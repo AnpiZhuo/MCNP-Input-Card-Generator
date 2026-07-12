@@ -1,0 +1,32 @@
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# MCNP runtime executables (large binaries)
+runtp*
+
+# IDE/OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# PyInstaller temp files
+*.toc
+*.pyz
+*.pkg
+localpycs/

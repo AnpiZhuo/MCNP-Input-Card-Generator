@@ -1,0 +1,8 @@
+# requirements.txt — MCNP Input Card Generator dependencies
+# Install with: pip install -r requirements.txt
+
+pymcnp>=0.9.0          # MCNP INP parsing, generation, and validation library
+PyQt5>=5.15            # Qt5 bindings for the desktop GUI
+pyinstaller>=5.0       # Packaging tool to bundle the app into a standalone .exe
+matplotlib             # Plotting library for tally visualization
+pyvista                # 3D VTK-based mesh/geometry viewer
