@@ -1,0 +1,5 @@
+pymcnp>=0.9.0
+PyQt5>=5.15
+pyinstaller>=5.0
+matplotlib
+pyvista
