@@ -13,7 +13,8 @@ not material cards).
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
     QTableWidget, QTableWidgetItem, QPushButton,
-    QHeaderView, QLabel, QMessageBox, QScrollArea, QWidget
+    QHeaderView, QLabel, QMessageBox, QWidget,
+    QScrollArea
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QSettings
 
@@ -53,10 +54,7 @@ class MaterialTab(QWidget):
     def init_ui(self):
         """Build the material tab UI layout.
 
-        Creates a scrollable layout containing:
-        - Material table with number, comment, and edit button columns
-        - Add/delete toolbar with text mode toggle
-        - Format hints for the user
+        Follows the same QScrollArea + stacked QGroupBox pattern as the energy tab.
         """
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -67,6 +65,7 @@ class MaterialTab(QWidget):
 
         content = QWidget()
         layout = QVBoxLayout(content)
+        layout.setSpacing(12)
 
         # ===== 材料概览列表 / Material Overview List =====
         grp = QGroupBox("材料列表（至少定义一个材料）")
@@ -128,9 +127,10 @@ class MaterialTab(QWidget):
         toolbar.insertWidget(toolbar.indexOf(self.btn_del) + 1, self._raw_mat.toggle_btn)
         # table is already on stack page 0, add stack directly to layout
         inner.addWidget(self._raw_mat.stack)
+        grp.setMinimumHeight(600)
         layout.addWidget(grp)
 
-        # ===== Format hint at bottom =====
+        # ===== Format hint =====
         hint = QLabel(
             "<span style='color:#5f6368; font-size:12px;'>"
             "💡 密度在栅元卡中设置。点击 [✎] 编辑核素组成，格式如 92235.06c -0.05</span>"
@@ -139,7 +139,7 @@ class MaterialTab(QWidget):
         layout.addStretch()
 
         scroll.setWidget(content)
-        outer.addWidget(scroll)
+        outer.addWidget(scroll, 1)
 
     # ---------- 公开接口 ----------
 

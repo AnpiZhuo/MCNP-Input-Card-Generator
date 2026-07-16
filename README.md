@@ -4,9 +4,29 @@
 
 A **PyQt5** desktop application for visually creating, editing, and validating **MCNP** input files (`.INP`). Replaces manual text editing with a structured, form-based GUI.
 
+![应用截图](images/screenshot.png)
+
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
 ![PyQt5](https://img.shields.io/badge/GUI-PyQt5-green)
 ![License](https://img.shields.io/badge/License-All%20Rights%20Reserved-red)
+![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-lightgrey)
+![MCNP](https://img.shields.io/badge/MCNP-6.x%20Compatible-orange)
+
+---
+
+## 解决痛点 Why This Tool Exists
+
+MCNP 是核工程领域最权威的蒙卡程序之一，但它的输入卡编写方式停留在上世纪 80 年代——纯文本、固定格式、零容错。本项目专门针对以下痛点：
+
+| 痛点 | 传统方式 | 本项目的方案 |
+|------|---------|-------------|
+| **格式敏感** | 每行严格 80 列，一个空格错位就 fatal error，调试全靠肉眼 | 表单化 GUI，自动格式化排版，不可能出现列对齐错误 |
+| **CAD 几何转换门槛高** | 从 STEP 文件手动提取曲面方程再写成 MCNP 曲面卡，动辄几百行 | 内置 GEOUNED 引擎，一键导入 STEP 文件，自动生成曲面和栅元 |
+| **材料定义繁琐** | 翻手册查 ZAID 号、算原子分数、手动拼写 Mm 卡，容易写错截面库 ID | 50+ 种预设材料库 + 化学式自动换算 → ZAID 表格，支持 xsdir 校验 |
+| **缺乏可视反馈** | 写完后跑 MCNP plotter 才能看到几何，错了回头改，循环极慢 | PyVista 实时 3D 几何预览，保存前就能确认几何正确性 |
+| **输出分析需额外工作** | 跑完 MCNP 后自己写脚本解析输出文件、提取计数、画图 | 内置输出解析器，自动提取 F1–F8 计数结果并绘图，支持 CSV/Parquet 导出 |
+| **学习曲线陡峭** | MCNP 手册上千页，卡类型上百种，记不住参数顺序和默认值 | 每个字段都有 Tooltip 提示和格式化输入，参考文档（C810）一键查看 |
+| **项目管理混乱** | 多个 INP 文件散落在文件夹里，改了什么版本完全靠文件名 | JSON 项目保存/加载，完整工作区随时恢复 |
 
 ---
 
@@ -102,13 +122,40 @@ The packaged executable will be output to `dist/MCNP输入卡生成器/`.
 
 ---
 
-## 许可协议 License
+## 引用与致谢 Acknowledgements
 
-All Rights Reserved. 本软件仅供**查阅参考**。未经明确许可，不得修改、分发或商业使用。
-This software is provided for **viewing purposes only**. No modification, distribution, or commercial use is permitted without explicit permission.
+本项目引用了以下开源软件，谨此致谢：
+
+| 项目 | 用途 | 许可证 |
+|------|------|--------|
+| [PyQt5](https://www.riverbankcomputing.com/software/pyqt/) | 图形界面框架 | GPL v3 |
+| [PyMCNP](https://github.com/FSIBT/PyMCNP) | MCNP 核心库（几何、生成、解析） | BSD-3-Clause |
+| [PyVista](https://github.com/pyvista/pyvista) | 3D 可视化 | MIT |
+| [matplotlib](https://matplotlib.org/) | 数据绘图 | PSF 风格 |
+| [GEOUNED](https://github.com/GEOUNED-org/GEOUNED) | STEP → MCNP 几何转换引擎 | EUPL-1.2 |
+| [FreeCAD](https://www.freecad.org/) | 3D CAD 几何处理 | LGPL v2+ |
+| [VTK](https://vtk.org/) | 3D 渲染与可视化管线 | BSD-3-Clause |
+| [NumPy](https://numpy.org/) | 科学计算 | BSD-3-Clause |
+| [SciPy](https://scipy.org/) | 科学计算 | BSD-3-Clause |
+
+GEOUNED 由 UNED（西班牙国立远程教育大学）开发，许可证为 EUPL-1.2（European Union Public Licence）。
+GEOUNED is developed by UNED (Universidad Nacional de Educación a Distancia, Spain) and licensed under EUPL-1.2。
 
 ---
 
-Built with [PyQt5](https://www.riverbankcomputing.com/software/pyqt/) and [pymcnp](https://pypi.org/project/pymcnp/).
+## 许可协议 License
 
-> 本项目代码由 AI 辅助生成 / This project was generated with AI assistance.
+**All Rights Reserved.** 版权所有 © 2026 魏祎卓
+
+- ✅ 允许个人及机构内部**免费使用**
+- ✅ 允许为自用或内部使用**修改代码**
+- ❌ **严禁任何形式的盈利活动**（销售、付费服务、商业嵌入等）
+- ❌ 修改后公开发布须**经作者书面许可**
+
+如需授权请联系：1378963177@qq.com
+
+---
+
+> 本项目由 AI 辅助编程完成 / Built with AI assistance (Claude).
+
+Built with [PyQt5](https://www.riverbankcomputing.com/software/pyqt/) and [pymcnp](https://pypi.org/project/pymcnp/).

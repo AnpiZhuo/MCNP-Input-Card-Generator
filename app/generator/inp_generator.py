@@ -318,10 +318,13 @@ def _generate_multi_source(sources: list[SourceData]) -> list[str]:
     # 归一化概率
     try:
         prob_floats = [float(p) for p in prob_list]
+        for p in prob_floats:
+            if math.isnan(p) or math.isinf(p):
+                raise ValueError(f"无效概率值：{p}")
     except ValueError as e:
         raise ValueError(f"多源概率格式错误：{e}") from e
     total_prob = sum(prob_floats)
-    if total_prob <= 0:
+    if not (total_prob > 0):  # handles NaN correctly: NaN > 0 is False, so not False → fallback
         prob_norm = [f"{1.0 / n_sources:.6f}" for _ in sources]
     else:
         prob_norm = [f"{p / total_prob:.6f}" for p in prob_floats]
@@ -547,9 +550,14 @@ def _generate_kcode(adv: AdvancedSettings) -> list[str]:
 
 
 def _generate_en_cards(tally: TallySettings) -> list[str]:
-    """生成 En 分计数能量箱卡 — 从 e_cards_text 解析，续行格式输出"""
+    """生成 En 分计数能量箱卡 — 从 e_cards_text 解析，续行格式输出。
+    只输出 generate_en=True 的计数对应的 En 卡。"""
     if not tally.e_cards_text or not tally.e_cards_text.strip():
         return []
+
+    # 收集 generate_en=True 的计数编号
+    enabled_tallies = {td.number for td in tally.tallies
+                       if getattr(td, 'generate_en', False)}
 
     lines = ["C  Per-tally energy grids (En cards)"]
     for raw_line in tally.e_cards_text.strip().split("\n"):
@@ -558,9 +566,12 @@ def _generate_en_cards(tally: TallySettings) -> list[str]:
             continue
         import re
         # 识别 En header: "E{n}" 或 "E{n}  params"
-        m = re.match(r'^(E\d+)(?:\s+(.*))?$', line, re.IGNORECASE)
+        m = re.match(r'^E(\d+)(?:\s+(.*))?$', line, re.IGNORECASE)
         if m:
-            header = m.group(1).upper()
+            num = int(m.group(1))
+            if num not in enabled_tallies:
+                continue  # 跳过未勾选的计数
+            header = f"E{num}"
             params = (m.group(2) or "").strip()
             if params:
                 lines.append(f"{header}\n     {params}")
@@ -568,6 +579,7 @@ def _generate_en_cards(tally: TallySettings) -> list[str]:
                 lines.append(header)
         else:
             lines.append(f"C  SKIPPED (not a valid En card): {line}")
+    return lines
     return lines
 
 
@@ -621,8 +633,8 @@ def _generate_energy_mesh(tally: TallySettings) -> list[str]:
     return lines
 
 
-def _generate_advanced(adv: AdvancedSettings) -> list[str]:
-    """高级设置：PHYS 卡 + 用户手动输入的额外 MCNP 卡片"""
+def _generate_phys(adv: AdvancedSettings) -> list[str]:
+    """高级设置：PHYS 卡（不包含 other_cards，后者在数据卡段末尾生成）"""
     lines = []
 
     # PHYS:N — C810: EMAX EMCNF IUNR DNB FISNU
@@ -662,7 +674,12 @@ def _generate_advanced(adv: AdvancedSettings) -> list[str]:
     if compact:
         lines.append(f"PHYS:HE  {compact}")
 
-    # 其他手动卡片
+    return lines
+
+
+def _generate_other_cards(adv: AdvancedSettings) -> list[str]:
+    """生成其他卡片（来自高级选项卡的手动输入），在数据卡段最末尾生成"""
+    lines = []
     if adv.other_cards:
         lines.append("C  ===== Additional Cards (from Advanced tab) =====")
         for card in adv.other_cards.split("\n"):
@@ -762,6 +779,15 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
     basic_lines = _generate_basic(basic)
     if basic_lines: lines.extend(basic_lines)
 
+    # TRn 变换卡（来自右侧 TR 文本框，放入数据卡段）
+    tr_text = deck.tr_cards.strip()
+    if tr_text:
+        lines.append("C  TR Transformations")
+        for tr_line in tr_text.split("\n"):
+            tr_line = tr_line.strip()
+            if tr_line:
+                lines.append(tr_line)
+
     raw = (overrides.get("materials") or "").strip()
     if raw:
         lines.append("C  Materials (raw text mode)")
@@ -788,8 +814,8 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
         lines.append("C  PHYS Cards (raw text mode)")
         lines.extend(raw.split("\n"))
     else:
-        adv_lines = _generate_advanced(adv)
-        if adv_lines: lines.extend(adv_lines)
+        phys_lines = _generate_phys(adv)
+        if phys_lines: lines.extend(phys_lines)
 
     raw = (overrides.get("tally") or "").strip()
     if raw:
@@ -820,6 +846,10 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
     else:
         cut_lines = _generate_cut(tally)
         if cut_lines: lines.extend(cut_lines)
+
+    # 其他卡片排在数据卡段最末尾（来自高级选项卡的手动输入）
+    other_lines = _generate_other_cards(adv)
+    if other_lines: lines.extend(other_lines)
 
     lines.append("")
     raw = "\n".join(lines)

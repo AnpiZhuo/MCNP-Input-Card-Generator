@@ -280,11 +280,22 @@ class MaterialEditDialog(QDialog):
 
     # ---------- 模式切换 ----------
 
+    def _populate_manual_table(self, rows: list[MaterialRow]):
+        """将 ZAID 列表填充到手动模式表格。"""
+        self.table.setRowCount(max(len(rows), 1))
+        for i, row in enumerate(rows):
+            self._setup_row_widgets(i, row)
+        if not rows:
+            self._setup_row_widgets(0, None)
+
     def _on_mode_changed(self, idx: int):
         mode = self.mode_combo.currentData()
         if mode == "formula":
             self.stack.setCurrentIndex(1)
         else:
+            # 切到手动模式时，把公式解析结果带到手动表格
+            if self._formula_rows:
+                self._populate_manual_table(self._formula_rows)
             self.stack.setCurrentIndex(0)
 
     # ---------- 预设材料 ----------
@@ -300,9 +311,8 @@ class MaterialEditDialog(QDialog):
         if not preset:
             return
 
-        # 填充注释
-        if not self.comment_edit.text().strip():
-            self.comment_edit.setText(preset["name"])
+        # 填充注释（总是更新为当前预设的名称）
+        self.comment_edit.setText(preset["name"])
 
         # 切换到化学式模式
         self.mode_combo.setCurrentIndex(1)
@@ -390,30 +400,46 @@ class MaterialEditDialog(QDialog):
 
         try:
             import pymcnp
-            mat = pymcnp.inp.M_0.from_formula(formulas)
-            mat_str = str(mat)
 
-            # 清理续行符和换行，统一为空格分隔
-            cleaned = mat_str.replace("&", " ").replace("\n", " ")
-            parts = cleaned.split()
-            # parts[0] = "m{n}", 后面交替 ZAID fraction
-            rows = []
-            i = 1  # skip "m{n}"
-            while i + 1 < len(parts):
-                zaid = parts[i]
-                frac = float(parts[i + 1])
-                rows.append((zaid, frac))
-                i += 2
+            # 逐个组分独立展开，避免 pymcnp 丢弃低含量组分
+            # from_formula 在混合多元素时会静默丢弃质量分数低(~1.2%)的元素，
+            # 因此先对每个组分单独调用 from_formula，再按用户比例合并。
+            all_rows: list[tuple[str, float]] = []
+            for elem_symbol, user_ratio in formulas.items():
+                # cutoff=1e-9 防止 pymcnp 丢弃低丰度同位素（默认 cutoff=0.01）
+                sub = pymcnp.inp.M_0.from_formula({elem_symbol: 1}, cutoff=1e-9)
+                sub_str = str(sub)
+                # 提取 ZAID + 丰度（跳过 "m{n}" 和续行符）
+                cleaned = sub_str.replace("&", " ").replace("\n", " ")
+                sub_parts = cleaned.split()
+                if len(sub_parts) < 3:
+                    continue  # 空组分
+                for k in range(1, len(sub_parts), 2):
+                    zaid = sub_parts[k]
+                    try:
+                        # 该组分内同位素丰度（天然百分比）
+                        iso_frac = float(sub_parts[k + 1])
+                        # 按用户设定的质量比缩放
+                        all_rows.append((zaid, iso_frac * user_ratio))
+                    except (ValueError, IndexError):
+                        continue
 
-            if not rows:
+            if not all_rows:
                 QMessageBox.warning(self, "解析失败", "pymcnp 返回空材料")
                 return
 
+            # 归一化到总和 = 1（pymcnp 用负数表示质量分数）
+            total = sum(abs(f) for _, f in all_rows)
+            if abs(total - 1.0) > 1e-9 and total > 0:
+                normalized = [(zaid, f / total) for zaid, f in all_rows]
+            else:
+                normalized = all_rows
+
             # 填充预览表
-            self.formula_table.setRowCount(len(rows))
-            for j, (zaid, frac) in enumerate(rows):
+            self.formula_table.setRowCount(len(normalized))
+            for j, (zaid, frac) in enumerate(normalized):
                 self.formula_table.setItem(j, 0, QTableWidgetItem(zaid))
-                num = zaid  # already numeric from pymcnp
+                num = zaid
                 parsed = parse_zzaaam(num) if num.isdigit() else None
                 elem_name = f"{Z_TO_SYMBOL.get(parsed[0], '?')}-{parsed[1]}" if parsed else "?"
                 self.formula_table.setItem(j, 1, QTableWidgetItem(elem_name))
@@ -422,11 +448,11 @@ class MaterialEditDialog(QDialog):
             # 缓存结果用于保存
             self._formula_rows = [
                 MaterialRow(zaid=zaid, fraction=f"{frac:.6f}")
-                for zaid, frac in rows
+                for zaid, frac in normalized
             ]
 
             self.formula_status.setText(
-                f"<span style='color:#2e7d32;'>✓ 解析成功，共 {len(rows)} 个核素</span>"
+                f"<span style='color:#2e7d32;'>✓ 解析成功，共 {len(normalized)} 个核素</span>"
             )
 
         except Exception as e:

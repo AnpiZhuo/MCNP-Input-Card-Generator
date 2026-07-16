@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+*.spec
+*.runtpe
+*.runtpf
+*.runtpg
+*.runtph
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

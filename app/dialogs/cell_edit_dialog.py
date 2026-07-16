@@ -42,17 +42,19 @@ class CellEditDialog(QDialog):
         self.material_combo.setToolTip("选择此栅元使用的材料。0 (void) = 真空。")
         for m in self.available_materials:
             self.material_combo.addItem(m)
-        # 用首段精确匹配来选中当前材料值（避免 startswith("M1") 误匹配 "M10"）
+        # 用去除 M 前缀后的数字匹配（兼容 "4" 和 "M4" 两种写法）
         cell_mat_token = self.cell.material.split()[0] if " " in self.cell.material else self.cell.material
+        cell_num = cell_mat_token.lstrip('M')  # "M4" → "4",  "4" → "4"
         matched = False
         for i in range(self.material_combo.count()):
-            item_token = self.material_combo.itemText(i).split()[0] if " " in self.material_combo.itemText(i) else self.material_combo.itemText(i)
-            if item_token == cell_mat_token:
+            item_raw = self.material_combo.itemText(i)
+            item_token = item_raw.split()[0] if " " in item_raw else item_raw
+            if item_token.lstrip('M') == cell_num:  # 都去掉 M 再比
                 self.material_combo.setCurrentIndex(i)
                 matched = True
                 break
         if not matched:
-            self.material_combo.setCurrentText(self.cell.material)
+            self.material_combo.setCurrentIndex(self.material_combo.count() - 1)
         form.addRow("材料号:", self.material_combo)
 
         # 密度

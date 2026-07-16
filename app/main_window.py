@@ -19,7 +19,7 @@ from PyQt5.QtCore import Qt, QSettings, QEvent, QTimer
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent
 
 from app.xsdir_db import DB as xsdir_db
-from app.style import LIGHT_QSS, DARK_QSS
+from app.style import LIGHT_QSS, DARK_QSS, PINK_QSS, TRADITIONAL_QSS
 from app.mcnp_detector import detect_mcnp
 from app.xsdir_manager import find_xsdir_from_env, load_xsdir
 from app.project_io import deck_to_dict, deck_from_dict, save_project_file, load_project_file
@@ -48,8 +48,8 @@ class MainWindow(QMainWindow):
         # Persistent application settings stored via QSettings (registry on Windows)
         self.settings = QSettings("MCNPGen", "MCNPGenerator")
         self.mcnp_exe = "mcnp6.exe"  # 默认 default MCNP executable
-        # Load dark mode preference from saved settings
-        self.is_dark = self.settings.value("dark_mode", False, type=bool)
+        # Load theme preference from saved settings ("light" | "dark" | "pink")
+        self.theme_mode = self.settings.value("theme_mode", "light")
         self.init_ui()
         self._connect_signals()
         self._detect_mcnp()
@@ -57,7 +57,7 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         """初始化界面 Build the complete user interface: menus, tabs, toolbar, status bar."""
-        self.setWindowTitle("MCNP 输入卡生成器 v1.4.0")
+        self.setWindowTitle("MCNP 输入卡生成器 v1.5.2")
         self.resize(1200, 800)
         self.setMinimumSize(900, 600)
         self.setAcceptDrops(True)  # Enable drag-and-drop for INP files
@@ -114,12 +114,25 @@ class MainWindow(QMainWindow):
         self.btn_import.clicked.connect(self._import_inp)
         top_bar.addWidget(self.btn_import)
         # Theme toggle button — label switches based on current mode
-        self.btn_theme = QPushButton("🌙 黑夜模式" if not self.is_dark else "☀ 白天模式")
+        init_label = {"light": "☀ 白天模式", "dark": "🌙 黑夜模式", "pink": "🌸 粉嫩模式", "traditional": "🏮 传统模式"}
+        self.btn_theme = QPushButton(init_label.get(self.theme_mode, "☀ 白天模式"))
         self.btn_theme.setObjectName("btnTheme")
         self.btn_theme.setToolTip("切换黑夜/白天模式")
         self.btn_theme.setFixedWidth(130)
         self.btn_theme.clicked.connect(self._toggle_theme)
         top_bar.addWidget(self.btn_theme)
+        top_bar.addSpacing(8)
+        # 全局参考文档按钮（蓝色问号）
+        self.btn_global_help = QPushButton("?")
+        self.btn_global_help.setFixedSize(22, 22)
+        self.btn_global_help.setToolTip("查看 MCNP 输入卡格式完整参考（C810）")
+        self.btn_global_help.setStyleSheet(
+            "QPushButton { background-color: #1976d2; color: white; border-radius: 11px; "
+            "font-weight: bold; font-size: 12px; border: none; }"
+            "QPushButton:hover { background-color: #1565c0; }"
+        )
+        self.btn_global_help.clicked.connect(self._show_c810_reference)
+        top_bar.addWidget(self.btn_global_help)
         top_bar.addStretch()  # Push buttons to the left
         main_layout.addLayout(top_bar)
 
@@ -157,7 +170,7 @@ class MainWindow(QMainWindow):
         # Output directory path input
         # 输出路径
         self.path_edit = QLineEdit()
-        default_path = self.settings.value("output_path", "D:\\MCNP\\new\\claude")
+        default_path = self.settings.value("output_path", "D:")
         self.path_edit.setText(default_path)
         self.path_edit.setPlaceholderText("输出路径...")
         self.path_edit.setToolTip("INP 文件和 run.bat 的保存目录")
@@ -226,9 +239,114 @@ class MainWindow(QMainWindow):
 
         # 先显示"正在加载"，延后加载截面库，让窗口优先渲染
         # Show "loading" first, defer xsdir loading so the window renders immediately
-        self.status_label.setText("正在加载截面库...")
-        QApplication.processEvents()
-        QTimer.singleShot(0, self._load_xsdir)
+        # 让窗口完全渲染后再加载截面库，避免弹窗阻塞界面首次出现
+        QTimer.singleShot(200, self._load_xsdir)
+
+    # ---------- C810 卡片格式参考弹窗 ----------
+
+    def _show_c810_reference(self):
+        """打开 C810 卡片格式完整参考文档"""
+        import os
+        from PyQt5.QtWidgets import QDialog, QTextBrowser, QVBoxLayout, QPushButton
+
+        ref_path = os.path.join(os.path.dirname(__file__), "docs",
+                                "C810_卡片格式详细.txt")
+        ref_path = os.path.normpath(ref_path)
+        if not os.path.isfile(ref_path):
+            QMessageBox.warning(self, "未找到", f"参考文档不存在:\n{ref_path}")
+            return
+        try:
+            with open(ref_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            QMessageBox.critical(self, "读取失败", f"无法读取参考文档:\n{e}")
+            return
+
+        # 预处理：将纯文本格式转换为更美观的 HTML
+        lines = content.split("\n")
+        html_parts = []
+        in_code = False
+        for line in lines:
+            stripped = line.strip()
+            # 跳过纯装饰线
+            if stripped and all(c in "=#" for c in stripped) and len(stripped) > 3:
+                if not html_parts:
+                    continue  # 跳过文件开头的装饰线
+                html_parts.append('<hr>')
+                continue
+            # 【xxx】 → 蓝色加粗标题
+            if stripped.startswith("【") and stripped.endswith("】"):
+                html_parts.append(
+                    f'<h3 style="color:#1565c0; margin:18px 0 8px 0;">{stripped}</h3>'
+                )
+                continue
+            # # N. xxx → 二级标题
+            if stripped.startswith("#") and stripped[1:2].isdigit():
+                title = stripped.lstrip("# ").strip()
+                html_parts.append(
+                    f'<h2 style="color:#1565c0; border-bottom:1px solid #e0e0e0; '
+                    f'padding-bottom:4px; margin-top:24px;">{title}</h2>'
+                )
+                continue
+            # 空行
+            if not stripped:
+                if in_code:
+                    html_parts.append('</pre>')
+                    in_code = False
+                html_parts.append('<br>')
+                continue
+            # 以两个以上空格开头或包含 $ 的 → 代码行
+            if (line.startswith("  ") and line[2:3] == " ") or "$" in stripped and "=" not in stripped[:3]:
+                if not in_code:
+                    html_parts.append('<pre style="background:#f5f5f5; padding:6px 12px; '
+                                      'border-left:3px solid #1976d2; border-radius:4px; '
+                                      'font-family:Consolas,monospace; font-size:13px; margin:4px 0;">')
+                    in_code = True
+                html_parts.append(stripped + "\n")
+                continue
+            else:
+                if in_code:
+                    html_parts.append('</pre>')
+                    in_code = False
+                # url 转链接
+                import re as _re
+                line_html = _re.sub(
+                    r'(https?://[^\s]+)',
+                    r'<a href="\1" style="color:#1976d2;">\1</a>',
+                    stripped
+                )
+                # 冒号前的字段名加粗
+                if "：" in line_html and not line_html.startswith("<"):
+                    parts = line_html.split("：", 1)
+                    line_html = f'<strong>{parts[0]}</strong>：{parts[1]}'
+                html_parts.append(f'<div style="line-height:1.8;">{line_html}</div>')
+        if in_code:
+            html_parts.append('</pre>')
+
+        body_html = "\n".join(html_parts)
+        dialog = QDialog(self)
+        dialog.setWindowTitle("C810 卡片格式详细参考")
+        dialog.setMinimumSize(900, 700)
+        dialog.resize(900, 700)
+        dlg_layout = QVBoxLayout(dialog)
+        full_html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family:'Microsoft YaHei','Segoe UI',sans-serif;
+      font-size:14px; line-height:1.8; color:#222; max-width:860px; margin:0 auto; padding:12px 24px;">
+{body_html}
+</body></html>"""
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        browser.setHtml(full_html)
+        browser.setStyleSheet("QTextBrowser { background-color: #fff; border: none; }")
+        dlg_layout.addWidget(browser)
+        btn_close = QPushButton("关闭")
+        btn_close.clicked.connect(dialog.close)
+        dlg_layout.addWidget(btn_close, alignment=Qt.AlignRight)
+
+        dialog.setAttribute(Qt.WA_DeleteOnClose, True)
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        dialog.show()
 
     def _load_xsdir(self):
         """加载截面库索引（优先级：QSettings → 环境变量 → 弹窗提醒）
@@ -465,22 +583,17 @@ class MainWindow(QMainWindow):
         return TallySettings(tallies=tallies, **energy_data)
 
     def _apply_theme(self):
-        """应用当前主题（黑夜/白天）
-        Apply the current theme (dark or light) by setting the application stylesheet.
-        Also updates the theme toggle button text to reflect the opposite mode."""
-        if self.is_dark:
-            self.setStyleSheet(DARK_QSS)
-            self.btn_theme.setText("☀ 白天模式")
-        else:
-            self.setStyleSheet(LIGHT_QSS)
-            self.btn_theme.setText("🌙 黑夜模式")
+        """应用当前主题（白天/黑夜/粉嫩）"""
+        theme_qss = {"light": LIGHT_QSS, "dark": DARK_QSS, "pink": PINK_QSS, "traditional": TRADITIONAL_QSS}
+        theme_label = {"light": "☀ 白天模式", "dark": "🌙 黑夜模式", "pink": "🌸 粉嫩模式", "traditional": "🏮 传统模式"}
+        self.setStyleSheet(theme_qss.get(self.theme_mode, LIGHT_QSS))
+        self.btn_theme.setText(theme_label.get(self.theme_mode, "☀ 白天模式"))
 
     def _toggle_theme(self):
-        """切换黑夜/白天模式
-        Toggle between dark and light themes.
-        Persists the preference to QSettings and applies the new theme immediately."""
-        self.is_dark = not self.is_dark
-        self.settings.setValue("dark_mode", self.is_dark)
+        """三档循环切换主题：白天 → 黑夜 → 粉嫩 → 白天"""
+        cycle = {"light": "dark", "dark": "pink", "pink": "traditional", "traditional": "light"}
+        self.theme_mode = cycle.get(self.theme_mode, "light")
+        self.settings.setValue("theme_mode", self.theme_mode)
         self._apply_theme()
 
     def eventFilter(self, obj, event):
@@ -615,6 +728,7 @@ class MainWindow(QMainWindow):
         return DeckData(
             basic=self.tab_basic.get_data(),         # Problem title, mode, etc.
             surfaces=self.tab_geo.get_surfaces(),     # Surface definitions
+            tr_cards=self.tab_geo.get_tr_cards(),     # TR transformation cards
             cells=self.tab_geo.get_cells(),           # Cell definitions
             materials=self.tab_mat.get_materials(),   # Material compositions
             sources=self.tab_sdef.get_sources(),      # Source (SDEF) definitions
@@ -635,22 +749,39 @@ class MainWindow(QMainWindow):
         """
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
-            self.status_label.setText("📥 拖放以导入 INP 文件… Drop to import INP file...")
+            self.status_label.setText("📥 拖放以导入文件…")
         else:
             event.ignore()
 
     def dropEvent(self, event: QDropEvent):
-        """Handle file drop for INP file drag-and-drop import.
-
-        Extracts the first file URL from the drop event and delegates to _do_import.
-
-        Args:
-            event: The drop event from Qt.
+        """Handle file drop for INP / STEP file drag-and-drop import.
+        - .inp/.i/.txt/no ext -> INP import
+        - .stp/.step -> STEP import (delegates to geometry tab)
         """
+        import os
         self.status_label.setText("就绪 Ready")
         urls = event.mimeData().urls()
-        if urls:
-            self._do_import(urls[0].toLocalFile())
+        if not urls:
+            return
+        path = urls[0].toLocalFile()
+        if not os.path.isfile(path):
+            return
+        ext = os.path.splitext(path)[1].lower()
+        if ext in (".stp", ".step"):
+            if hasattr(self.tab_geo, '_import_step_path'):
+                self.tab_geo._import_step_path(path)
+            else:
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "导入失败", "geometry tab 未就绪")
+        elif ext in (".inp", ".i", ".txt", ""):
+            self._do_import(path)
+        else:
+            from PyQt5.QtWidgets import QMessageBox
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self, "不支持的格式",
+                f"仅支持: .inp/.i/.txt 或 .stp/.step" + os.path.basename(path)
+            )
 
     def _do_import(self, path: str):
         """导入 INP 文件（委托到 inp_importer）

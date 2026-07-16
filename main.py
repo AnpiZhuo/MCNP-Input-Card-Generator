@@ -1,5 +1,5 @@
 """
-MCNP 输入卡生成器 v1.3.2
+MCNP 输入卡生成器 v1.5.2
 图形界面基于 PyQt5
 """
 
@@ -17,7 +17,7 @@ from app.style import STYLE
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("MCNP 输入卡生成器")
-    app.setApplicationVersion("1.2.0")
+    app.setApplicationVersion("1.5.2")
     app.setStyleSheet(STYLE)
 
     window = MainWindow()

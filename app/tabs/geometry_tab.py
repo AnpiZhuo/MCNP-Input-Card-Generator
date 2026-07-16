@@ -24,10 +24,17 @@ from PyQt5.QtWidgets import (
     QPushButton, QHeaderView, QLabel, QMessageBox,
     QSplitter, QScrollArea
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QThread, pyqtSlot, QSettings
+import webbrowser
+import hashlib
+
+from PyQt5.QtCore import Qt, pyqtSignal, QThread, pyqtSlot, QSettings, QObject, QTimer
+from PyQt5.QtWidgets import QApplication, QFileDialog, QProgressDialog
 
 from app.models import CellData
+from app.step_importer import StepImporter
 from app.dialogs.cell_edit_dialog import CellEditDialog
+from app.freecad_preview import FreeCADEngine
+from pymcnp.types.Geometry import Geometry
 from app.widgets.text_mode_section import TextModeSection
 from app.generator.inp_generator import _generate_cells
 
@@ -59,44 +66,63 @@ def _register(name, count, cls):
 def _lazy_register():
     """延时注册，避免循环导入 / Lazy registration to avoid circular imports.
 
+    参考：MCNP6 曲面卡格式完全参考 (C810.pdf 第3-11至3-24页)
+
     Registers all supported MCNP surface types on first call.
     Must be called before any surface parsing occurs.
     This function is idempotent — subsequent calls are no-ops once registered.
 
     Registered surface types:
-        - Planes: P, PX, PY, PZ, X, Y, Z (1 param)
-        - Spheres: SO, S, SX, SY, SZ (1 param)
-        - Cylinders: CX, CY, CZ, C/X, C/Y, C/Z (1 param)
-        - Cones: KX, KY, KZ, K/X, K/Y, K/Z (3 params)
-        - Quadratic: SQ (10 params), GQ (10+ params)
+        - Planes: PX, PY, PZ (1 param); P (4或9 params, see _parse_surface_line)
+        - Spheres: SO (1 param), S (4 params), SX/SY/SZ (2 params)
+        - Cylinders: CX/CY/CZ (1 param), C/X/C/Y/C/Z (3 params)
+        - Cones: KX/KY/KZ (3 params), K/X/K/Y/K/Z (5 params)
+        - Quadratic: SQ (10 params), GQ (10 params)
         - Torii: TX, TY, TZ (6 params)
-        - Macrobodies: RPP, SPH, RCC, TRC
+        - Point-defined: X, Y, Z (6 params, 3 coordinate pairs)
+        - Macrobodies: RPP, SPH, RCC, TRC, REC, ELL, WED, BOX, ARB, RHP, HEX
     """
     if _SURFACE_PARSERS:
         return
     import pymcnp.inp as pi
-    # Single-parameter planes (planes perpendicular to axes)
+    # Planes perpendicular to axes (1 param: D)
     _register("PX", 1, pi.Px); _register("PY", 1, pi.Py); _register("PZ", 1, pi.Pz)
-    # Spheres: general (SO) and centered on axes (Sx, Sy, Sz)
-    _register("SO", 1, pi.So); _register("S", 1, pi.So)
-    _register("SX", 1, pi.Sx); _register("SY", 1, pi.Sy); _register("SZ", 1, pi.Sz)
-    # Cylinders: axis-aligned (Cx, Cy, Cz) and angled (C/X, C/Y, C/Z)
+    # General plane P is handled specially in _parse_surface_line():
+    #   4 params → P_0 (Ax + By + Cz = D coefficients)
+    #   9 params → P_1 (three-point definition)
+    # Spheres
+    _register("SO", 1, pi.So)     # origin-centered sphere (R)
+    _register("S", 4, pi.S)       # general sphere (x̄ ȳ z̄ R)
+    _register("SX", 2, pi.Sx)     # x̄ R
+    _register("SY", 2, pi.Sy)     # ȳ R
+    _register("SZ", 2, pi.Sz)     # z̄ R
+    # Cylinders: axis-aligned (R)
     _register("CX", 1, pi.Cx); _register("CY", 1, pi.Cy); _register("CZ", 1, pi.Cz)
-    _register("C/X", 1, pi.C_x); _register("C/Y", 1, pi.C_y); _register("C/Z", 1, pi.C_z)
-    # Cones (3 parameters: vertex x, t-squared, +/-1 sign)
+    # Cylinders: parallel to axes (ȳ z̄ R / x̄ z̄ R / x̄ ȳ R)
+    _register("C/X", 3, pi.C_x); _register("C/Y", 3, pi.C_y); _register("C/Z", 3, pi.C_z)
+    # Cones: on-axis (x̄ t² ±1)
     _register("KX", 3, pi.Kx); _register("KY", 3, pi.Ky); _register("KZ", 3, pi.Kz)
-    _register("K/X", 3, pi.K_x); _register("K/Y", 3, pi.K_y); _register("K/Z", 3, pi.K_z)
-    # Quadratic surfaces: SQ (10 params) and GQ (10+ params)
-    _register("SQ", 10, pi.Sq); _register("GQ", 10, pi.Gq)
-    # Torii (6 parameters)
+    # Cones: parallel to axes (x̄ ȳ z̄ t² ±1)
+    _register("K/X", 5, pi.K_x); _register("K/Y", 5, pi.K_y); _register("K/Z", 5, pi.K_z)
+    # Quadratic surfaces
+    _register("SQ", 10, pi.Sq)    # A B C D E F G x̄ ȳ z̄
+    _register("GQ", 10, pi.Gq)    # A B C D E F G H J K
+    # Torii (x̄ ȳ z̄ A B C)
     _register("TX", 6, pi.Tx); _register("TY", 6, pi.Ty); _register("TZ", 6, pi.Tz)
-    # Macrobodies: rectangular parallelepiped, sphere, right circular cylinder, truncated cone
+    # Point-defined axisymmetric surfaces (x1 r1 [x2 r2] [x3 r3])
+    _register("X", 2, pi.X); _register("Y", 2, pi.Y); _register("Z", 2, pi.Z)
+    # Macrobodies (C810.pdf Section III.D)
     _register("RPP", 6, pi.Rpp)   # xmin xmax ymin ymax zmin zmax
     _register("SPH", 4, pi.Sph)   # vx vy vz r
     _register("RCC", 7, pi.Rcc)   # vx vy vz hx hy hz r
     _register("TRC", 8, pi.Trc)   # vx vy vz hx hy hz r1 r2
-    # Plane aliases (single-letter forms)
-    _register("X", 1, pi.X); _register("Y", 1, pi.Y); _register("Z", 1, pi.Z)
+    _register("REC", 12, pi.Rec)  # vx vy vz hx hy hz v1x v1y v1z v2x v2y v2z
+    _register("ELL", 7, pi.Ell)   # v1x v1y v1z v2x v2y v2z rm
+    _register("WED", 12, pi.Wed)  # vx vy vz v1x v1y v1z v2x v2y v2z v3x v3y v3z
+    _register("BOX", 12, pi.Box)  # vx vy vz a1x a1y a1z a2x a2y a2z a3x a3y a3z
+    _register("ARB", 30, pi.Arb)  # 8 vertices (24 coords) + 6 facet definitions
+    _register("RHP", 15, pi.Rhp)  # vx vy vz hx hy hz r1 r2 r3 s1 s2 s3 t1 t2 t3
+    _register("HEX", 15, pi.Rhp)  # HEX = RHP alias
 
 
 def _parse_surface_line(line: str) -> tuple:
@@ -122,6 +148,7 @@ def _parse_surface_line(line: str) -> tuple:
         tuple: (surface_object_or_None, warning_string_or_None)
     """
     _lazy_register()
+    import pymcnp.inp as pi
     stripped = line.strip()
     # Skip empty lines and comment lines (C or c at start)
     if not stripped or stripped.startswith("C ") or stripped.startswith("c "):
@@ -139,19 +166,47 @@ def _parse_surface_line(line: str) -> tuple:
         return (None, f"格式不完整: {line[:60]}")
 
     # Extract surface number (must be an integer)
+    # MCNP6 supports * (reflecting) and + (white boundary) prefixes on surface numbers
+    # (C810.pdf §3-11). These are stripped for display; the pymcnp object stores only the number.
     surf_num = parts[0]
+    surf_prefix = ""
+    if surf_num.startswith("*") or surf_num.startswith("+"):
+        surf_prefix = surf_num[0]
+        surf_num = surf_num[1:]
     try:
         surf_num = int(surf_num)
     except ValueError:
         return (None, f"曲面号非数字: {line[:60]}")
 
-    # Handle optional TRn transform prefix (e.g., "TR1" before surface type)
-    # TRn prefixes reference a transformation defined elsewhere in the input.
+    # Handle optional TRn transform prefix (e.g., "TR1", bare integer "1", or "-3")
+    # MCNP6 format (C810.pdf §3-11): j [n] a list
+    #   n > 0 = TRn card number (bare integer or "TR1" syntax)
+    #   n < 0 = periodic with surface |n|
+    #   n can be omitted entirely (surface type at parts[1])
+    # Must distinguish from surface types (always alphabetic) vs TRC (starts with "TR").
     tr_val = None
     type_idx = 1
-    if parts[1].upper().startswith("TR") and len(parts) > 2:
+    tr_candidate = parts[1].upper()
+
+    # Case A: Explicit "TRn" prefix — ensure the "n" part is numeric to avoid
+    # matching surface types like "TRC" (truncated cone).
+    if tr_candidate.startswith("TR") and len(parts) > 2 and tr_candidate[2:].isdigit():
         tr_val = parts[1]
         type_idx = 2
+
+    # Case B: Bare integer (positive or negative) — the n-position is a TRn reference
+    # or periodic-surface index, and the actual surface type follows at parts[2].
+    # We verify by checking that parts[2] is a known surface type.
+    # Note: "P" is not in _SURFACE_PARSERS (handled specially later), so check for it explicitly.
+    elif len(parts) > 2:
+        try:
+            n_val = int(parts[1])
+            surf_type_check = parts[2].upper()
+            if n_val != 0 and (surf_type_check in _SURFACE_PARSERS or surf_type_check == "P"):
+                tr_val = parts[1]
+                type_idx = 2
+        except ValueError:
+            pass  # parts[1] is not numeric → treat as surface type (normal case)
 
     if type_idx >= len(parts):
         return (None, f"缺少曲面类型: {line[:60]}")
@@ -159,11 +214,24 @@ def _parse_surface_line(line: str) -> tuple:
     surf_type = parts[type_idx].upper()
     params = parts[type_idx + 1:]
 
-    # Check if the surface type is supported
-    if surf_type not in _SURFACE_PARSERS:
-        return (None, f"不支持的曲面类型: {surf_type}")
+    # Special handling for P (一般平面):
+    #   C810.pdf §2.1 / §IV: 4 params → equation coefficients (A B C D)
+    #                         9 params → three-point definition (X1 Y1 Z1 X2 Y2 Z2 X3 Y3 Z3)
+    if surf_type == "P":
+        if len(params) == 4:
+            min_params, cls = 4, pi.P_0
+        elif len(params) == 9:
+            min_params, cls = 9, pi.P_1
+        else:
+            return (None, f"P 曲面参数数必须为 4（方程系数 A B C D）或 9（三点定义），"
+                          f"实际 {len(params)} 个")
+    else:
+        # Check if the surface type is supported
+        if surf_type not in _SURFACE_PARSERS:
+            return (None, f"不支持的曲面类型: {surf_type}")
 
-    min_params, cls = _SURFACE_PARSERS[surf_type]
+        min_params, cls = _SURFACE_PARSERS[surf_type]
+
     if len(params) < min_params:
         return (None, f"参数不足: 需要≥{min_params}个, 实际{len(params)}个 ({surf_type}) "
                       f"/ Insufficient params: need ≥{min_params}, got {len(params)} ({surf_type})")
@@ -176,15 +244,50 @@ def _parse_surface_line(line: str) -> tuple:
 
     # Create the pymcnp surface object
     try:
-        obj = cls(*float_params, number=surf_num)
-        if tr_val:
-            # pymcnp surface may support transform parameter
-            # Currently not applied; left for future implementation
-            import pymcnp.inp as pi
-            pass
+        # Pass transform if tr_val is a positive integer (TRn reference)
+        # Negative values = periodic surfaces (not supported by pymcnp's transform param)
+        transform_num = None
+        if tr_val is not None:
+            tr_str = str(tr_val).upper().replace("TR", "").lstrip("*")
+            try:
+                tn = int(tr_str)
+                if tn > 0:
+                    transform_num = tn
+            except ValueError:
+                pass
+
+        if transform_num is not None:
+            obj = cls(*float_params, number=surf_num, transform=transform_num)
+        else:
+            obj = cls(*float_params, number=surf_num)
         return (obj, None)
     except Exception as e:
         return (None, f"创建 {surf_type} 失败: {e}")
+
+
+class _StepWorker(QObject):
+    """后台工作线程：运行 StepImporter.import_step 不阻塞 UI。"""
+
+    result_ready = pyqtSignal(object)  # dict: {"text": str} 或 {"error": str}
+    finished = pyqtSignal()
+
+    def __init__(self, step_path: str, freecad_bin: str):
+        super().__init__()
+        self._step_path = step_path
+        self._freecad_bin = freecad_bin
+        self._aborted = False
+
+    def abort(self):
+        self._aborted = True
+
+    def run(self):
+        if self._aborted:
+            self.finished.emit()
+            return
+        result = StepImporter.import_step(self._step_path, self._freecad_bin)
+        if not self._aborted:
+            self.result_ready.emit(result)
+        self.finished.emit()
 
 
 class GeometryTab(QWidget):
@@ -225,12 +328,7 @@ class GeometryTab(QWidget):
     def init_ui(self):
         """Build the complete geometry tab UI layout.
 
-        Creates a scrollable layout with a vertical splitter containing:
-        1. Surface card group: free-text editor for surface definitions + 3D preview button
-        2. Cell card group: table of cells with add/delete/edit toolbar + text mode toggle
-
-        The splitter allows users to resize the relative height of the surface
-        and cell card sections.
+        Follows the same QScrollArea + stacked QGroupBox pattern as the energy tab.
         """
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -241,77 +339,145 @@ class GeometryTab(QWidget):
 
         content = QWidget()
         layout = QVBoxLayout(content)
+        layout.setSpacing(12)
 
-        # Use a vertical splitter to allow resizing between surface and cell areas
-        splitter = QSplitter(Qt.Vertical)
-        splitter.setMinimumHeight(400)
-
-        # ===== 曲面卡（大文本框）/ Surface Cards (Large Text Box) =====
-        # Free-text area for MCNP surface definitions.
-        # Each line defines one surface: number, type, and parameters.
-        grp_surf = QGroupBox("曲面卡 - 请在此输入曲面定义")
+        # ===== 曲面与TR卡（左右分栏）/ Surfaces & TR Cards (Left/Right) =====
+        grp_surf = QGroupBox("曲面与TR卡")
         grp_surf.setToolTip(
-            "每行定义一个曲面，格式：\n"
-            "曲面号  类型  参数1  参数2 ...\n\n"
+            "左：曲面定义（每行一个）\n"
+            "   曲面号  类型  参数1  参数2 ...\n"
+            "右：TRn 坐标变换卡（如 *TR1 ...）\n\n"
             "示例：\n"
-            "1  PX  -9\n"
-            "2  PY  -9\n"
-            "3  PZ  -9\n"
-            "10  RCC  0 0 0  0 0 5  2\n\n"
-            "⚠ 注意：曲面号不要重复，每行不超过 80 列\n"
-            "One surface per line. Format:\n"
-            "surf_number  type  param1  param2 ...\n"
-            "Surface numbers must be unique. Keep lines under 80 columns."
+            "  左: 1 PX -9\n"
+            "  右: *TR1 0 0 0  30 60 90\n\n"
+            "⚠ 曲面号不要重复，每行不超过 80 列"
         )
         surf_layout = QVBoxLayout(grp_surf)
 
-        surf_label = QLabel(
-            "格式：<span style='font-family:monospace;'>"
-            "曲面号  类型  参数1  参数2 ...</span>"
+        # 自定义标题栏：标签 + 蓝色问号帮助按钮
+        surf_header = QHBoxLayout()
+        surf_header.setContentsMargins(0, 0, 0, 0)
+        surf_title = QLabel("<b>曲面与TR卡</b>")
+        surf_header.addWidget(surf_title)
+        surf_header.addSpacing(4)
+        self.btn_surf_help = QPushButton("?")
+        self.btn_surf_help.setFixedSize(20, 20)
+        self.btn_surf_help.setToolTip("查看 MCNP6 曲面卡格式参考")
+        self.btn_surf_help.setStyleSheet(
+            "QPushButton { background-color: #1976d2; color: white; border-radius: 10px; "
+            "font-weight: bold; font-size: 11px; border: none; }"
+            "QPushButton:hover { background-color: #1565c0; }"
         )
+        self.btn_surf_help.clicked.connect(self._show_surface_reference)
+        surf_header.addWidget(self.btn_surf_help)
+        surf_header.addStretch()
+        surf_layout.addLayout(surf_header)
 
+        # Horizontal splitter for left (surfaces) and right (TR)
+        h_split = QSplitter(Qt.Horizontal)
+
+        # ---- Left: Surface cards ----
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+
+        left_label = QLabel(
+            "<b>曲面卡</b>  "
+            "<span style='font-family:monospace;'>曲面号  类型  参数 ...</span>"
+        )
         self.surface_text = QPlainTextEdit()
         self.surface_text.setPlaceholderText(
-            "示例：\n"
-            "1  PX  -9\n"
-            "2  PY  -9\n"
-            "3  PZ  -9\n"
-            "4  PX   9\n"
-            "5  PY   9\n"
-            "6  PZ   9\n"
-            "7  CZ   5\n"
+            "1  PX  -9\n2  PY  -9\n3  PZ  -9\n"
+            "4  PX   9\n5  PY   9\n6  PZ   9\n7  CZ   5"
         )
         self.surface_text.setToolTip(
             "每行一个曲面，支持所有 MCNP 曲面类型：\n"
             "P/PX/PY/PZ (平面), SO/S/SX/SY/SZ (球),\n"
-            "CX/CY/CZ/C/X/C/Y/C/Z (圆柱),\n"
-            "KX/KY/KZ/K/X/K/Y/K/Z (锥),\n"
-            "SQ/GQ (二次曲面), TX/TY/TZ (环),\n"
-            "Macrobody: RPP/RCC/SPH/BOX/REC/TRC/ELL/WED/ARB 等\n\n"
-            "One surface per line. Supports all MCNP surface types."
+            "CX/CY/CZ/C/X/C/Y/C/Z (圆柱), 等"
         )
-        self.surface_text.setMinimumHeight(80)
+        self.surface_text.setMinimumHeight(400)
 
-        surf_layout.addWidget(surf_label)
-        surf_layout.addWidget(self.surface_text)
+        # 编号建议
+        surf_tip = QLabel(
+            "<span style='color:#e65100; font-size:11px;'>"
+            "💡 建议曲面号大于 100，栅元号小于 100</span>"
+        )
+        left_layout.addWidget(surf_tip)
+        left_layout.addWidget(left_label)
+        left_layout.addWidget(self.surface_text)
+        h_split.addWidget(left_widget)
 
-        # 3D preview button row
+        # ---- Right: TR cards ----
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+
+        right_label = QLabel(
+            "<b>TR 变换卡</b>  "
+            "<span style='font-family:monospace;'>*TRn  Tx Ty Tz  B1..B9  [M]</span>"
+        )
+        self.tr_text = QPlainTextEdit()
+        self.tr_text.setPlaceholderText(
+            "TR1  0 0 0  1 0 0  0 1 0  0 0 1\n"
+            "*TR2  10 0 0  0 1 0  -1 0 0  0 0 1"
+        )
+        self.tr_text.setToolTip(
+            "TRn 坐标变换卡。格式：\n"
+            "  TRn  Tx Ty Tz  B1 B2 B3  B4 B5 B6  B7 B8 B9  [M]\n"
+            "  *TRn 表示平移+旋转的组合变换\n"
+            "例如：*TR1  0 0 0  30 60 90\n"
+            "（Tx Ty Tz = 平移向量，B1~B9 = 旋转矩阵）"
+        )
+        self.tr_text.setMinimumHeight(400)
+        right_layout.addWidget(right_label)
+        right_layout.addWidget(self.tr_text)
+        h_split.addWidget(right_widget)
+
+        # Set initial 60/40 split
+        h_split.setSizes([600, 400])
+        surf_layout.addWidget(h_split, 1)
+
+        # 3D preview + import button row
         surf_btn_layout = QHBoxLayout()
         surf_btn_layout.addStretch()
+
+        self.lbl_step_warn = QLabel("⚠️ 功能不完善")
+        self.lbl_step_warn.setToolTip(
+            "STEP 导入功能依赖 FreeCAD + GEOUNED，\n"
+            "目前仅支持基本几何类型，复杂曲面可能转换失败。"
+        )
+        self.lbl_step_warn.setStyleSheet("color: #e65100; font-size: 11px; padding: 2px 6px;")
+        surf_btn_layout.addWidget(self.lbl_step_warn)
+
+        self.btn_import_step = QPushButton("📥 导入 STEP")
+        self.btn_import_step.setToolTip(
+            "将 STEP 文件转换为 MCNP 曲面和栅元卡。\n"
+            "依赖 FreeCAD + GEOUNED，需已安装。"
+        )
+        self.btn_import_step.clicked.connect(self._import_step)
+        surf_btn_layout.addWidget(self.btn_import_step)
+
         self.btn_3d = QPushButton("🔍 3D 预览")
         self.btn_3d.setToolTip(
             "基于当前曲面和栅元定义打开 3D 几何预览窗口。\n"
-            "使用 pyvista 渲染，支持鼠标旋转/缩放。\n"
-            "不支持的曲面类型将被跳过。\n"
-            "Open 3D geometry preview based on current surfaces and cells.\n"
-            "Uses pyvista rendering with mouse rotate/zoom support.\n"
-            "Unsupported surface types will be skipped."
+            "使用 FreeCAD + PyVista 渲染，支持真 CSG 布尔运算。\n"
+            "需要已安装 FreeCAD。"
         )
         self.btn_3d.setProperty("cssClass", "btnPrimary")
         self.btn_3d.clicked.connect(self._preview_3d)
         surf_btn_layout.addWidget(self.btn_3d)
+
+        self.btn_export_stl = QPushButton("📦 导出 STL")
+        self.btn_export_stl.setToolTip("将每个栅元导出为 STL 网格文件")
+        self.btn_export_stl.clicked.connect(self._export_stl)
+        surf_btn_layout.addWidget(self.btn_export_stl)
+
+        self.btn_export_step = QPushButton("📐 导出 STEP")
+        self.btn_export_step.setToolTip("将每个栅元导出为 STEP 实体模型")
+        self.btn_export_step.clicked.connect(self._export_step)
+        surf_btn_layout.addWidget(self.btn_export_step)
         surf_layout.addLayout(surf_btn_layout)
-        splitter.addWidget(grp_surf)
+        layout.addWidget(grp_surf)
 
         # ===== 栅元卡（列表 + 编辑弹窗）/ Cell Cards (Table + Dialog Editor) =====
         # Table-based cell card management with dialog editing.
@@ -392,12 +558,85 @@ class GeometryTab(QWidget):
         self._raw_cell.stack.insertWidget(0, self.cell_table)
         cell_layout.addWidget(self._raw_cell.stack)
         self._raw_cell.stack.setCurrentIndex(0)  # 强制表单模式
-        splitter.addWidget(grp_cell)
+        grp_cell.setMinimumHeight(600)
+        layout.addWidget(grp_cell)
 
-        layout.addWidget(splitter, 1)
-
+        layout.addStretch()
         scroll.setWidget(content)
-        outer.addWidget(scroll)
+        outer.addWidget(scroll, 1)
+
+    # ---------- 曲面格式参考弹窗 ----------
+
+    def _show_surface_reference(self):
+        """打开 MCNP6 曲面卡格式参考文档"""
+        import os
+        ref_path = os.path.join(os.path.dirname(__file__), "..", "docs",
+                                "MCNP6_曲面卡格式参考.md")
+        ref_path = os.path.normpath(ref_path)
+        if not os.path.isfile(ref_path):
+            QMessageBox.warning(self, "未找到", f"参考文档不存在:\n{ref_path}")
+            return
+        try:
+            with open(ref_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            QMessageBox.critical(self, "读取失败", f"无法读取参考文档:\n{e}")
+            return
+
+        from PyQt5.QtWidgets import QDialog, QTextBrowser, QVBoxLayout, QPushButton
+        import markdown as _md
+        dialog = QDialog(self)
+        dialog.setWindowTitle("MCNP6 曲面卡格式参考")
+        dialog.setMinimumSize(850, 700)
+        dialog.resize(850, 700)
+        dlg_layout = QVBoxLayout(dialog)
+
+        html_body = _md.markdown(
+            content,
+            extensions=["extra", "toc"],
+        )
+        full_html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:'Microsoft YaHei','Segoe UI',sans-serif;
+      font-size:14px; line-height:1.8; color:#222; max-width:820px; margin:0 auto; padding:12px 20px;">
+<style>
+  h1 {{ font-size:22px; border-bottom:2px solid #1976d2; padding-bottom:6px; color:#1565c0; }}
+  h2 {{ font-size:18px; color:#1565c0; margin-top:24px; border-bottom:1px solid #e0e0e0; padding-bottom:4px; }}
+  h3 {{ font-size:15px; color:#333; margin-top:18px; }}
+  table {{ border-collapse:collapse; width:100%; margin:10px 0; }}
+  th {{ background-color:#e3f2fd; font-weight:bold; padding:7px 10px; border:1px solid #bbb; text-align:left; }}
+  td {{ padding:5px 10px; border:1px solid #ddd; }}
+  tr:nth-child(even) {{ background-color:#f8f8f8; }}
+  tr:hover {{ background-color:#e8f0fe; }}
+  code {{ background-color:#f0f0f0; padding:1px 5px; border-radius:3px;
+         font-family:Consolas,monospace; font-size:13px; color:#d32f2f; }}
+  pre {{ background-color:#f5f5f5; padding:12px 16px; border-left:3px solid #1976d2;
+        border-radius:4px; font-family:Consolas,monospace; font-size:13px; overflow-x:auto; }}
+  blockquote {{ border-left:4px solid #1976d2; margin:14px 0; padding:8px 16px;
+               background:#f5f8ff; color:#555; border-radius:0 4px 4px 0; }}
+  hr {{ border:none; border-top:1px solid #ddd; margin:24px 0; }}
+  strong {{ color:#1565c0; }}
+  ul, ol {{ padding-left:22px; }}
+  li {{ margin:4px 0; }}
+  a {{ color:#1976d2; }}
+</style>
+{html_body}
+</body>
+</html>"""
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        browser.setHtml(full_html)
+        browser.setStyleSheet("QTextBrowser { background-color: #fff; border: none; }")
+        dlg_layout.addWidget(browser)
+        btn_close = QPushButton("关闭")
+        btn_close.clicked.connect(dialog.close)
+        dlg_layout.addWidget(btn_close, alignment=Qt.AlignRight)
+
+        # 非模态：不阻塞主界面，可边看参考边编辑曲面卡
+        dialog.setAttribute(Qt.WA_DeleteOnClose, True)
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        dialog.show()
 
     # ---------- 公开接口
     # These methods are called by the MainWindow and INP generator.
@@ -406,9 +645,17 @@ class GeometryTab(QWidget):
         """获取曲面卡文本 / Get the surface card text.
 
         Returns:
-            str: The raw surface definitions as entered by the user.
+            str: The raw surface definitions (left panel).
         """
         return self.surface_text.toPlainText().strip()
+
+    def get_tr_cards(self) -> str:
+        """获取 TR 变换卡文本 / Get the TR transformation card text.
+
+        Returns:
+            str: The raw TR card definitions (right panel).
+        """
+        return self.tr_text.toPlainText().strip()
 
     def get_cells(self) -> list[CellData]:
         """获取栅元卡数据列表 / Get the cell card data list.
@@ -418,14 +665,16 @@ class GeometryTab(QWidget):
         """
         return self.cells
 
-    def set_data(self, surfaces: str, cells: list[CellData]):
+    def set_data(self, surfaces: str, cells: list[CellData], tr_cards: str = ""):
         """从导入数据回填 UI（用于 INP 导入） / Populate UI from imported data (for INP import).
 
         Args:
             surfaces: Surface definition text to restore.
             cells: List of cell data objects to restore.
+            tr_cards: TR transformation card text to restore.
         """
         self.surface_text.setPlainText(surfaces)
+        self.tr_text.setPlainText(tr_cards)
         self.cells = list(cells)
         self._refresh_table()
 
@@ -647,213 +896,537 @@ class GeometryTab(QWidget):
             self.cells[idx] = dialog.get_data()
             self._refresh_table()
 
+    # ---------- STEP 导入 / STEP Import ----------
+    # STEP → MCNP 转换集成。依赖 FreeCAD + GEOUNED。
+
+    def _import_step_path(self, path: str):
+        """导入 STEP 文件（指定路径，不走文件选择对话框）"""
+        freecad_bin = StepImporter.detect_freecad()
+        if not freecad_bin:
+            self._show_freecad_guide()
+            return
+
+        self._step_thread = QThread()
+        self._step_worker = _StepWorker(path, freecad_bin)
+        self._step_worker.moveToThread(self._step_thread)
+
+        self._step_progress = QProgressDialog(
+            "正在转换 STEP → MCNP...\n这可能需要几秒到几分钟。",
+            "取消", 0, 0, self
+        )
+        self._step_progress.setWindowTitle("导入 STEP")
+        self._step_progress.setModal(True)
+        self._step_progress.show()
+        QApplication.processEvents()
+
+        self._step_worker.result_ready.connect(self._on_step_result)
+        self._step_progress.canceled.connect(self._cancel_step_import)
+        self._step_thread.started.connect(self._step_worker.run)
+        self._step_worker.finished.connect(self._step_thread.quit)
+        self._step_worker.finished.connect(self._step_progress.close)
+        self._step_worker.finished.connect(self._step_worker.deleteLater)
+        self._step_thread.finished.connect(self._step_thread.deleteLater)
+        self._step_thread.start()
+
+    def _import_step(self):
+        """导入 STEP 文件：检测 FreeCAD → 选文件 → 后台转 MCNP → 加载。"""
+        freecad_bin = StepImporter.detect_freecad()
+        if not freecad_bin:
+            self._show_freecad_guide()
+            return
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择 STEP 文件", "",
+            "STEP 文件 (*.step *.stp);;所有文件 (*.*)"
+        )
+        if not path:
+            return
+
+        # 创建后台工作线程
+        self._step_thread = QThread()
+        self._step_worker = _StepWorker(path, freecad_bin)
+        self._step_worker.moveToThread(self._step_thread)
+
+        # 进度对话框
+        self._step_progress = QProgressDialog(
+            "正在转换 STEP → MCNP...\n这可能需要几秒到几分钟。",
+            "取消", 0, 0, self
+        )
+        self._step_progress.setWindowTitle("导入 STEP")
+        self._step_progress.setModal(True)
+        self._step_progress.show()
+        QApplication.processEvents()
+
+        # 信号连接
+        self._step_worker.result_ready.connect(self._on_step_result)
+        self._step_progress.canceled.connect(self._cancel_step_import)
+        self._step_thread.started.connect(self._step_worker.run)
+        self._step_worker.finished.connect(self._step_thread.quit)
+        self._step_worker.finished.connect(self._step_progress.close)
+        self._step_worker.finished.connect(self._step_worker.deleteLater)
+        self._step_thread.finished.connect(self._step_thread.deleteLater)
+
+        self._step_thread.start()
+
+    def _cancel_step_import(self):
+        """用户取消进度对话框时终止转换。"""
+        if hasattr(self, '_step_worker') and self._step_worker:
+            self._step_worker.abort()
+        if hasattr(self, '_step_thread') and self._step_thread:
+            self._step_thread.quit()
+        self._step_progress.close()
+
+    def _on_step_result(self, result: dict):
+        """后台线程完成后的回调（主线程）。"""
+        if "error" in result:
+            QMessageBox.critical(self, "STEP 导入失败", result["error"])
+            return
+        self._on_import_done(result["text"])
+
+    def _show_freecad_guide(self):
+        """FreeCAD 未安装时弹窗引导。选择路径后自动重试。"""
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Information)
+        msg.setWindowTitle("需要 FreeCAD")
+        msg.setText("导入 STEP 需要 FreeCAD 作为转换引擎。")
+        msg.setInformativeText("未检测到 FreeCAD 安装。\n\n选择操作：")
+        btn_download = msg.addButton("🌐 前往官网下载", QMessageBox.ActionRole)
+        btn_manual = msg.addButton("📁 手动指定路径", QMessageBox.ActionRole)
+        msg.addButton("取消", QMessageBox.RejectRole)
+        msg.exec_()
+
+        if msg.clickedButton() == btn_download:
+            webbrowser.open("https://www.freecad.org/?lang=zh_CN")
+        elif msg.clickedButton() == btn_manual:
+            exe_path, _ = QFileDialog.getOpenFileName(
+                self, "选择 FreeCAD.exe",
+                "", "FreeCAD (FreeCAD.exe)"
+            )
+            if exe_path:
+                StepImporter.save_freecad_path(exe_path)
+                # 保存后自动重试
+                QTimer.singleShot(100, self._import_step)
+
+    def _on_import_done(self, mcnp_text: str):
+        """转换完成弹窗：追加/替换。"""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("导入完成")
+        msg.setText("STEP 转换完成，已生成曲面和栅元卡。")
+
+        preview_lines = mcnp_text.strip().split("\n")[:8]
+        msg.setDetailedText(
+            "转换结果预览（前 8 行）：\n" + "\n".join(preview_lines)
+        )
+
+        btn_append = msg.addButton("追加到现有内容", QMessageBox.ActionRole)
+        btn_replace = msg.addButton("替换现有内容", QMessageBox.ActionRole)
+        msg.addButton("取消", QMessageBox.RejectRole)
+        msg.exec_()
+
+        # 分离曲面和 TR 卡（TR 行放在右侧 TR 文本框）
+        surf_lines = []
+        tr_lines = []
+        for line in mcnp_text.split("\n"):
+            stripped = line.strip()
+            upper = stripped.upper()
+            if upper.startswith("*TR") or (upper.startswith("TR")
+                and len(upper) > 2 and upper[2:].lstrip() and upper[2:].lstrip()[0].isdigit()):
+                tr_lines.append(stripped)
+            elif stripped and not stripped.startswith("#"):
+                surf_lines.append(stripped)
+
+        surf_text = "\n".join(surf_lines)
+        tr_text = "\n".join(tr_lines)
+
+        if msg.clickedButton() == btn_append:
+            cur_surf = self.surface_text.toPlainText()
+            cur_tr = self.tr_text.toPlainText()
+            if surf_text:
+                self.surface_text.setPlainText(cur_surf.rstrip() + "\n\n" + surf_text)
+            if tr_text:
+                self.tr_text.setPlainText(cur_tr.rstrip() + "\n" + tr_text)
+        elif msg.clickedButton() == btn_replace:
+            if surf_text:
+                self.surface_text.setPlainText(surf_text)
+            if tr_text:
+                self.tr_text.setPlainText(tr_text)
+
+
     # ---------- 3D 预览 / 3D Preview ----------
-    # Generates a pyvista-based 3D visualization of the geometry.
-    # Runs in a separate thread to keep the UI responsive.
+    # Uses FreeCAD CSG for true boolean operations, then renders with PyVista.
+    # Runs FreeCAD Python as a subprocess (like the STEP import pattern).
+
+    def _parse_tr_cards(self) -> dict:
+        """解析 TRn 变换卡 → {tr_num: {translate, rotate}}"""
+        import re as _re
+        tr_map = {}
+        tr_text = self.tr_text.toPlainText().strip()
+        if not tr_text:
+            return tr_map
+
+        for line in tr_text.split("\n"):
+            line_s = line.strip()
+            if not line_s:
+                continue
+            m = _re.match(r'^(\*)?TR(\d+)', line_s.upper())
+            if not m:
+                continue
+            try:
+                tr_num = int(m.group(2))
+                if tr_num in tr_map:
+                    continue
+                parts = line_s.split()
+                vals = parts[1:]
+                if len(vals) < 3:
+                    continue
+                floats = [float(v) for v in vals]
+                translate = floats[0:3]
+                rotate = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+                prefix = m.group(1) or ""
+                if len(floats) >= 9:
+                    rotate = [
+                        [floats[3], floats[4], floats[5]],
+                        [floats[6], floats[7], floats[8]],
+                    ]
+                    if len(floats) >= 12:
+                        rotate.append([floats[9], floats[10], floats[11]])
+                    else:
+                        from numpy import cross as _cross
+                        rotate.append(_cross(rotate[0], rotate[1]).tolist())
+                elif len(floats) >= 6:
+                    from numpy import cross as _cross
+                    x_row = [floats[3], floats[4], floats[5]]
+                    y_d = [1, 0, 0] if abs(floats[3]) < 0.9 else [0, 1, 0]
+                    y_row = [floats[6] if len(floats) > 6 else 0,
+                             floats[7] if len(floats) > 7 else 0,
+                             floats[8] if len(floats) > 8 else 0]
+                    if all(v == 0 for v in y_row):
+                        y_row = y_d
+                    rotate = [x_row, y_row, _cross(x_row, y_row).tolist()]
+
+                if prefix == "*":
+                    from math import cos, radians
+                    rotate = [[cos(radians(v)) for v in row] for row in rotate]
+
+                m_val = 1
+                if len(floats) in (10, 13):
+                    m_val = int(floats[-1])
+                if m_val == -1:
+                    from numpy import array, transpose
+                    R = array(rotate)
+                    translate = (-transpose(R) @ array(translate)).tolist()
+
+                tr_map[tr_num] = {
+                    "translate": translate, "rotate": rotate,
+                }
+            except Exception:
+                continue
+        return tr_map
 
     def _preview_3d(self):
-        """基于当前曲面和栅元定义生成 3D 几何预览 / Generate 3D geometry preview from current surfaces and cells.
+        """基于当前曲面和栅元生成 3D 几何预览 (FreeCAD CSG + PyVista)
 
-        Parses surface definitions, builds pymcnp cell objects, and launches
-        a pyvista-based 3D visualization window. Each material gets a different
-        color for visual distinction. Runs the visualizer in a separate thread
-        to avoid blocking the UI.
-
-        The process:
-            1. Parse surface definitions from text using _parse_surface_line
-            2. Build pymcnp Cell objects from cell data with geometry expressions
-            3. Create pymcnp Inp object and launch pyvista Plotter in a daemon thread
-
-        Errors and warnings are collected and displayed to the user.
+        流程:
+            1. 解析曲面文本为 pymcnp 对象 (_parse_surface_line)
+            2. 解析 TRn 变换卡
+            3. 从 self.cells 构建栅元数据 + Geometry AST
+            4. 子进程调 FreeCAD Python 做 CSG 布尔运算
+            5. PyVista 渲染输出文件
         """
-        import pymcnp
+        freecad_bin = StepImporter.detect_freecad()
+        if not freecad_bin:
+            self._show_freecad_guide()
+            return
 
         surfaces_text = self.surface_text.toPlainText().strip()
         if not surfaces_text and not self.cells:
             QMessageBox.information(self, "提示", "请先定义曲面和栅元")
             return
 
-        # 1. Parse surface definitions from text
+        # 1. 解析曲面 (复用 _parse_surface_line)
         surfs = []
-        warnings = []
+        warn_list = []
         for line in surfaces_text.split("\n"):
             obj, warn = _parse_surface_line(line)
             if obj is not None:
                 surfs.append(obj)
             if warn:
-                warnings.append(warn)
+                warn_list.append(warn)
 
         if not surfs:
             msg = "未解析到有效的曲面对象。"
-            if warnings:
-                msg += f"\n\n警告（前5条）:\n" + "\n".join(warnings[:5])
+            if warn_list:
+                msg += "\n\n警告 (前5条):\n" + "\n".join(warn_list[:5])
             QMessageBox.warning(self, "无法预览", msg)
             return
 
-        # 2. Build pymcnp cell objects from cell data
-        # Use Geometry.from_mcnp() for string parsing to avoid pymcnp
-        # Geometry.py _Unary.to_show calling surface to_show with incorrect arguments
-        from pymcnp.inp.cell import Imp
-        from pymcnp.inp import Cell as PymcnpCell
-        from pymcnp.types.Geometry import Geometry
+        # 2. 解析 TRn
+        tr_cards = self._parse_tr_cards()
 
-        cells_pymcnp = []
-        build_errors = []
+        # 3. 构建栅元数据 (Geometry.from_mcnp 解析表达式)
+        cells_data = []
         for cell in self.cells:
             expr = cell.surface_expr.strip()
             if not expr:
                 continue
-
-            # Parse the boolean surface expression
-            # Geometry.from_mcnp() parses MCNP boolean surface notation.
             try:
                 geometry = Geometry.from_mcnp(expr)
-            except Exception as e:
-                build_errors.append(f"栅元 {cell.number}: 表达式 '{expr}' 解析失败 — {e}")
+            except Exception:
                 continue
+            cells_data.append({
+                "number": cell.number,
+                "material": cell.material,
+                "ast": geometry,
+                "density": cell.density,
+            })
 
-            # Extract material number (strip "M" prefix if present)
-            mat_str = cell.material
-            if " " in mat_str:
-                mat_str = mat_str.split()[0]
-            if mat_str.startswith("M"):
-                mat_str = mat_str[1:]
-            mat_num = int(mat_str) if mat_str.lstrip('-').isdigit() else 0
-
-            # Set neutron importance (default to 1 if not specified)
-            options = [
-                Imp(designator='n', importance=int(cell.imp_n) if cell.imp_n.isdigit() else 1)
-            ]
-
-            # Set density for non-void materials
-            density = None
-            if mat_num != 0:
-                dens_str = cell.density.strip()
-                density = float(dens_str) if dens_str else -1.0
-
-            try:
-                cells_pymcnp.append(PymcnpCell(
-                    material=mat_num, geometry=geometry, density=density,
-                    options=options
-                ))
-            except Exception as e:
-                build_errors.append(f"栅元 {cell.number}: 创建失败 — {e}")
-
-        if not cells_pymcnp:
-            msg = "未能从栅元定义构建 3D 几何。"
-            if build_errors:
-                msg += "\n\n错误详情：\n" + "\n".join(build_errors[:5])
-            QMessageBox.warning(self, "无法预览", msg)
+        if not cells_data:
+            QMessageBox.warning(self, "无法预览", "没有有效的栅元定义")
             return
 
-        # 3. Build pymcnp Inp object and launch 3D visualization
+        # 4. 进度条
+        progress = QProgressDialog(
+            "FreeCAD 正在构建 3D 几何...\n首次启动约需 5-10 秒",
+            "取消", 0, 0, self
+        )
+        progress.setWindowTitle("3D 预览")
+        progress.setModal(True)
+        progress.show()
+        QApplication.processEvents()
+
+        # 5. 子进程调 FreeCAD
+        engine = FreeCADEngine(freecad_bin)
         try:
-            inp = pymcnp.Inp(
-                title="3D Geometry Preview",
-                cells=cells_pymcnp,
-                surfaces=surfs,
-                data=[],
-            )
-
-            # Inner function running in a separate thread to avoid blocking UI
-            def _show():
-                try:
-                    import pyvista
-                    # Build surface dictionary (consistent with to_show_cells internal logic)
-                    # Maps surface numbers to their pyvista-compatible mesh objects.
-                    surf_map = {}
-                    for surf in inp.surfaces:
-                        surf_map[str(surf.number)] = surf.to_show()
-
-                    # Material-to-color mapping
-                    # High-distinction color cycle indexed by material number
-                    # 0 = void (transparent), 1+ = distinct colors
-                    _COLORS = [
-                        None,                  # 0: void 透明 / transparent
-                        (0.12, 0.47, 0.71),    # 1: 蓝 / blue
-                        (0.85, 0.37, 0.01),    # 2: 橙 / orange
-                        (0.20, 0.63, 0.17),    # 3: 绿 / green
-                        (0.74, 0.13, 0.13),    # 4: 红 / red
-                        (0.44, 0.18, 0.66),    # 5: 紫 / purple
-                        (0.00, 0.58, 0.58),    # 6: 青 / cyan
-                        (0.77, 0.55, 0.00),    # 7: 金 / gold
-                        (0.18, 0.31, 0.31),    # 8: 深青 / dark cyan
-                        (0.58, 0.00, 0.33),    # 9: 洋红 / magenta
-                        (0.30, 0.75, 0.93),    # 10: 天蓝 / sky blue
-                        (1.00, 0.65, 0.00),    # 11: 琥珀 / amber
-                        (0.50, 0.80, 0.20),    # 12: 草绿 / grass green
-                        (0.95, 0.50, 0.55),    # 13: 粉红 / pink
-                        (0.55, 0.35, 0.75),    # 14: 淡紫 / lavender
-                        (0.00, 0.75, 0.75),    # 15: 湖蓝 / lake blue
-                        (0.85, 0.70, 0.20),    # 16: 芥末 / mustard
-                        (0.80, 0.35, 0.25),    # 17: 砖红 / brick red
-                        (0.40, 0.40, 0.60),    # 18: 灰蓝 / gray blue
-                        (0.40, 0.70, 0.40),    # 19: 翠绿 / emerald green
-                    ]
-                    def _mat_color(mat):
-                        mat = int(mat)  # Convert pymcnp Integer type to native int
-                        if mat < len(_COLORS):
-                            return _COLORS[mat]
-                        # For materials beyond the predefined list, generate color via hash
-                        # Provides a deterministic color for any material number.
-                        import hashlib
-                        h = hashlib.md5(str(mat).encode()).digest()
-                        return (h[0]/255, h[1]/255, h[2]/255)
-
-                    # Create pyvista plotter and render all cells
-                    plot = pyvista.Plotter()
-                    plot.add_axes()
-
-                    cell_shapes = {}
-                    for cell in inp.cells:
-                        if isinstance(cell, pymcnp.inp.Cell):
-                            shape = cell.to_show(surf_map, cell_shapes)
-                        elif isinstance(cell, pymcnp.inp.Like):
-                            # Like cells reference another cell's shape
-                            # Uses the previously computed shape from the referenced cell.
-                            shape = cell_shapes.get(str(cell.cell))
-                            if shape is None:
-                                continue
-                        else:
-                            continue
-                        cell_shapes[str(cell.number)] = shape
-
-                        mat = cell.material if hasattr(cell, 'material') else 0
-                        color = _mat_color(mat)
-                        if color is not None:
-                            plot.add_mesh(shape.surface, color=color, opacity=0.85)
-
-                    plot.show()
-                except Exception as e:
-                    import traceback
-                    # Emit error signal back to main thread for display
-                    # PyQt signals are thread-safe for cross-thread communication.
-                    self._preview_error.emit(
-                        f"可视化启动失败：\n"
-                        f"{type(e).__name__}: {e}\n\n"
-                        f"{traceback.format_exc()[-500:]}"
-                    )
-
-            # Launch visualization in a daemon thread to keep UI responsive
-            # Daemon thread exits automatically when the main application exits.
-            import threading
-            t = threading.Thread(target=_show, daemon=True)
-            t.start()
-
-            # Show any warnings/errors that occurred during preparation
-            if warnings or build_errors:
-                parts = []
-                if warnings:
-                    parts.append(f"曲面警告（{len(warnings)} 条）：\n" + "\n".join(warnings[:5]))
-                if build_errors:
-                    parts.append(f"栅元警告（{len(build_errors)} 条）：\n" + "\n".join(build_errors[:5]))
-                if parts:
-                    QMessageBox.information(self, "3D 预览",
-                        "预览已启动（独立窗口）。\n\n"
-                        + "\n\n".join(parts))
-
+            result = engine.build_geometry(surfs, cells_data, tr_cards)
         except Exception as e:
-            QMessageBox.critical(self, "3D 预览失败", str(e))
+            progress.close()
+            QMessageBox.critical(self, "预览失败", str(e))
+            engine.cleanup()
+            return
+        finally:
+            progress.close()
+
+        # 6. PyVista 展示（在 engine.cleanup 之前，因为文件是临时的）
+        try:
+            import pyvista as pv
+
+            # Tableau 20 — 高区分度分类色板
+            _COLORS = [
+                None,
+                (0.1216, 0.4667, 0.7059),   # 1  蓝
+                (1.0000, 0.4980, 0.0549),   # 2  橙
+                (0.1725, 0.6275, 0.1725),   # 3  绿
+                (0.8392, 0.1529, 0.1569),   # 4  红
+                (0.5804, 0.4039, 0.7412),   # 5  紫
+                (0.7373, 0.7412, 0.1333),   # 6  金
+                (0.0902, 0.7451, 0.8118),   # 7  青
+                (0.9686, 0.5059, 0.7490),   # 8  粉
+                (0.4980, 0.4980, 0.4980),   # 9  灰
+                (0.6941, 0.3490, 0.1569),   # 10 棕
+                (0.4000, 0.7608, 0.6471),   # 11 薄荷
+                (0.9882, 0.5529, 0.3843),   # 12 杏
+                (0.5529, 0.6275, 0.7961),   # 13 淡蓝
+                (0.9059, 0.5412, 0.7647),   # 14 淡紫
+                (0.6510, 0.8471, 0.3294),   # 15 黄绿
+                (1.0000, 0.8510, 0.1843),   # 16 黄
+                (0.8980, 0.7686, 0.5804),   # 17 卡其
+                (0.7020, 0.7020, 0.7020),   # 18 银
+                (0.8000, 0.4000, 0.4000),   # 19 砖红
+                (0.4000, 0.6000, 0.8000),   # 20 钢蓝
+            ]
+            _EXTRA_COLORS = len(_COLORS)
+
+            def _mat_color(m):
+                m = int(m)
+                if m < 0:
+                    m = 0
+                if m < _EXTRA_COLORS:
+                    return _COLORS[m]
+                h = hashlib.md5(str(m).encode()).digest()
+                return (h[0] / 255, h[1] / 255, h[2] / 255)
+
+            def _material_of(cell_num):
+                for c in self.cells:
+                    if c.number == cell_num:
+                        ms = c.material
+                        if " " in ms:
+                            ms = ms.split()[0]
+                        if ms.startswith("M"):
+                            ms = ms[1:]
+                        try:
+                            return int(ms) if ms.lstrip("-").isdigit() else 0
+                        except ValueError:
+                            return 0
+                return 0
+
+            # 收集实际使用的材料号 → 颜色/标签
+            legend_entries = []
+            mat_seen = {}
+            for c in self.cells:
+                mat_num = _material_of(c.number)
+                if mat_num <= 0 or mat_num in mat_seen:
+                    continue
+                mat_seen[mat_num] = True
+                color = _mat_color(mat_num)
+                # 获取材料注释（从 main_window 的材料列表）
+                label = f"M{mat_num}"
+                if hasattr(self, 'main_window') and hasattr(self.main_window, 'tab_mat'):
+                    try:
+                        for m in self.main_window.tab_mat.get_materials():
+                            comment = getattr(m, 'comment', '')
+                            if comment:
+                                label += f" ({comment.strip()})"
+                                break
+                    except Exception:
+                        pass
+                legend_entries.append((label, color))
+
+            # 按体积排序：外层（大）半透明，内层（小）实心
+            cell_meshes = []
+            for cell_num, stl_path in result.items():
+                mesh = pv.read(stl_path)
+                if mesh.n_cells == 0:
+                    continue
+                mat = _material_of(cell_num)
+                cell_meshes.append((cell_num, mesh, mat,
+                                    abs(mesh.volume) if hasattr(mesh, 'volume') else 0))
+            cell_meshes.sort(key=lambda x: x[3])  # 按体积升序
+
+            plot = pv.Plotter()
+            plot.add_axes()
+
+            _actors = []  # [(actor, base_op, mesh_center)]
+            for cell_num, mesh, mat, vol in cell_meshes:
+                color = _mat_color(mat)
+                if color is None:
+                    continue
+                if vol > 1e6 and mat > 0:
+                    base_op = 0.35
+                elif vol > 1e4 and mat > 0:
+                    base_op = 0.65
+                else:
+                    base_op = 1.0
+                actor = plot.add_mesh(mesh, color=color, opacity=base_op)
+                _actors.append((actor, base_op, mesh.center))
+
+            def _update_opacity_by_distance():
+                """摄像机越近 → 外层越透明"""
+                if not _actors:
+                    return
+                cam_pos = plot.camera_position[0]
+                # 计算所有 actor 中离摄像机最远的距离
+                max_dist = 1.0
+                for _, _, center in _actors:
+                    d = ((cam_pos[0]-center[0])**2 +
+                         (cam_pos[1]-center[1])**2 +
+                         (cam_pos[2]-center[2])**2) ** 0.5
+                    max_dist = max(max_dist, d)
+                for actor, base_op, center in _actors:
+                    d = ((cam_pos[0]-center[0])**2 +
+                         (cam_pos[1]-center[1])**2 +
+                         (cam_pos[2]-center[2])**2) ** 0.5
+                    # 远→base_op，近→更透明
+                    ratio = d / max_dist if max_dist > 0 else 0.5
+                    # 透明度范围 [base_op-0.3, base_op+0.1]
+                    op = base_op * (0.7 + 0.3 * ratio)
+                    op = max(0.15, min(1.0, op))
+                    actor.GetProperty().SetOpacity(op)
+
+            def _on_camera_move(obj, event):
+                _update_opacity_by_distance()
+
+            plot.iren.add_observer("InteractionEvent", _on_camera_move)
+            plot.iren.add_observer("RenderEvent", _on_camera_move)
+
+            if legend_entries:
+                plot.add_legend(
+                    labels=legend_entries,
+                    bcolor=(0.95, 0.95, 0.95),
+                    size=(0.2, 0.25),
+                )
+
+            plot.show()
+        except Exception as e:
+            QMessageBox.critical(self, "渲染失败", str(e))
+        finally:
+            engine.cleanup()
+
+    def _export_stl(self):
+        """导出每个栅元为 STL 文件"""
+        self._export_geometry("stl")
+
+    def _export_step(self):
+        """导出每个栅元为 STEP 文件"""
+        self._export_geometry("step")
+
+    def _export_geometry(self, fmt: str):
+        """通用导出方法"""
+        freecad_bin = StepImporter.detect_freecad()
+        if not freecad_bin:
+            self._show_freecad_guide()
+            return
+
+        default_dir = getattr(self.main_window, 'path_edit', None)
+        default_path = default_dir.text().strip() if default_dir else ""
+        out_dir = QFileDialog.getExistingDirectory(self, "选择导出目录", default_path)
+        if not out_dir:
+            return
+
+        surfaces_text = self.surface_text.toPlainText().strip()
+        surfs = []
+        for line in surfaces_text.split("\n"):
+            obj, _ = _parse_surface_line(line)
+            if obj is not None:
+                surfs.append(obj)
+
+        if not surfs:
+            QMessageBox.warning(self, "提示", "没有有效的曲面定义")
+            return
+
+        tr_cards = self._parse_tr_cards()
+
+        cells_data = []
+        for cell in self.cells:
+            expr = cell.surface_expr.strip()
+            if not expr:
+                continue
+            try:
+                geometry = Geometry.from_mcnp(expr)
+                cells_data.append({
+                    "number": cell.number,
+                    "material": cell.material,
+                    "ast": geometry,
+                    "density": cell.density,
+                })
+            except Exception:
+                continue
+
+        if not cells_data:
+            QMessageBox.warning(self, "提示", "没有有效的栅元定义")
+            return
+
+        progress = QProgressDialog(
+            "正在导出 " + fmt.upper() + "...", "取消", 0, 0, self
+        )
+        progress.setModal(True)
+        progress.show()
+        QApplication.processEvents()
+
+        engine = FreeCADEngine(freecad_bin)
+        try:
+            if fmt == "stl":
+                files = engine.export_stl(surfs, cells_data, tr_cards, out_dir)
+            else:
+                files = engine.export_step(surfs, cells_data, tr_cards, out_dir)
+            QMessageBox.information(
+                self, "导出成功",
+                "已导出 " + str(len(files)) + " 个 ." + fmt + " 文件到:\n" + out_dir
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "导出失败", str(e))
+        finally:
+            progress.close()
+            engine.cleanup()
 
     def _on_preview_error(self, msg: str):
         """接收后台线程的预览错误并弹窗（支持 Ctrl+C 复制） / Handle preview errors from background thread.

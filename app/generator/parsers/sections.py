@@ -17,6 +17,10 @@ def _is_surface_line(line: str) -> bool:
     A surface card starts with a numeric ID, followed by a surface mnemonic
     (e.g., "P", "PX", "S", "RPP") from the _SURFACE_TYPES set.
 
+    Supports optional TRn reference after the surface number:
+        j [n] a list   where n > 0 = TRn, n < 0 = periodic with surface |n|
+        n can be explicit "TR1" or a bare integer "1".
+
     Args:
         line: A normalized MCNP input line.
 
@@ -28,10 +32,24 @@ def _is_surface_line(line: str) -> bool:
         return False
     if not parts[0].lstrip('-').isdigit():
         return False
-    surf_type = parts[1].upper()
-    # Handle TRn transformation cards where the actual surface type is the 3rd token
-    if re.match(r'^TR\d+$', surf_type) and len(parts) > 2:
-        surf_type = parts[2].upper()
+
+    # Determine where the surface type keyword sits
+    surf_type_idx = 1
+    second = parts[1].upper()
+
+    # Case A: Explicit TRn prefix (e.g. "TR1", "TR99")
+    if re.match(r'^TR\d+$', second) and len(parts) > 2:
+        surf_type_idx = 2
+    # Case B: Bare integer TRn reference / periodic surface index (e.g. "2", "-3")
+    elif len(parts) > 2 and parts[1].lstrip('-').isdigit():
+        try:
+            n_val = int(parts[1])
+            if n_val != 0:  # 0 = no transform, skip
+                surf_type_idx = 2
+        except ValueError:
+            pass
+
+    surf_type = parts[surf_type_idx].upper()
     return surf_type in _SURFACE_TYPES
 
 
@@ -100,8 +118,8 @@ def split_sections(lines: list[str]) -> tuple[str, list[str], list[str], list[st
     # Determine title: first non-empty line, unless it looks like a cell/comment card
     first_line = lines[start].strip()
     first_part = first_line.split()[0].upper() if first_line.split() else ""
-    # Cell cards start with a digit; comments start with C
-    if first_part.isdigit() or (first_part.startswith('C') and len(first_part) <= 2):
+    # Cell cards start with a digit; comments start with C (exact "C", not "Co"/"Cu"/"Ca")
+    if first_part.isdigit() or first_part == 'C':
         title = "inp_CARD"
     else:
         title = first_line
@@ -112,10 +130,11 @@ def split_sections(lines: list[str]) -> tuple[str, list[str], list[str], list[st
         "MODE", "NPS", "CTME", "NONU", "SDEF", "PRDMP",
         "KCODE", "KSRC", "TOTNU", "PTRAC", "VOID", "LOST",
         "DBCN", "PERT", "SSW", "SSR", "ESPLT", "WWE", "WWN",
-        "PHYS:N", "PHYS:P", "PHYS:E", "PHYS",
+        "PHYS:N", "PHYS:P", "PHYS:E", "PHYS:H", "PHYS:HE", "PHYS",
         "BURN", "FMESH", "FC", "F", "F0",
+        "PRINT", "ACT", "MPHYS", "LCA",
     }
-    # Regex patterns for data card line starts (Mnn, SIn, SPn, Fn:, Fn, FCn, En, CUT:)
+    # Regex patterns for data card line starts
     DATA_PATTERNS = [
         re.compile(r'^M\d+$', re.IGNORECASE),
         re.compile(r'^SI\d*$', re.IGNORECASE),
@@ -125,6 +144,9 @@ def split_sections(lines: list[str]) -> tuple[str, list[str], list[str], list[st
         re.compile(r'^FC\d+$', re.IGNORECASE),
         re.compile(r'^E\d*$', re.IGNORECASE),
         re.compile(r'^CUT:', re.IGNORECASE),
+        re.compile(r'^MT\d+$', re.IGNORECASE),
+        re.compile(r'^\*?TR\d+$', re.IGNORECASE),
+        re.compile(r'^(FU|FT|FQ|T)\d+$', re.IGNORECASE),
     ]
 
     # Phase-based section classification: start in "cell", transition on blank line or data patterns
@@ -134,9 +156,17 @@ def split_sections(lines: list[str]) -> tuple[str, list[str], list[str], list[st
         line = remaining[i].strip()
 
         # Blank line: transition to the next section (cell -> surface -> data)
+        # Only non-C-comment lines count as real content for the transition,
+        # so C-comment headers like "c cell card" before actual cells don't
+        # trigger premature section change.
         if not line:
             if phase == "cell":
-                phase = "surface"
+                has_real_cells = any(
+                    not l.strip().upper().startswith("C")
+                    for l in cell_lines
+                )
+                if has_real_cells:
+                    phase = "surface"
             elif phase == "surface":
                 phase = "data"
             i += 1
@@ -174,6 +204,17 @@ def split_sections(lines: list[str]) -> tuple[str, list[str], list[str], list[st
                 i += 1
                 continue
 
+        # C-comment cards go to the current section (cell/surface/data) without changing phase
+        if re.match(r'^C\s', line, re.IGNORECASE):
+            if phase == "cell":
+                cell_lines.append(line)
+            elif phase == "surface":
+                surf_lines.append(line)
+            else:
+                data_lines.append(line)
+            i += 1
+            continue
+
         # Classify the line based on the current phase
         if phase == "cell":
             if _is_surface_line(line):
@@ -184,14 +225,7 @@ def split_sections(lines: list[str]) -> tuple[str, list[str], list[str], list[st
                 cell_lines.append(line)
         elif phase == "surface":
             if _is_cell_line(line) and not _is_surface_line(line):
-                # Ambiguous line: looks like a cell card — verify it's not actually a surface
-                surf_type = parts[1].upper() if len(parts) > 1 else ""
-                if re.match(r'^TR\d+$', surf_type) and len(parts) > 2:
-                    surf_type = parts[2].upper()
-                if surf_type in _SURFACE_TYPES:
-                    surf_lines.append(line)
-                else:
-                    cell_lines.append(line)
+                cell_lines.append(line)
             else:
                 surf_lines.append(line)
         elif phase == "data":

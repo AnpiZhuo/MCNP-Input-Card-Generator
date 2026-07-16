@@ -84,6 +84,7 @@ class BasicSettingsTab(QWidget):
         )
 
         title_layout.addWidget(title_label)
+        self.title_edit.textChanged.connect(self._easter_egg)
         title_layout.addWidget(self.title_edit)
         title_layout.addWidget(tip)
         layout.addWidget(grp_title)
@@ -205,6 +206,70 @@ class BasicSettingsTab(QWidget):
 
         scroll.setWidget(content)
         outer.addWidget(scroll)
+
+
+    def _easter_egg(self, text: str):
+        """标题栏输入英文关键词触发彩蛋，每次启动每类仅触发一次"""
+        import re as _re
+        from PyQt5.QtWidgets import QMessageBox
+        if not hasattr(self, '_egg_triggered'):
+            self._egg_triggered = set()
+        t = text.lower().strip()
+        eggs = [
+            (r'\boutp\b', 'outp',
+             "不是……大哥，你写的是输入卡。\nOUTP 是输出文件的名字，你标题写这个干嘛？\n\n"
+             "Bro... you're writing an INPUT file.\nWhy are you naming it OUTP?"),
+            (r'\binp\b', 'inp',
+             "INP！INP！INP！\n你就不能想个比 INP 更有创意的名字吗？\n\n"
+             "INP! INP! INP!\nYou couldn't think of a more creative name than INP?"),
+            (r'\btitle\b', 'title',
+             "Title? 你管这叫 title？\n行吧，你说是就是。\n\n"
+             "Title? You call THAT a title?\nSure, whatever you say."),
+            (r'\btest\b', 'test',
+             "又到了经典的「先跑个测试看看」环节。祝你一次过。\n\n"
+             "\"Just run a quick test\" — the classic opening move. Good luck."),
+            (r'\b(simple|easy|just|quick)\b', 'simple',
+             "「简单算一下」—— 全人类的 flag。建议预留半天调参数。\n\n"
+             "\"It's a simple calculation\" — famous last words."),
+            (r'\b(final|last|ultimate)\b', 'final',
+             "检测到标题含「最终版」。三天后你还会回来的。\n\n"
+             "Files named \"final\" never are. See you in 3 days."),
+            (r'\b(help|sos)\b', 'help',
+             "你好，你已经在使用 MCNP 生成器了。剩下的帮不了你了，去看 C810 吧。\n\n"
+             "You're already using a generator. The rest is in the C810 manual."),
+            (r'\bhello\b', 'hello',
+             "Hello World! 来自一个没有感情的 AI（和一位不想写标题的用户）\n\n"
+             "Hello World! — from a heartless AI and a lazy user."),
+            (r'\b(uranium|plutonium)\b', 'uranium',
+             "检测到裂变材料。确保你持有相关许可证。（当然我猜你只是在算 KCODE）\n\n"
+             "Fissionable material detected. Hope you have a license. (Probably just KCODE.)"),
+            (r'\bboring\b', 'boring',
+             "MCNP 前处理确实不酷。但你把这件事做完了，这才是酷的。\n\n"
+             "MCNP preprocessing isn't glamorous. But finishing it is."),
+            (r'\b(perfect|nice|good|done|awesome)\b', 'good',
+             "看到成果了吧？奖励自己一杯奶茶。\n\n"
+             "You got results. Go treat yourself."),
+            (r'\bweiyizhuo\b', 'weiyizhuo',
+             "这你都认识？你跟作者很熟吗？\n别声张，他不知道自己是个名人。\n\n"
+             "You know that name? Are you friends with the dev?\nShh, he doesn't know he's famous."),
+            (r'\b1\b', 'one',
+             "标题写个「1」？\n你就懒到这个地步了吗？我的天。\n\n"
+             "Your title is \"1\"?\nAre you even trying right now?"),
+            (r'1378963177', 'qq',
+             "这个邮箱我记住了。\n\n"
+             "I've memorized this email by now."),
+            (r'\b(bug|error|crash|fail)\b', 'bug',
+             "\U0001f41b 没有 bug 的程序不是好程序。\n——来自一个不写代码的产品经理\n\n"
+             "A program without bugs isn't a real program. — Every PM ever."),
+            (r'\b(shit|crap|fuck|damn)\b', 'shit',
+             "消消气。出去喝杯水，回来再战。\n\n"
+             "Take a breath. Get some water. Come back and crush it."),
+        ]
+        for pattern, key, msg in eggs:
+            if key not in self._egg_triggered and _re.search(pattern, t):
+                self._egg_triggered.add(key)
+                QMessageBox.information(self, "\U0001f38a 彩蛋！", msg)
+                break
 
     def get_data(self) -> BasicSettings:
         """获取当前标签页的数据"""

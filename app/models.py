@@ -328,7 +328,7 @@ class AdvancedSettings:
 
     # SDEF mode toggle: "fixed" = point source, "distribution" = distributed source
     # SDEF 模式切换（固定点源/分布源）
-    source_mode: str = "fixed"       # "fixed" | "distribution" | "kcode"
+    source_mode: str = "distribution"       # "fixed" | "distribution" | "kcode"
 
     # Distribution source mode: SDEF field values
     # 分布源模式：SDEF 字段值
@@ -375,6 +375,7 @@ class DeckData:
     """
     basic: BasicSettings = field(default_factory=BasicSettings)       # Title, mode, NPS, CTME / 标题、模式、NPS、CTME
     surfaces: str = ""                                                # Surface cards as raw text / 曲面卡片原始文本
+    tr_cards: str = ""                                                 # TR transformation cards as raw text / TR 变换卡原始文本
     cells: list[CellData] = field(default_factory=list)               # Cell definitions / 栅元定义列表
     materials: list[MaterialData] = field(default_factory=list)       # Material definitions / 材料定义列表
     sources: list[SourceData] = field(default_factory=list)           # Source definitions / 源定义列表
