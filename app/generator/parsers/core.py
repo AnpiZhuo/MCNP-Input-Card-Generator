@@ -114,6 +114,22 @@ def parse_cells(cell_lines: list[str]) -> list[CellData]:
         while idx < len(parts):
             token = parts[idx]
             upper = token.upper()
+            if upper.startswith("IMP:"):
+                # 处理 imp:n,p=1 这种多粒子合并语法（逗号分隔粒子列表）
+                imp_body = token.split("=", 1)
+                if len(imp_body) == 2:
+                    value = imp_body[1]
+                    particles = imp_body[0][4:]  # 去掉 "IMP:" 前缀
+                    for p in particles.split(","):
+                        p = p.strip().lower()
+                        if p == "n":
+                            imp_n = value
+                        elif p == "p":
+                            imp_p = value
+                        elif p == "e":
+                            imp_e = value
+                    idx += 1
+                    continue
             if upper.startswith("IMP:N="):
                 imp_n = token.split("=", 1)[1]
             elif upper.startswith("IMP:P="):
@@ -362,7 +378,7 @@ def parse_sdef_simple(parts: list[str]) -> list[SourceData]:
                 if ti < len(tokens):
                     _apply_sdef_param(src, key, tokens[ti])
                     ti += 1
-                    # key= 后跟续值（如 pos= -5 0 0）
+                    # key= 后跟续值（如 pos= -5 0 0 或 par= D1 或 X= FERG D2）
                     if key in ("POS", "VEC", "AXS"):
                         cont = _collect_multi_val(tokens, ti)
                         if cont:
@@ -376,6 +392,28 @@ def parse_sdef_simple(parts: list[str]) -> list[SourceData]:
                             elif key == "AXS":
                                 src.axs = " ".join([tokens[ti - 1]] + cont)
                             ti += len(cont)
+                    elif key in _KNOWN_KEYS:
+                        cont = _collect_multi_val(tokens, ti)
+                        real_cont = []
+                        for c in cont:
+                            if c.upper() in _KNOWN_KEYS:
+                                break
+                            real_cont.append(c)
+                        if real_cont:
+                            cont_str = " ".join(real_cont)
+                            ti += len(real_cont)
+                            if key == "X":
+                                src.pos_x = (src.pos_x + " " + cont_str).strip()
+                            elif key == "Y":
+                                src.pos_y = (src.pos_y + " " + cont_str).strip()
+                            elif key == "Z":
+                                src.pos_z = (src.pos_z + " " + cont_str).strip()
+                            elif key == "EFF":
+                                src.sdef_extra = (src.sdef_extra + " " + cont_str).strip()
+                            else:
+                                attr = "dir_" if key == "DIR" else key.lower()
+                                cur = getattr(src, attr, "")
+                                setattr(src, attr, (cur + " " + cont_str).strip())
                     continue
         else:
             # 裸参数（无 = 号）
@@ -627,6 +665,7 @@ def parse_data_cards(data_lines: list[str]) -> dict:
         "ksrc_points": [],  # list of {"x":..., "y":..., "z":...}
         "source_mode": "fixed",
         "other_cards": [], "e0_values": [], "warnings": [],
+        "tr_cards": [],
     }
 
     data = [l for l in data_lines
@@ -836,6 +875,10 @@ def parse_data_cards(data_lines: list[str]) -> dict:
             result["kcode_ikz"] = expanded[2]
             result["kcode_kct"] = expanded[3]
             result["kcode_knrm"] = expanded[4]
+            i += 1
+        elif re.match(r'^\*?TR\d+$', first, re.IGNORECASE):
+            # TRn / *TRn 变换卡 — 存入 tr_cards
+            result["tr_cards"].append(raw_line)
             i += 1
         elif first.startswith("KSRC"):
             # KSRC  x y z [x y z ...] — 每三个数一组

@@ -25,6 +25,14 @@ class OutputTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
 
+        # ===== 功能未完成提示 =====
+        warn = QLabel(
+            "<span style='color:#c62828; font-weight:bold;'>"
+            "⚠ 注意：输出板块功能尚未完成，部分功能可能无法正常工作。</span>"
+        )
+        warn.setWordWrap(True)
+        layout.addWidget(warn)
+
         # ===== 文件选择 =====
         grp_file = QGroupBox("选择 MCNP 输出文件")
         grp_file.setToolTip("加载 MCNP 输出文件（outp），解析并提取 tally 数据")

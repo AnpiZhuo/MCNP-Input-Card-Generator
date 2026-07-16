@@ -1,0 +1,533 @@
+========================================================================
+  C810 文档 - MCNP 输入卡格式详细说明
+  源: D:\MCNP\MCNP6\C810.pdf  |  MCNP5 Vol.II Ch.3
+========================================================================
+
+########################################################################
+# 1. 栅元卡 (CELL CARDS)
+########################################################################
+
+【基本格式】
+  j  m  d  geom  params
+
+  j     = 栅元编号 (1 <= j <= 99999)
+  m     = 材料编号 (m=0 表示真空)
+  d     = 密度: +数=原子密度(10^24/cm^3), -数=质量密度(g/cm^3)
+  geom  = 几何描述: 有符号曲面号, :(并), #(补), ()(优先级)
+  params= keyword=value 参数 (IMP, VOL, U, FILL, TRCL, ...)
+
+【LIKE m BUT 格式】
+  j  LIKE k BUT  keyword=val  ...
+  继承栅元k的全部描述, 只修改指定的参数
+
+【示例】
+  1  0  -1  2  -3  4  -5  6                $ 立方体
+  2  1  -2.7  -2                          $ 材料1, 密度2.7
+  3  0  -1 : 2 : -3                       $ 并集
+  4  0  #2                                $ 补集
+  10  LIKE 1 BUT  MAT=3  RHO=-1.2          $ 同形状, 改材料
+
+########################################################################
+# 2. 曲面卡 (SURFACE CARDS)
+########################################################################
+
+【通用格式】
+  j  type  params
+
+平面:
+  P     A B C D         $ Ax+By+Cz=D
+  PX    D               $ x=D
+  PY    D               $ y=D
+  PZ    D               $ z=D
+
+球面:
+  SO    R               $ 球心原点, x^2+y^2+z^2=R^2
+  SX    Xc R            $ 球心在x轴
+  SY    Yc R
+  SZ    Zc R
+  S     Xc Yc Zc R      $ 一般球面
+
+柱面:
+  CX    R               $ x轴向, y^2+z^2=R^2
+  CY    R
+  CZ    R
+  C/X   Xc Yc Zc R      $ 一般柱面, 平行x轴
+  C/Y   Xc Yc Zc R      $ 平行y轴
+  C/Z   Xc Yc Zc R      $ 平行z轴
+
+锥面:
+  KX    Xc A T           $ (x-Xc)^2 - A^2(y^2+z^2)=0, T=1单/2双
+  KY    Yc A T
+  KZ    Zc A T
+  K/X   Xc Yc Zc A T    $ 一般轴向锥
+  K/Y   Xc Yc Zc A T
+  K/Z   Xc Yc Zc A T
+
+二次曲面:
+  SQ    A B C D E F G H J K    $ Ax^2+By^2+Cz^2+Dxy+Eyz+Fzx+Gx+Hy+Jz=K
+  GQ    A B C D E F G H I J K  $ Ax^2+By^2+Cz^2+Dxy+Eyz+Fzx+Gx+Hy+Iz=J
+
+环面:
+  TZ    A B C              $ z轴向环面, a b c 为椭圆参数
+  TX    A B C              $ x轴向环面
+  TY    A B C              $ y轴向环面
+
+椭圆柱面:
+  TXY   Yc Zc A B        $ 椭圆柱, 轴//z
+  TXZ   Xc Zc A B        $ 轴//y
+  TYZ   Xc Yc A B        $ 轴//x
+
+坐标平面:
+  X     x0               $ x=x0
+  Y     y0               $ y=y0
+  Z     z0               $ z=z0
+
+Macrobody(宏体):
+  BOX   Vx Vy Vz  A1x A1y A1z  A2x A2y A2z  A3x A3y A3z
+  RPP   Xmin Xmax Ymin Ymax Zmin Zmax
+  SPH   Vx Vy Vz R
+  RCC   Vx Vy Vz  Hx Hy Hz  R
+  REC   Vx Vy Vz  Hx Hy Hz  V1x V1y V1z  V2x V2y V2z
+  # REC可用缩略格式: REC Vx Vy Vz  Hx Hy Hz  V1x V1y V1z  rMinor
+  TRC   Vx Vy Vz  Hx Hy Hz  R1 R2
+  ELL   Vx Vy Vz  Ux Uy Uz  Wx Wy Wz  RM
+  WED   Vx Vy Vz  A1 A2 A3  B1 B2 B3  C1 C2 C3
+  ARB   (8点x,y,z) (6个4位面编号)
+  RHP/HEX  v1 v2 v3  h1 h2 h3  r1 r2 r3  s1 s2 s3  t1 t2 t3
+
+########################################################################
+# 3. 源卡 (SOURCE CARDS)
+########################################################################
+
+## 3a. SDEF 通用源卡
+
+【格式】
+  SDEF  var=val  var=val  ...
+  赋值方式: val=显式值, =Dn(从分布n采样), =Fvar Dn(依赖分布)
+
+【源变量列表】
+  CEL = 栅元号           (默认: 由XYZ确定)
+  SUR = 面号(面源)       (默认: 0=体源)
+  ERG = 能量(MeV)        (默认: 14)
+  TME = 时间(shakes)     (默认: 0)
+  DIR = 方向余弦         (体源各向同性, 面源p(mu)=2mu)
+  VEC = 参考矢量(x y z)  (面源: 法向)
+  NRM = 法向符号(+1/-1)  (默认: +1)
+  POS = 参考点(x y z)    (默认: 0 0 0)
+  RAD = 径向距离         (默认: 0)
+  EXT = 轴向距离         (默认: 无)
+  AXS = 参考轴(x y z)    (默认: 无)
+  X   = x坐标            (默认: 无)
+  Y   = y坐标            (默认: 无)
+  Z   = z坐标            (默认: 无)
+  CCC = cookie-cutter栅元(默认: 无)
+  ARA = 面面积           (默认: 无)
+  WGT = 初始权重         (默认: 1)
+  EFF = 拒绝效率阈值     (默认: 0.01)
+  PAR = 粒子类型         1=N, 2=P, 3=E, 4=F(正电子)
+  TR  = 变换编号         (默认: 无)
+
+【示例】
+  SDEF  ERG=14.0  POS=0 0 0            $ 14MeV点源
+  SDEF  ERG=D1  CEL=2  X=D2  Y=D3  Z=D4  $ 体源+拒绝
+  SDEF  SUR=1  NRM=-1  ERG=14.0          $ 面向内的面源
+  SDEF  PAR=2  ERG=0.511  POS=0 0 0      $ 0.511MeV光子点源
+
+## 3b. SI/SP/SB/DS 分布卡
+
+SIn (源信息卡) 格式:
+  SI[n] [type]  vals...
+  类型: L=离散列表, A=等间距对数, H=等间距线性, S=子分布
+
+SPn (源概率卡) 格式:
+  SP[n] [type]  vals...
+  类型: D=默认概率, 或无=显式概率
+
+SBn (源偏倚卡) 格式:
+  SB[n] [type]  vals...
+
+DSn (依赖分布卡) 格式:
+  DS[n]  var  Dn1  Dn2  ...
+
+【示例】
+  SDEF  ERG=D1
+  SI1  L  0.1  1.0  14.0     $ 三种能量离散
+  SP1  D                       $ 等概率
+
+  SDEF  DIR=FERG D2            $ DIR依赖ERG
+  DS2  ERG                     $ 依赖ERG
+  SI2  H  0  1                 $ ERG=0.1时DIR均匀0~1
+  SI3  H  -1  1                $ ERG=1.0时DIR均匀-1~1
+
+## 3c. KCODE 临界源卡
+
+【格式】
+  KCODE  NSRC  RKK  IKZ  KCT  [KNRM]
+  NSRC = 每代裂变点数 (~10000)
+  RKK  = 初始keff (~1.0)
+  IKZ  = 跳过的代数 (~50)
+  KCT  = 有效代数 (~1000)
+  KNRM = 法向nsrc (0/1)
+
+【示例】
+  KCODE  10000  1.0  50  500
+  KSRC   0  0  0  2  0  0  -2  0  0
+
+########################################################################
+# 4. 计数卡 (TALLY CARDS)
+########################################################################
+
+## 4a. Fn 基本计数定义卡
+
+【通用格式】
+  Fn:pl  S1  S2  ...  Sk
+  n   = 编号 (1,2,4,5,6,7,8, 或+10)
+  pl  = 粒子: N,P,E,N,P,P,E
+  Si  = 曲面/栅元编号, T=所有条目并集
+
+【F1 面电流】
+  F1:N/P/E  s1 s2 ...
+  *F1:N/P/E  s1 s2 ...    $ MeV
+
+【F2 面平均通量】
+  F2:N/P/E  s1 s2 ...
+  *F2:N/P/E  s1 s2 ...    $ MeV/cm^2
+
+【F4 栅元平均通量】
+  F4:N/P/E  c1 c2 ...
+  *F4:N/P/E  c1 c2 ...    $ MeV/cm^2
+
+【F5 探测器】
+  F5:N/P  x y z  R0           $ 点探测器
+  F5a:N/P  a r  R0            $ 环探测器 (a=X/Y/Z)
+  FIR5:N/P  X1 Y1 Z1 0 X2 Y2 Z2 F1 F2 F3  $ 平面放射成像
+  FIC5:N/P  ...               $ 柱面放射成像
+  FIP5:N/P  ...               $ 针孔成像
+
+【F6 能量沉积】
+  F6:N/P/N,P  c1 c2 ...   $ MeV/g
+  *F6:N/P  c1 c2 ...       $ jerks/g
+
+【F7 裂变能量沉积】
+  F7:N  c1 c2 ...   $ MeV/g
+
+【F8 脉冲高度谱】
+  F8:P/E/P,E  c1 c2 ...   $ 脉冲数
+  *F8:P/E/P,E  c1 c2 ...   $ MeV (能量沉积)
+  +F8:E  c1 c2 ...         $ 电荷 (电子电荷单位)
+
+【示例】
+  F4:N  1  2  3
+  F4:P  (1 2) 3 4
+  F5:P  0 0 100  1
+  F8:P  1  2  3
+  *F8:P  1  2  3             $ 能量沉积
+
+## 4b. 辅助计数卡
+
+En (能量箱):
+  En   E1  E2  ...  Ek  [NT(不打印合计)/C(累积)]
+  示例: E4  0.1  1.0  10.0
+        E0  0.01  0.1  1.0    $ E0=全局默认
+
+Tn (时间箱):
+  Tn   T1  T2  ...  Tk
+  示例: T4  1e8  1e9  1e10
+
+Cn (余弦箱):
+  Cn   mu1  mu2  ...  munk
+  示例: C4  -1  -0.5  0  0.5  1
+
+FMn (计数乘子):
+  FMn  C  m  r1  r2  ...
+  C  = 常数, m = 材料号
+  ri = MT反应号 (负数=特殊处理, -6=裂变)
+  示例: FM4  1  1  -6         $ 裂变率
+        FM4  3.7e10  1  -6    $ 裂变功率 W/g
+
+DEn/DFn (剂量转换):
+  DEn   E1  E2  ...  Ek
+  DFn   F1  F2  ...  Fk
+  示例: DE4  0.1  1.0  10.0
+        DF4  1e-8  1e-7  2e-7
+
+FTn (特殊处理):
+  FTn  keyword  vals
+  关键字: TAL, PHL, CAP, FFT, INC, GEO, ...
+
+FMESHn (网格计数):
+  FMESHn:N/P/E  GEOM=xyz  ORIGIN=x0 y0 z0
+            IMESH=val  IINTS=val
+            JMESH=val  JINTS=val
+            KMESH=val  KINTS=val
+
+########################################################################
+# 5. 材料卡 (MATERIAL CARDS)
+########################################################################
+
+## 5a. Mn 材料定义卡
+
+【格式】
+  Mn  ZAID1  f1  ZAID2  f2  ...  [kw=val ...]
+
+  n    = 材料编号 (1~99999)
+  ZAID = ZZZAAA.nnX
+    ZZZ=原子序数(1~98), AAA=质量数(0=天然)
+    nn=库标识(可选, 如60), X=类型字母(可选):
+      c=中子连续, g=中子多群, y=光原子, e=电子, u=光核, r=剂量
+  fi   = 份额: +数=原子分数, -数=质量分数
+
+【关键字=值】
+  GAS=n   : 0=固/液, 1=气态
+  ESTEP=n : 电子子步增加数
+  NLIB=id : 默认中子库
+  PLIB=id : 默认光原子库
+  PNLIB=id: 默认光核库
+  ELIB=id : 默认电子库
+  COND=n  : 传导态 (<0非导, 0默认, >0导)
+
+【示例】
+  M1  1001  2  8016  1            $ H2O, 原子分数
+  M2  26000  -0.95  6000  -0.05   $ 钢, 质量分数95%Fe+5%C
+  M3  92235.60c  0.05  92238.60c  0.95  $ 5%浓缩铀
+  M4  1001  .6667  8016  .3333  GAS=1  $ 水蒸气
+
+## 5b. MPNn 光核核素选择
+
+【格式】
+  MPNn  ZA1  ZA2  ...  ZAi
+
+## 5c. TOTNU 总裂变卡
+
+【格式】
+  TOTNU
+  用途: 使用总nu值(瞬发+缓发)采样裂变中子数
+
+## 5d. NONU 裂变关闭卡
+
+【格式】
+  NONU
+  用途: 关闭裂变中子产生(光子/电子问题)
+
+########################################################################
+# 6. PHYS 物理卡
+########################################################################
+
+## 6a. PHYS:N (中子)
+
+【格式】
+  PHYS:N  EMAX  EMCNF  IUNR  DNB  FISNU
+
+  EMAX  = 中子能量上限(MeV), 默认=极大
+  EMCNF = 俘获方式转变能(MeV), 默认=0.0
+           高于此=隐含俘获(权重降低), 低于此=模拟俘获(死亡)
+  IUNR  = 0=打开(默认), 1=关闭未分辨共振概率表
+  DNB   = -1=自然(默认), 0=无缓发, >0=每裂变DNB个缓发
+  FISNU = <0=用-FISNU高斯宽度, 0=整数采样(默认), 1=推荐高斯, 2=原始Terrell
+
+【示例】
+  PHYS:N  20.0  0.1  1  -1  1
+
+## 6b. PHYS:P (光子)
+
+【格式】
+  PHYS:P  EMCPF  IDES  NOCOH  ISPN  NODOP
+
+  EMCPF = 详细/简单分界能量(MeV), 默认=100
+           >EMCPF: 简单(光电+康普顿+电子对,无荧光)
+           <EMCPF: 详细(含荧光+相干散射+电子束缚)
+  IDES  = 0=产生次级电子(默认), 1=不产生
+  NOCOH = 0=含相干散射(默认), 1=关闭
+  ISPN  = 0=无光核(默认), -1=模拟采样, 1=偏倚采样
+  NODOP = 0=含Doppler展宽(默认), 1=关闭
+
+【示例】
+  PHYS:P  100  0  0  1  0
+
+## 6c. PHYS:E (电子)
+
+【格式】
+  PHYS:E  EMAX  IDES  IPHOT  IBAD  ISTRG  BNUM  XNUM  RNOK  ENUM  NUMB
+
+  EMAX  = 电子能量上限(MeV), 默认=100
+  IDES  = 0=光子产生电子(默认), 1=不产生
+  IPHOT = 0=电子产生轫致光子(默认), 1=不产生
+  IBAD  = 0=完整角分布(默认), 1=简单角分布
+  ISTRG = 0=采样能损(默认), 1=期望值能损
+  BNUM  = 轫致光子倍增  (>0=倍, 0=不产生)
+  XNUM  = X射线倍增    (>0=倍, 0=不产生)
+  RNOK  = 撞出电子倍增  (>0=倍, 0=不产生)
+  ENUM  = 光致电子倍增  (>0=倍, 0=不产生)
+  NUMB  = 轫致辐射每子步控制  (>0=每子步产生, 0=常态默认/默认)
+
+【示例】
+  PHYS:E  100  0  0  0  0  1  1  1  1
+
+########################################################################
+# 7. 截断卡 (CUTOFF CARDS)
+########################################################################
+
+## 7a. CUT:n 截断卡
+
+【格式】
+  CUT:N/P/E  T  E  WC1  WC2  SWTM
+
+  T    = 时间截断(shakes, 1sh=1e-8s), >T时被杀
+  E    = 低能截断(MeV), <E时被杀
+  WC1  = 权重上限截断
+  WC2  = 权重下限截断(低于此值触发轮盘赌)
+  SWTM = 最小源权重(用于负值截断时归一)
+
+【默认值】
+  中子: T=极大  E=0.0  WC1=-0.50  WC2=-0.25  SWTM=自动
+  光子: T=同中子  E=0.001  WC1=-0.50  WC2=-0.25
+  电子: T=同中子  E=0.001  WC1=0  WC2=0
+
+【权重截断规则】
+  当 WGT < R*WC2 (R=源imp/当前imp):
+    概率 WGT/(R*WC1) 存活, 新权重=R*WC1, 否则杀
+  负值: 用 |WC1|*Ws, |WC2|*Ws (推荐)
+
+【示例】
+  CUT:N  1e8  1e-6  -0.5  -0.25
+  CUT:P  3J  -0.10                 $ 用前3个默认, 改WC2
+
+## 7b. 其他截断卡
+
+ELPT:n (逐栅元能量截断):
+  ELPT:N/P/E  E1  E2  ...  EI
+  实际使用 max(ELPT_i, CUT:n E)
+
+NPS (历史数截断):
+  NPS  N  [NPSMG]
+  N=总历史数, NPSMG=FIR直穿贡献数
+  示例: NPS  1000000
+
+CTME (计算机时间截断):
+  CTME  minutes
+  示例: CTME  30
+
+NOTRN:
+  NOTRN    $ 禁止散射输运, 只计算直穿
+
+########################################################################
+# 8. 其他常用卡
+########################################################################
+
+## 8a. MODE 卡
+
+【格式】
+  MODE  N  [/P]  [/E]
+  示例: MODE  N P E    $ 中子+光子+电子
+
+## 8b. IMP:n 重要性卡
+
+【格式】
+  IMP:N/P/E  I1  I2  ...  II (I对应栅元顺序)
+  Ii = 第i栅元的重要性: 0=不可进入, >0=分裂/轮盘赌依据
+
+【示例】
+  IMP:N  1  1  1  0
+  IMP:E,P,N  1  1  0      $ 多粒子同值
+
+## 8c. VOL 体积卡
+
+【格式】
+  VOL  V1  V2  ...  VI
+  示例: VOL  100.0  200.0  50.0
+
+## 8d. TMP 热温度卡
+
+【格式】
+  TMP  T1  T2  ...  TI  (单位: MeV)
+  默认: 2.53e-8 MeV (~293.6K)
+  示例: TMP  2.53e-8
+
+## 8e. MTn S(alpha,beta) 热散射卡
+
+【格式】
+  MTn  ZAID1  ZAID2  ...
+  n = 材料编号 (对应 Mn)
+  示例:
+  M1  1001  8016
+  MT1  lwtr.10t    $ 轻水热散射
+
+## 8f. MODE 和粒子标识符
+
+粒子标识符:
+  卡片名后加 :N, :P, :E 指定粒子
+  示例: IMP:N, F4:P, PHYS:E, CUT:N
+  多粒子: IMP:E,P,N  1  1  0
+  联合计数: F6:N,P 或 F8:P,E
+
+########################################################################
+# 9. 输入文件结构
+########################################################################
+
+【INP 文件块结构】
+
+  [消息块]          可选, 空行终止
+  标题行            第1行, 1-80列
+  [栅元卡块]         空行终止
+  [曲面卡块]         空行终止
+  [数据卡块]         隐式终止(无空行要求)
+
+【通用格式规则】
+
+  (1) 每行不超过 80 列
+  (2) 卡片名在 1-5 列开始
+  (3) 条目之间用空格分隔
+  (4) 注释: 第1列'c'=整行注释, '$'=行内注释
+  (5) 空行分隔栅元/曲面块
+  (6) 续行: 行尾 '&' 表示下一行是续行
+  (7) nJ = 跳过 n 个参数 (用默认值)
+  (8) nR = 重复前一值 n 次
+  (9) nI = 线性插值 n 个值
+  (10) 关键字=值, =号可省略
+  (11) 粒子标识符: :N :P :E 跟在卡片名后
+  (12) 默认值: 未指定的参数取默认值
+
+########################################################################
+# 附录: 卡片速查索引 (按Chapter 3页码)
+########################################################################
+
+卡片        格式摘要                           页码
+----------  ---------------------------------  -----
+栅元        j m d geom params                  3-9
+LIKE m BUT  j LIKE k BUT params                3-9
+曲面        j type params                      3-11
+MODE        MODE N[/P][/E]                     3-24
+IMP:n       IMP:n I1 I2 ...                    3-34
+SDEF        SDEF var=val ...                   3-54
+SIn         SI[n] [type] vals                  3-63
+SPn         SP[n] [type] vals                  3-63
+SBn         SB[n] [type] vals                  3-63
+DSn         DS[n] var Dn1 ...                  3-66
+SSW         SSW s1 s2 ...                      3-70
+SSR         SSR [old=new ...]                  3-72
+KCODE       KCODE NSRC RKK IKZ KCT            3-77
+KSRC        KSRC x1 y1 z1 ...                 3-78
+Fn          Fn:pl S1 S2 ...                    3-81
+En          En E1 E2 ... [NT/C]                3-96
+Tn          Tn T1 T2 ...                       3-96
+Cn          Cn mu1 mu2 ...                     3-97
+FMn         FMn C m r1 r2 ...                  3-99
+DEn/DFn     DEn E1 E2 ... / DFn F1 F2 ...     3-103
+FTn         FTn keyword vals                   3-116
+FMESHn      FMESHn:N GEOM=...                  3-118
+Mn          Mn ZAID f ZAID f ...               3-122
+MPNn        MPNn ZA1 ZA2 ...                   3-124
+TOTNU       TOTNU                              3-126
+NONU        NONU                               3-126
+PHYS:N      PHYS:N EMAX EMCNF IUNR DNB FISNU  3-131
+PHYS:P      PHYS:P EMCPF IDES NOCOH ISPN NODOP 3-133
+PHYS:E      PHYS:E EMAX IDES IPHOT ...        3-134
+TMP         TMP T1 T2 ...                      3-136
+MTn         MTn ZAID1 ZAID2 ...                3-138
+CUT:n       CUT:n T E WC1 WC2 SWTM            3-139
+ELPT:n      ELPT:n E1 E2 ...                   3-140
+NPS         NPS N [NPSMG]                      3-141
+CTME        CTME minutes                       3-142
+NOTRN       NOTRN                              3-141
+VOL         VOL V1 V2 ...                      3-24
+PRINT       PRINT tbl1 ...                     3-144

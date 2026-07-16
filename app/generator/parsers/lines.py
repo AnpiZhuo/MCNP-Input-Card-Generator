@@ -14,7 +14,7 @@ _SURFACE_TYPES = {
     "P", "PX", "PY", "PZ", "SO", "S", "SX", "SY", "SZ",
     "CX", "CY", "CZ", "C/X", "C/Y", "C/Z",
     "KX", "KY", "KZ", "K/X", "K/Y", "K/Z",
-    "SQ", "GQ", "TX", "TY", "TZ", "TXY", "TXZ", "TYZ",
+    "SQ", "GQ", "TX", "TY", "TZ",
     "RPP", "SPH", "RCC", "TRC", "REC", "ELL", "WED", "BOX", "ARB", "RHP", "HEX",
     "X", "Y", "Z",
 }

@@ -43,6 +43,15 @@ def _parse_tally_data(raw: dict) -> dict:
         "cut_h_wc1", "cut_h_wc2", "cut_h_swtm",
         "cut_he_t", "cut_he_e", "cut_he_raw",
         "cut_he_wc1", "cut_he_wc2", "cut_he_swtm",
+        # CUT:D — deuteron
+        "cut_d_t", "cut_d_e", "cut_d_raw",
+        "cut_d_wc1", "cut_d_wc2", "cut_d_swtm",
+        # CUT:T — triton
+        "cut_t_t", "cut_t_e", "cut_t_raw",
+        "cut_t_wc1", "cut_t_wc2", "cut_t_swtm",
+        # CUT:A — alpha
+        "cut_a_t", "cut_a_e", "cut_a_raw",
+        "cut_a_wc1", "cut_a_wc2", "cut_a_swtm",
     }
     result = {k: v for k, v in raw.items() if k in fields}
 

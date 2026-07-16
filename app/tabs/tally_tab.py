@@ -9,13 +9,20 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
     QTableWidget, QTableWidgetItem, QPushButton,
     QSpinBox, QLineEdit, QHeaderView,
-    QLabel, QMessageBox, QScrollArea, QCheckBox,
+    QLabel, QMessageBox, QCheckBox, QSplitter,
+    QScrollArea,
 )
-from PyQt5.QtCore import Qt, QSettings, pyqtSignal
+from PyQt5.QtCore import Qt, QSettings, pyqtSignal, QEvent
 
 from app.models import TallySettings, TallyDefinition
 from app.widgets.text_mode_section import TextModeSection
 from app.generator.inp_generator import _generate_tallies
+
+
+class NoWheelSpinBox(QSpinBox):
+    """禁用鼠标滚轮更改数值的 QSpinBox，防止悬停时误改 F 卡编号"""
+    def wheelEvent(self, event):
+        event.ignore()
 
 # 默认编号映射：选择类型时自动填入的默认编号
 _TYPE_CN_NAME = {
@@ -93,6 +100,7 @@ class TallyTab(QWidget):
         layout = QVBoxLayout(content)
         layout.setSpacing(12)
 
+        # ===== 计数卡列表 =====
         grp = QGroupBox("计数卡列表（每行定义一个 Fn 计数）")
         grp.setToolTip(
             "在此定义 MCNP 计数卡。每行包含：计数类型、编号、粒子、参数。\n"
@@ -162,10 +170,10 @@ class TallyTab(QWidget):
         )
         toolbar.insertWidget(toolbar.indexOf(self.btn_del) + 1, self._raw_tally.toggle_btn)
         inner.addWidget(self._raw_tally.stack)
-
+        grp.setMinimumHeight(600)
         layout.addWidget(grp)
 
-        # 使用说明 + 计数类型参照表
+        # ===== 使用说明 + 计数类型参照表 =====
         hint = QLabel(
             "<span style='color:#5f6368; font-size:12px;'>"
             "💡 每个粒子输出一张 Fn 卡。如编号=15 粒子=n p "
@@ -204,7 +212,7 @@ class TallyTab(QWidget):
         layout.addStretch()
 
         scroll.setWidget(content)
-        outer.addWidget(scroll)
+        outer.addWidget(scroll, 1)
 
     # ───────── 公开接口 ─────────
 
@@ -272,8 +280,8 @@ class TallyTab(QWidget):
         lbl_type.setToolTip(f"计数类型（由编号末位自动决定，不可编辑）\n{tally_type} = {cn_name}")
         self.table.setCellWidget(row, 0, lbl_type)
 
-        # 编号（末位自动同步类型）
-        sb = QSpinBox()
+        # 编号（末位自动同步类型，禁用滚轮误改）
+        sb = NoWheelSpinBox()
         sb.setRange(1, 99999)
         sb.setValue(number)
         sb.setToolTip("计数编号（如 1, 2, 5, 15, 25…）\n末位数字决定 MCNP 计数类型。"

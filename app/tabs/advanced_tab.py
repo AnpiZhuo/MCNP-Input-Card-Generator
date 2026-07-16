@@ -14,7 +14,7 @@ from PyQt5.QtGui import QFont
 from app.models import AdvancedSettings
 from app.xsdir_db import DB as xsdir_db
 from app.widgets.text_mode_section import TextModeSection
-from app.generator.inp_generator import _generate_advanced
+from app.generator.inp_generator import _generate_phys, _generate_other_cards
 
 
 class AdvancedTab(QWidget):
@@ -411,7 +411,11 @@ class AdvancedTab(QWidget):
     # ---------- 文本模式支持 ----------
 
     def _gen_phys_raw(self) -> str:
-        return "\n".join(_generate_advanced(self.get_data()))
+        adv = self.get_data()
+        lines = []
+        lines.extend(_generate_phys(adv))
+        lines.extend(_generate_other_cards(adv))
+        return "\n".join(lines)
 
     def get_raw_overrides(self) -> dict:
         return {"phys": self._raw_phys.get_raw_text()}

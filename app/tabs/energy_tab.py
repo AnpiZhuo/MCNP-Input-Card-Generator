@@ -453,36 +453,55 @@ class EnergyTab(QWidget):
         return grp
 
     def update_en_preview(self, tallies: list):
-        """根据勾选 En 的计数卡创建/删除/更新 En 行，Fn 编号变化时保留数据"""
-        needed = [td.number for td in tallies
-                  if getattr(td, 'generate_en', False)]
+        """根据计数卡列表创建/删除/更新 En 行，Fn 编号变化时保留数据。
+        未勾选 En 且无数据的行自动消失；有导入数据的行灰显保留。"""
+        existing_nums = {td.number for td in tallies}
+        en_map = {td.number: getattr(td, 'generate_en', False) for td in tallies}
 
         # 更新现有行的编号（Fn 编号变化时保留已填数据）
         old_keys = list(self._en_rows.keys())
-        for i, num in enumerate(needed):
+        for i, num in enumerate(sorted(existing_nums)):
             if num in self._en_rows:
                 continue
-            # 按位置匹配：老的第 i 个行如果已不存在，拿来改编号
             if i < len(old_keys) and old_keys[i] in self._en_rows:
                 old_num = old_keys[i]
-                if old_num not in needed:
+                if old_num not in existing_nums:
                     row_data = self._en_rows.pop(old_num)
                     self._en_rows[num] = row_data
-                    # 更新 GroupBox 标题
                     row_data["widget"].setTitle(
                         f"E{num}  — 计数 F{num} 专用能量网格")
 
-        # 删除不再需要的行
+        # 删除不存在的计数对应的行
         for num in list(self._en_rows.keys()):
-            if num not in needed:
+            if num not in existing_nums:
                 row_data = self._en_rows.pop(num)
                 row_data["widget"].setParent(None)
                 row_data["widget"].deleteLater()
 
-        # 新建需要的行
-        for num in needed:
-            if num not in self._en_rows:
+        # 为勾选 En 的行创建（如该计数尚无行）
+        for num in sorted(existing_nums):
+            if num not in self._en_rows and en_map.get(num, False):
                 self._create_en_row(num)
+
+        # 处理未勾选的行：有数据则灰显保留，无数据则消失
+        for num in list(self._en_rows.keys()):
+            if en_map.get(num, False):
+                self._en_rows[num]["widget"].setEnabled(True)
+            else:
+                rd = self._en_rows[num]
+                has_data = bool(
+                    rd["min"].text().strip()
+                    or rd["max"].text().strip()
+                    or rd["bins"].value() > 0
+                    or (rd.get("custom_cb") and rd["custom_cb"].isChecked())
+                    or (rd.get("custom_edit") and rd["custom_edit"].toPlainText().strip())
+                )
+                if has_data:
+                    rd["widget"].setEnabled(False)
+                else:
+                    rd["widget"].setParent(None)
+                    rd["widget"].deleteLater()
+                    del self._en_rows[num]
 
         # 更新 note 显隐
         self._en_note.setVisible(not bool(self._en_rows))
@@ -509,11 +528,13 @@ class EnergyTab(QWidget):
             if e_min and e_bins > 0 and e_max:
                 grid = "log" if e_log else "i"
                 lines.append(f"E{num}  {e_min} {e_bins}{grid} {e_max}")
-            elif e_min and e_bins > 0:
+            elif e_min and e_max and not (e_bins > 0):
+                # 只有 min 和 max，无 bins → 输出为 2 个显式值
+                lines.append(f"E{num}  {e_min} {e_max}")
+            elif e_min and e_max and e_bins > 0:
+                # 三个都填了但上一条没匹配（理论上不会发生），兜底输出完整格式
                 grid = "log" if e_log else "i"
-                lines.append(f"E{num}  {e_min} {e_bins}{grid}")
-            elif e_min:
-                lines.append(f"E{num}  {e_min}")
+                lines.append(f"E{num}  {e_min} {e_bins}{grid} {e_max}")
         return "\n".join(lines)
 
     def _en_rows_from_text(self, text: str):
@@ -537,6 +558,8 @@ class EnergyTab(QWidget):
             if not m:
                 continue
             num = int(m.group(1))
+            if num in self._en_rows:
+                continue  # 跳过重复的 En 编号，避免 widget 泄漏
             self._create_en_row(num)
             row_data = self._en_rows.get(num)
             if not row_data:

@@ -48,7 +48,7 @@ def import_inp_file(path: str, tabs: dict) -> tuple[bool, str]:
 
     # 回填各标签页
     tabs["basic"].set_data(deck.basic)
-    tabs["geo"].set_data(deck.surfaces, deck.cells)
+    tabs["geo"].set_data(deck.surfaces, deck.cells, deck.tr_cards)
     tabs["mat"].set_data(deck.materials)
     tabs["sdef"].set_data(deck.sources, deck.adv)
     tabs["tally"].set_data(deck.tally)

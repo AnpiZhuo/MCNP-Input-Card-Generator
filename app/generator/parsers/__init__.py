@@ -227,9 +227,12 @@ def parse_inp_text(text: str) -> tuple[DeckData, list[str]]:
         sdef_raw_text=data.get("sdef_raw_text", ""),
     )
 
+    # Extract TR cards from data section into DeckData.tr_cards
+    tr_cards = "\n".join(data.get("tr_cards", []))
+
     # Assemble the final DeckData object combining all parsed sections
     deck = DeckData(basic=basic, surfaces=surfaces, cells=cells,
                     materials=data["materials"], sources=data["sources"],
-                    tally=tally, adv=adv)
+                    tally=tally, adv=adv, tr_cards=tr_cards)
 
     return deck, warnings
