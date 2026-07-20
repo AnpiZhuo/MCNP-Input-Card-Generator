@@ -46,6 +46,10 @@ def _generate_cells(cells: list[CellData]) -> list[str]:
             params_parts.append(f"LAT={cell.lat}")
         if cell.trcl:
             params_parts.append(f"TRCL={cell.trcl}")
+        if cell.tmp and cell.tmp.strip():
+            params_parts.append(f"TMP={cell.tmp}")
+        if cell.other_params:
+            params_parts.append(cell.other_params)
         params = "  " + "  ".join(params_parts) if params_parts else ""
         comment = f"  $ {cell.comment}" if cell.comment else ""
 
@@ -194,7 +198,7 @@ def _generate_single_source(src: SourceData) -> list[str]:
         if src.pos_x: pos_parts.append(src.pos_x)
         if src.pos_y: pos_parts.append(src.pos_y)
         if src.pos_z: pos_parts.append(src.pos_z)
-        if pos_parts:
+        if len(pos_parts) == 3:
             parts.append(f"POS={' '.join(pos_parts)}")
         if src.dir_: parts.append(f"DIR={src.dir_}")
         if src.wgt: parts.append(f"WGT={src.wgt}")
@@ -221,7 +225,7 @@ def _generate_single_source(src: SourceData) -> list[str]:
     if src.pos_x: pos_parts.append(src.pos_x)
     if src.pos_y: pos_parts.append(src.pos_y)
     if src.pos_z: pos_parts.append(src.pos_z)
-    if pos_parts:
+    if len(pos_parts) == 3:
         parts.append(f"POS={' '.join(pos_parts)}")
     if src.dir_: parts.append(f"DIR={src.dir_}")
     if src.wgt: parts.append(f"WGT={src.wgt}")
@@ -243,7 +247,7 @@ def _generate_distribution_sdef(adv: AdvancedSettings) -> list[str]:
     if adv.sdef_pos_x: pos_parts.append(adv.sdef_pos_x)
     if adv.sdef_pos_y: pos_parts.append(adv.sdef_pos_y)
     if adv.sdef_pos_z: pos_parts.append(adv.sdef_pos_z)
-    if pos_parts:
+    if len(pos_parts) == 3:
         parts.append(f"POS={' '.join(pos_parts)}")
     if adv.sdef_wgt: parts.append(f"WGT={adv.sdef_wgt}")
     if adv.sdef_dir: parts.append(f"DIR={adv.sdef_dir}")
@@ -268,8 +272,8 @@ def _generate_distribution_sdef(adv: AdvancedSettings) -> list[str]:
         try:
             pairs = json.loads(adv.sdef_raw_text)
             for idx, pair in enumerate(pairs, 1):
-                si = pair.get("si", "").strip()
-                sp = pair.get("sp", "").strip()
+                si = (pair.get("si") or "").strip()
+                sp = (pair.get("sp") or "").strip()
                 if si:
                     # 内容可能已不含 SI{n} 前缀（UI 标签已显示索引），自动补全
                     if not re.match(r'^SI\d+', si, re.IGNORECASE):
@@ -526,7 +530,7 @@ def _generate_kcode(adv: AdvancedSettings) -> list[str]:
     kcode_parts = [adv.kcode_nsrc, adv.kcode_rkk or "1.0",
                    adv.kcode_ikz or "30", adv.kcode_kct or "100"]
     compact = _compress_j_skip(kcode_parts)
-    if adv.kcode_knrm.strip():
+    if (adv.kcode_knrm or "").strip():
         compact += " " + adv.kcode_knrm.strip()
     lines.append(f"KCODE  {compact}")
 
@@ -538,9 +542,9 @@ def _generate_kcode(adv: AdvancedSettings) -> list[str]:
             if points:
                 line_parts = ["C  KSRC Initial Fission Points"]
                 for pt in points:
-                    x = pt.get("x", "").strip()
-                    y = pt.get("y", "").strip()
-                    z = pt.get("z", "").strip()
+                    x = (pt.get("x") or "").strip()
+                    y = (pt.get("y") or "").strip()
+                    z = (pt.get("z") or "").strip()
                     if x and y and z:
                         line_parts.append(f"KSRC  {x}  {y}  {z}")
                 lines.extend(line_parts)
@@ -579,7 +583,6 @@ def _generate_en_cards(tally: TallySettings) -> list[str]:
                 lines.append(header)
         else:
             lines.append(f"C  SKIPPED (not a valid En card): {line}")
-    return lines
     return lines
 
 
@@ -705,8 +708,8 @@ def _wrap_long_lines(text: str) -> str:
             if has_cont:
                 line = line[:-1].rstrip()
 
-            # 在列 30-79 范围内找最后一个空格（优先在值之间拆分）
-            split_at = line.rfind(" ", 30, 80)
+            # 在列 30-78 范围内找最后一个空格，留位置给续行符 &（2 列）
+            split_at = line.rfind(" ", 30, 78)
             if split_at < 6:
                 split_at = 78
 

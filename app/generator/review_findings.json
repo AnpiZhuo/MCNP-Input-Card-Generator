@@ -1,0 +1,44 @@
+[
+  {
+    "file": "D:\\MCNP\\输入卡生成器源码\\app\\generator\\inp_generator.py",
+    "line": 724,
+    "summary": "raw_overrides: repeated 7x boilerplate with no validation — leaky bypass",
+    "failure_scenario": "The same 4-line override-guard pattern (lines 752, 764, 790, 798, 811, 819, 827, 841) is copy-pasted 8 times. Line 837 introduces an inconsistent variant that checks `raw_tally` rather than the current override key, meaning the override keys do not compose cleanly. The raw text bypasses all formatting, 80-column wrapping, and MCNP syntax validation — a malformed override string produces a silent failure (MCNP rejects the file at runtime). This is a leaky bypass: it looks like a proper abstraction seam but provides no contract enforcement, error reporting, or isolation. Adding a new section requires duplicating the entire pattern, making it easy to introduce behavioral drift."
+  },
+  {
+    "file": "D:\\MCNP\\输入卡生成器源码\\app\\generator\\inp_generator.py",
+    "line": 567,
+    "summary": "Redundant `import re` inside `_generate_en_cards` shadows module-level import",
+    "failure_scenario": "`re` is imported at module level (line 7) and again inside `_generate_en_cards` (line 567). The local import is dead code — Python caches the module, so no error occurs, but it is misleading: a reader may believe this is the only consumer of `re` and safely remove the module-level import, breaking `_compress_j_skip` (which uses `re.match` via `_is_d_ref`) without any local error signal. Standard Python convention (PEP 8) places all imports at module top level."
+  },
+  {
+    "file": "D:\\MCNP\\输入卡生成器源码\\app\\generator\\inp_generator.py",
+    "line": 535,
+    "summary": "Redundant `import json as _json` in `_generate_kcode` shadows module-level import",
+    "failure_scenario": "`json` is imported at module level (line 5) and again inside `_generate_kcode` (line 535) under the alias `_json`. The alias is used only for `_json.loads` in the exception handler; line 269 uses the module-level `json` directly. The local import is dead code — the same functionality is available from the module-level import. The `_json` alias is inconsistent with the rest of the file and suggests the author was unaware of the existing import. If the module-level import were ever removed, line 537 would fail (`_json not defined`), but the module-level import on line 5 would also need to be present for line 269, creating a confusing cross-dependency."
+  },
+  {
+    "file": "D:\\MCNP\\输入卡生成器源码\\app\\generator\\inp_generator.py",
+    "line": 182,
+    "summary": "_generate_single_source: two nearly identical SDEF construction blocks (DRY violation)",
+    "failure_scenario": "Lines 190-213 and 216-234 build SDEF keyword=value pairs with identical field-by-field logic. The only difference is that the first block (Dn-ref branch) includes 6 extra fields (SUR, NRM, TR, CCC, ARA, RATE, sdef_extra) that the normal branch omits. This is ~25 lines of pure duplication. If a new SDEF keyword (e.g., a future `WWE` field) is added, it must be added to both blocks — it is easy to miss one. The cost is cumulative: every SDEF field addition doubles the maintenance surface."
+  },
+  {
+    "file": "D:\\MCNP\\输入卡生成器源码\\app\\generator\\inp_generator.py",
+    "line": 288,
+    "summary": "_generate_multi_source: 145 lines combining 5 sub-concerns (altitude violation)",
+    "failure_scenario": "The function mixes: (a) collecting per-source values into parallel lists (lines 297-316), (b) probability normalization with NaN/inf edge-case handling (lines 318-330), (c) variance detection across sources (lines 332-362), (d) SDEF line construction with Dn index bookkeeping (lines 364-412), and (e) SI/SP card construction with Dn keying (lines 414-427). These should be 3-4 smaller functions. The current structure means: (1) the whole 145-line function must be tested as a single unit — probability normalization logic cannot be unit-tested independently; (2) the `add_dist` closure (line 343) captures `dist_params` from the enclosing scope, obscuring data flow; (3) adding a new source field requires edits in sub-concerns (a), (c), and (e) — all within this one function — making it hard to verify completeness."
+  },
+  {
+    "file": "D:\\MCNP\\输入卡生成器源码\\app\\generator\\inp_generator.py",
+    "line": 297,
+    "summary": "_generate_multi_source: source field names enumerated in 3 separate places (fragile)",
+    "failure_scenario": "Each source attribute appears in 3 locations within the function: value-list collection (lines 297-316), `add_dist` annotation (lines 347-362), and the SI/SP dict mapping (lines 399-402). Adding a hypothetical new field (e.g., `wwe`) requires: adding `wwe_list = [src.wwe for src in sources]` in section (a), adding `add_dist(\"WWE\", wwe_list)` in section (c), and adding a `\"WWE\": wwe_list` entry in the dict in section (e). Missing any one produces a silent omission in the generated INP — no error, just a missing distribution. This violates the DRY principle and the Open/Closed principle."
+  },
+  {
+    "file": "D:\\MCNP\\输入卡生成器源码\\app\\generator\\inp_generator.py",
+    "line": 78,
+    "summary": "pymcnp imported inside function body despite being a listed dependency",
+    "failure_scenario": "`from pymcnp import inp as pymcnp_inp` is inside `_generate_basic` (line 78), while pymcnp is a hard dependency in requirements.txt. All other imports are at module level. This suggests the dependency is optional or conditional, when it is not — if pymcnp is missing, the entire Mode/Nps/Ctme/Nonu generation path fails at call time rather than import time. A reader could reasonably assume this section is a fallback for an optional feature. The late import also incurs a minor but unnecessary per-call cost (Python's import cache mitigates this, but the import machinery still runs the first time)."
+  }
+]

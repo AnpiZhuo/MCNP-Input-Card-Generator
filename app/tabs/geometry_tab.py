@@ -22,15 +22,17 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
     QPlainTextEdit, QTableWidget, QTableWidgetItem,
     QPushButton, QHeaderView, QLabel, QMessageBox,
-    QSplitter, QScrollArea
+    QSplitter, QScrollArea, QCheckBox
 )
 import webbrowser
 import hashlib
 
 from PyQt5.QtCore import Qt, pyqtSignal, QThread, pyqtSlot, QSettings, QObject, QTimer
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QApplication, QFileDialog, QProgressDialog
 
 from app.models import CellData
+from app.widgets.render_ctrl import RenderControlWindow
 from app.step_importer import StepImporter
 from app.dialogs.cell_edit_dialog import CellEditDialog
 from app.freecad_preview import FreeCADEngine
@@ -45,6 +47,51 @@ from app.generator.inp_generator import _generate_cells
 # The parser registry is populated lazily to avoid circular imports with pymcnp.
 
 _SURFACE_PARSERS = {}  # {typename: (param_count, pymcnp_class)}
+
+# ── 3D 预览颜色方案 ────────────────────────────────────
+# Tableau 20 — 高区分度分类色板（index 0 = None for void）
+_COLORS = [
+    None,
+    (0.1216, 0.4667, 0.7059),   # 1  蓝
+    (1.0000, 0.4980, 0.0549),   # 2  橙
+    (0.1725, 0.6275, 0.1725),   # 3  绿
+    (0.8392, 0.1529, 0.1569),   # 4  红
+    (0.5804, 0.4039, 0.7412),   # 5  紫
+    (0.7373, 0.7412, 0.1333),   # 6  金
+    (0.0902, 0.7451, 0.8118),   # 7  青
+    (0.9686, 0.5059, 0.7490),   # 8  粉
+    (0.4980, 0.4980, 0.4980),   # 9  灰
+    (0.6941, 0.3490, 0.1569),   # 10 棕
+    (0.4000, 0.7608, 0.6471),   # 11 薄荷
+    (0.9882, 0.5529, 0.3843),   # 12 杏
+    (0.5529, 0.6275, 0.7961),   # 13 淡蓝
+    (0.9059, 0.5412, 0.7647),   # 14 淡紫
+    (0.6510, 0.8471, 0.3294),   # 15 黄绿
+    (1.0000, 0.8510, 0.1843),   # 16 黄
+    (0.8980, 0.7686, 0.5804),   # 17 卡其
+    (0.7020, 0.7020, 0.7020),   # 18 银
+    (0.8000, 0.4000, 0.4000),   # 19 砖红
+    (0.4000, 0.6000, 0.8000),   # 20 钢蓝
+]
+
+
+def _get_mat_color(m):
+    """将材料号映射为 RGB 颜色 (0-1)，超出 20 则用 MD5 生成稳定色。"""
+    m = int(m)
+    if m < 0:
+        m = 0
+    if m < len(_COLORS):
+        return _COLORS[m]
+    h = hashlib.md5(str(m).encode()).digest()
+    return (h[0] / 255, h[1] / 255, h[2] / 255)
+
+
+def _get_mat_qcolor(mat_num: int) -> QColor:
+    """材料号 → QColor（用于表格文字染色）"""
+    c = _get_mat_color(mat_num)
+    if c is None:
+        return QColor(100, 100, 100)
+    return QColor(int(c[0]*255), int(c[1]*255), int(c[2]*255))
 
 
 def _register(name, count, cls):
@@ -265,31 +312,6 @@ def _parse_surface_line(line: str) -> tuple:
         return (None, f"创建 {surf_type} 失败: {e}")
 
 
-class _StepWorker(QObject):
-    """后台工作线程：运行 StepImporter.import_step 不阻塞 UI。"""
-
-    result_ready = pyqtSignal(object)  # dict: {"text": str} 或 {"error": str}
-    finished = pyqtSignal()
-
-    def __init__(self, step_path: str, freecad_bin: str):
-        super().__init__()
-        self._step_path = step_path
-        self._freecad_bin = freecad_bin
-        self._aborted = False
-
-    def abort(self):
-        self._aborted = True
-
-    def run(self):
-        if self._aborted:
-            self.finished.emit()
-            return
-        result = StepImporter.import_step(self._step_path, self._freecad_bin)
-        if not self._aborted:
-            self.result_ready.emit(result)
-        self.finished.emit()
-
-
 class GeometryTab(QWidget):
     """几何标签页 / Geometry Tab
 
@@ -322,6 +344,9 @@ class GeometryTab(QWidget):
         super().__init__()
         self.main_window = main_window
         self.cells: list[CellData] = []
+        self._render_ctrl_win: RenderControlWindow | None = None
+        self._3d_plotter = None
+        self._3d_cell_actors: dict[int, object] = {}
         self._preview_error.connect(self._on_preview_error)
         self.init_ui()
 
@@ -441,19 +466,16 @@ class GeometryTab(QWidget):
         surf_btn_layout = QHBoxLayout()
         surf_btn_layout.addStretch()
 
-        self.lbl_step_warn = QLabel("⚠️ 功能不完善")
+        self.lbl_step_warn = QLabel("✅ McCAD 已就绪")
         self.lbl_step_warn.setToolTip(
-            "STEP 导入功能依赖 FreeCAD + GEOUNED，\n"
-            "目前仅支持基本几何类型，复杂曲面可能转换失败。"
+            "使用 McCAD 外置转换器导入 STEP 文件，\n"
+            "支持自动分解非凸体。"
         )
-        self.lbl_step_warn.setStyleSheet("color: #e65100; font-size: 11px; padding: 2px 6px;")
+        self.lbl_step_warn.setStyleSheet("color: #2e7d32; font-size: 11px; padding: 2px 6px;")
         surf_btn_layout.addWidget(self.lbl_step_warn)
 
         self.btn_import_step = QPushButton("📥 导入 STEP")
-        self.btn_import_step.setToolTip(
-            "将 STEP 文件转换为 MCNP 曲面和栅元卡。\n"
-            "依赖 FreeCAD + GEOUNED，需已安装。"
-        )
+        self.btn_import_step.setToolTip("使用 McCAD 转换 STEP → MCNP 输入卡")
         self.btn_import_step.clicked.connect(self._import_step)
         surf_btn_layout.addWidget(self.btn_import_step)
 
@@ -466,11 +488,6 @@ class GeometryTab(QWidget):
         self.btn_3d.setProperty("cssClass", "btnPrimary")
         self.btn_3d.clicked.connect(self._preview_3d)
         surf_btn_layout.addWidget(self.btn_3d)
-
-        self.btn_export_stl = QPushButton("📦 导出 STL")
-        self.btn_export_stl.setToolTip("将每个栅元导出为 STL 网格文件")
-        self.btn_export_stl.clicked.connect(self._export_stl)
-        surf_btn_layout.addWidget(self.btn_export_stl)
 
         self.btn_export_step = QPushButton("📐 导出 STEP")
         self.btn_export_step.setToolTip("将每个栅元导出为 STEP 实体模型")
@@ -510,8 +527,13 @@ class GeometryTab(QWidget):
         self.btn_del_cell.setProperty("cssClass", "btnDelete")
         self.btn_del_cell.clicked.connect(self._delete_cell)
 
+        self.btn_rend_ctrl = QPushButton("🎨 渲染控制")
+        self.btn_rend_ctrl.setToolTip("控制每个栅元在3D预览中的显隐（独立置顶窗口）")
+        self.btn_rend_ctrl.clicked.connect(self._open_render_ctrl)
+
         cell_toolbar.addWidget(self.btn_add_cell)
         cell_toolbar.addWidget(self.btn_del_cell)
+        cell_toolbar.addWidget(self.btn_rend_ctrl)
 
         # Text mode toggle button for switching between form and raw text editing
         # TextModeSection provides a toggle button and stacked widget for dual-mode editing.
@@ -817,32 +839,59 @@ class GeometryTab(QWidget):
     # These methods handle table management, cell CRUD, and UI refresh.
 
     def _refresh_table(self):
+        print(f"[_refresh_table] rows={len(self.cells)}")
         """刷新栅元表格显示 / Refresh the cell table display.
 
         Rebuilds all table rows from the current cells list.
         Each row shows: cell number, material (with comment), density,
-        neutron importance, comment, and an edit button.
+        neutron importance, comment, edit button, and render checkbox.
         Called after any cell data change (add, edit, delete, import).
         """
         self.cell_table.setRowCount(len(self.cells))
         for i, cell in enumerate(self.cells):
+            # 0 — 栅元号
             self.cell_table.setItem(i, 0, QTableWidgetItem(str(cell.number)))
-            self.cell_table.setItem(i, 1, QTableWidgetItem(
-                self._get_material_display(cell.material)
-            ))
+
+            # 1 — 材料号（带颜色）
+            mat_text = self._get_material_display(cell.material)
+            mat_item = QTableWidgetItem(mat_text)
+            # 解析材料号取色
+            raw = cell.material
+            if " " in raw:
+                raw = raw.split()[0]
+            if raw.startswith("M"):
+                ns = raw[1:]
+                if ns.isdigit():
+                    mat_item.setForeground(_get_mat_qcolor(int(ns)))
+            elif raw == "0":
+                mat_item.setForeground(QColor(120, 120, 120))
+            self.cell_table.setItem(i, 1, mat_item)
+
             self.cell_table.setItem(i, 2, QTableWidgetItem(
                 cell.density if cell.density else "(void)"
             ))
             self.cell_table.setItem(i, 3, QTableWidgetItem(cell.imp_n))
-            self.cell_table.setItem(i, 4, QTableWidgetItem(cell.comment))
+            # 4 — 注释（带材料颜色）
+            cmt_item = QTableWidgetItem(cell.comment)
+            raw = cell.material
+            if " " in raw:
+                raw = raw.split()[0]
+            if raw.startswith("M") and raw[1:].isdigit():
+                cmt_item.setForeground(_get_mat_qcolor(int(raw[1:])))
+            elif raw == "0":
+                cmt_item.setForeground(QColor(120, 120, 120))
+            self.cell_table.setItem(i, 4, cmt_item)
 
-            # Edit button for each row
-            # Opens the CellEditDialog when clicked.
+            # 5 — 编辑按钮
             btn_edit = QPushButton("✎ 编辑")
             btn_edit.setToolTip("编辑此栅元的详细参数")
             btn_edit.setProperty("cssClass", "btnEdit")
             btn_edit.clicked.connect(lambda checked, idx=i: self._edit_cell(idx))
             self.cell_table.setCellWidget(i, 5, btn_edit)
+
+        # 同步渲染控制窗口（如果打开）
+        if self._render_ctrl_win and self._render_ctrl_win.isVisible():
+            self._render_ctrl_win.refresh()
 
     def _add_cell(self):
         """添加新栅元（默认 void） / Add a new cell (default void material).
@@ -896,18 +945,146 @@ class GeometryTab(QWidget):
             self.cells[idx] = dialog.get_data()
             self._refresh_table()
 
+    # ---------- 渲染控制窗口 / Render Control Window ----------
+
+    def _open_render_ctrl(self):
+        """打开/激活浮动渲染控制窗口"""
+        if self._render_ctrl_win and self._render_ctrl_win.isVisible():
+            self._render_ctrl_win.raise_()
+            self._render_ctrl_win.refresh()
+            return
+        self._render_ctrl_win = RenderControlWindow(
+            get_cells_fn=lambda: self.cells,
+            format_fn=self._render_ctrl_format,
+            on_changed=self._sync_3d_visibility,
+            on_mat_changed=self._on_render_ctrl_mat_changed,
+            get_surface_info_fn=self._get_cell_surface_info,
+        )
+        self._render_ctrl_win.show()
+
+    def _get_cell_surface_info(self, surface_expr: str) -> list[tuple[int, str]]:
+        """从栅元曲面表达式提取曲面号及对应卡片文本
+
+        Args:
+            surface_expr: 栅元的曲面表达式（如 "118 -111 -126"）
+
+        Returns:
+            [(曲面号, 曲面卡原文), ...] 按曲面号排序
+        """
+        # 1. 提取所有曲面号（去掉 + - # : ( ) 等符号）
+        surf_nums: set[int] = set()
+        for token in surface_expr.replace(':', ' ').split():
+            token = token.strip().lstrip('+#-()')
+            if token.isdigit():
+                surf_nums.add(int(token))
+
+        if not surf_nums:
+            return []
+
+        # 2. 从 surface_text 逐行匹配曲面卡原文
+        text = self.surface_text.toPlainText()
+        lines = text.split('\n')
+
+        result = []
+        for num in sorted(surf_nums):
+            card_text = None
+            for line in lines:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                # 跳过注释行（以 c 或 C 开头）
+                if stripped[0] in ('c', 'C'):
+                    continue
+                parts = stripped.split()
+                if parts and parts[0] == str(num):
+                    card_text = stripped
+                    break
+            if card_text:
+                result.append((num, card_text))
+            else:
+                result.append((num, f"; {num} — 未找到曲面卡"))
+
+        return result
+
+    def _sync_3d_visibility(self):
+        """勾选变化时实时更新3D场景中对应栅元的显隐"""
+        if not self._3d_cell_actors or self._3d_plotter is None:
+            return
+        try:
+            for c in self.cells:
+                actor = self._3d_cell_actors.get(c.number)
+                if actor is not None:
+                    actor.SetVisibility(getattr(c, 'render', True))
+            self._3d_plotter.render()
+        except Exception:
+            pass
+
+    def _on_render_ctrl_mat_changed(self, idx, mat_text):
+        """渲染控制窗口中材料号变更后的实时反馈"""
+        cells = self.cells
+        if idx >= len(cells):
+            return
+        cell = cells[idx]
+        # 解析材料号
+        raw = mat_text
+        if raw.startswith("M"):
+            raw = raw[1:]
+        try:
+            mat_num = int(raw) if raw.lstrip("-").isdigit() else 0
+        except ValueError:
+            mat_num = 0
+        # 更新 3D 场景中对应栅元的颜色
+        if self._3d_cell_actors and self._3d_plotter is not None:
+            actor = self._3d_cell_actors.get(cell.number)
+            if actor:
+                color = _get_mat_color(mat_num)
+                if color:
+                    actor.GetProperty().SetColor(color[0], color[1], color[2])
+                    self._3d_plotter.render()
+        # 刷新主表格中对应行的注释颜色
+        self._refresh_table()
+
+    def _render_ctrl_format(self, idx, cell):
+        """为渲染控制窗口格式化栅元显示文本
+
+        Returns:
+            (mat_text: str, comment_text: str)
+            mat_text — 如 "—  M1 (Steel)"
+            comment_text — 如 "# 外边界" 或 ""
+        """
+        mat_text = f"—  {self._get_material_display(cell.material)}"
+        cell_c = str(cell.comment or '').strip()
+        comment_text = f"# {cell_c}" if cell_c else ""
+        return mat_text, comment_text
+
     # ---------- STEP 导入 / STEP Import ----------
     # STEP → MCNP 转换集成。依赖 FreeCAD + GEOUNED。
 
-    def _import_step_path(self, path: str):
-        """导入 STEP 文件（指定路径，不走文件选择对话框）"""
-        freecad_bin = StepImporter.detect_freecad()
-        if not freecad_bin:
-            self._show_freecad_guide()
-            return
+    def _scan_max_surf(self) -> int:
+        """扫描曲面文本框中的数字，返回最大曲面号。无内容则返回 0。"""
+        import re
+        text = self.surface_text.toPlainText()
+        nums = [int(m) for m in re.findall(r"^\s*(\d+)", text, re.MULTILINE)]
+        return max(nums) if nums else 0
+
+    def _scan_max_cell(self) -> int:
+        """扫描栅元列表，返回最大栅元号。无内容则返回 0。"""
+        if not self.cells:
+            return 0
+        return max(c.number for c in self.cells)
+
+    def _show_import_dialog(self, step_path: str, freecad_bin: str):
+        """弹出 STEP 导入设置对话框，确认后启动后台转换。"""
+        max_surf = self._scan_max_surf()
+        max_cell = self._scan_max_cell()
+        dialog = StepImportDialog(self, max_surf=max_surf, max_cell=max_cell)
+        if dialog.exec_() != StepImportDialog.Accepted:
+            return  # 用户取消
+
+        user_settings = dialog.get_settings()
 
         self._step_thread = QThread()
-        self._step_worker = _StepWorker(path, freecad_bin)
+        self._step_worker = _StepWorker(step_path, freecad_bin, user_settings)
         self._step_worker.moveToThread(self._step_thread)
 
         self._step_progress = QProgressDialog(
@@ -926,46 +1103,6 @@ class GeometryTab(QWidget):
         self._step_worker.finished.connect(self._step_progress.close)
         self._step_worker.finished.connect(self._step_worker.deleteLater)
         self._step_thread.finished.connect(self._step_thread.deleteLater)
-        self._step_thread.start()
-
-    def _import_step(self):
-        """导入 STEP 文件：检测 FreeCAD → 选文件 → 后台转 MCNP → 加载。"""
-        freecad_bin = StepImporter.detect_freecad()
-        if not freecad_bin:
-            self._show_freecad_guide()
-            return
-
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择 STEP 文件", "",
-            "STEP 文件 (*.step *.stp);;所有文件 (*.*)"
-        )
-        if not path:
-            return
-
-        # 创建后台工作线程
-        self._step_thread = QThread()
-        self._step_worker = _StepWorker(path, freecad_bin)
-        self._step_worker.moveToThread(self._step_thread)
-
-        # 进度对话框
-        self._step_progress = QProgressDialog(
-            "正在转换 STEP → MCNP...\n这可能需要几秒到几分钟。",
-            "取消", 0, 0, self
-        )
-        self._step_progress.setWindowTitle("导入 STEP")
-        self._step_progress.setModal(True)
-        self._step_progress.show()
-        QApplication.processEvents()
-
-        # 信号连接
-        self._step_worker.result_ready.connect(self._on_step_result)
-        self._step_progress.canceled.connect(self._cancel_step_import)
-        self._step_thread.started.connect(self._step_worker.run)
-        self._step_worker.finished.connect(self._step_thread.quit)
-        self._step_worker.finished.connect(self._step_progress.close)
-        self._step_worker.finished.connect(self._step_worker.deleteLater)
-        self._step_thread.finished.connect(self._step_thread.deleteLater)
-
         self._step_thread.start()
 
     def _cancel_step_import(self):
@@ -975,13 +1112,6 @@ class GeometryTab(QWidget):
         if hasattr(self, '_step_thread') and self._step_thread:
             self._step_thread.quit()
         self._step_progress.close()
-
-    def _on_step_result(self, result: dict):
-        """后台线程完成后的回调（主线程）。"""
-        if "error" in result:
-            QMessageBox.critical(self, "STEP 导入失败", result["error"])
-            return
-        self._on_import_done(result["text"])
 
     def _show_freecad_guide(self):
         """FreeCAD 未安装时弹窗引导。选择路径后自动重试。"""
@@ -1005,56 +1135,7 @@ class GeometryTab(QWidget):
             if exe_path:
                 StepImporter.save_freecad_path(exe_path)
                 # 保存后自动重试
-                QTimer.singleShot(100, self._import_step)
-
-    def _on_import_done(self, mcnp_text: str):
-        """转换完成弹窗：追加/替换。"""
-        msg = QMessageBox(self)
-        msg.setWindowTitle("导入完成")
-        msg.setText("STEP 转换完成，已生成曲面和栅元卡。")
-
-        preview_lines = mcnp_text.strip().split("\n")[:8]
-        msg.setDetailedText(
-            "转换结果预览（前 8 行）：\n" + "\n".join(preview_lines)
-        )
-
-        btn_append = msg.addButton("追加到现有内容", QMessageBox.ActionRole)
-        btn_replace = msg.addButton("替换现有内容", QMessageBox.ActionRole)
-        msg.addButton("取消", QMessageBox.RejectRole)
-        msg.exec_()
-
-        # 分离曲面和 TR 卡（TR 行放在右侧 TR 文本框）
-        surf_lines = []
-        tr_lines = []
-        for line in mcnp_text.split("\n"):
-            stripped = line.strip()
-            upper = stripped.upper()
-            if upper.startswith("*TR") or (upper.startswith("TR")
-                and len(upper) > 2 and upper[2:].lstrip() and upper[2:].lstrip()[0].isdigit()):
-                tr_lines.append(stripped)
-            elif stripped and not stripped.startswith("#"):
-                surf_lines.append(stripped)
-
-        surf_text = "\n".join(surf_lines)
-        tr_text = "\n".join(tr_lines)
-
-        if msg.clickedButton() == btn_append:
-            cur_surf = self.surface_text.toPlainText()
-            cur_tr = self.tr_text.toPlainText()
-            if surf_text:
-                self.surface_text.setPlainText(cur_surf.rstrip() + "\n\n" + surf_text)
-            if tr_text:
-                self.tr_text.setPlainText(cur_tr.rstrip() + "\n" + tr_text)
-        elif msg.clickedButton() == btn_replace:
-            if surf_text:
-                self.surface_text.setPlainText(surf_text)
-            if tr_text:
-                self.tr_text.setPlainText(tr_text)
-
-
-    # ---------- 3D 预览 / 3D Preview ----------
-    # Uses FreeCAD CSG for true boolean operations, then renders with PyVista.
-    # Runs FreeCAD Python as a subprocess (like the STEP import pattern).
+                pass
 
     def _parse_tr_cards(self) -> dict:
         """解析 TRn 变换卡 → {tr_num: {translate, rotate}}"""
@@ -1133,15 +1214,22 @@ class GeometryTab(QWidget):
             4. 子进程调 FreeCAD Python 做 CSG 布尔运算
             5. PyVista 渲染输出文件
         """
+        print("[_preview_3d] start")
         freecad_bin = StepImporter.detect_freecad()
         if not freecad_bin:
             self._show_freecad_guide()
             return
 
         surfaces_text = self.surface_text.toPlainText().strip()
-        if not surfaces_text and not self.cells:
-            QMessageBox.information(self, "提示", "请先定义曲面和栅元")
-            return
+        raw_cell_text = self._raw_cell.get_raw_text()
+        if not surfaces_text and not self.cells and not raw_cell_text:
+                box = QMessageBox(self)
+                box.setIcon(QMessageBox.Information)
+                box.setWindowTitle("提示")
+                box.setText("请先定义曲面和栅元")
+                box.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+                box.exec_()
+                return
 
         # 1. 解析曲面 (复用 _parse_surface_line)
         surfs = []
@@ -1157,31 +1245,73 @@ class GeometryTab(QWidget):
             msg = "未解析到有效的曲面对象。"
             if warn_list:
                 msg += "\n\n警告 (前5条):\n" + "\n".join(warn_list[:5])
-            QMessageBox.warning(self, "无法预览", msg)
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle("无法预览")
+            box.setText(msg)
+            box.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+            box.exec_()
             return
 
         # 2. 解析 TRn
         tr_cards = self._parse_tr_cards()
 
-        # 3. 构建栅元数据 (Geometry.from_mcnp 解析表达式)
+        # 3. 构建栅元数据：文本模式时从 raw text 解析，否则用表单
         cells_data = []
-        for cell in self.cells:
-            expr = cell.surface_expr.strip()
-            if not expr:
-                continue
-            try:
-                geometry = Geometry.from_mcnp(expr)
-            except Exception:
-                continue
-            cells_data.append({
-                "number": cell.number,
-                "material": cell.material,
-                "ast": geometry,
-                "density": cell.density,
-            })
+        raw_cell_text = self._raw_cell.get_raw_text()
+        if raw_cell_text:
+            # 文本模式：解析 raw text 中的栅元卡
+            from app.generator.parsers.sections import split_sections
+            from app.generator.parsers.core import parse_cells
+            all_lines = raw_cell_text.split("\n")
+            title, cell_lines, _, _ = split_sections(all_lines)
+            raw_cells = parse_cells(cell_lines) if cell_lines else []
+            for cell in raw_cells:
+                expr = cell.surface_expr.strip()
+                if not expr:
+                    continue
+                # 跳过 void 栅元（材料号 0）
+                raw_mat = (cell.material or "").strip().split()[0] if cell.material else ""
+                if raw_mat == "0":
+                    continue
+                try:
+                    geometry = Geometry.from_mcnp(expr)
+                except Exception:
+                    continue
+                cells_data.append({
+                    "number": cell.number,
+                    "material": cell.material,
+                    "ast": geometry,
+                    "density": cell.density,
+                })
+        else:
+            # 表单模式
+            for cell in self.cells:
+                expr = cell.surface_expr.strip()
+                if not expr:
+                    continue
+                # 跳过 void 栅元（材料号 0）
+                raw_mat = (cell.material or "").strip().split()[0] if cell.material else ""
+                if raw_mat == "0":
+                    continue
+                try:
+                    geometry = Geometry.from_mcnp(expr)
+                except Exception:
+                    continue
+                cells_data.append({
+                    "number": cell.number,
+                    "material": cell.material,
+                    "ast": geometry,
+                    "density": cell.density,
+                })
 
         if not cells_data:
-            QMessageBox.warning(self, "无法预览", "没有有效的栅元定义")
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle("无法预览")
+            box.setText("没有有效的栅元定义")
+            box.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+            box.exec_()
             return
 
         # 4. 进度条
@@ -1194,13 +1324,34 @@ class GeometryTab(QWidget):
         progress.show()
         QApplication.processEvents()
 
-        # 5. 子进程调 FreeCAD
+        # 5. 自动计算包围盒：扫描曲面文本中所有数字
+        bound = 5000  # 默认足够大
+        try:
+            import re as _re
+            vals = []
+            for line in surfaces_text.split("\n"):
+                for token in line.split():
+                    try:
+                        vals.append(abs(float(token)))
+                    except ValueError:
+                        pass
+            if vals:
+                bound = int(max(vals) * 1.5) + 500
+        except Exception:
+            pass
+
+        # 6. 子进程调 FreeCAD
         engine = FreeCADEngine(freecad_bin)
         try:
-            result = engine.build_geometry(surfs, cells_data, tr_cards)
+            result = engine.build_geometry(surfs, cells_data, tr_cards, bound=bound)
         except Exception as e:
             progress.close()
-            QMessageBox.critical(self, "预览失败", str(e))
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Critical)
+            box.setWindowTitle("3D 预览失败")
+            box.setText(str(e))
+            box.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+            box.exec_()
             engine.cleanup()
             return
         finally:
@@ -1209,43 +1360,12 @@ class GeometryTab(QWidget):
         # 6. PyVista 展示（在 engine.cleanup 之前，因为文件是临时的）
         try:
             import pyvista as pv
-
-            # Tableau 20 — 高区分度分类色板
-            _COLORS = [
-                None,
-                (0.1216, 0.4667, 0.7059),   # 1  蓝
-                (1.0000, 0.4980, 0.0549),   # 2  橙
-                (0.1725, 0.6275, 0.1725),   # 3  绿
-                (0.8392, 0.1529, 0.1569),   # 4  红
-                (0.5804, 0.4039, 0.7412),   # 5  紫
-                (0.7373, 0.7412, 0.1333),   # 6  金
-                (0.0902, 0.7451, 0.8118),   # 7  青
-                (0.9686, 0.5059, 0.7490),   # 8  粉
-                (0.4980, 0.4980, 0.4980),   # 9  灰
-                (0.6941, 0.3490, 0.1569),   # 10 棕
-                (0.4000, 0.7608, 0.6471),   # 11 薄荷
-                (0.9882, 0.5529, 0.3843),   # 12 杏
-                (0.5529, 0.6275, 0.7961),   # 13 淡蓝
-                (0.9059, 0.5412, 0.7647),   # 14 淡紫
-                (0.6510, 0.8471, 0.3294),   # 15 黄绿
-                (1.0000, 0.8510, 0.1843),   # 16 黄
-                (0.8980, 0.7686, 0.5804),   # 17 卡其
-                (0.7020, 0.7020, 0.7020),   # 18 银
-                (0.8000, 0.4000, 0.4000),   # 19 砖红
-                (0.4000, 0.6000, 0.8000),   # 20 钢蓝
-            ]
-            _EXTRA_COLORS = len(_COLORS)
-
-            def _mat_color(m):
-                m = int(m)
-                if m < 0:
-                    m = 0
-                if m < _EXTRA_COLORS:
-                    return _COLORS[m]
-                h = hashlib.md5(str(m).encode()).digest()
-                return (h[0] / 255, h[1] / 255, h[2] / 255)
+            from pyvistaqt import BackgroundPlotter as _BgPlotter
+            from app.widgets.coord_aids import CoordAids
+            from app.widgets.opacity_ctrl import OpacityController
 
             def _material_of(cell_num):
+                """通过栅元号查材料号（用于 STL → 材料映射）"""
                 for c in self.cells:
                     if c.number == cell_num:
                         ms = c.material
@@ -1259,27 +1379,44 @@ class GeometryTab(QWidget):
                             return 0
                 return 0
 
-            # 收集实际使用的材料号 → 颜色/标签
+            # 收集全部材料号 → 颜色/标签（始终展示所有材料，不依渲染状态过滤）
             legend_entries = []
             mat_seen = {}
+            # 1. 从栅元中收集被引用的材料
             for c in self.cells:
                 mat_num = _material_of(c.number)
                 if mat_num <= 0 or mat_num in mat_seen:
                     continue
                 mat_seen[mat_num] = True
-                color = _mat_color(mat_num)
-                # 获取材料注释（从 main_window 的材料列表）
+                color = _get_mat_color(mat_num)
                 label = f"M{mat_num}"
                 if hasattr(self, 'main_window') and hasattr(self.main_window, 'tab_mat'):
                     try:
                         for m in self.main_window.tab_mat.get_materials():
-                            comment = getattr(m, 'comment', '')
-                            if comment:
-                                label += f" ({comment.strip()})"
-                                break
+                            if m.number == mat_num:
+                                c = str(m.comment or '').strip()
+                                if c:
+                                    label = c
+                                    break
                     except Exception:
                         pass
                 legend_entries.append((label, color))
+            # 2. 补充材料卡中定义但未被栅元引用的材料
+            if hasattr(self, 'main_window') and hasattr(self.main_window, 'tab_mat'):
+                try:
+                    for m in self.main_window.tab_mat.get_materials():
+                        if m.number not in mat_seen:
+                            mat_seen[m.number] = True
+                            color = _get_mat_color(m.number)
+                            label = str(m.comment or '').strip() or f"M{m.number}"
+                            legend_entries.append((label, color))
+                except Exception:
+                    pass
+
+            # 构建 QColor 版图例数据（用于渲染控制窗口）
+            legend_qc: list[tuple[str, QColor]] = []
+            for lbl, rgb in legend_entries:
+                legend_qc.append((lbl, QColor(int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255))))
 
             # 按体积排序：外层（大）半透明，内层（小）实心
             cell_meshes = []
@@ -1290,70 +1427,146 @@ class GeometryTab(QWidget):
                 mat = _material_of(cell_num)
                 cell_meshes.append((cell_num, mesh, mat,
                                     abs(mesh.volume) if hasattr(mesh, 'volume') else 0))
-            cell_meshes.sort(key=lambda x: x[3])  # 按体积升序
+            cell_meshes.sort(key=lambda x: x[3])
 
-            plot = pv.Plotter()
+            plot = _BgPlotter()
             plot.add_axes()
 
-            _actors = []  # [(actor, base_op, mesh_center)]
+            # 计算模型包围盒对角线
+            all_meshes = [m for _, m, _, _ in cell_meshes]
+            if all_meshes:
+                bbox = [float('inf'), float('-inf')] * 3
+                for m in all_meshes:
+                    b = m.bounds
+                    for i in range(3):
+                        bbox[2*i] = min(bbox[2*i], b[2*i])
+                        bbox[2*i+1] = max(bbox[2*i+1], b[2*i+1])
+                diag = ((bbox[1]-bbox[0])**2 + (bbox[3]-bbox[2])**2 + (bbox[5]-bbox[4])**2)**0.5 or 100
+            else:
+                bbox = [-50, 50, -50, 50, -50, 50]
+                diag = 100
+            extent = max(abs(bbox[0]), abs(bbox[1]), abs(bbox[2]),
+                         abs(bbox[3]), abs(bbox[4]), abs(bbox[5])) * 1.5
+
+            # === Deep Module: CoordAids ===
+            coord = CoordAids(plot, extent, diag)
+            coord.setup()
+
+            # === Deep Module: OpacityController ===
+            op_ctrl = OpacityController()
+            _actors = []
+            self._3d_cell_actors.clear()
             for cell_num, mesh, mat, vol in cell_meshes:
-                color = _mat_color(mat)
-                if color is None:
-                    continue
-                if vol > 1e6 and mat > 0:
-                    base_op = 0.35
-                elif vol > 1e4 and mat > 0:
-                    base_op = 0.65
+                if mat == 0:
+                    color = (0.75, 0.75, 0.75)  # 真空栅元用浅灰
+                    base_op = 0.5
                 else:
-                    base_op = 1.0
+                    color = _get_mat_color(mat)
+                    if color is None:
+                        continue
+                    if vol > 1e6:
+                        base_op = 0.35
+                    elif vol > 1e4:
+                        base_op = 0.65
+                    else:
+                        base_op = 1.0
                 actor = plot.add_mesh(mesh, color=color, opacity=base_op)
                 _actors.append((actor, base_op, mesh.center))
+                # 实时显隐：找到对应 cell，设置 actor 初始可见性
+                cell_obj = next((c for c in self.cells if c.number == cell_num), None)
+                if cell_obj is not None and not getattr(cell_obj, 'render', True):
+                    actor.SetVisibility(False)
+                self._3d_cell_actors[cell_num] = actor
+            op_ctrl.set_actors(_actors)
+            self._3d_plotter = plot
 
-            def _update_opacity_by_distance():
-                """摄像机越近 → 外层越透明"""
-                if not _actors:
-                    return
-                cam_pos = plot.camera_position[0]
-                # 计算所有 actor 中离摄像机最远的距离
-                max_dist = 1.0
-                for _, _, center in _actors:
-                    d = ((cam_pos[0]-center[0])**2 +
-                         (cam_pos[1]-center[1])**2 +
-                         (cam_pos[2]-center[2])**2) ** 0.5
-                    max_dist = max(max_dist, d)
-                for actor, base_op, center in _actors:
-                    d = ((cam_pos[0]-center[0])**2 +
-                         (cam_pos[1]-center[1])**2 +
-                         (cam_pos[2]-center[2])**2) ** 0.5
-                    # 远→base_op，近→更透明
-                    ratio = d / max_dist if max_dist > 0 else 0.5
-                    # 透明度范围 [base_op-0.3, base_op+0.1]
-                    op = base_op * (0.7 + 0.3 * ratio)
-                    op = max(0.15, min(1.0, op))
-                    actor.GetProperty().SetOpacity(op)
+            # ── 摄像机事件回调 ──
+            def _on_render(obj, event):
+                op_ctrl.update(plot.camera_position[0])
+                coord.on_render()
 
-            def _on_camera_move(obj, event):
-                _update_opacity_by_distance()
+            def _on_interaction_end(obj, event):
+                _on_render(None, None)
+                coord.rebuild_ticks()
+                print("[_on_interaction_end]")
 
-            plot.iren.add_observer("InteractionEvent", _on_camera_move)
-            plot.iren.add_observer("RenderEvent", _on_camera_move)
+            plot.iren.add_observer("RenderEvent", _on_render)
+            plot.iren.add_observer("EndInteractionEvent", _on_interaction_end)
 
-            if legend_entries:
-                plot.add_legend(
-                    labels=legend_entries,
-                    bcolor=(0.95, 0.95, 0.95),
-                    size=(0.2, 0.25),
-                )
+            # ── 键盘控制摄像头（直接观察 iren，绕过坏掉的 add_key_event）──
+            def _cam_move(dz):
+                cam = plot.camera; p = list(cam.GetPosition()); f = list(cam.GetFocalPoint())
+                fw = (f[0]-p[0], f[1]-p[1], f[2]-p[2])
+                d = (fw[0]**2 + fw[1]**2 + fw[2]**2)**0.5
+                if d < 1e-10: return
+                fx, fy, fz = fw[0]/d, fw[1]/d, fw[2]/d
+                cam.SetPosition(p[0]+fx*d*0.15*dz, p[1]+fy*d*0.15*dz, p[2]+fz*d*0.15*dz)
+                _on_render(None, None)
+                plot.ren_win.Render()
 
+            def _cam_strafe(dx):
+                cam = plot.camera; p = list(cam.GetPosition()); f = list(cam.GetFocalPoint())
+                u = list(cam.GetViewUp())
+                fw = (f[0]-p[0], f[1]-p[1], f[2]-p[2])
+                d = (fw[0]**2 + fw[1]**2 + fw[2]**2)**0.5
+                if d < 1e-10: return
+                fx, fy, fz = fw[0]/d, fw[1]/d, fw[2]/d
+                rt = (fy*u[2]-fz*u[1], fz*u[0]-fx*u[2], fx*u[1]-fy*u[0])
+                s = d * 0.15
+                cam.SetPosition(p[0]+rt[0]*dx*s, p[1]+rt[1]*dx*s, p[2]+rt[2]*dx*s)
+                cam.SetFocalPoint(f[0]+rt[0]*dx*s, f[1]+rt[1]*dx*s, f[2]+rt[2]*dx*s)
+                _on_render(None, None)
+                plot.ren_win.Render()
+
+            def _cam_roll(angle):
+                """绕视线方向旋转（滚筒），直接用 VTK 方法"""
+                import math
+                cam = plot.camera
+                pos = cam.GetPosition(); fp = cam.GetFocalPoint()
+                # forward 方向
+                fx = fp[0]-pos[0]; fy = fp[1]-pos[1]; fz = fp[2]-pos[2]
+                d = (fx*fx+fy*fy+fz*fz)**0.5
+                fx, fy, fz = fx/d, fy/d, fz/d
+                # 当前 ViewUp
+                ux, uy, uz = cam.GetViewUp()
+                # right = forward × up（叉积）
+                rx = fy*uz - fz*uy
+                ry = fz*ux - fx*uz
+                rz = fx*uy - fy*ux
+                r_len = (rx*rx+ry*ry+rz*rz)**0.5
+                rx, ry, rz = rx/r_len, ry/r_len, rz/r_len
+                # 在 (up, right) 平面旋转 angle 度
+                rad = math.radians(angle); c, s = math.cos(rad), math.sin(rad)
+                cam.SetViewUp((ux*c+rx*s, uy*c+ry*s, uz*c+rz*s))
+                _on_render(None, None)
+                plot.ren_win.Render()
+
+            def _keyboard_cb(caller, event):
+                ks = caller.GetKeySym().lower()
+                if ks == 'w': _cam_move(1)
+                elif ks == 's': _cam_move(-1)
+                elif ks == 'a': _cam_strafe(-1)
+                elif ks == 'd': _cam_strafe(1)
+                elif ks == 'left': _cam_roll(-5)
+                elif ks == 'right': _cam_roll(5)
+
+            plot.iren.add_observer('KeyPressEvent', _keyboard_cb)
+
+            # 自动弹出渲染控制窗口
+            self._open_render_ctrl()
+            # 把材料颜色对照传给渲染控制窗口（替代 3D 图例）
+            if self._render_ctrl_win and legend_qc:
+                self._render_ctrl_win.set_legend(legend_qc)
             plot.show()
         except Exception as e:
-            QMessageBox.critical(self, "渲染失败", str(e))
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Critical)
+            box.setWindowTitle("渲染失败")
+            box.setText(str(e))
+            box.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+            box.exec_()
         finally:
             engine.cleanup()
-
-    def _export_stl(self):
-        """导出每个栅元为 STL 文件"""
-        self._export_geometry("stl")
 
     def _export_step(self):
         """导出每个栅元为 STEP 文件"""
@@ -1380,29 +1593,63 @@ class GeometryTab(QWidget):
                 surfs.append(obj)
 
         if not surfs:
-            QMessageBox.warning(self, "提示", "没有有效的曲面定义")
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle("提示")
+            box.setText("没有有效的曲面定义")
+            box.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+            box.exec_()
             return
 
         tr_cards = self._parse_tr_cards()
 
         cells_data = []
-        for cell in self.cells:
-            expr = cell.surface_expr.strip()
-            if not expr:
-                continue
-            try:
-                geometry = Geometry.from_mcnp(expr)
-                cells_data.append({
-                    "number": cell.number,
-                    "material": cell.material,
-                    "ast": geometry,
-                    "density": cell.density,
-                })
-            except Exception:
-                continue
+        raw_cell_text = self._raw_cell.get_raw_text()
+        if raw_cell_text:
+            from app.generator.parsers.sections import split_sections
+            from app.generator.parsers.core import parse_cells
+            all_lines = raw_cell_text.split("\n")
+            title, cell_lines, _, _ = split_sections(all_lines)
+            raw_cells = parse_cells(cell_lines) if cell_lines else []
+            for cell in raw_cells:
+                expr = cell.surface_expr.strip()
+                if not expr:
+                    continue
+                try:
+                    geometry = Geometry.from_mcnp(expr)
+                    cells_data.append({
+                        "number": cell.number,
+                        "material": cell.material,
+                        "ast": geometry,
+                        "density": cell.density,
+                    })
+                except Exception:
+                    continue
+        else:
+            for cell in self.cells:
+                expr = cell.surface_expr.strip()
+                if not expr:
+                    continue
+                try:
+                    geometry = Geometry.from_mcnp(expr)
+                    if not getattr(cell, 'render', True):
+                        continue
+                    cells_data.append({
+                        "number": cell.number,
+                        "material": cell.material,
+                        "ast": geometry,
+                        "density": cell.density,
+                    })
+                except Exception:
+                    continue
 
         if not cells_data:
-            QMessageBox.warning(self, "提示", "没有有效的栅元定义")
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle("提示")
+            box.setText("没有有效的栅元定义")
+            box.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+            box.exec_()
             return
 
         progress = QProgressDialog(
@@ -1414,20 +1661,88 @@ class GeometryTab(QWidget):
 
         engine = FreeCADEngine(freecad_bin)
         try:
-            if fmt == "stl":
-                files = engine.export_stl(surfs, cells_data, tr_cards, out_dir)
-            else:
-                files = engine.export_step(surfs, cells_data, tr_cards, out_dir)
-            QMessageBox.information(
-                self, "导出成功",
-                "已导出 " + str(len(files)) + " 个 ." + fmt + " 文件到:\n" + out_dir
-            )
+            files = engine.export_step(surfs, cells_data, tr_cards, out_dir)
+            msg = "已导出几何体为 geometry.step (已跳过真空/空气栅元) 到:\n" + out_dir
+            QMessageBox.information(self, "导出成功", msg)
         except Exception as e:
             QMessageBox.critical(self, "导出失败", str(e))
         finally:
             progress.close()
             engine.cleanup()
 
+
+    def _import_step(self):
+        """调用 McCAD 导入 STEP 文件（通过文件对话框）。"""
+        step_path, _ = QFileDialog.getOpenFileName(
+            self, "选择 STEP 文件", "",
+            "STEP 文件 (*.step *.stp);;所有文件 (*)"
+        )
+        if not step_path:
+            return
+        self._run_step_import(step_path)
+
+    def _import_step_path(self, step_path: str):
+        """直接传入路径导入 STEP（供拖放调用）。"""
+        self._run_step_import(step_path)
+
+    def _run_step_import(self, step_path: str):
+        import os
+        import re
+        material = "MAT"
+        density = -1.0
+
+        # 弹出设置对话框
+        from app.step_importer import StepImportDialog
+        dialog = StepImportDialog(self, material=material, density=abs(density),
+                                  step_path=step_path)
+        if dialog.exec_() != StepImportDialog.Accepted:
+            return
+
+        material = dialog.get_material()
+        density = dialog.get_density()
+        mccad_settings = dialog.get_settings()
+
+        progress = QProgressDialog("正在转换 STEP → MCNP...", "取消", 0, 0, self)
+        progress.setWindowTitle("导入 STEP")
+        progress.setModal(True)
+        progress.show()
+        QApplication.processEvents()
+
+        try:
+            from app.step_importer import StepImporter
+            deck = StepImporter.import_step(step_path, material, density,
+                                            settings=mccad_settings)
+            if deck is None:
+                QMessageBox.critical(self, "导入失败", "McCAD 未能生成有效的 MCNP 文件。")
+                return
+
+            # 填入编辑器
+            self.set_data(deck.surfaces if hasattr(deck, 'surfaces') else "",
+                          deck.cells if hasattr(deck, 'cells') else [],
+                          deck.tr_cards if hasattr(deck, 'tr_cards') else "")
+
+            # 同步到其他标签页
+            main_win = self.window()
+            if hasattr(main_win, 'tab_basic'):
+                if hasattr(deck, 'basic') and deck.basic:
+                    main_win.tab_basic.set_data(deck.basic)
+                if hasattr(deck, 'materials') and deck.materials:
+                    main_win.tab_mat.set_data(deck.materials)
+                if hasattr(deck, 'sources') and deck.sources:
+                    main_win.tab_sdef.set_data(deck.sources)
+                if hasattr(deck, 'tally') and deck.tally:
+                    main_win.tab_tally.set_data(deck.tally)
+
+            QMessageBox.information(self, "导入成功",
+                f"STEP 文件已成功导入！\n"
+                f"栅元: {len(deck.cells) if hasattr(deck, 'cells') else 0} 个\n"
+                f"材料: {len(deck.materials) if hasattr(deck, 'materials') else 0} 种"
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "导入失败",
+                f"STEP 导入失败:\n{e}")
+        finally:
+            progress.close()
     def _on_preview_error(self, msg: str):
         """接收后台线程的预览错误并弹窗（支持 Ctrl+C 复制） / Handle preview errors from background thread.
 

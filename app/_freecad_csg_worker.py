@@ -20,6 +20,7 @@ try:
     import FreeCAD
     import Part
     import Mesh as FcMesh
+    import Import
     import numpy as np
 except ImportError as e:
     # FreeCAD 不可用时的错误报告
@@ -170,6 +171,7 @@ def make_halfspace(surf_type: str, params: list[float], B: float = 500):
         x0, y0, R = params
         cyl = Part.makeCylinder(R, B * 2, _vec(x0, y0, -B), _vec(0, 0, 1))
         return _make_box(-B, B, -B, B, -B, B).cut(cyl)
+
 
     # ── 圆锥 (KX/KY/KZ) ──
     elif surf_type == "KX":
@@ -650,7 +652,8 @@ def apply_trn(shape, tr_data):
     r = tr_data["rotate"]
 
     # 构建 4x4 矩阵 (MCNP TRn 格式: 列向量 = 局部轴在全局的方向)
-    # M = [R^T, t; 0, 1]
+    # FreeCAD: M * P (column vector), 矩阵列 = 局部轴在全局的方向
+    # 列0=V, 列1=W, 列2=U
     mat = FreeCAD.Matrix(
         r[0][0], r[1][0], r[2][0], t[0],
         r[0][1], r[1][1], r[2][1], t[1],
@@ -658,6 +661,39 @@ def apply_trn(shape, tr_data):
         0, 0, 0, 1
     )
     shape.Placement = FreeCAD.Placement(mat)
+
+
+# ============================================================
+# 无界曲面原语 (用于 TR 变换)
+# ============================================================
+
+def _make_primitive(surf_type: str, params: list[float], B: float):
+    """
+    创建无界的曲面原语（不包围盒裁剪），供 TR 变换后使用。
+
+    对于 `B - primitive` 类型的曲面（圆柱/球/锥），
+    TR 应先作用于原语再包围盒裁剪，而非作用于已裁剪结果。
+    """
+    if surf_type == "C/X":
+        y0, z0, R = params
+        return Part.makeCylinder(R, B * 2, _vec(-B, y0, z0), _vec(1, 0, 0))
+    elif surf_type == "C/Y":
+        x0, z0, R = params
+        return Part.makeCylinder(R, B * 2, _vec(x0, -B, z0), _vec(0, 1, 0))
+    elif surf_type == "C/Z":
+        x0, y0, R = params
+        return Part.makeCylinder(R, B * 2, _vec(x0, y0, -B), _vec(0, 0, 1))
+    elif surf_type == "CX":
+        R = params[0]
+        return Part.makeCylinder(R, B * 2, _vec(-B, 0, 0), _vec(1, 0, 0))
+    elif surf_type == "CY":
+        R = params[0]
+        return Part.makeCylinder(R, B * 2, _vec(0, -B, 0), _vec(0, 1, 0))
+    elif surf_type == "CZ":
+        R = params[0]
+        return Part.makeCylinder(R, B * 2, _vec(0, 0, -B), _vec(0, 0, 1))
+    else:
+        raise ValueError(f"不支持的 TR 曲面: {surf_type}")
 
 
 # ============================================================
@@ -720,17 +756,31 @@ def main():
     for s in data.get("surfaces", []):
         num = s["number"]
         try:
-            shape = make_halfspace(s["type"], s["params"], B)
-            # 应用 TRn 变换
             trn = s.get("transform")
+            tr_data = None
             if trn is not None and str(trn) in data.get("tr_cards", {}):
-                apply_trn(shape, data["tr_cards"][str(trn)])
+                tr_data = data["tr_cards"][str(trn)]
+
+            if tr_data is not None and s["type"] in ("C/X", "C/Y", "C/Z", "CX", "CY", "CZ"):
+                # ── TR 圆柱修复 ──
+                # 旧行为: T(B - C) = T(B) - T(C), 导致负侧求值错误:
+                #   B - T(B-C) = (B \ T(B)) ∪ (B ∩ T(C)) — 多了 B \ T(B) 的垃圾区域
+                # 正确做法: 先变换圆柱本体, 再从 B 挖掉:
+                #   正侧 = B - T(C), 负侧 = B - (B - T(C)) = B ∩ T(C)
+                prim = _make_primitive(s["type"], s["params"], B)
+                apply_trn(prim, tr_data)
+                shape = bound_box.cut(prim)  # B - T(primitive) = 正侧
+            else:
+                shape = make_halfspace(s["type"], s["params"], B)
+                if tr_data:
+                    apply_trn(shape, tr_data)
+
             surfaces[num] = shape
         except Exception as e:
             warnings.append(f"曲面 {num} ({s['type']}): {e}")
             # 跳过该曲面 → 后续用到它的栅元会报错
 
-    # Step 3: 为每个栅元求值布尔表达式
+    # Step 3: 为每个栅元求值布尔表达式（所有栅元都求值，含真空/空气）
     results = {}
     cell_warnings = []
     for cell in data.get("cells", []):
@@ -743,20 +793,48 @@ def main():
 
     # Step 4: 导出
     os.makedirs(out_dir, exist_ok=True)
+    single_file = data.get("single_file", False)
     files = {}
-    for num_str, shape in results.items():
-        path = os.path.join(out_dir, f"cell_{num_str}.{fmt}")
-        try:
-            if fmt == "stl":
-                mesh = FcMesh.Mesh(shape.tessellate(1.0))
-                mesh.write(path)
-            elif fmt == "step":
-                Part.export([shape], path)
-            else:
-                raise ValueError(f"不支持的导出格式: {fmt}")
-            files[num_str] = f"cell_{num_str}.{fmt}"
-        except Exception as e:
-            warnings.append(f"导出栅元 {num_str}: {e}")
+    if single_file:
+        # 合并模式: 所有栅元导出一个文件（用户导出，跳过真空/空气栅元）
+        export_data = []
+        for cell in data.get("cells", []):
+            num = cell["number"]
+            mat = str(cell.get("material", "0")).strip()
+            if mat == "0" or mat == "":
+                continue
+            shape = results.get(str(num))
+            if shape is not None:
+                export_data.append((num, mat, shape))
+        if not export_data:
+            warnings.append("没有非真空栅元可导出")
+        elif fmt == "step":
+            single_path = os.path.join(out_dir, "geometry.step")
+            try:
+                SCALE = 10.0  # MCNP cm → FreeCAD mm
+                scaled = [shape.copy() for _, _, shape in export_data]
+                for s in scaled:
+                    s.scale(SCALE)
+                Part.makeCompound(scaled).exportStep(single_path)
+                files["0"] = "geometry.step"
+            except Exception as e:
+                warnings.append(f"导出 STEP 失败: {e}")
+
+    else:
+        # 独立模式: 每个栅元单独文件（3D 预览使用）
+        for num_str, shape in results.items():
+            path = os.path.join(out_dir, f"cell_{num_str}.{fmt}")
+            try:
+                if fmt == "stl":
+                    mesh = FcMesh.Mesh(shape.tessellate(1.0))
+                    mesh.write(path)
+                elif fmt == "step":
+                    shape.exportStep(path)
+                else:
+                    raise ValueError(f"不支持的导出格式: {fmt}")
+                files[num_str] = f"cell_{num_str}.{fmt}"
+            except Exception as e:
+                warnings.append(f"导出栅元 {num_str}: {e}")
 
     # Step 5: 输出结果
     output = {"status": "ok", "files": files}

@@ -48,7 +48,7 @@ class MainWindow(QMainWindow):
         # Persistent application settings stored via QSettings (registry on Windows)
         self.settings = QSettings("MCNPGen", "MCNPGenerator")
         self.mcnp_exe = "mcnp6.exe"  # 默认 default MCNP executable
-        # Load theme preference from saved settings ("light" | "dark" | "pink")
+        # Load theme preference from saved settings ("light" | "dark" | "pink" | "traditional")
         self.theme_mode = self.settings.value("theme_mode", "light")
         self.init_ui()
         self._connect_signals()
@@ -590,7 +590,7 @@ class MainWindow(QMainWindow):
         self.btn_theme.setText(theme_label.get(self.theme_mode, "☀ 白天模式"))
 
     def _toggle_theme(self):
-        """三档循环切换主题：白天 → 黑夜 → 粉嫩 → 白天"""
+        """四档循环切换主题：白天 → 黑夜 → 粉嫩 → 传统 → 白天"""
         cycle = {"light": "dark", "dark": "pink", "pink": "traditional", "traditional": "light"}
         self.theme_mode = cycle.get(self.theme_mode, "light")
         self.settings.setValue("theme_mode", self.theme_mode)
@@ -695,8 +695,7 @@ class MainWindow(QMainWindow):
 
     # ---------- 序列化辅助 Serialization Helpers ----------
 
-    
-    
+
     def _update_en_preview(self):
         """计数卡 En 勾选变化时更新 En 预览"""
         import json
@@ -777,10 +776,9 @@ class MainWindow(QMainWindow):
             self._do_import(path)
         else:
             from PyQt5.QtWidgets import QMessageBox
-            from PyQt5.QtWidgets import QMessageBox
             QMessageBox.warning(
                 self, "不支持的格式",
-                f"仅支持: .inp/.i/.txt 或 .stp/.step" + os.path.basename(path)
+                f"不支持的文件: {os.path.basename(path)}\n仅支持: .inp/.i/.txt 或 .stp/.step"
             )
 
     def _do_import(self, path: str):
