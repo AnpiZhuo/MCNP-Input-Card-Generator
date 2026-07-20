@@ -49,7 +49,10 @@ class CellData:
     fill: str = ""       # FILL — fill universe number / FILL — 填充的宇宙号
     lat: str = ""        # LAT — lattice type (1 = hexahedron, 2 = hexagonal prism) / LAT — 格阵（1=六面体，2=六棱柱）
     trcl: str = ""       # TRCL — coordinate transformation / TRCL — 坐标变换
+    tmp: str = ""        # TMP — cell temperature in MeV (e.g. "2.53e-8") / TMP — 栅元温度(MeV)
+    other_params: str = ""  # Other unrecognized keywords (e.g. "TMP=2.53E-8") / 其他未识别关键词
     comment: str = ""    # Inline comment for this cell / 注释
+    render: bool = True  # Whether to render this cell in 3D preview / 是否在 3D 预览中渲染
 
 
 @dataclass

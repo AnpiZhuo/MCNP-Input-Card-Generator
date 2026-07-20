@@ -108,7 +108,7 @@ def parse_cells(cell_lines: list[str]) -> list[CellData]:
         imp_p = ""
         imp_e = ""
         vol = ""
-        pwt = ext = fcl = u_ = fill = lat = trcl = ""
+        pwt = ext = fcl = u_ = fill = lat = trcl = tmp = other_params = ""
 
         idx = surf_start
         while idx < len(parts):
@@ -152,6 +152,8 @@ def parse_cells(cell_lines: list[str]) -> list[CellData]:
                 lat = token.split("=", 1)[1]
             elif upper.startswith("TRCL="):
                 trcl = token.split("=", 1)[1]
+            elif upper.startswith("TMP="):
+                tmp = token.split("=", 1)[1]
             elif upper.startswith("IMP:N"):
                 idx += 1
                 if idx < len(parts):
@@ -197,7 +199,14 @@ def parse_cells(cell_lines: list[str]) -> list[CellData]:
                 if idx < len(parts):
                     trcl = parts[idx]
             else:
-                surf_parts.append(token)
+                # 带 = 的未知关键词 → other_params
+                if "=" in token and not token[0].isdigit():
+                    if other_params:
+                        other_params += " " + token
+                    else:
+                        other_params = token
+                else:
+                    surf_parts.append(token)
             idx += 1
 
         cells.append(CellData(
@@ -206,6 +215,7 @@ def parse_cells(cell_lines: list[str]) -> list[CellData]:
             imp_n=imp_n, imp_p=imp_p, imp_e=imp_e,
             vol=vol, pwt=pwt, ext=ext, fcl=fcl,
             u=u_, fill=fill, lat=lat, trcl=trcl,
+            tmp=tmp, other_params=other_params,
             comment=comment,
         ))
 

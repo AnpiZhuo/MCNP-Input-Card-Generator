@@ -252,9 +252,6 @@ class BasicSettingsTab(QWidget):
             (r'\bweiyizhuo\b', 'weiyizhuo',
              "这你都认识？你跟作者很熟吗？\n别声张，他不知道自己是个名人。\n\n"
              "You know that name? Are you friends with the dev?\nShh, he doesn't know he's famous."),
-            (r'\b1\b', 'one',
-             "标题写个「1」？\n你就懒到这个地步了吗？我的天。\n\n"
-             "Your title is \"1\"?\nAre you even trying right now?"),
             (r'1378963177', 'qq',
              "这个邮箱我记住了。\n\n"
              "I've memorized this email by now."),

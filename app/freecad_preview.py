@@ -150,7 +150,7 @@ class FreeCADEngine:
 
     def build_geometry(self, pymcnp_surfaces: list, cells_data: list,
                        tr_cards: dict, bound: float = 500,
-                       fmt: str = "stl") -> dict[int, str]:
+                       fmt: str = "stl", single_file: bool = False) -> dict[int, str]:
         """从 pymcnp 对象和栅元数据构建各栅元的 CSG 几何。
 
         Args:
@@ -159,6 +159,7 @@ class FreeCADEngine:
             tr_cards: {"1": {"translate": [...], "rotate": [[...],...]}}
             bound: 半空间包围盒半边长 (BOUND)
             fmt: 输出格式 ("stl" | "step")
+            single_file: True=所有栅元合并为单个文件, False=每个栅元单独文件
 
         Returns:
             {cell_number: 输出文件路径}
@@ -183,6 +184,7 @@ class FreeCADEngine:
                 raise RuntimeError(f"栅元 {c['number']} AST 序列化失败: {e}")
             cell_dicts.append({
                 "number": c["number"],
+                "material": str(c.get("material", "0")),
                 "ast": ast_json,
             })
 
@@ -195,6 +197,7 @@ class FreeCADEngine:
             "bound": bound,
             "output_dir": tmp_dir,
             "format": fmt,
+            "single_file": single_file,
         }
 
         # 4. 子进程调用 FreeCAD
@@ -209,27 +212,14 @@ class FreeCADEngine:
         # warnings 可通过返回结构传递，但保持接口简单
         return result
 
-    def export_stl(self, pymcnp_surfaces: list, cells_data: list,
-                   tr_cards: dict, out_dir: str) -> list[str]:
-        """导出每个栅元的 STL 文件"""
-        result = self.build_geometry(pymcnp_surfaces, cells_data,
-                                     tr_cards, fmt="stl")
-        files = []
-        for cell_num, src_path in result.items():
-            dst = os.path.join(out_dir, f"cell_{cell_num}.stl")
-            if os.path.abspath(src_path) != os.path.abspath(dst):
-                shutil.copy2(src_path, dst)
-            files.append(dst)
-        return files
-
     def export_step(self, pymcnp_surfaces: list, cells_data: list,
                     tr_cards: dict, out_dir: str) -> list[str]:
-        """导出每个栅元的 STEP 文件"""
+        """将所有栅元导出为一个 STEP 文件（跳过真空/空气栅元）"""
         result = self.build_geometry(pymcnp_surfaces, cells_data,
-                                     tr_cards, fmt="step")
+                                     tr_cards, fmt="step", single_file=True)
         files = []
-        for cell_num, src_path in result.items():
-            dst = os.path.join(out_dir, f"cell_{cell_num}.step")
+        for src_path in result.values():
+            dst = os.path.join(out_dir, "geometry.step")
             if os.path.abspath(src_path) != os.path.abspath(dst):
                 shutil.copy2(src_path, dst)
             files.append(dst)
