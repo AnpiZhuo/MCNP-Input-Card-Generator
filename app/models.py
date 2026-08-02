@@ -151,6 +151,8 @@ class BasicSettings:
     mode_a: bool = False  # Alpha mode enabled / α粒子 (Alpha)
     nps: str = ""         # Number of histories (NPS card) / NPS 历史数
     ctme: str = ""        # Computation time limit in minutes (CTME card) / 计算时间限制（分钟）
+    act: str = ""         # Activation (ACT card) / 活化分析卡（如 ACT 2j 1）
+    print_pr: str = ""    # PRINT card / PRINT 输出控制卡
     phys_fis: bool = True # True = fission enabled; False = outputs NONU card to disable fission / True=开启裂变, False=输出 NONU 卡关闭裂变
 
 
@@ -178,6 +180,9 @@ class TallyDefinition:
     particles: list[str] = field(default_factory=lambda: ["n"])
     params: str = ""     # 参数串（取决于类型）
     generate_en: bool = False  # 是否自动生成该计数对应的 En 能量卡（默认不勾选）
+    generate_tn: bool = False  # 是否自动生成该计数对应的 Tn 时间卡（默认不勾选）
+    fn_prefix: str = ""        # "" / "*" / "+" — 计数卡前缀修饰
+    number_suffix: str = ""    # F5 环探测器轴字母: "X" / "Y" / "Z"，其他类型为空
 
 
 @dataclass
@@ -204,6 +209,17 @@ class TallySettings:
     e_custom_enabled: bool = False    # Enable custom energy grid text / 自定义网格开关
     e_custom_text: str = ""           # Custom energy grid text / 自定义网格文本
     e_cards_text: str = ""            # En energy cards text (one card per line) / En 能量卡文本（每行一条）
+
+    # T0 — 时间网格 / Time bins (C810: T0 t1 t2 ... tn)
+    t0_min: str = ""
+    t0_max: str = ""
+    t0_bins: int = 0
+    t0_log: bool = False
+    t0_custom_enabled: bool = False
+    t0_custom_text: str = ""
+    t0_text: str = ""                 # T0 card text / T0 时间卡文本（每行一条）
+    t_cards_text: str = ""            # Tn time cards text (one card per line) / Tn 时间卡文本（每行一条）
+    fn_prefix: str = ""              # Fn / *Fn / +Fn 模式（每行，TallyDefinition 中也有一份）
 
     # CUT:N — neutron cutoff / CUT:N 中子截断 (C810: T E WC1 WC2 SWTM)
     cut_n_t: str = ""                 # Time cutoff (shakes)
@@ -359,6 +375,31 @@ class AdvancedSettings:
     # Distribution source mode: SI/SP pair serialized text (each pair separated by \n---\n)
     # 分布源模式：SI/SP 对序列化文本（每个对用 \n---\n 分隔）
     sdef_raw_text: str = ""
+
+    # 结构化分布（新）：SI/SP/SB/DS 结构化 JSON，非空时优先于 sdef_raw_text
+    # 格式: [{"id":1,"paramRef":"ERG","si":{"type":"L","values":[...]},"sp":{"type":"D","values":[...],"fnCode":"","fnParams":[]},"sb":null,"ds":null,"auto":true}]
+    sdef_distributions: str = ""
+
+    # ── SSW/SSR 面源（source_mode 面源时使用）──
+    ssw_surf: str = ""   # SSW 曲面号（写面源）
+    ssw_sym: str = ""    # SSW 对称面 (0/1/2)
+    ssw_pty: str = ""    # SSW 粒子类型 (N/P/E)
+    ssw_cel: str = ""    # SSW 栅元列表
+    ssr_surf: str = ""   # SSR 曲面号（读面源）
+    ssr_mode: str = ""   # SSR 模式: "" / "old" / "new"
+    ssr_cel: str = ""    # SSR 栅元列表
+    ssr_pty: str = ""    # SSR 粒子类型
+    ssr_col: str = ""    # SSR COL 碰撞次数
+    ssr_wgt: str = ""    # SSR WGT 权重倍率
+    ssr_tr: str = ""     # SSR TR 变换
+    ssr_psc: str = ""    # SSR PSC 角度分布幂次
+
+    # ── KCODE 扩展（8 参数）+ HSRC ──
+    kcode_msrk: str = ""      # 分配源点存储 / distributed array
+    kcode_mrkp: str = ""      # MCTAL/RUNTPE 保存周期数 / distributed array
+    kcode_kc8: str = ""       # 0=全部周期, 1=仅活跃周期
+    hsrc_enabled: bool = False  # 是否生成 HSRC 卡
+    hsrc_text: str = ""       # HSRC 网格文本（如 "3 0 1 10 -10 10 10"）
 
 
 @dataclass

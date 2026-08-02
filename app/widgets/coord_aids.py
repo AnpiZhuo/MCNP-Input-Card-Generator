@@ -161,6 +161,10 @@ class CoordAids:
             return magnitude * 5
         return magnitude * 10
 
+    def set_on_drag(self, fn):
+        """注册外部拖拽回调，在拖拽时同步到其它 UI 组件"""
+        self._ext_drag = fn
+
     def _add_reference_point(self):
         """可拖拽金色线框球 + 左上角实时坐标文本"""
         pos = self.default_pos
@@ -169,12 +173,15 @@ class CoordAids:
             position='upper_left', font_size=14, color=(0.1, 0.1, 0.1), font='courier',
         )
         self.actors.append(self._coord_text)
+        self._ext_drag = None
 
         def _drag(point):
             self._coord_text.SetText(
                 2,
                 f'  X: {point[0]:.1f}   Y: {point[1]:.1f}   Z: {point[2]:.1f}  (cm)  ',
             )
+            if self._ext_drag:
+                self._ext_drag(point)
             self._p.render()
 
         self._sphere = self._p.add_sphere_widget(

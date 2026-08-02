@@ -36,48 +36,140 @@ def _is_float(s: str) -> bool:
 
 
 def _expand_j_skip(params: list[str], count: int) -> list[str]:
-    """展开 j-skip 语法，补齐到 count 个元素。
-    Expand MCNP j-skip syntax (placeholder skipping) to a fixed count of elements.
+    """展开 j-skip / R / M 语法，补齐到 count 个元素。
+    Expands MCNP j-skip (placeholder skipping), R (repeat), M (multiply).
 
-    MCNP uses "j" to skip a field and "nj" to skip n fields. This function
-    expands those placeholders into empty strings, padding or truncating
-    to the requested count. If the expansion exceeds count, trailing non-empty
-    values are preserved and intermediate values are truncated.
+    J 语法:
+        "J" → 跳过一个字段（填入空串）
+        "nJ" → 跳过 n 个字段
+    R 语法:
+        "R" → 重复前一个值 1 次 (例: 1 R → 1 1)
+        "nR" → 重复前一个值 n 次 (例: 1 3R → 1 1 1 1)
+    M 语法:
+        "M" 后跟一个数字 → 前一个值乘以该数字 (例: 2 M 3 → 2 6)
 
     Examples:
-        ["2j", "0", "0"] with count=6 -> ["", "", "0", "0", "", ""]
-        ["4j", "1"] with count=3 -> ["", "", "1"]
-
-    Args:
-        params: List of parameter tokens, possibly containing "j" / "nj" skips.
-        count: The target number of elements.
-
-    Returns:
-        A list of length count, with empty strings for skipped positions.
+        ["2j", "0", "0"] with count=6 → ["", "", "0", "0", "", ""]
+        ["1", "3R"] with count=5 → ["1", "1", "1", "1", ""]
+        ["2", "M", "3"] with count=4 → ["2", "6", "", ""]
     """
     result = []
-    for p in params:
+    i = 0
+    while i < len(params):
+        p = params[i]
         u = p.upper()
         if u == "J":
             result.append("")
         elif u.endswith("J") and u[:-1].isdigit():
             for _ in range(int(u[:-1])):
                 result.append("")
+        elif u == "R":
+            if result:
+                result.append(result[-1])
+        elif u.endswith("R") and u[:-1].isdigit():
+            n = int(u[:-1])
+            if result:
+                for _ in range(n):
+                    result.append(result[-1])
+        elif u == "M" and i + 1 < len(params):
+            i += 1
+            if result:
+                try:
+                    prev = float(result[-1])
+                    factor = float(params[i])
+                    result.append(str(prev * factor))
+                except ValueError:
+                    result.append(params[i])
+            else:
+                result.append(params[i])
         else:
             result.append(p)
+        i += 1
     return (result[-count:] if len(result) >= count
             else result + [""] * (count - len(result)))
 
 
-def parse_cells(cell_lines: list[str]) -> list[CellData]:
-    """解析栅元卡行 → CellData 列表"""
-    cells = []
-    content = [l for l in cell_lines if l.strip()
-               and not l.strip().upper().startswith("C ")
-               and not l.strip().upper().startswith("C\t")]
+def _is_d_ref(val: str) -> bool:
+    """检查值是否为 Dn 分布引用（如 D1、D2）"""
+    return bool(re.match(r'^D\d+$', val.strip().upper())) if val else False
 
-    for line in content:
+
+def _parse_sisp_structured(sisp_lines: list[str]) -> list[dict]:
+    """将 SI/SP/SB/DS 行解析为结构化分布列表（源分布卡说明.md 三/四节）。
+
+    返回 [{"id", "paramRef", "si":{"type","values"}, "sp":{"type","values","fnCode","fnParams"},
+           "sb":{"type","values"} | None, "ds":{"type","param","distributionIds"} | None}]
+    """
+    entries: dict[int, dict] = {}
+    order: list[int] = []
+    for line in sisp_lines:
+        s = line.strip()
+        if not s:
+            continue
+        # 剥 $ 注释（MCNP $ 后为注释，不参与分布值）
+        if "$" in s:
+            s = s.split("$", 1)[0].strip()
+        upper = s.split()[0].upper() if s.split() else ""
+        m = re.match(r'^(SI|SP|SB|DS)(\d+)', upper)
+        if not m:
+            continue
+        kind, num = m.group(1), int(m.group(2))
+        rest = s[m.end():].strip()
+        if num not in entries:
+            entries[num] = {"id": num, "paramRef": "", "si": None, "sp": None, "sb": None, "ds": None, "auto": False}
+            order.append(num)
+        e = entries[num]
+        toks = rest.split()
+        if kind == "SI":
+            typ = "L"
+            vals = toks
+            if toks and toks[0].upper() in ("L", "H", "A", "S", "Q", "T", "F"):
+                typ = toks[0].upper(); vals = toks[1:]
+            e["si"] = {"type": typ, "values": vals}
+        elif kind == "SP":
+            sp = {"type": "", "values": [], "fnCode": "", "fnParams": []}
+            if toks and re.match(r'^-\d+$', toks[0]):
+                sp["fnCode"] = toks[0]; sp["fnParams"] = toks[1:]
+            elif toks and toks[0].upper() in ("D", "C", "V"):
+                sp["type"] = toks[0].upper(); sp["values"] = toks[1:]
+            else:
+                sp["values"] = toks
+            e["sp"] = sp
+        elif kind == "SB":
+            sb = {"type": "D", "values": toks}
+            if toks and toks[0] in ("-21", "-31"):
+                sb["type"] = toks[0]; sb["values"] = toks[1:]
+            elif toks and toks[0].upper() == "D":
+                sb["type"] = "D"; sb["values"] = toks[1:]
+            e["sb"] = sb
+        elif kind == "DS":
+            ds = {"type": "S", "param": "", "distributionIds": []}
+            if toks and toks[0].upper() in ("H", "L", "S", "T", "Q"):
+                ds["type"] = toks[0].upper(); toks = toks[1:]
+            if ds["type"] == "T":
+                pass
+            elif toks:
+                ds["param"] = toks[0]
+                ds["distributionIds"] = toks[1:]
+            e["ds"] = ds
+    return [entries[n] for n in order]
+
+
+def parse_cells(cell_lines: list[str]) -> list[CellData]:
+    """解析栅元卡行 → CellData 列表（C 注释行关联到下一个栅元，$ 注释优先）"""
+    cells = []
+    pending_c = ""  # 最近的 C 注释行
+    for line in cell_lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.upper().startswith("C ") or stripped.upper().startswith("C\t"):
+            pending_c = stripped
+            continue
         comment = extract_comment(line)
+        if not comment and pending_c:
+            comment = pending_c[1:].strip()  # 去掉 C 前缀
+        pending_c = ""
         line_clean = strip_comment(line)
         parts = line_clean.split()
         if not parts:
@@ -573,6 +665,11 @@ def parse_sdef_fields(parts: list[str]) -> dict:
                     ti += 1
                     continue
             ti += 1
+    # POS=Dn（矢量分布）→ 三个分量同引用（否则再生成会退化成 X=D1 丢失三元组语义）
+    _px = result.get("sdef_pos_x", "")
+    if _is_d_ref(_px) and not result.get("sdef_pos_y") and not result.get("sdef_pos_z"):
+        result["sdef_pos_y"] = _px
+        result["sdef_pos_z"] = _px
     return result
 
 
@@ -587,14 +684,39 @@ def parse_f_tally(parts: list[str], tally_defs: list) -> bool | None:
          None  = 不是计数卡
     """
     first = parts[0].upper()
-    m = re.match(r'^F(\d+):([NPEHAS])$', first)
-    if not m:
-        m = re.match(r'^F(\d+)([NPEHAS])$', first)
-    if not m:
-        return None
+    fn_prefix = ""
+    # 检测 *F 或 +F 前缀
+    pre_m = re.match(r'^([*+])(.+)', first)
+    if pre_m:
+        fn_prefix = pre_m.group(1)
+        first = pre_m.group(2)  # "F4:N" 去掉前缀后重新匹配
+    # 通量成像 FIPn / FIRn / FICn
+    img_m = re.match(r'^(FIP|FIR|FIC)(\d+):([NPEHAS])$', first)
+    if not img_m:
+        img_m = re.match(r'^(FIP|FIR|FIC)(\d+)([NPEHAS])$', first)
+    if img_m:
+        fn_prefix = img_m.group(1)          # "FIP", "FIR", "FIC"
+        suffix = int(img_m.group(2))
+        designator = img_m.group(3).upper()
+        number_suffix = ""
+    else:
+        m = re.match(r'^F(\d+):([NPEHAS])$', first)
+        if not m:
+            m = re.match(r'^F(\d+)([NPEHAS])$', first)
+        if not m:
+            m = re.match(r'^F(\d+)([XYZ]):([NPEHAS])$', first)   # F5X:N 环探测器
+        if not m:
+            m = re.match(r'^F(\d+)([XYZ])([NPEHAS])$', first)    # F5XN（无冒号）
+        if not m:
+            return None
 
-    suffix = int(m.group(1))
-    designator = m.group(2).upper()
+        suffix_str, designator = m.group(1), m.group(2).upper()
+        number_suffix = ""
+        if m.lastindex == 3:
+            # F5X:N → m=(5, X, N)  环探测器轴字母在 group(2)
+            number_suffix = m.group(2).upper()
+            designator = m.group(3).upper()
+        suffix = int(suffix_str)
 
     # Tally type is determined by the last digit of suffix:
     # F1/F11/F21… → F1 (surface current), F5/F15/F25… → F5 (point detector), etc.
@@ -618,11 +740,15 @@ def parse_f_tally(parts: list[str], tally_defs: list) -> bool | None:
         p_lower = designator.lower()
         if p_lower not in [p.lower() for p in existing.particles]:
             existing.particles.append(p_lower)
+        if fn_prefix and not existing.fn_prefix:
+            existing.fn_prefix = fn_prefix
     else:
         tally_defs.append(TallyDefinition(
             type=tally_type, number=suffix,
             particles=[designator.lower()],
             params=params,
+            fn_prefix=fn_prefix,
+            number_suffix=number_suffix,
         ))
 
     return True
@@ -649,16 +775,60 @@ def parse_cut(parts: list[str], tally_dict: dict):
 # ── 已知但无对应 UI 的 MCNP 卡片（保留在 other_cards 中，但不警告） ──
 _KNOWN_OTHER_CARDS = {
     "PHYS:N", "PHYS:P", "PHYS:E", "PHYS",
-    "ACT", "MPHYS", "LCA", "PRDMP", "DBCN",
+    "MPHYS", "LCA", "PRDMP", "DBCN",
     "KCODE", "KSRC", "TOTNU", "PTRAC", "VOID", "LOST",
     "SSW", "SSR", "ESPLT", "WWE", "WWN",
-    "BURN", "FMESH", "PERT", "PRINT",
+    "BURN", "FMESH", "PERT",
 }
 
 # ── 计数修饰卡 / 时间卡 / 能量卡（带数字后缀）
 _TALLY_MODIFIER_RE = re.compile(
     r'^(FU|FT|FQ|FC|T|E)\d+$', re.IGNORECASE
 )
+
+
+def _parse_card_with_continuation(data: list[str], i: int, first: str, parts: list[str]) -> tuple[list[float], int]:
+    """通用续行卡片解析：解析 E0/En/Tn 的 nlog/nlin 语法 + 续行值收集
+    返回 (values, new_i)，new_i 指向最后一个续行
+    """
+    import sys
+    print(f"[E0DBG] _parse_card_with_continuation: first={first}, parts={parts}", file=sys.stderr)
+    vals: list[float] = []
+    ti = 1
+    while ti < len(parts):
+        token = parts[ti]
+        nl_m = re.match(r'^(\d+)(LOG|LIN|I)$', token.upper())
+        if nl_m and vals:
+            count = int(nl_m.group(1))
+            curve = nl_m.group(2)
+            ti += 1
+            if ti < len(parts):
+                try:
+                    end_val = float(parts[ti]); ti += 1
+                    start_val = vals[-1]
+                except ValueError: break
+            elif curve == "I" and len(vals) >= 2:
+                end_val = vals.pop(); start_val = vals[-1]
+            else: break
+            is_log = (curve == "LOG")
+            for j in range(1, count + 1):
+                vals.append(10.0 ** (math.log10(max(start_val, 1e-99)) + j * (math.log10(end_val) - math.log10(max(start_val, 1e-99))) / count) if is_log else start_val + j * (end_val - start_val) / count)
+            continue
+        try:
+            vals.append(float(token))
+            ti += 1
+        except ValueError: break
+    # 收集续行值
+    while i + 1 < len(data):
+        nr = data[i + 1].strip()
+        if not nr: i += 1; continue
+        nf = nr.split()[0].upper()
+        if re.match(r'^[A-Z][A-Z0-9]*$', nf) or nf.startswith("C"): break
+        for tok in nr.split():
+            try: vals.append(float(tok))
+            except: break
+        i += 1
+    return vals, i
 
 
 def parse_data_cards(data_lines: list[str]) -> dict:
@@ -675,13 +845,14 @@ def parse_data_cards(data_lines: list[str]) -> dict:
         "ksrc_points": [],  # list of {"x":..., "y":..., "z":...}
         "source_mode": "fixed",
         "other_cards": [], "e0_values": [], "warnings": [],
-        "tr_cards": [],
+        "tr_cards": [], "t_cards_lines": [],
     }
 
     data = [l for l in data_lines
             if l.strip()]  # 保留 C 注释行，后续手动放入 other_cards
 
     i = 0
+    pending_c = ""  # 最近的 C 注释行（关联到下一个 M 卡）
     while i < len(data):
         raw_line = data[i]
         line = strip_comment(raw_line.strip())
@@ -689,14 +860,19 @@ def parse_data_cards(data_lines: list[str]) -> dict:
             i += 1
             continue
 
-        # C 注释行保留到 other_cards（C 后跟至少一个空格，CUT 不是注释）
+        # C 注释行缓冲（C 后跟至少一个空格，CUT 不是注释）；若后续非 M 卡则回落到 other_cards
         if re.match(r'^C\s', line, re.IGNORECASE):
-            result["other_cards"].append(raw_line)
+            pending_c = raw_line
             i += 1
             continue
 
         parts = line.split()
         first = parts[0].upper()
+
+        # 非 M 卡 → 未消费的 C 注释回落 other_cards（M 卡分支自行消费）
+        if not re.match(r'^M\d+$', first, re.IGNORECASE) and pending_c:
+            result["other_cards"].append(pending_c)
+            pending_c = ""
 
         if first == "MODE":
             for p in parts[1:]:
@@ -716,6 +892,12 @@ def parse_data_cards(data_lines: list[str]) -> dict:
         elif first == "CTME":
             result["ctme"] = parts[1] if len(parts) > 1 else ""
             i += 1
+        elif first == "ACT":
+            result["act"] = " ".join(parts[1:]) if len(parts) > 1 else ""
+            i += 1
+        elif first == "PRINT":
+            result["print_pr"] = " ".join(parts[1:]) if len(parts) > 1 else ""
+            i += 1
         elif first == "NONU":
             result["nonu"] = True
             i += 1
@@ -724,6 +906,9 @@ def parse_data_cards(data_lines: list[str]) -> dict:
             mat_comment = extract_comment(raw_line)
             if mat_comment:
                 mat.comment = mat_comment
+            elif pending_c:
+                mat.comment = pending_c[1:].strip()  # 去掉 C 前缀
+            pending_c = ""
             result["materials"].append(mat)
             i += 1
         elif re.match(r'^MT\d+$', first, re.IGNORECASE):
@@ -744,19 +929,22 @@ def parse_data_cards(data_lines: list[str]) -> dict:
             # 解析分布源字段
             sdef_dict = parse_sdef_fields(parts)
             result.update(sdef_dict)
-            # 收集后续 SI/SP 行
+            # 收集后续 SI/SP/SB/DS 行
             i += 1
             sisp_lines = []
             while i < len(data):
                 next_first = data[i].strip().split()[0].upper() if data[i].strip().split() else ""
-                if next_first.startswith("SI") or next_first.startswith("SP"):
+                if (next_first.startswith("SI") or next_first.startswith("SP")
+                        or next_first.startswith("SB") or next_first.startswith("DS")):
                     sisp_lines.append(data[i].strip())
                     i += 1
                 else:
                     break
             if sisp_lines:
                 result["source_mode"] = "distribution"
-                # 转为 JSON 对 [{si, sp}, ...]
+                # 结构化分布（新）+ 旧格式 sdef_raw_text（兼容）并存
+                result["sdef_distributions"] = json.dumps(_parse_sisp_structured(sisp_lines), ensure_ascii=False)
+                # 旧格式：SI/SP 配对 [{si, sp}, ...]
                 pairs = []
                 for line in sisp_lines:
                     upper = line.strip().split()[0].upper() if line.strip().split() else ""
@@ -768,7 +956,9 @@ def parse_data_cards(data_lines: list[str]) -> dict:
                         else:
                             pairs.append({"si": "", "sp": line.strip()})
                 result["sdef_raw_text"] = json.dumps(pairs, ensure_ascii=False)
-        elif re.match(r'^F\d+:', first) or re.match(r'^F\d+$', first):
+        elif (re.match(r'^[*+]?F\d+:', first) or re.match(r'^[*+]?F\d+$', first)
+              or re.match(r'^[*+]?F(?:IP|IR|IC)\d+:', first) or re.match(r'^[*+]?F(?:IP|IR|IC)\d+$', first)
+              or re.match(r'^[*+]?F\d+[XYZ]:', first) or re.match(r'^[*+]?F\d+[XYZ][NPEHAS]$', first)):
             handled = parse_f_tally(parts, result["tally_defs"])
             if handled is False:
                 # 计数卡编号超出 F1-F8 支持范围 → 保留原样
@@ -779,55 +969,21 @@ def parse_data_cards(data_lines: list[str]) -> dict:
                 # 裸 Fn 无粒子标识符（如 F1）→ 保留原样
                 result["other_cards"].append(line)
             i += 1
-        elif re.match(r'^E0?$', first):
-            # 仅 E / E0 是全局能谱网格；En (n≥1) 是计数专用能谱，归入 other_cards
-            # 支持 MCNP nlog/nlin 语法（如 1 200log 200）
-            vals = []
-            ti = 1
-            while ti < len(parts):
-                token = parts[ti]
-                # 识别 nlog / nlin / nI（MCNP E0 插值语法）
-                nl_m = re.match(r'^(\d+)(LOG|LIN|I)$', token.upper())
-                if nl_m and vals:
-                    count = int(nl_m.group(1))
-                    curve = nl_m.group(2)
-                    ti += 1
-                    if ti < len(parts):
-                        # nLOG/nLIN:  <start> <nLOG> <end>
-                        try:
-                            end_val = float(parts[ti])
-                            ti += 1
-                            start_val = vals[-1]
-                        except ValueError:
-                            break
-                    elif curve == "I" and len(vals) >= 2:
-                        # nI:  <start> <end> <nI>（末尾无后续值）
-                        end_val = vals.pop()
-                        start_val = vals[-1]
-                    else:
-                        break
-                    is_log = (curve == "LOG")
-                    # 记录原始参数，让 UI 填入正常 E0 字段而非自定义网格
+
+        elif re.match(r'^E0?$', first, re.IGNORECASE):
+            import sys
+            print(f"[E0DBG] E0 line: {line[:80]}", file=sys.stderr)
+            vals, i = _parse_card_with_continuation(data, i, first, parts)
+            print(f"[E0DBG] E0 vals: {len(vals)} -> {vals[:5]}", file=sys.stderr)
+            if len(vals) >= 2:
+                raw = " ".join(parts[1:])
+                pm = re.search(r'(\d+)(LOG|LIN|I)\s+([\d.eE+\-]+)$', raw.upper())
+                if pm:
                     result["e0_parametric"] = True
-                    result["e0_min"] = str(start_val)
-                    result["e0_max"] = str(end_val)
-                    result["e0_bins"] = count
-                    result["e0_log"] = is_log
-                    if is_log:
-                        log_min = math.log10(max(start_val, 1e-99))
-                        log_max = math.log10(end_val)
-                        for j in range(1, count + 1):
-                            vals.append(10.0 ** (log_min + j * (log_max - log_min) / count))
-                    else:
-                        for j in range(1, count + 1):
-                            vals.append(start_val + j * (end_val - start_val) / count)
-                    continue
-                try:
-                    vals.append(float(token))
-                    ti += 1
-                except ValueError:
-                    break
-            if vals:
+                    result["e0_min"] = str(vals[0])
+                    result["e0_max"] = str(vals[-1])
+                    result["e0_bins"] = int(pm.group(1))
+                    result["e0_log"] = pm.group(2) == "LOG"
                 result["e0_values"] = vals
             i += 1
         elif first.startswith("CUT:"):
@@ -877,14 +1033,58 @@ def parse_data_cards(data_lines: list[str]) -> dict:
         elif first.startswith("SI") or first.startswith("SP"):
             i += 1
         elif first.startswith("KCODE"):
-            # KCODE  NSRC RKK IKZ KCT [KNRM]
+            # KCODE  NSRC RKK IKZ KCT [MSRK KNRM MRKP KC8]
             result["source_mode"] = "kcode"
-            expanded = _expand_j_skip(parts[1:], 5)
+            expanded = _expand_j_skip(parts[1:], 8)
             result["kcode_nsrc"] = expanded[0]
             result["kcode_rkk"] = expanded[1]
             result["kcode_ikz"] = expanded[2]
             result["kcode_kct"] = expanded[3]
-            result["kcode_knrm"] = expanded[4]
+            result["kcode_msrk"] = expanded[4]
+            result["kcode_knrm"] = expanded[5]
+            result["kcode_mrkp"] = expanded[6]
+            result["kcode_kc8"] = expanded[7]
+            i += 1
+        elif first.startswith("HSRC"):
+            # HSRC  nx xmin xmax ny ymin ymax nz zmin zmax（香农熵网格）
+            result["hsrc_enabled"] = True
+            result["hsrc_text"] = " ".join(parts[1:])
+            i += 1
+        elif first.startswith("SSW"):
+            # SSW  S1 S2 ... [SYM=] [PTY=] [CEL=]（写面源）
+            result["source_mode"] = "surface"
+            result["ssw_surf"] = ""
+            extra = []
+            for tok in parts[1:]:
+                if "=" in tok:
+                    k, v = tok.split("=", 1)
+                    if k.upper() == "SYM": result["ssw_sym"] = v
+                    elif k.upper() == "PTY": result["ssw_pty"] = v
+                    elif k.upper() == "CEL": result["ssw_cel"] = v
+                    else: extra.append(tok)
+                else:
+                    if result["ssw_surf"]: result["ssw_surf"] += " " + tok
+                    else: result["ssw_surf"] = tok
+            i += 1
+        elif first.startswith("SSR"):
+            # SSR  [OLD|NEW] S ... [CEL=] [PTY=] [COL=] [WGT=] [TR=] [PSC=]（读面源）
+            result["source_mode"] = "surface"
+            result["ssr_surf"] = ""
+            for tok in parts[1:]:
+                if "=" in tok:
+                    k, v = tok.split("=", 1)
+                    ku = k.upper()
+                    if ku == "CEL": result["ssr_cel"] = v
+                    elif ku == "PTY": result["ssr_pty"] = v
+                    elif ku == "COL": result["ssr_col"] = v
+                    elif ku == "WGT": result["ssr_wgt"] = v
+                    elif ku == "TR": result["ssr_tr"] = v
+                    elif ku == "PSC": result["ssr_psc"] = v
+                elif tok.upper() in ("OLD", "NEW"):
+                    result["ssr_mode"] = tok.upper()
+                else:
+                    if result["ssr_surf"]: result["ssr_surf"] += " " + tok
+                    else: result["ssr_surf"] = tok
             i += 1
         elif re.match(r'^\*?TR\d+$', first, re.IGNORECASE):
             # TRn / *TRn 变换卡 — 存入 tr_cards
@@ -901,8 +1101,46 @@ def parse_data_cards(data_lines: list[str]) -> dict:
                     })
             i += 1
         elif re.match(r'^E\d+$', first, re.IGNORECASE):
-            # En 能量卡 — 存入 e_cards_lines，后续合并到 e_cards_text
-            result["e_cards_lines"].append(line)
+            # En (n≥1) 能量卡: 先收续行原文再解析值
+            raw_lines = [line]
+            while i + 1 < len(data):
+                nr = data[i + 1].strip()
+                if not nr: i += 1; continue
+                nf = nr.split()[0].upper()
+                if re.match(r'^[A-Z][A-Z0-9]*$', nf) or nf.startswith("C"): break
+                raw_lines.append(data[i + 1]); i += 1
+            vals, _ = _parse_card_with_continuation(data, i, first, parts)
+            result["e_cards_lines"].append("\n".join(raw_lines))
+            i += 1
+        elif re.match(r'^T0$', first, re.IGNORECASE):
+            # T0 时间网格（同 E0 逻辑）
+            vals, i = _parse_card_with_continuation(data, i, first, parts)
+            if len(vals) >= 2:
+                raw = " ".join(parts[1:])
+                pm = re.search(r'(\d+)(LOG|LIN|I)\s+([\d.eE+\-]+)$', raw.upper())
+                if pm:
+                    result["t0_parametric"] = True
+                    result["t0_min"] = str(vals[0])
+                    result["t0_max"] = str(vals[-1])
+                    result["t0_bins"] = int(pm.group(1))
+                    result["t0_log"] = pm.group(2) == "LOG"
+                else:
+                    # 显式值列表 → 自定义文本
+                    result["t0_custom_enabled"] = True
+                    result["t0_custom_text"] = " ".join(str(v) for v in vals)
+                result["t0_values"] = vals
+            i += 1
+        elif re.match(r'^T\d+$', first, re.IGNORECASE):
+            # Tn (n≥1) 时间卡: 先收续行原文再解析值
+            raw_lines = [line]
+            while i + 1 < len(data):
+                nr = data[i + 1].strip()
+                if not nr: i += 1; continue
+                nf = nr.split()[0].upper()
+                if re.match(r'^[A-Z][A-Z0-9]*$', nf) or nf.startswith("C"): break
+                raw_lines.append(data[i + 1]); i += 1
+            vals, _ = _parse_card_with_continuation(data, i, first, parts)
+            result["t_cards_lines"].append("\n".join(raw_lines))
             i += 1
         elif first in _KNOWN_OTHER_CARDS or _TALLY_MODIFIER_RE.match(first):
             # 标准 MCNP 卡片但无对应 UI，保留原样到 other_cards

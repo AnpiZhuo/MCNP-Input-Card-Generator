@@ -52,7 +52,7 @@ def import_inp_file(path: str, tabs: dict) -> tuple[bool, str]:
     tabs["mat"].set_data(deck.materials)
     tabs["sdef"].set_data(deck.sources, deck.adv)
     tabs["tally"].set_data(deck.tally)
-    tabs["energy"].set_data(deck.tally)
+    tabs["advanced"].set_cut_data(deck.tally)
     tabs["adv"].set_data(deck.adv)
 
     src_info = f"源: {len(deck.sources)}" if deck.adv.source_mode != "distribution" else "源: 分布源模式"

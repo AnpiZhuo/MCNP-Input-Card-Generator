@@ -10,6 +10,17 @@ from app.models import BasicSettings, CellData, MaterialData, SourceData, Advanc
 
 # ===== Cells & Surfaces: 保留原始文本 pass-through =====
 
+def _dist_json_nonempty(dist_json: str) -> bool:
+    """结构化分布 JSON 是否含有效条目（"[]"/空串 → False）"""
+    if not dist_json or not dist_json.strip():
+        return False
+    try:
+        arr = json.loads(dist_json)
+        return isinstance(arr, list) and len(arr) > 0
+    except (json.JSONDecodeError, TypeError):
+        return False
+
+
 def _generate_cells(cells: list[CellData]) -> list[str]:
     """生成栅元卡 — 空值不输出"""
     lines = []
@@ -111,6 +122,12 @@ def _generate_basic(basic: BasicSettings) -> list[str]:
         except ValueError:
             lines.append(f"CTME  {basic.ctme}")
 
+    if basic.act and basic.act.strip():
+        lines.append(f"ACT  {basic.act}")
+
+    if basic.print_pr and basic.print_pr.strip():
+        lines.append(f"PRINT  {basic.print_pr}")
+
     if not basic.phys_fis:
         lines.append(str(pymcnp_inp.Nonu()).upper())
         lines.append("C  Fission turned off via NONU card")
@@ -118,15 +135,42 @@ def _generate_basic(basic: BasicSettings) -> list[str]:
     return lines
 
 
+# 元素符号 → 原子序数（手动 ZAID 模式存的是 "U-235" 元素格式，生成时转 ZZZAA）
+_ELEMENT_Z = {
+    "H":1,"He":2,"Li":3,"Be":4,"B":5,"C":6,"N":7,"O":8,"F":9,"Ne":10,
+    "Na":11,"Mg":12,"Al":13,"Si":14,"P":15,"S":16,"Cl":17,"Ar":18,
+    "K":19,"Ca":20,"Sc":21,"Ti":22,"V":23,"Cr":24,"Mn":25,"Fe":26,
+    "Co":27,"Ni":28,"Cu":29,"Zn":30,"Ga":31,"Ge":32,"As":33,"Se":34,
+    "Br":35,"Kr":36,"Rb":37,"Sr":38,"Y":39,"Zr":40,"Nb":41,"Mo":42,
+    "Tc":43,"Ru":44,"Rh":45,"Pd":46,"Ag":47,"Cd":48,"In":49,"Sn":50,
+    "Sb":51,"Te":52,"I":53,"Xe":54,"Cs":55,"Ba":56,"La":57,"Ce":58,
+    "Pr":59,"Nd":60,"Pm":61,"Sm":62,"Eu":63,"Gd":64,"Tb":65,"Dy":66,
+    "Ho":67,"Er":68,"Tm":69,"Yb":70,"Lu":71,"Hf":72,"Ta":73,"W":74,
+    "Re":75,"Os":76,"Ir":77,"Pt":78,"Au":79,"Hg":80,"Tl":81,"Pb":82,
+    "Bi":83,"Po":84,"At":85,"Rn":86,"Fr":87,"Ra":88,"Ac":89,"Th":90,
+    "Pa":91,"U":92,"Np":93,"Pu":94,"Am":95,"Cm":96,"Bk":97,"Cf":98,
+    "Es":99,"Fm":100,
+}
+
 def _normalize_zaid(zaid: str) -> str:
-    """将 ZAID 规范化为 ZZAAA 格式（不带前导零）。
-    001001 → 1001, 008016 → 8016, 092235 → 92235
+    """将 ZAID 规范化为 ZZAAA 格式（不带前导零）。支持：
+    - 001001 → 1001, 008016 → 8016, 092235 → 92235
+    - 92235.06c → 92235.06c（带库后缀）
+    - U-235 / U235 / Fe-56 → 92235 / 26056（元素-质量数格式，手动 ZAID 模式）
     """
+    lib = ""
     if "." in zaid:
         num_part, lib = zaid.split(".", 1)
         lib = "." + lib
     else:
-        num_part, lib = zaid, ""
+        num_part = zaid
+    num_part = num_part.strip()
+    m = re.match(r"^([A-Za-z]+)-?(\d+)$", num_part)
+    if m:
+        el = m.group(1)[0].upper() + m.group(1)[1:].lower()
+        z = _ELEMENT_Z.get(el)
+        if z is not None:
+            return f"{z}{int(m.group(2)):03d}{lib}"
     stripped = num_part.lstrip("0") or "0"
     return stripped + lib
 
@@ -139,7 +183,7 @@ def _generate_materials(materials: list[MaterialData]) -> list[str]:
             continue
 
         if mat.comment:
-            lines.append(f"C  Material {mat.number}: {mat.comment}")
+            lines.append(f"C  {mat.comment}")
 
         # 首行: M{n}
         card = f"M{mat.number}"
@@ -187,19 +231,30 @@ def _generate_single_source(src: SourceData) -> list[str]:
     """单源：存在 Dn 引用或特殊字段时手写 SDEF，否则也用等号格式"""
     has_d_or_extra = any(
         _is_d_ref(v) for v in [src.par, src.erg, src.dir_, src.wgt,
-                               src.cel, src.tme, src.rad, src.ext, src.axs, src.vec]
+                               src.cel, src.tme, src.rad, src.ext, src.axs, src.vec,
+                               src.pos_x, src.pos_y, src.pos_z]
     ) or any([src.sur, src.nrm, src.tr, src.ccc, src.ara, src.rate, src.sdef_extra])
     if has_d_or_extra:
         # ── Dn 引用 → 手写 SDEF 行 ──
         parts = ["SDEF"]
         if src.par: parts.append(f"PAR={src.par}")
         if src.erg: parts.append(f"ERG={src.erg}")
-        pos_parts = []
-        if src.pos_x: pos_parts.append(src.pos_x)
-        if src.pos_y: pos_parts.append(src.pos_y)
-        if src.pos_z: pos_parts.append(src.pos_z)
-        if len(pos_parts) == 3:
-            parts.append(f"POS={' '.join(pos_parts)}")
+        # 分布引用用 x=/y=/z=，普通数值用 POS=
+        _all_same_d = src.pos_x and src.pos_y and src.pos_z and src.pos_x == src.pos_y == src.pos_z and _is_d_ref(src.pos_x)
+        _pos_ref = any(_is_d_ref(v) for v in [src.pos_x, src.pos_y, src.pos_z] if v)
+        if _all_same_d:
+            parts.append(f"POS={src.pos_x}")
+        elif _pos_ref:
+            if src.pos_x: parts.append(f"X={src.pos_x}")
+            if src.pos_y: parts.append(f"Y={src.pos_y}")
+            if src.pos_z: parts.append(f"Z={src.pos_z}")
+        else:
+            pos_parts = []
+            if src.pos_x: pos_parts.append(src.pos_x)
+            if src.pos_y: pos_parts.append(src.pos_y)
+            if src.pos_z: pos_parts.append(src.pos_z)
+            if len(pos_parts) == 3:
+                parts.append(f"POS={' '.join(pos_parts)}")
         if src.dir_: parts.append(f"DIR={src.dir_}")
         if src.wgt: parts.append(f"WGT={src.wgt}")
         if src.cel: parts.append(f"CEL={src.cel}")
@@ -243,12 +298,20 @@ def _generate_distribution_sdef(adv: AdvancedSettings) -> list[str]:
     parts = ["SDEF"]
     if adv.sdef_par: parts.append(f"PAR={adv.sdef_par}")
     if adv.sdef_erg: parts.append(f"ERG={adv.sdef_erg}")
-    pos_parts = []
-    if adv.sdef_pos_x: pos_parts.append(adv.sdef_pos_x)
-    if adv.sdef_pos_y: pos_parts.append(adv.sdef_pos_y)
-    if adv.sdef_pos_z: pos_parts.append(adv.sdef_pos_z)
-    if len(pos_parts) == 3:
-        parts.append(f"POS={' '.join(pos_parts)}")
+    # 分布引用用 x=/y=/z=，普通数值用 POS=
+    _px, _py, _pz = adv.sdef_pos_x, adv.sdef_pos_y, adv.sdef_pos_z
+    _all_same_d = _px and _py and _pz and _px == _py == _pz and _is_d_ref(_px)
+    _pos_ref = any(_is_d_ref(v) for v in [_px, _py, _pz] if v)
+    if _all_same_d:
+        parts.append(f"POS={_px}")
+    elif _pos_ref:
+        if _px: parts.append(f"X={_px}")
+        if _py: parts.append(f"Y={_py}")
+        if _pz: parts.append(f"Z={_pz}")
+    else:
+        pos_parts = [p for p in [_px, _py, _pz] if p]
+        if len(pos_parts) == 3:
+            parts.append(f"POS={' '.join(pos_parts)}")
     if adv.sdef_wgt: parts.append(f"WGT={adv.sdef_wgt}")
     if adv.sdef_dir: parts.append(f"DIR={adv.sdef_dir}")
     if adv.sdef_cel: parts.append(f"CEL={adv.sdef_cel}")
@@ -267,15 +330,18 @@ def _generate_distribution_sdef(adv: AdvancedSettings) -> list[str]:
 
     lines = ["  ".join(parts)]
 
-    # 反序列化 SI/SP 对，自动加回 SI{n}/SP{n} 前缀
-    if adv.sdef_raw_text:
+    # 结构化分布优先（新），旧 sdef_raw_text 兜底（兼容旧数据）
+    if (adv.sdef_distributions or "").strip():
+        lines.extend(_generate_structured_distributions(adv.sdef_distributions))
+    elif adv.sdef_raw_text:
+        # 反序列化 SI/SP 对，自动加回 SI{n}/SP{n} 前缀
         try:
             pairs = json.loads(adv.sdef_raw_text)
-            for idx, pair in enumerate(pairs, 1):
+            for pair in pairs:
+                idx = pair.get("id") or pairs.index(pair) + 1
                 si = (pair.get("si") or "").strip()
                 sp = (pair.get("sp") or "").strip()
                 if si:
-                    # 内容可能已不含 SI{n} 前缀（UI 标签已显示索引），自动补全
                     if not re.match(r'^SI\d+', si, re.IGNORECASE):
                         si = f"SI{idx}  {si}"
                     lines.append(si)
@@ -449,24 +515,26 @@ def _generate_tallies(tally: TallySettings) -> list[str]:
 
     for td in tally.tallies:
         params = td.params if td.params else ""
-        for p in td.particles:
-            if not p.strip():
-                continue
-            p_upper = p.strip().upper()
-            card = f"F{td.number}:{p_upper}  {params}"
-            # 简要描述
-            desc = {
-                "F1": "Surface current",
-                "F2": "Surface flux",
-                "F4": "Cell flux",
-                "F5": "Point detector",
-                "F6": "Energy deposition",
-                "F7": "Fission energy deposition",
-                "F8": "Pulse height",
-            }.get(td.type, "")
-            if desc:
-                card += f"   $ {desc} (particles/cm2)"
-            lines.append(card)
+        pre = td.fn_prefix if td.fn_prefix and td.fn_prefix.strip() else ""
+        suffix = getattr(td, 'number_suffix', '') or ''
+        particles_str = ",".join(p.strip().upper() for p in td.particles if p.strip()) or "N"
+        if pre in ("FIP", "FIR", "FIC"):
+            card = f"{pre}{td.number}{suffix}:{particles_str}  {params}"
+        else:
+            card = f"{pre}F{td.number}{suffix}:{particles_str}  {params}"
+        # 简要描述
+        desc = {
+            "F1": "Surface current",
+            "F2": "Surface flux",
+            "F4": "Cell flux",
+            "F5": "Point detector",
+            "F6": "Energy deposition",
+            "F7": "Fission energy deposition",
+            "F8": "Pulse height",
+        }.get(td.type, "")
+        if desc:
+            card += f"   $ {desc} (particles/cm2)"
+        lines.append(card)
 
     # E0 和 En 由 generate_inp_from_deck 中单独的 e0/cut 处理调用，不在此处重复生成
     return lines
@@ -516,22 +584,28 @@ def _generate_cut(tally: TallySettings) -> list[str]:
 
 
 def _generate_kcode(adv: AdvancedSettings) -> list[str]:
-    """生成 KCODE + KSRC 临界源卡 / Generate KCODE/KSRC criticality source cards.
+    """生成 KCODE + KSRC + HSRC 临界源卡。
 
-    KCODE  NSRC RKK IKZ KCT [KNRM]
+    KCODE  NSRC RKK IKZ KCT [MSRK KNRM MRKP KC8]
     KSRC   x1 y1 z1 [x2 y2 z2 ...]
-
-    KCODE mode replaces SDEF — both are not emitted together.
+    HSRC   nx xmin xmax ny ymin ymax nz zmin zmax
     """
     lines = ["C  KCODE Criticality Source Parameters"]
     if not adv.kcode_nsrc:
         return lines + ["C  KCODE skipped — NSRC not set"]
 
-    kcode_parts = [adv.kcode_nsrc, adv.kcode_rkk or "1.0",
-                   adv.kcode_ikz or "30", adv.kcode_kct or "100"]
+    # 8 参数：NSRC RKK IKZ KCT MSRK KNRM MRKP KC8（空值用 j-skip 压缩省略）
+    kcode_parts = [
+        adv.kcode_nsrc,
+        adv.kcode_rkk or "1.0",
+        adv.kcode_ikz or "30",
+        adv.kcode_kct or "100",
+        (adv.kcode_msrk or "").strip(),
+        (adv.kcode_knrm or "").strip(),
+        (adv.kcode_mrkp or "").strip(),
+        (adv.kcode_kc8 or "").strip(),
+    ]
     compact = _compress_j_skip(kcode_parts)
-    if (adv.kcode_knrm or "").strip():
-        compact += " " + adv.kcode_knrm.strip()
     lines.append(f"KCODE  {compact}")
 
     # KSRC coordinate points
@@ -550,40 +624,255 @@ def _generate_kcode(adv: AdvancedSettings) -> list[str]:
                 lines.extend(line_parts)
         except (_json.JSONDecodeError, TypeError):
             lines.append("C  KSRC points: failed to parse")
+
+    # HSRC 香农熵网格（评估裂变源收敛）
+    if getattr(adv, "hsrc_enabled", False) and (adv.hsrc_text or "").strip():
+        lines.append("C  HSRC Shannon Entropy Mesh")
+        lines.append(f"HSRC  {adv.hsrc_text.strip()}")
     return lines
+
+
+# ── 结构化分布生成（SI/SP/SB/DS，源分布卡说明.md 第三/四节）──
+def _generate_structured_distributions(dist_json: str) -> list[str]:
+    """从 sdef_distributions JSON 生成 SI/SP/SB/DS 卡。
+
+    格式: [{"id":1,"paramRef":"ERG",
+            "si":{"type":"L","values":[...]},
+            "sp":{"type":"D","values":[...],"fnCode":"-3","fnParams":["0.965","2.29"]},
+            "sb":{"type":"-31","values":["1.5"]} | null,
+            "ds":{"type":"S","param":"ERG","distributionIds":["3","4"]} | null}]
+    """
+    if not dist_json:
+        return []
+    import json as _json
+    try:
+        entries = _json.loads(dist_json)
+    except (_json.JSONDecodeError, TypeError):
+        return []
+    lines = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        idx = entry.get("id", 1)
+        si = entry.get("si") or {}
+        sp = entry.get("sp") or {}
+        sb = entry.get("sb")
+        ds = entry.get("ds")
+        # SI: SIn type values (L/H/A/S)
+        si_type = (si.get("type") or "L").upper()
+        si_vals = [str(v) for v in (si.get("values") or []) if str(v).strip()]
+        if si_vals:
+            lines.append(f"SI{idx}  {si_type}  {'  '.join(si_vals)}")
+        # SP: SPn [type] values 或内置函数
+        if sp:
+            sp_type = (sp.get("type") or "").upper()
+            fn = (sp.get("fnCode") or "").strip()
+            fn_params = [str(v) for v in (sp.get("fnParams") or []) if str(v).strip()]
+            vals = [str(v) for v in (sp.get("values") or []) if str(v).strip()]
+            if fn:
+                params_str = "  ".join(fn_params)
+                lines.append(f"SP{idx}  {fn}" + (f"  {params_str}" if params_str else ""))
+            elif sp_type in ("C", "V"):
+                lines.append(f"SP{idx}  {sp_type}  {'  '.join(vals)}")
+            elif vals:
+                lines.append(f"SP{idx}  {'  '.join(vals)}")
+        # SB: SBn [D] values 或 SBn -21/-31 a
+        if sb:
+            sb_type = (sb.get("type") or "D")
+            sb_vals = [str(v) for v in (sb.get("values") or []) if str(v).strip()]
+            if str(sb_type) in ("-21", "-31"):
+                lines.append(f"SB{idx}  {sb_type}  {'  '.join(sb_vals)}")
+            elif sb_vals:
+                lines.append(f"SB{idx}  D  {'  '.join(sb_vals)}")
+        # DS: DSn [type] [param] distIds（依赖分布）
+        if ds:
+            ds_type = (ds.get("type") or "S").upper()
+            param = (ds.get("param") or "").strip()
+            refs = [str(r) for r in (ds.get("distributionIds") or []) if str(r).strip()]
+            if ds_type == "T":
+                lines.append(f"DS{idx}  T")
+            else:
+                head = f"DS{idx}  {ds_type}"
+                if param:
+                    head += f"  {param}"
+                if refs:
+                    head += "  " + "  ".join(refs)
+                lines.append(head)
+    return lines
+
+
+def _generate_ssw(adv: AdvancedSettings) -> list[str]:
+    """SSW 写面源卡。SSW S1 S2 ... [SYM=] [PTY=] [CEL=]（源分布卡说明.md 四）"""
+    if not (adv.ssw_surf or "").strip():
+        return []
+    parts = ["SSW  " + adv.ssw_surf.strip()]
+    if (adv.ssw_sym or "").strip():
+        parts.append(f"SYM={adv.ssw_sym.strip()}")
+    if (adv.ssw_pty or "").strip():
+        parts.append(f"PTY={adv.ssw_pty.strip()}")
+    if (adv.ssw_cel or "").strip():
+        parts.append(f"CEL={adv.ssw_cel.strip()}")
+    return ["  ".join(parts)]
+
+
+def _generate_ssr(adv: AdvancedSettings) -> list[str]:
+    """SSR 读面源卡。SSR [OLD|NEW] S ... [CEL=] [PTY=] [COL=] [WGT=] [TR=] [PSC=]"""
+    if not (adv.ssr_surf or "").strip():
+        return []
+    mode = (adv.ssr_mode or "").strip().upper()
+    parts = ["SSR"]
+    if mode == "OLD":
+        parts.append("OLD")
+    elif mode == "NEW":
+        parts.append("NEW")
+    parts.append(adv.ssr_surf.strip())
+    for k, f in [("CEL", adv.ssr_cel), ("PTY", adv.ssr_pty), ("COL", adv.ssr_col),
+                 ("WGT", adv.ssr_wgt), ("TR", adv.ssr_tr), ("PSC", adv.ssr_psc)]:
+        if (f or "").strip():
+            parts.append(f"{k}={f.strip()}")
+    return ["  ".join(parts)]
+
+
+def _parse_numeric_cards(text: str, letter: str) -> list[tuple[int | None, list[str]]]:
+    """
+    解析 En/Tn 多行卡文本 → [(number, [param_lines...]), ...]
+    以 E{n}/T{n} 开新卡；缩进行或裸值行并入上一张卡的参数（保持多行原样）。
+    无法识别的孤立行返回 (None, [原文])。
+    """
+    out: list[tuple[int | None, list[str]]] = []
+    cur_num: int | None = None
+    cur_lines: list[str] = []
+
+    def flush():
+        nonlocal cur_num, cur_lines
+        if cur_num is not None:
+            out.append((cur_num, cur_lines))
+            cur_num, cur_lines = None, []
+
+    for raw in text.split("\n"):
+        line = raw.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            continue
+        m = re.match(rf'^{letter}(\d+)(?:\s+(.*))?$', stripped, re.IGNORECASE)
+        if m:
+            flush()
+            cur_num = int(m.group(1))
+            first = (m.group(2) or "").strip()
+            cur_lines = [first] if first else []
+        elif cur_num is not None:
+            # 续行（缩进或裸值）→ 并入上一张卡参数，保持原样
+            cur_lines.append(stripped)
+        else:
+            out.append((None, [stripped]))
+    flush()
+    return out
+
+
+_NUM_RE = re.compile(r'^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$')
+
+
+def _emit_numeric_card(lines: list[str], letter: str, num: int, plines: list[str]) -> None:
+    """
+    输出 En/Tn 卡：
+    - 纯数值列表 → 每值一个续行（E4 / 1 / 2 / 3）
+    - 含参数化(i/log/lin)或混合 → 保持原样多行
+    """
+    body = " ".join(plines)
+    tokens = body.split()
+    if tokens and all(_NUM_RE.match(t) for t in tokens):
+        lines.append(f"{letter}{num}")
+        for t in tokens:
+            lines.append(f"     {t}")
+    else:
+        if plines:
+            lines.append(f"{letter}{num}  {plines[0]}")
+            for extra in plines[1:]:
+                lines.append(f"     {extra}")
+        else:
+            lines.append(f"{letter}{num}")
 
 
 def _generate_en_cards(tally: TallySettings) -> list[str]:
-    """生成 En 分计数能量箱卡 — 从 e_cards_text 解析，续行格式输出。
-    只输出 generate_en=True 的计数对应的 En 卡。"""
+    """生成 En 分计数能量箱卡 — 从 e_cards_text 解析，每计数可不同参数"""
     if not tally.e_cards_text or not tally.e_cards_text.strip():
         return []
 
-    # 收集 generate_en=True 的计数编号
-    enabled_tallies = {td.number for td in tally.tallies
-                       if getattr(td, 'generate_en', False)}
+    enabled = {td.number for td in tally.tallies
+               if getattr(td, 'generate_en', False)}
 
     lines = ["C  Per-tally energy grids (En cards)"]
-    for raw_line in tally.e_cards_text.strip().split("\n"):
-        line = raw_line.strip()
-        if not line:
-            continue
-        import re
-        # 识别 En header: "E{n}" 或 "E{n}  params"
-        m = re.match(r'^E(\d+)(?:\s+(.*))?$', line, re.IGNORECASE)
-        if m:
-            num = int(m.group(1))
-            if num not in enabled_tallies:
-                continue  # 跳过未勾选的计数
-            header = f"E{num}"
-            params = (m.group(2) or "").strip()
-            if params:
-                lines.append(f"{header}\n     {params}")
-            else:
-                lines.append(header)
-        else:
-            lines.append(f"C  SKIPPED (not a valid En card): {line}")
+    for num, plines in _parse_numeric_cards(tally.e_cards_text, "E"):
+        if num is None:
+            lines.append(f"C  SKIPPED (not a valid En card): {plines[0] if plines else ''}")
+        elif num in enabled:
+            _emit_numeric_card(lines, "E", num, plines)
     return lines
+
+
+def _generate_time_mesh(tally: TallySettings) -> list[str]:
+    """生成 T0 时间网格 — 续行格式，空值跳过（对应 E0 的 _generate_energy_mesh）"""
+    lines = []
+
+    # 数值格式化：去掉多余的尾随零
+    def _fmt(v: float) -> str:
+        s = f"{v:.7g}"
+        if "." in s:
+            s = s.rstrip("0").rstrip(".")
+        return s
+
+    if getattr(tally, 't0_custom_enabled', False) and getattr(tally, 't0_custom_text', '').strip():
+        custom_values = []
+        for raw_line in tally.t0_custom_text.strip().split("\n"):
+            val = raw_line.strip()
+            if val:
+                try:
+                    custom_values.append(float(val))
+                except ValueError:
+                    pass
+        if len(custom_values) >= 2:
+            parts = "\n".join(f"     {_fmt(v)}" for v in custom_values)
+            lines.append(f"T0\n{parts}")
+            lines.append(f"C  Time mesh: {len(custom_values)} user-defined points")
+        else:
+            lines.append("C  Time mesh: custom grid skipped — need at least 2 time values")
+    else:
+        if not tally.t0_min or not tally.t0_max or not tally.t0_bins:
+            return lines  # 空值 → 不生成 T0
+        try:
+            tmin = float(tally.t0_min)
+            tmax = float(tally.t0_max)
+            n_bins = tally.t0_bins
+            if n_bins > 0 and tmax > tmin:
+                grid_syntax = "log" if tally.t0_log else "i"
+                type_label = "LOG" if tally.t0_log else "LINEAR"
+                lines.append(f"T0\n     {_fmt(tmin)} {n_bins}{grid_syntax} {_fmt(tmax)}")
+                lines.append(f"C  Time mesh: {n_bins} {type_label} intervals, {_fmt(tmin)} to {_fmt(tmax)} shakes")
+        except (ValueError, ZeroDivisionError):
+            lines.append("C  Time mesh: invalid parameters, skipped")
+    return lines
+
+
+def _generate_tn_cards(tally: TallySettings) -> list[str]:
+    """生成 Tn 分计数时间箱卡 — 从 t_cards_text 解析，每计数可不同参数"""
+    if not getattr(tally, 't_cards_text', '') or not tally.t_cards_text.strip():
+        return []
+
+    enabled = {td.number for td in tally.tallies
+               if getattr(td, 'generate_tn', False)}
+
+    lines = ["C  Per-tally time grids (Tn cards)"]
+    for num, plines in _parse_numeric_cards(tally.t_cards_text, "T"):
+        if num is None:
+            lines.append(f"C  SKIPPED (not a valid Tn card): {plines[0] if plines else ''}")
+        elif num in enabled:
+            _emit_numeric_card(lines, "T", num, plines)
+    return lines
+
+
+# 公用：收集 enabled 计数编号
+def _enabled_tally_nums(tally, attr: str) -> set:
+    return {td.number for td in tally.tallies if getattr(td, attr, False)}
 
 
 def _generate_energy_mesh(tally: TallySettings) -> list[str]:
@@ -804,10 +1093,13 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
         lines.append("C  Source Definition (raw text mode)")
         lines.extend(raw.split("\n"))
     else:
-        if adv.source_mode == "distribution" and adv.sdef_raw_text:
+        _has_dist = bool(adv.sdef_raw_text) or bool(_dist_json_nonempty(adv.sdef_distributions))
+        if adv.source_mode in ("distribution", "sdef") and _has_dist:
             sdef_lines = _generate_distribution_sdef(adv)
         elif adv.source_mode == "kcode" and adv.kcode_nsrc:
             sdef_lines = _generate_kcode(adv)
+        elif adv.source_mode == "surface":
+            sdef_lines = _generate_ssw(adv) + _generate_ssr(adv)
         else:
             sdef_lines = _generate_sdef(sources)
         if sdef_lines: lines.extend(sdef_lines)
@@ -841,6 +1133,13 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
     if not raw_tally:
         en_lines = _generate_en_cards(tally)
         if en_lines: lines.extend(en_lines)
+
+    # T0 全局时间网格 + Tn 分计数时间箱
+    if not raw_tally:
+        t0_lines = _generate_time_mesh(tally)
+        if t0_lines: lines.extend(t0_lines)
+        tn_lines = _generate_tn_cards(tally)
+        if tn_lines: lines.extend(tn_lines)
 
     raw = (overrides.get("cut") or "").strip()
     if raw:

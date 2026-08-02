@@ -13,6 +13,7 @@ from PyQt5.QtGui import QColor
 from app.models import MaterialData, MaterialRow
 from app.xsdir_db import DB as xsdir_db, Z_TO_SYMBOL, format_zzaaam, parse_zzaaam
 from app.material_presets import get_all_presets, PRESET_CATEGORIES
+from app.widgets.ui_helpers import make_add_button, make_delete_button
 
 
 class ElementCombo(QComboBox):
@@ -170,13 +171,9 @@ class MaterialEditDialog(QDialog):
         manual_layout.addWidget(self.table)
 
         btn_layout = QHBoxLayout()
-        self.btn_add_row = QPushButton("+ 添加行")
-        self.btn_add_row.setToolTip("添加一行核素")
-        self.btn_add_row.setProperty("cssClass", "btnAdd")
+        self.btn_add_row = make_add_button("+ 添加行", "添加一行核素")
         self.btn_add_row.clicked.connect(self._add_row)
-        self.btn_del_row = QPushButton("× 删除选中行")
-        self.btn_del_row.setToolTip("删除选中的行")
-        self.btn_del_row.setProperty("cssClass", "btnDelete")
+        self.btn_del_row = make_delete_button("× 删除选中行", "删除选中的行")
         self.btn_del_row.clicked.connect(self._delete_row)
         btn_layout.addWidget(self.btn_add_row)
         btn_layout.addWidget(self.btn_del_row)

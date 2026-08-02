@@ -1,4 +1,4 @@
-"""
+﻿"""
 MCNP Input Card Generator — Main Window
 主窗口：管理标签页、生成/保存操作、设置默认路径
 
@@ -9,32 +9,268 @@ dialog or drag-and-drop, xsdir loading, MCNP detection, and theme toggling.
 """
 
 import os
+from PyQt5.QtCore import Qt, QSettings, QEvent, QTimer, QVariantAnimation, QObject, QPropertyAnimation, pyqtProperty, QEasingCurve
+from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QPixmap, QPainter, QColor, QPen, QIcon, QFont, QKeySequence
 from PyQt5.QtWidgets import (
     QMainWindow, QTabWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QWidget, QFileDialog, QMessageBox,
     QLabel, QLineEdit, QStatusBar, QInputDialog,
-    QAction, QMenuBar, QComboBox, QApplication
+    QAction, QMenuBar, QComboBox, QApplication,
+    QSpinBox, QDoubleSpinBox, QShortcut, QGraphicsOpacityEffect,
 )
-from PyQt5.QtCore import Qt, QSettings, QEvent, QTimer
-from PyQt5.QtGui import QDragEnterEvent, QDropEvent
 
+from app._version import APP_TITLE
 from app.xsdir_db import DB as xsdir_db
-from app.style import LIGHT_QSS, DARK_QSS, PINK_QSS, TRADITIONAL_QSS
+from app.style import LIGHT_QSS, DARK_QSS, PINK_QSS, TRADITIONAL_QSS, PALETTES
 from app.mcnp_detector import detect_mcnp
 from app.xsdir_manager import find_xsdir_from_env, load_xsdir
 from app.project_io import deck_to_dict, deck_from_dict, save_project_file, load_project_file
 from app.inp_importer import import_inp_file
-from app.tabs.basic_settings_tab import BasicSettingsTab
-from app.tabs.geometry_tab import GeometryTab
-from app.tabs.material_tab import MaterialTab
-from app.tabs.sdef_tab import SdefTab
-from app.tabs.tally_tab import TallyTab
-from app.tabs.energy_tab import EnergyTab
-from app.tabs.advanced_tab import AdvancedTab
-from app.tabs.output_tab import OutputTab
+from app.tabs.basic_settings import BasicSettingsTab
+from app.tabs.geometry import GeometryTab
+from app.tabs.material import MaterialTab
+from app.tabs.sdef import SdefTab
+from app.tabs.tally import TallyTab
+from app.tabs.advanced import AdvancedTab
+from app.tabs.output import OutputTab
+from app.widgets.reference_viewer import make_help_button
+from app.widgets.ui_helpers import make_avatar
 from app.models import DeckData, TallySettings
 from app.generator.inp_generator import generate_inp_from_deck
 from app.generator.validator import validate_deck
+
+
+def _make_icon(draw_fn, size=20, color="#888888"):
+    pm = QPixmap(size, size); pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setBrush(Qt.NoBrush)
+    p.setPen(QPen(QColor(color), 1.5, Qt.SolidLine, Qt.RoundCap))
+    draw_fn(p, size); p.end()
+    return QIcon(pm)
+
+
+class _WheelBlocker(QObject):
+    """全局拦截 QComboBox/QSpinBox/QDoubleSpinBox 的滚轮事件，防止悬停误改值"""
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Wheel and isinstance(
+            obj, (QComboBox, QSpinBox, QDoubleSpinBox)
+        ):
+            event.ignore()
+            return True
+        return super().eventFilter(obj, event)
+
+
+class _SidebarButton(QPushButton):
+    """侧边栏按钮：hover 时字体亮度渐变，checked 时白色"""
+    def __init__(self, icon_fn, text, parent=None):
+        super().__init__(parent)
+        self._icon_fn = icon_fn
+        self._brightness = 0
+        self._icon_color = "#888888"
+        self._hover_color = "#FFFFFF"
+        self.setText(text)
+        self.setCheckable(True)
+        self.setProperty("sideBtn", "true")
+        self.setFixedHeight(40)
+        # hover 动画
+        self._anim = QPropertyAnimation(self, b"brightness")
+        self._anim.setDuration(150)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        # 缓存 QIcon
+        self._pix = None
+
+    def set_hover_color(self, color):
+        self._hover_color = color
+
+    def enterEvent(self, event):
+        self._anim.stop()
+        self._anim.setStartValue(self._brightness)
+        self._anim.setEndValue(100)
+        self._anim.start()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        if not self.isChecked():
+            self._anim.stop()
+            self._anim.setStartValue(self._brightness)
+            self._anim.setEndValue(0)
+            self._anim.start()
+        super().leaveEvent(event)
+
+    def _on_checked(self, checked):
+        if checked:
+            self._anim.stop()
+            self._brightness = 100
+        else:
+            self._anim.stop()
+            self._brightness = 0
+
+    def nextCheckState(self):
+        super().nextCheckState()
+        self._on_checked(self.isChecked())
+
+    @pyqtProperty(int)
+    def brightness(self):
+        return self._brightness
+
+    @brightness.setter
+    def brightness(self, val):
+        self._brightness = val
+        alpha = int(val * 0.7 / 100 * 255)
+        if val > 0 and not self.isChecked():
+            self.setStyleSheet(f"color: rgba({','.join(str(int(self._hover_color[i:i+2],16)) for i in (1,3,5))},{alpha}) !important;")
+        elif self.isChecked():
+            self.setStyleSheet("color: white !important;")
+        else:
+            self.setStyleSheet("")
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        side = 18; ix = 10; iy = (self.height() - side) // 2
+        if self._pix is None:
+            self._pix = QPixmap(side, side); self._pix.fill(Qt.transparent)
+            ip = QPainter(self._pix)
+            ip.setRenderHint(QPainter.Antialiasing)
+            ip.setPen(QPen(QColor(self._icon_color), 1.5)); ip.setBrush(Qt.NoBrush)
+            self._icon_fn(ip, side)
+            ip.end()
+        p.drawPixmap(ix, iy, self._pix)
+        # 文字在图标右边
+        text_rect = self.rect().adjusted(34, 0, 0, 0)
+        p.setPen(QColor(self._icon_color))
+        p.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, self.text())
+        p.end()
+
+
+    def update_icon_colors(self, color):
+        self._icon_color = color
+        for btn in self.buttons:
+            btn._icon_color = color
+            btn._pix = None
+            btn.update()
+        for w in [self.btn_import, self.btn_theme]:
+            if hasattr(w, '_SidebarButton__icon_color'):
+                pass
+
+class _Sidebar(QWidget):
+    """侧边栏：7 个导航按钮 + 底部导入/主题按钮"""
+    def __init__(self, parent=None, icon_color="#888888"):
+        super().__init__(parent)
+        self._icon_color = icon_color
+        self.setObjectName("sideBar")
+        self.setFixedWidth(56)
+        self.setMouseTracking(True)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 8, 6, 8)
+        layout.setSpacing(4)
+
+        nav_icons = [
+            (lambda p,s: (p.drawRect(2,2,s-4,s-4) or p.drawText(s//2,s//2+2,"P")), "基本设置"),
+            (lambda p,s: (p.drawRect(2,2,s-4,s-4) or p.drawText(s//2,s//2+2,"M")), "材料"),
+            (lambda p,s: (p.drawRect(2,2,s-4,s-4) or p.drawText(s//2,s//2+2,"S")), "几何"),
+            (lambda p,s: (p.drawRect(2,2,s-4,s-4) or p.drawText(s//2,s//2+2,"Src")), "源项"),
+            (lambda p,s: (p.drawRect(2,2,s-4,s-4) or p.drawText(s//2,s//2+2,"T")), "计数"),
+            (lambda p,s: (p.drawEllipse(3,3,s-6,s-6) or p.drawText(s//2,s//2+2,"A")), "高级"),
+            (lambda p,s: (p.drawRect(2,2,s-4,s-4) or p.drawText(s//2,s//2+2,"O")), "输出"),
+        ]
+
+        self.buttons = []
+        for i, (fn, text) in enumerate(nav_icons):
+            btn = _SidebarButton(fn, text)
+            btn._icon_color = self._icon_color
+            btn.setToolTip(text)
+            btn.clicked.connect(lambda checked, idx=i: self._on_click(idx))
+            if i == 0: btn.setChecked(True)
+            layout.addWidget(btn)
+            self.buttons.append(btn)
+
+        layout.addStretch()
+
+        self.btn_import = QPushButton("📥")
+        self.btn_import.setToolTip("导入 INP 输入卡")
+        self.btn_import.setProperty("sideBtn", "true")
+        self.btn_import.setFixedHeight(40)
+        layout.addWidget(self.btn_import)
+
+        self.btn_theme = QPushButton("🎨")
+        self.btn_theme.setToolTip("切换主题")
+        self.btn_theme.setProperty("sideBtn", "true")
+        self.btn_theme.setFixedHeight(40)
+        layout.addWidget(self.btn_theme)
+
+        self._click_handler = None
+        self._orig_width = 56
+
+    def _on_click(self, idx):
+        for i, btn in enumerate(self.buttons):
+            btn.setChecked(i == idx)
+        # 点击后缩回
+        self._animate_width(56)
+        if self._click_handler:
+            self._click_handler(idx)
+
+    def on_click(self, handler):
+        self._click_handler = handler
+
+    def enterEvent(self, event):
+        self._animate_width(160)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._animate_width(56)
+        super().leaveEvent(event)
+
+    def _animate_width(self, target):
+        if hasattr(self, '_width_anim') and self._width_anim:
+            self._width_anim.stop()
+        self._width_anim = QVariantAnimation(self)
+        self._width_anim.setDuration(200)
+        self._width_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._width_anim.setStartValue(self.width())
+        self._width_anim.setEndValue(target)
+        self._width_anim.valueChanged.connect(lambda v: self.setFixedWidth(v))
+        self._width_anim.start()
+
+    def set_theme_label(self, text):
+        if hasattr(self, 'btn_theme') and self.btn_theme:
+            self.btn_theme.setText(f"🎨 {text}")
+
+
+class _BreathingDot(QWidget):
+    """呼吸灯 — 就绪状态指示"""
+    def __init__(self, color="#10B981", size=7, parent=None):
+        super().__init__(parent)
+        self._color = QColor(color)
+        self._opacity = 0.4  # 必须在动画启动前初始化
+        self._anim = QPropertyAnimation(self, b"opacity_val")
+        self._anim.setDuration(2000)
+        self._anim.setStartValue(0.4)
+        self._anim.setEndValue(1.0)
+        self._anim.setEasingCurve(QEasingCurve.InOutSine)
+        self._anim.setLoopCount(-1)
+        self._anim.start()
+
+    @pyqtProperty(float)
+    def opacity_val(self):
+        return self._opacity
+
+    @opacity_val.setter
+    def opacity_val(self, val):
+        self._opacity = val
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        c = QColor(self._color)
+        c.setAlphaF(self._opacity)
+        p.setBrush(c); p.setPen(Qt.NoPen)
+        size = min(self.width(), self.height()) - 4
+        p.drawEllipse(2, 2, size, size)
+        p.end()
 
 
 class MainWindow(QMainWindow):
@@ -45,6 +281,10 @@ class MainWindow(QMainWindow):
     def __init__(self):
         """Initialize the main window: load persisted settings, detect MCNP, build UI."""
         super().__init__()
+        # 全局拦截滚轮误改 QComboBox/QSpinBox 值
+        _app = QApplication.instance()
+        if _app:
+            _app.installEventFilter(_WheelBlocker(_app))
         # Persistent application settings stored via QSettings (registry on Windows)
         self.settings = QSettings("MCNPGen", "MCNPGenerator")
         self.mcnp_exe = "mcnp6.exe"  # 默认 default MCNP executable
@@ -57,144 +297,168 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         """初始化界面 Build the complete user interface: menus, tabs, toolbar, status bar."""
-        self.setWindowTitle("MCNP 输入卡生成器 v1.5.2")
+        self.setWindowTitle(APP_TITLE)
         self.resize(1200, 800)
         self.setMinimumSize(900, 600)
         self.setAcceptDrops(True)  # Enable drag-and-drop for INP files
+        self.setWindowFlags(Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        # DWM 阴影
+        try:
+            import ctypes
+            ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea(
+                int(self.winId()), ctypes.byref(ctypes.c_int(-1)))
+            # Windows 11 原生圆角
+            hwnd = ctypes.wintypes.HWND(int(self.winId()))
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, 33, ctypes.byref(ctypes.c_int(2)),
+                ctypes.sizeof(ctypes.c_int))
+        except:
+            pass
+        # 全局字体抗锯齿
+        _fnt = QFont("Microsoft YaHei", 9)
+        _fnt.setStyleStrategy(QFont.PreferAntialias)
+        app = QApplication.instance()
+        if app: app.setFont(_fnt)
 
-        # ===== 菜单栏 Menu Bar =====
-        menubar = self.menuBar()
-        # 文件菜单 File menu
-        file_menu = menubar.addMenu("文件(&F)")
+        # 快捷键
+        QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self._save_project)
+        QShortcut(QKeySequence("Ctrl+O"), self).activated.connect(self._load_project)
+        QShortcut(QKeySequence("Ctrl+I"), self).activated.connect(self._import_inp)
+        self.menuBar().setVisible(False)
 
-        # Import INP file action
-        act_import = QAction("📥 导入 INP...", self)
-        act_import.setShortcut("Ctrl+I")
-        act_import.setToolTip("从现有 MCNP 输入卡文件导入，自动回填到各标签页")
-        act_import.triggered.connect(self._import_inp)
-        file_menu.addAction(act_import)
-
-        file_menu.addSeparator()
-
-        # Save project (JSON) action
-        act_save_proj = QAction("💾 保存项目...", self)
-        act_save_proj.setShortcut("Ctrl+S")
-        act_save_proj.setToolTip("将当前所有标签页数据保存为 JSON 项目文件")
-        act_save_proj.triggered.connect(self._save_project)
-        file_menu.addAction(act_save_proj)
-
-        # Load project (JSON) action
-        act_load_proj = QAction("📂 加载项目...", self)
-        act_load_proj.setShortcut("Ctrl+O")
-        act_load_proj.setToolTip("从 JSON 项目文件恢复所有标签页数据")
-        act_load_proj.triggered.connect(self._load_project)
-        file_menu.addAction(act_load_proj)
-
-        file_menu.addSeparator()
-
-        # Exit action
-        act_exit = QAction("退出(&X)", self)
-        act_exit.setShortcut("Alt+F4")
-        act_exit.triggered.connect(self.close)
-        file_menu.addAction(act_exit)
-
-        # Central widget holding everything below the menu bar
         # 中央部件
         central = QWidget()
+        central.setObjectName("centralContainer")
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        # Top bar: import button + theme toggle + spacer
-        # 顶部栏：导入按钮 + 主题切换按钮 + 留白
+        # ===== 顶栏：用户头像 + 标题 + 状态信息 + 窗口控制按钮 =====
         top_bar = QHBoxLayout()
-        self.btn_import = QPushButton("📥 导入 INP")
-        self.btn_import.setObjectName("btnImport")
-        self.btn_import.setToolTip("从现有 MCNP 输入卡文件导入数据（Ctrl+I）")
-        self.btn_import.setFixedWidth(120)
-        self.btn_import.clicked.connect(self._import_inp)
-        top_bar.addWidget(self.btn_import)
-        # Theme toggle button — label switches based on current mode
-        init_label = {"light": "☀ 白天模式", "dark": "🌙 黑夜模式", "pink": "🌸 粉嫩模式", "traditional": "🏮 传统模式"}
-        self.btn_theme = QPushButton(init_label.get(self.theme_mode, "☀ 白天模式"))
-        self.btn_theme.setObjectName("btnTheme")
-        self.btn_theme.setToolTip("切换黑夜/白天模式")
-        self.btn_theme.setFixedWidth(130)
-        self.btn_theme.clicked.connect(self._toggle_theme)
-        top_bar.addWidget(self.btn_theme)
+        top_bar.setContentsMargins(12, 6, 12, 4)
+
+        _display_name = ""
+        try:
+            import ctypes
+            _buf = ctypes.create_unicode_buffer(256)
+            _sz = ctypes.c_ulong(256)
+            if ctypes.windll.secur32.GetUserNameExW(3, _buf, ctypes.byref(_sz)):
+                _display_name = _buf.value.strip()
+        except: pass
+        if not _display_name:
+            _display_name = os.environ.get("USERNAME", "")
+        if not _display_name:
+            _display_name = "U"
+
+        avatar = make_avatar(_display_name[0], 26)
+        avatar.setToolTip("查看 C810 参考文档")
+        avatar.mousePressEvent = lambda e: self._show_c810_reference()
+        top_bar.addWidget(avatar)
         top_bar.addSpacing(8)
-        # 全局参考文档按钮（蓝色问号）
-        self.btn_global_help = QPushButton("?")
-        self.btn_global_help.setFixedSize(22, 22)
-        self.btn_global_help.setToolTip("查看 MCNP 输入卡格式完整参考（C810）")
-        self.btn_global_help.setStyleSheet(
-            "QPushButton { background-color: #1976d2; color: white; border-radius: 11px; "
-            "font-weight: bold; font-size: 12px; border: none; }"
-            "QPushButton:hover { background-color: #1565c0; }"
+
+        title_lbl = QLabel(APP_TITLE)
+        title_lbl.setStyleSheet("font-weight:600; font-size:13px; border:none; background:transparent;")
+        top_bar.addWidget(title_lbl)
+        top_bar.addSpacing(20)
+
+        # 呼吸灯 + 状态
+        self._ready_dot = _BreathingDot()
+        top_bar.addWidget(self._ready_dot)
+        top_bar.addSpacing(4)
+        self.status_label = QLabel("就绪")
+        self.status_label.setStyleSheet("border:none; background:transparent; font-size:11px; color:#4169E1;")
+        top_bar.addWidget(self.status_label)
+        top_bar.addSpacing(12)
+
+        self.status_mcnp = QLabel("")
+        self.status_mcnp.setStyleSheet("border:none; background:transparent; font-size:11px;")
+        self.status_mcnp.setCursor(Qt.PointingHandCursor)
+        self.status_mcnp.installEventFilter(self)
+        top_bar.addWidget(self.status_mcnp)
+        top_bar.addSpacing(12)
+
+        self.status_xsdir = QLabel("")
+        self.status_xsdir.setStyleSheet("border:none; background:transparent; font-size:11px;")
+        top_bar.addWidget(self.status_xsdir)
+        top_bar.addStretch()
+
+        # 窗口控制按钮（最右）
+        win_btn_style = (
+            "QPushButton{background:transparent;border:none;font-size:14px;"
+            "border-radius:4px;color:#888;}"
+            "QPushButton:hover{background:rgba(128,128,128,0.25);color:#fff;}"
         )
-        self.btn_global_help.clicked.connect(self._show_c810_reference)
-        top_bar.addWidget(self.btn_global_help)
-        top_bar.addStretch()  # Push buttons to the left
+        self._btn_max = None
+        for sym, tip, slot in [
+            ("─", "最小化", self.showMinimized),
+            ("□", "最大化", lambda: self.showNormal() if self.isMaximized() else self.showMaximized()),
+            ("✕", "关闭", self.close),
+        ]:
+            btn = QPushButton(sym)
+            btn.setFixedSize(42, 26)
+            btn.setToolTip(tip)
+            if sym == "✕":
+                btn.setStyleSheet(
+                    "QPushButton{background:transparent;border:none;font-size:14px;"
+                    "border-radius:4px;color:#888;}"
+                    "QPushButton:hover{background:#E81123;color:white;}"
+                )
+            else:
+                btn.setStyleSheet(win_btn_style)
+            btn.clicked.connect(slot)
+            top_bar.addWidget(btn)
+            if sym in ("□", "❐"):
+                self._btn_max = btn
+
         main_layout.addLayout(top_bar)
 
-        # Tab widget: each tab is a separate settings category
-        # 标签页
-        self.tab_widget = QTabWidget()
-        self.tab_basic = BasicSettingsTab()   # 基本设置 Basic settings (title, mode, etc.)
-        self.tab_mat = MaterialTab(self)      # 材料 Materials (ZAID, density, composition)
-        self.tab_geo = GeometryTab(self)      # 几何 Geometry (surfaces and cells)
-        self.tab_sdef = SdefTab()             # 源项 Source definition (SDEF)
-        self.tab_tally = TallyTab()           # 计数 Tallies (F2, F4, F5, etc.)
-        self.tab_energy = EnergyTab()         # 能谱 Energy spectrum / DE/DF cards
-        self.tab_advanced = AdvancedTab()     # 高级 Advanced settings (xsdir, PHYS cards)
-        self.tab_output = OutputTab()         # 输出 Output display
+        # ===== 主体：侧边栏（左）+ 右列（标签页 + 工具栏） =====
+        body = QWidget()
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
 
-        # 计数卡 En 勾选变化 → En 预览更新
-        self.tab_tally.talliesChanged.connect(self._update_en_preview)
+        self._sidebar = _Sidebar()
+        self._sidebar.on_click(self._switch_tab)
+        self._sidebar.btn_import.clicked.connect(self._import_inp)
+        self._sidebar.btn_theme.clicked.connect(self._toggle_theme)
+        body_layout.addWidget(self._sidebar)
 
-        # Add tabs in order — index positions used elsewhere (e.g., xsdir warning jumps to tab 6)
-        self.tab_widget.addTab(self.tab_basic, "📄 基本设置")
-        self.tab_widget.addTab(self.tab_mat, "🧪 材料")
-        self.tab_widget.addTab(self.tab_geo, "📐 几何")
-        self.tab_widget.addTab(self.tab_sdef, "🎯 源项")
-        self.tab_widget.addTab(self.tab_tally, "📊 计数")
-        self.tab_widget.addTab(self.tab_energy, "⚡ 能谱")
-        self.tab_widget.addTab(self.tab_advanced, "⚙ 高级")
-        self.tab_widget.addTab(self.tab_output, "📈 输出")
+        right_col = QWidget()
+        right_layout = QVBoxLayout(right_col)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
 
-        main_layout.addWidget(self.tab_widget)
-
-        # Bottom toolbar: output path, suffix selector, generate button
-        # 底部工具栏
+        # 工具栏：输出目录 / 浏览 / 后缀 / 生成 INP
         toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(16, 8, 16, 8)
 
-        # Output directory path input
-        # 输出路径
         self.path_edit = QLineEdit()
-        default_path = self.settings.value("output_path", "D:")
-        self.path_edit.setText(default_path)
-        self.path_edit.setPlaceholderText("输出路径...")
+        saved_path = self.settings.value("output_path", "")
+        if saved_path and os.path.isdir(saved_path):
+            self.path_edit.setText(saved_path)
+        self.path_edit.setPlaceholderText("选择输出目录…")
         self.path_edit.setToolTip("INP 文件和 run.bat 的保存目录")
         btn_browse = QPushButton("浏览…")
         btn_browse.setToolTip("选择输出目录")
         btn_browse.setProperty("cssClass", "btnBrowse")
         btn_browse.clicked.connect(self._browse_path)
 
-        # INP file suffix selector (.i, .inp, .txt, or none)
         self.suffix_combo = QComboBox()
         self.suffix_combo.addItems([".i", ".inp", ".txt", ""])
         saved_suffix = self.settings.value("inp_suffix", ".i")
         idx = self.suffix_combo.findText(saved_suffix)
         self.suffix_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self.suffix_combo.setToolTip("INP 输入卡文件后缀 INP file suffix（留空=无后缀）")
+        self.suffix_combo.setToolTip("INP 输入卡文件后缀")
         self.suffix_combo.setMaximumWidth(70)
-        # Persist suffix preference immediately on change
         self.suffix_combo.currentTextChanged.connect(
             lambda t: self.settings.setValue("inp_suffix", t))
 
-        # Generate INP button — main action of the application
         self.btn_generate = QPushButton("⚡ 生成 INP")
         self.btn_generate.setObjectName("btnGenerate")
-        self.btn_generate.setToolTip("校验所有必填项后生成 MCNP 输入卡 Validate and generate the MCNP input card")
+        self.btn_generate.setToolTip("校验后生成 MCNP 输入卡")
         self.btn_generate.clicked.connect(self._on_generate)
 
         toolbar.addWidget(QLabel("输出目录:"))
@@ -204,149 +468,168 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(QLabel("后缀:"))
         toolbar.addWidget(self.suffix_combo)
         toolbar.addWidget(self.btn_generate)
+        right_layout.addLayout(toolbar)
 
-        # Contact / bug-report information label
-        # 联系信息
-        contact = QLabel(
-            "<span style='color:#E65100; font-size:12px; font-weight:bold;'>"
-            "🐛 BUG/建议请联系: 1378963177@qq.com</span>"
-        )
-        contact.setToolTip("发现 BUG 或功能建议欢迎联系 Report bugs or suggest features — contact info")
+        # 标签页
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setDocumentMode(True)
+        self.tab_widget.tabBar().hide()  # 用侧边栏切换
 
-        # Wrap toolbar + contact into a single container widget for clean layout
-        container = QWidget()
-        c_layout = QVBoxLayout(container)
-        c_layout.setContentsMargins(0, 0, 0, 0)
-        c_layout.setSpacing(2)
-        c_layout.addLayout(toolbar)
-        c_layout.addWidget(contact, 0, Qt.AlignRight)
-        main_layout.addWidget(container)
+        self.tab_basic = BasicSettingsTab()
+        self.tab_mat = MaterialTab(self)
+        self.tab_geo = GeometryTab(self)
+        self.tab_sdef = SdefTab()
+        self.tab_tally = TallyTab()
+        self.tab_advanced = AdvancedTab()
+        self.tab_output = OutputTab()
 
-        # Status bar: general status, MCNP version, xsdir status
-        # 状态栏
-        self.status_label = QLabel("就绪")
-        self.status_xsdir = QLabel("")
-        self.status_xsdir.setStyleSheet("color: #888; font-size: 11px; padding: 0 8px;")
-        self.status_mcnp = QLabel("")
-        self.status_mcnp.setStyleSheet("color: #888; font-size: 11px; padding: 0 8px;")
-        self.status_mcnp.setCursor(Qt.PointingHandCursor)  # Indicates it's clickable
-        # 使用事件过滤器替代猴子补丁，保留 QLabel 原生事件处理链
-        # Use event filter instead of monkey-patching to preserve QLabel's native event chain
-        self.status_mcnp.installEventFilter(self)
-        self.statusBar().addWidget(self.status_label, 1)
-        self.statusBar().addPermanentWidget(self.status_mcnp)
-        self.statusBar().addPermanentWidget(self.status_xsdir)
+        self.tab_tally.talliesChanged.connect(self._update_en_preview)
 
-        # 先显示"正在加载"，延后加载截面库，让窗口优先渲染
-        # Show "loading" first, defer xsdir loading so the window renders immediately
-        # 让窗口完全渲染后再加载截面库，避免弹窗阻塞界面首次出现
+        self.tab_widget.addTab(self.tab_basic, "📄 基本设置")
+        self.tab_widget.addTab(self.tab_mat, "🧪 材料")
+        self.tab_widget.addTab(self.tab_geo, "📐 几何")
+        self.tab_widget.addTab(self.tab_sdef, "🎯 源项")
+        self.tab_widget.addTab(self.tab_tally, "📊 计数")
+        self.tab_widget.addTab(self.tab_advanced, "⚙ 高级")
+        self.tab_widget.addTab(self.tab_output, "📈 输出")
+
+        right_layout.addWidget(self.tab_widget, 1)
+        body_layout.addWidget(right_col, 1)
+        main_layout.addWidget(body, 1)
+
+        # 状态栏（半透明叠加在底部）
+        sb = QStatusBar()
+        sb.setObjectName("customStatusBar")
+        contact = QLabel("🐛 联系")
+        contact.setToolTip("发现 BUG 或功能建议请联系: 1378963177@qq.com")
+        contact.setCursor(Qt.PointingHandCursor)
+        sb.addPermanentWidget(contact)
+        main_layout.addWidget(sb)
+
         QTimer.singleShot(200, self._load_xsdir)
 
-    # ---------- C810 卡片格式参考弹窗 ----------
+    # ---------- 原生消息 ----------
 
-    def _show_c810_reference(self):
-        """打开 C810 卡片格式完整参考文档"""
-        import os
-        from PyQt5.QtWidgets import QDialog, QTextBrowser, QVBoxLayout, QPushButton
-
-        ref_path = os.path.join(os.path.dirname(__file__), "docs",
-                                "C810_卡片格式详细.txt")
-        ref_path = os.path.normpath(ref_path)
-        if not os.path.isfile(ref_path):
-            QMessageBox.warning(self, "未找到", f"参考文档不存在:\n{ref_path}")
-            return
+    def nativeEvent(self, eventType, message):
         try:
-            with open(ref_path, "r", encoding="utf-8") as f:
-                content = f.read()
-        except Exception as e:
-            QMessageBox.critical(self, "读取失败", f"无法读取参考文档:\n{e}")
-            return
+            import ctypes
+            msg = ctypes.wintypes.MSG.from_address(int(message))
+            if msg.message == 0x84:  # WM_NCHITTEST
+                lx = self.cursor().pos().x() - self.x()
+                ly = self.cursor().pos().y() - self.y()
+                if not self.isMaximized():
+                    r = 6; w, h = self.width(), self.height()
+                    top = ly < r; bot = ly > h - r; left = lx < r; right = lx > w - r
+                    if top and left:   return True, 13
+                    if top and right:  return True, 14
+                    if bot and left:   return True, 16
+                    if bot and right:  return True, 17
+                    if top:            return True, 12
+                    if bot:            return True, 15
+                    if left:           return True, 10
+                    if right:          return True, 11
+                if ly < 40:
+                    cw = self.centralWidget()
+                    if cw:
+                        child = cw.childAt(lx, ly)
+                        if child is not None and isinstance(child, QPushButton):
+                            return True, 1
+                    return True, 2
+        except:
+            pass
+        return super().nativeEvent(eventType, message)
 
-        # 预处理：将纯文本格式转换为更美观的 HTML
-        lines = content.split("\n")
-        html_parts = []
-        in_code = False
-        for line in lines:
-            stripped = line.strip()
-            # 跳过纯装饰线
-            if stripped and all(c in "=#" for c in stripped) and len(stripped) > 3:
-                if not html_parts:
-                    continue  # 跳过文件开头的装饰线
-                html_parts.append('<hr>')
-                continue
-            # 【xxx】 → 蓝色加粗标题
-            if stripped.startswith("【") and stripped.endswith("】"):
-                html_parts.append(
-                    f'<h3 style="color:#1565c0; margin:18px 0 8px 0;">{stripped}</h3>'
-                )
-                continue
-            # # N. xxx → 二级标题
-            if stripped.startswith("#") and stripped[1:2].isdigit():
-                title = stripped.lstrip("# ").strip()
-                html_parts.append(
-                    f'<h2 style="color:#1565c0; border-bottom:1px solid #e0e0e0; '
-                    f'padding-bottom:4px; margin-top:24px;">{title}</h2>'
-                )
-                continue
-            # 空行
-            if not stripped:
-                if in_code:
-                    html_parts.append('</pre>')
-                    in_code = False
-                html_parts.append('<br>')
-                continue
-            # 以两个以上空格开头或包含 $ 的 → 代码行
-            if (line.startswith("  ") and line[2:3] == " ") or "$" in stripped and "=" not in stripped[:3]:
-                if not in_code:
-                    html_parts.append('<pre style="background:#f5f5f5; padding:6px 12px; '
-                                      'border-left:3px solid #1976d2; border-radius:4px; '
-                                      'font-family:Consolas,monospace; font-size:13px; margin:4px 0;">')
-                    in_code = True
-                html_parts.append(stripped + "\n")
-                continue
-            else:
-                if in_code:
-                    html_parts.append('</pre>')
-                    in_code = False
-                # url 转链接
-                import re as _re
-                line_html = _re.sub(
-                    r'(https?://[^\s]+)',
-                    r'<a href="\1" style="color:#1976d2;">\1</a>',
-                    stripped
-                )
-                # 冒号前的字段名加粗
-                if "：" in line_html and not line_html.startswith("<"):
-                    parts = line_html.split("：", 1)
-                    line_html = f'<strong>{parts[0]}</strong>：{parts[1]}'
-                html_parts.append(f'<div style="line-height:1.8;">{line_html}</div>')
-        if in_code:
-            html_parts.append('</pre>')
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
 
-        body_html = "\n".join(html_parts)
-        dialog = QDialog(self)
-        dialog.setWindowTitle("C810 卡片格式详细参考")
-        dialog.setMinimumSize(900, 700)
-        dialog.resize(900, 700)
-        dlg_layout = QVBoxLayout(dialog)
-        full_html = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"></head>
-<body style="font-family:'Microsoft YaHei','Segoe UI',sans-serif;
-      font-size:14px; line-height:1.8; color:#222; max-width:860px; margin:0 auto; padding:12px 24px;">
-{body_html}
-</body></html>"""
-        browser = QTextBrowser()
-        browser.setOpenExternalLinks(True)
-        browser.setHtml(full_html)
-        browser.setStyleSheet("QTextBrowser { background-color: #fff; border: none; }")
-        dlg_layout.addWidget(browser)
-        btn_close = QPushButton("关闭")
-        btn_close.clicked.connect(dialog.close)
-        dlg_layout.addWidget(btn_close, alignment=Qt.AlignRight)
+    def changeEvent(self, event):
+        if event.type() == QEvent.WindowStateChange and hasattr(self, '_btn_max') and self._btn_max:
+            self._btn_max.setText("❐" if self.isMaximized() else "□")
+        super().changeEvent(event)
 
-        dialog.setAttribute(Qt.WA_DeleteOnClose, True)
-        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-        dialog.show()
+    # ---------- 侧边栏切换 ----------
+
+    def _switch_tab(self, idx: int):
+        self.tab_widget.setCurrentIndex(idx)
+
+    # ---------- 主题 ----------
+
+    def _apply_theme(self):
+        """应用当前主题"""
+        from app.style import PALETTES
+        theme_qss = {"light": LIGHT_QSS, "dark": DARK_QSS, "pink": PINK_QSS, "traditional": TRADITIONAL_QSS}
+        self.setStyleSheet(theme_qss.get(self.theme_mode, LIGHT_QSS))
+        cw = self.findChild(QWidget, "centralContainer")
+        pal = PALETTES.get(self.theme_mode, PALETTES["light"])
+        if cw:
+            cw.setStyleSheet(
+                f"#centralContainer {{ background: {pal['bg_window']}; border-radius: 10px; }}"
+            )
+        if hasattr(self, '_sidebar'):
+            for btn in self._sidebar.buttons[:7]:
+                if hasattr(btn, 'set_hover_color'):
+                    btn.set_hover_color(pal['text_primary'])
+        # 更新曲面/TR 高亮色
+        if hasattr(self, 'tab_geo'):
+            if hasattr(self.tab_geo, '_surf_hl'):
+                self.tab_geo._surf_hl.set_colors(pal)
+            if hasattr(self.tab_geo, '_tr_hl'):
+                self.tab_geo._tr_hl.set_colors(pal)
+
+    def _toggle_theme(self):
+        """四档循环切换主题（截图覆盖淡出）"""
+        cycle = {"light": "dark", "dark": "pink", "pink": "traditional", "traditional": "light"}
+        self.theme_mode = cycle.get(self.theme_mode, "light")
+        self.settings.setValue("theme_mode", self.theme_mode)
+        if hasattr(self, '_theme_fade') and self._theme_fade:
+            self._theme_fade.stop()
+        cw = self.centralWidget()
+        if not cw:
+            self._apply_theme(); return
+        snapshot = cw.grab()
+        QTimer.singleShot(0, lambda: self._do_theme_transition(snapshot))
+
+    def _do_theme_transition(self, snapshot):
+        cw = self.centralWidget()
+        if not cw: return
+        overlay = QLabel(cw)
+        overlay.setPixmap(snapshot)
+        overlay.setGeometry(cw.rect())
+        overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        overlay.show(); overlay.raise_()
+        self._apply_theme()
+        cn_map = {"light": "白天模式", "dark": "黑夜模式", "pink": "多巴胺模式", "traditional": "护眼模式"}
+        if hasattr(self, '_sidebar'):
+            self._sidebar.set_theme_label(cn_map.get(self.theme_mode, "白天模式"))
+        effect = QGraphicsOpacityEffect(overlay)
+        overlay.setGraphicsEffect(effect)
+        self._theme_fade = QPropertyAnimation(effect, b"opacity")
+        self._theme_fade.setDuration(200)
+        self._theme_fade.setStartValue(1.0)
+        self._theme_fade.setEndValue(0.0)
+        self._theme_fade.finished.connect(overlay.deleteLater)
+        self._theme_fade.start()
+
+    # ---------- 事件过滤器 ----------
+
+    def eventFilter(self, obj, event):
+        """事件过滤器：双击最大化 + status_mcnp 点击"""
+        if event.type() == QEvent.MouseButtonDblClick and event.button() == Qt.LeftButton:
+            pos = self.mapFromGlobal(event.globalPos())
+            if pos.y() < 40:
+                cw = self.centralWidget()
+                if cw:
+                    child = cw.childAt(cw.mapFromGlobal(event.globalPos()))
+                    if child is None or not isinstance(child, QPushButton):
+                        if self.isMaximized(): self.showNormal()
+                        else: self.showMaximized()
+                        return True
+        if obj is self.status_mcnp and event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+            self._change_mcnp()
+            return True
+        return super().eventFilter(obj, event)
+
+    # ---------- 截面库 ----------
 
     def _load_xsdir(self):
         """加载截面库索引（优先级：QSettings → 环境变量 → 弹窗提醒）
@@ -538,7 +821,7 @@ class MainWindow(QMainWindow):
             # Collect raw (text-mode) overrides from tabs that support them
             raw_overrides = {}
             for tab in [self.tab_mat, self.tab_geo, self.tab_sdef,
-                        self.tab_tally, self.tab_energy, self.tab_advanced]:
+                        self.tab_tally, self.tab_advanced]:
                 raw_overrides.update(tab.get_raw_overrides())
 
             # Generate the INP file content as a string
@@ -555,63 +838,40 @@ class MainWindow(QMainWindow):
     def _merge_tally_settings(self):
         """合并计数标签页和能谱标签页的数据 → TallySettings
 
-        tally_tab 返回 {"tallies": list[TallyDefinition]}，
-        energy_tab 返回 E0 + CUT 参数字典。
+        tally_tab 返回 {"tallies": list[TallyDefinition], "e_min":..., "e_cards_text":...}，
+        CUT 参数来自 advanced_tab。
         若 En 文本区为空则自动从 tallies × E0 生成 En 卡。
         """
         import sys
         tally_data = self.tab_tally.get_data()
-        energy_data = self.tab_energy.get_data()
+        # CUT 数据现在在 advanced_tab
+        energy_data = self.tab_advanced.get_cut_data().__dict__ if hasattr(self.tab_advanced, 'get_cut_data') else {}
+        energy_data.pop('tallies', None)  # __dict__ 含默认 tallies=[], 与下面关键字冲突
         tallies = tally_data.get("tallies", [])
 
-        # 自动从勾选 En 的 tallies × E0 生成 En 能量卡
-        e_cards_text = energy_data.get("e_cards_text", "").strip()
+        # E0/En 从 tally_tab 获取
+        e_cards_text = tally_data.get("e_cards_text", "").strip()
         if not e_cards_text:
             en_tallies = [td for td in tallies if td.generate_en]
             if en_tallies:
                 tally_nums = sorted(set(td.number for td in en_tallies))
-                e0_min = energy_data.get("e_min", "")
-                e0_max = energy_data.get("e_max", "")
-                e0_bins = energy_data.get("e_bins", 0)
-                e0_log = energy_data.get("e_log", False)
+                e0_min = tally_data.get("e_min", "")
+                e0_max = tally_data.get("e_max", "")
+                e0_bins = tally_data.get("e_bins", 0)
+                e0_log = tally_data.get("e_log", False)
                 if e0_min and e0_max and e0_bins:
                     grid_syntax = "log" if e0_log else "i"
                     e_lines = [f"E{n}  {e0_min} {e0_bins}{grid_syntax} {e0_max}"
                               for n in tally_nums]
-                    energy_data["e_cards_text"] = "\n".join(e_lines)
+                    tally_data["e_cards_text"] = "\n".join(e_lines)
 
+        # E0 字段合并到 energy_data（来自 tally_tab）
+        for k in ("e_min","e_max","e_bins","e_log","e_custom_enabled","e_custom_text","e_cards_text",
+                   "t0_min","t0_max","t0_bins","t0_log","t0_custom_enabled","t0_custom_text","t0_text",
+                   ):
+            if k in tally_data:
+                energy_data[k] = tally_data[k]
         return TallySettings(tallies=tallies, **energy_data)
-
-    def _apply_theme(self):
-        """应用当前主题（白天/黑夜/粉嫩）"""
-        theme_qss = {"light": LIGHT_QSS, "dark": DARK_QSS, "pink": PINK_QSS, "traditional": TRADITIONAL_QSS}
-        theme_label = {"light": "☀ 白天模式", "dark": "🌙 黑夜模式", "pink": "🌸 粉嫩模式", "traditional": "🏮 传统模式"}
-        self.setStyleSheet(theme_qss.get(self.theme_mode, LIGHT_QSS))
-        self.btn_theme.setText(theme_label.get(self.theme_mode, "☀ 白天模式"))
-
-    def _toggle_theme(self):
-        """四档循环切换主题：白天 → 黑夜 → 粉嫩 → 传统 → 白天"""
-        cycle = {"light": "dark", "dark": "pink", "pink": "traditional", "traditional": "light"}
-        self.theme_mode = cycle.get(self.theme_mode, "light")
-        self.settings.setValue("theme_mode", self.theme_mode)
-        self._apply_theme()
-
-    def eventFilter(self, obj, event):
-        """事件过滤器：处理 status_mcnp 的点击事件
-        Event filter to handle left-click on the MCNP status label,
-        which opens the version selection dialog.
-
-        Args:
-            obj: The object being filtered (checked against self.status_mcnp).
-            event: The incoming event.
-
-        Returns:
-            True if the event was handled, otherwise delegates to the parent filter.
-        """
-        if obj is self.status_mcnp and event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
-            self._change_mcnp()
-            return True
-        return super().eventFilter(obj, event)
 
     # ---------- INP 导入 INP Import ----------
 
@@ -688,8 +948,8 @@ class MainWindow(QMainWindow):
         self.tab_mat.set_data(deck.materials)
         self.tab_sdef.set_data(deck.sources, deck.adv)
         self.tab_tally.set_data(deck.tally)
-        self.tab_energy.set_data(deck.tally)
         self.tab_advanced.set_data(deck.adv)
+        self.tab_advanced.set_cut_data(deck.tally)
         # MODE 同步 CUT 显隐
         self._update_en_preview()
 
@@ -697,15 +957,17 @@ class MainWindow(QMainWindow):
 
 
     def _update_en_preview(self):
-        """计数卡 En 勾选变化时更新 En 预览"""
+        """计数卡 En/Tn 勾选变化时更新预览"""
         import json
         tally_data = self.tab_tally.get_data()
         tallies = tally_data.get("tallies", [])
-        self.tab_energy.update_en_preview(tallies)
+        self.tab_tally.update_en_preview(tallies)
+        self.tab_tally.update_tn_preview(tallies, tally_data)
 
     def _sync_cut_visibility(self, basic):
         """MODE 变化时同步 CUT 行显隐"""
-        self.tab_energy.sync_cut_with_mode(basic)
+        # CUT 全部显示，不再依赖 MODE
+        pass
 
     def _collect_deck(self) -> DeckData:
         """收集当前所有标签页数据构建 DeckData
@@ -792,7 +1054,7 @@ class MainWindow(QMainWindow):
         tabs = {
             "basic": self.tab_basic, "geo": self.tab_geo,
             "mat": self.tab_mat, "sdef": self.tab_sdef,
-            "tally": self.tab_tally, "energy": self.tab_energy,
+            "tally": self.tab_tally, "advanced": self.tab_advanced,
             "adv": self.tab_advanced,
         }
         ok, msg = import_inp_file(path, tabs)
@@ -811,3 +1073,9 @@ class MainWindow(QMainWindow):
         """
         self.settings.setValue("output_path", self.path_edit.text())
         super().closeEvent(event)
+
+        theme_label = {"light": "白天模式", "dark": "黑夜模式", "pink": "多巴胺模式", "traditional": "护眼模式"}
+        if hasattr(self, '_sidebar'):
+            self._sidebar.btn_theme.setText(theme_label.get(self.theme_mode, "白天模式"))
+            self._sidebar.update_icon_colors(pal.get("text_disabled", "#888888"))
+

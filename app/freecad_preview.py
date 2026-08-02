@@ -133,6 +133,24 @@ def _pymcnp_surf_to_dict(surf):
     return info
 
 
+def _compute_bound_from_surfaces(surf_dicts: list, default: float = 500) -> float:
+    """根据曲面参数的最大坐标估算 FreeCAD 包围盒半边长。
+
+    启发式：取所有数值参数绝对值最大值 *1.3 + 100，再与默认值取大。
+    保证用户画的大几何不被 FreeCAD 的 [-B,B]³ 盒子裁剪。
+    """
+    max_coord = 0.0
+    for s in surf_dicts:
+        for v in s.get("params", []) or []:
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                continue
+            if abs(f) > max_coord:
+                max_coord = abs(f)
+    return max(max_coord * 1.3 + 100, default)
+
+
 class FreeCADEngine:
     """FreeCAD CSG 几何引擎封装。
 
@@ -175,6 +193,9 @@ class FreeCADEngine:
             except (ValueError, AttributeError) as e:
                 raise RuntimeError(f"曲面 {getattr(s, 'number', '?')} 序列化失败: {e}")
 
+        # 根据曲面参数自适应 bound（大几何不被裁剪）
+        bound = _compute_bound_from_surfaces(surf_dicts, default=bound)
+
         # 2. 序列化 Geometry AST
         cell_dicts = []
         for c in cells_data:
@@ -205,18 +226,21 @@ class FreeCADEngine:
 
         # 5. 收集输出
         result = {}
-        for cell_num_str, filename in result_data.get("files", {}).items():
-            result[int(cell_num_str)] = os.path.join(tmp_dir, filename)
+        for cell_num_str, entry in result_data.get("files", {}).items():
+            if isinstance(entry, dict) and "vertices" in entry:
+                # fmt="mesh": 直接返回顶点/三角面数据
+                result[int(cell_num_str)] = entry
+            elif isinstance(entry, str):
+                # fmt="stl"|"step": 文件路径
+                result[int(cell_num_str)] = os.path.join(tmp_dir, entry)
 
-        # 如果有警告，记录但不中断
-        # warnings 可通过返回结构传递，但保持接口简单
         return result
 
     def export_step(self, pymcnp_surfaces: list, cells_data: list,
-                    tr_cards: dict, out_dir: str) -> list[str]:
+                    tr_cards: dict, out_dir: str, bound: float = 500) -> list[str]:
         """将所有栅元导出为一个 STEP 文件（跳过真空/空气栅元）"""
         result = self.build_geometry(pymcnp_surfaces, cells_data,
-                                     tr_cards, fmt="step", single_file=True)
+                                     tr_cards, bound=bound, fmt="step", single_file=True)
         files = []
         for src_path in result.values():
             dst = os.path.join(out_dir, "geometry.step")

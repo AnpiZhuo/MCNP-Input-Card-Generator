@@ -1,0 +1,1102 @@
+"""
+MCNP 生成器 API 服务 — 桥接 React 前端与 Python 后端
+使用标准库 http.server，无需安装 Flask
+
+启动: python api_server.py
+监听: http://localhost:5001
+"""
+
+import json
+import os as _pv_os
+_pv_os.environ["PYVISTA_OFF_SCREEN"] = "true"  # 供后续 handler 里懒加载的 pyvista 使用
+import os
+import sys
+from http.server import ThreadingHTTPServer as HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse
+
+# 将 app/ 和项目根目录都加入路径
+PROJECT_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+APP_DIR = os.path.join(PROJECT_DIR, "app")
+if APP_DIR not in sys.path:
+    sys.path.insert(0, APP_DIR)
+if PROJECT_DIR not in sys.path:
+    sys.path.insert(0, PROJECT_DIR)
+
+from models import (
+    BasicSettings, CellData, MaterialData, MaterialRow,
+    SourceData, TallySettings, TallyDefinition, AdvancedSettings, DeckData
+)
+from generator.inp_generator import generate_inp_from_deck
+from generator.parsers import parse_inp_text
+from xsdir_db import DB as xsdir_db
+
+PORT = 5001
+
+
+# ===== 共享曲面解析（preview-3d / export-step / cross-section 共用） =====
+import pymcnp.inp as _pi
+
+_SURF_CLASSES = {}
+for _name in dir(_pi):
+    _obj = getattr(_pi, _name)
+    if hasattr(_obj, '_KEYWORD') and hasattr(_obj, 'from_mcnp') and isinstance(_obj, type):
+        _kw = (_obj._KEYWORD or '').upper()
+        if _kw: _SURF_CLASSES[_kw] = _obj
+
+def parse_surfaces(text: str) -> list:
+    """将 MCNP 曲面文本解析为 pymcnp 表面对象列表（支持 TR 引用号）"""
+    surfs = []
+    for _line in text.strip().splitlines():
+        _l = _line.strip()
+        if not _l or _l.startswith("C") or _l.startswith("c"): continue
+        if "$" in _l[:5]: _l = _l.split("$")[0].strip()
+        if not _l: continue
+        _p = _l.split()
+        if len(_p) < 2: continue
+        _kw_idx = 1
+        if len(_p) > 2 and _SURF_CLASSES.get(_p[2].upper()): _kw_idx = 2
+        _cls = _SURF_CLASSES.get(_p[_kw_idx].upper())
+        if _cls is None: continue
+        try: surfs.append(_cls.from_mcnp(_l))
+        except: pass
+    return surfs
+
+def parse_tr_cards(text: str) -> dict:
+    """解析 TRn 变换卡文本为 {num: {translate, rotate}}"""
+    import re
+    tr_cards = {}
+    for _line in text.strip().splitlines():
+        _ls = _line.strip()
+        if not _ls: continue
+        m = re.match(r'^\*?TR(\d+)', _ls.upper())
+        if not m: continue
+        try:
+            tn = int(m.group(1))
+            if str(tn) in tr_cards: continue
+            vals = [float(v) for v in _ls.split()[1:]]
+            translate = vals[:3] if len(vals) >= 3 else [0, 0, 0]
+            rotate = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+            if len(vals) >= 9:
+                import numpy as np
+                rotate = [[vals[3], vals[4], vals[5]], [vals[6], vals[7], vals[8]]]
+                if len(vals) >= 12:
+                    rotate.append([vals[9], vals[10], vals[11]])
+                else:
+                    rotate.append(np.cross(rotate[0], rotate[1]).tolist())
+            tr_cards[str(tn)] = {"translate": translate, "rotate": rotate}
+        except: pass
+    return tr_cards
+
+
+# ===== JSON → Dataclass 转换 =====
+
+def _find_mcnp_exe() -> str:
+    """查找 MCNP 可执行文件，返回第一个找到的完整路径（未找到返回空串）"""
+    try:
+        import os, winreg
+        found = []; seen = set()
+        def _add(p):
+            if p and p not in seen: seen.add(p); found.append(p)
+        # System PATH from registry
+        system_paths = set()
+        try:
+            h = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")
+            system_paths.update(winreg.QueryValueEx(h, "Path")[0].split(";"))
+            winreg.CloseKey(h)
+            try:
+                h = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment")
+                up = winreg.QueryValueEx(h, "Path")[0]
+                if up: system_paths.update(up.split(";"))
+                winreg.CloseKey(h)
+            except: pass
+        except: pass
+        # Search all PATH dirs
+        all_paths = set()
+        for p in os.environ.get("PATH","").split(os.pathsep):
+            all_paths.add(p.strip().strip('"'))
+        all_paths.update(p.strip().strip('"') for p in system_paths if p.strip())
+        for d in all_paths:
+            if not d or not os.path.isdir(d): continue
+            for f in os.listdir(d):
+                if f.lower() in ("mcnp6.exe","mcnp5.exe","mcnp6","mcnp5"): _add(os.path.join(d, f))
+        # Registry
+        try:
+            for key in [winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER]:
+                for subkey in [r"SOFTWARE\MCNP", r"SOFTWARE\Wow6432Node\MCNP"]:
+                    try:
+                        h = winreg.OpenKey(key, subkey)
+                        pv = winreg.QueryValueEx(h, "InstallPath")[0]
+                        for r, dd, ff in os.walk(pv):
+                            for fn in ff:
+                                if fn.lower() in ("mcnp6.exe","mcnp5.exe"): _add(os.path.join(r, fn))
+                        winreg.CloseKey(h)
+                    except: pass
+        except: pass
+        # Recursive search
+        for base in ["D:/MCNP", "C:/Program Files/MCNP", "C:/MCNP"]:
+            if base and os.path.isdir(base):
+                for r, dd, ff in os.walk(base):
+                    for fn in ff:
+                        if fn.lower() in ("mcnp6.exe","mcnp5.exe","mcnp6","mcnp5"): _add(os.path.join(r, fn))
+        return found[0] if found else ""
+    except Exception:
+        return ""
+
+
+def _basic_from_dict(d: dict) -> BasicSettings:
+    return BasicSettings(
+        title=d.get("title", ""), mode_n=d.get("mode_n", False), mode_p=d.get("mode_p", False),
+        mode_e=d.get("mode_e", False), mode_h=d.get("mode_h", False), mode_he=d.get("mode_he", False),
+        mode_d=d.get("mode_d", False), mode_t=d.get("mode_t", False), mode_a=d.get("mode_a", False),
+        nps=d.get("nps", ""), ctme=d.get("ctme", ""), act=d.get("act", ""),
+        print_pr=d.get("print_pr", ""), phys_fis=d.get("phys_fis", True),
+    )
+
+def _cells_from_list(arr: list) -> list[CellData]:
+    return [CellData(
+        number=c.get("number", 0), material=c.get("material", "0"), density=c.get("density", ""),
+        surface_expr=c.get("surface_expr", ""), imp_n=c.get("imp_n", ""), imp_p=c.get("imp_p", ""),
+        imp_e=c.get("imp_e", ""), vol=c.get("vol", ""), pwt=c.get("pwt", ""), ext=c.get("ext", ""),
+        fcl=c.get("fcl", ""), u=c.get("u", ""), fill=c.get("fill", ""), lat=c.get("lat", ""),
+        trcl=c.get("trcl", ""), tmp=c.get("tmp", ""), other_params=c.get("other_params", ""),
+        render=c.get("render", True), comment=c.get("comment", ""),
+    ) for c in arr]
+
+def _materials_from_list(arr: list) -> list[MaterialData]:
+    # 前端 deck 统一用 nuclides，导入路径会额外带 rows（api_server 405-407 映射）。
+    # 这里兼容两者：rows 优先，nuclides 兜底，保证手动添加的材料也能参与生成。
+    return [MaterialData(
+        number=m.get("number", 0),
+        rows=[MaterialRow(zaid=r.get("zaid", ""), fraction=r.get("fraction", "")) for r in (m.get("rows") or m.get("nuclides") or [])],
+        comment=m.get("comment", ""), options=m.get("options", ""), mt_card=m.get("mt_card", ""),
+        formula=m.get("formula", ""),
+    ) for m in arr]
+
+def _sources_from_list(arr: list) -> list[SourceData]:
+    return [SourceData(
+        number=s.get("number", 0), par=s.get("par", ""), erg=s.get("erg", ""),
+        pos_x=s.get("pos_x", ""), pos_y=s.get("pos_y", ""), pos_z=s.get("pos_z", ""),
+        wgt=s.get("wgt", ""), cel=s.get("cel", ""), dir_=s.get("dir_", ""),
+        probability=s.get("prob", ""), tme=s.get("tme", ""), vec=s.get("vec", ""),
+        axs=s.get("axs", ""), rad=s.get("rad", ""), ext=s.get("ext", ""),
+        sur=s.get("sur", ""), nrm=s.get("nrm", ""), tr=s.get("tr", ""),
+        ccc=s.get("ccc", ""), ara=s.get("ara", ""), rate=s.get("rate", ""),
+    ) for s in arr]
+
+def _tally_from_dict(d: dict) -> TallySettings:
+    tallies = []
+    for t in d.get("tallies", []):
+        tallies.append(TallyDefinition(
+            type=t.get("type", "F4"), number=t.get("number", 4),
+            particles=t.get("particles") if isinstance(t.get("particles"), list) else [p.lower().strip() for p in t.get("particle", "n").replace(",", " ").split() if p.strip()], params=t.get("params", ""),
+            generate_en=t.get("generate_en", t.get("enableEn", False)), generate_tn=t.get("generate_tn", t.get("enableTn", False)),
+        ))
+    return TallySettings(tallies=tallies,
+        e_min=d.get("e_min", ""), e_max=d.get("e_max", ""), e_bins=d.get("e_bins", 0),
+        e_log=d.get("e_log", False), e_custom_enabled=d.get("e_custom_enabled", False),
+        e_custom_text=d.get("e_custom_text", ""),
+        t0_min=d.get("t0_min", ""), t0_max=d.get("t0_max", ""), t0_bins=d.get("t0_bins", 0),
+        t0_log=d.get("t0_log", False), t0_custom_enabled=d.get("t0_custom_enabled", False),
+        t0_custom_text=d.get("t0_custom_text", ""), e_cards_text=d.get("e_cards_text", ""),
+        t_cards_text=d.get("t_cards_text", ""),
+        cut_n_t=d.get("cut_n_t", ""), cut_n_e=d.get("cut_n_e", ""), cut_n_wc1=d.get("cut_n_wc1", ""),
+        cut_n_wc2=d.get("cut_n_wc2", ""), cut_n_swtm=d.get("cut_n_swtm", ""),
+        cut_p_t=d.get("cut_p_t", ""), cut_p_e=d.get("cut_p_e", ""), cut_p_wc1=d.get("cut_p_wc1", ""),
+        cut_p_wc2=d.get("cut_p_wc2", ""), cut_p_swtm=d.get("cut_p_swtm", ""),
+        cut_e_t=d.get("cut_e_t", ""), cut_e_e=d.get("cut_e_e", ""), cut_e_wc1=d.get("cut_e_wc1", ""),
+        cut_e_wc2=d.get("cut_e_wc2", ""), cut_e_swtm=d.get("cut_e_swtm", ""),
+        cut_h_t=d.get("cut_h_t", ""), cut_h_e=d.get("cut_h_e", ""), cut_h_wc1=d.get("cut_h_wc1", ""),
+        cut_h_wc2=d.get("cut_h_wc2", ""), cut_h_swtm=d.get("cut_h_swtm", ""),
+        cut_he_t=d.get("cut_he_t", ""), cut_he_e=d.get("cut_he_e", ""), cut_he_wc1=d.get("cut_he_wc1", ""),
+        cut_he_wc2=d.get("cut_he_wc2", ""), cut_he_swtm=d.get("cut_he_swtm", ""),
+        cut_d_t=d.get("cut_d_t", ""), cut_d_e=d.get("cut_d_e", ""), cut_d_wc1=d.get("cut_d_wc1", ""),
+        cut_d_wc2=d.get("cut_d_wc2", ""), cut_d_swtm=d.get("cut_d_swtm", ""),
+        cut_t_t=d.get("cut_t_t", ""), cut_t_e=d.get("cut_t_e", ""), cut_t_wc1=d.get("cut_t_wc1", ""),
+        cut_t_wc2=d.get("cut_t_wc2", ""), cut_t_swtm=d.get("cut_t_swtm", ""),
+        cut_a_t=d.get("cut_a_t", ""), cut_a_e=d.get("cut_a_e", ""), cut_a_wc1=d.get("cut_a_wc1", ""),
+        cut_a_wc2=d.get("cut_a_wc2", ""), cut_a_swtm=d.get("cut_a_swtm", ""),
+    )
+
+def _adv_from_dict(d: dict) -> AdvancedSettings:
+    return AdvancedSettings(
+        other_cards=d.get("other_cards", ""),
+        phys_n_emax=d.get("phys_n_emax", ""), phys_n_emcnf=d.get("phys_n_emcnf", ""),
+        phys_n_iunr=d.get("phys_n_iunr", ""), phys_n_dnb=d.get("phys_n_dnb", ""),
+        phys_n_fisnu=d.get("phys_n_fisnu", ""),
+        phys_p_emcpf=d.get("phys_p_emcpf", ""), phys_p_ides=d.get("phys_p_ides", ""),
+        phys_p_nocoh=d.get("phys_p_nocoh", ""), phys_p_ispn=d.get("phys_p_ispn", ""),
+        phys_p_nodop=d.get("phys_p_nodop", ""),
+        phys_e_emax=d.get("phys_e_emax", ""), phys_e_ides=d.get("phys_e_ides", ""),
+        phys_e_iphoto=d.get("phys_e_iphoto", ""), phys_e_ibad=d.get("phys_e_ibad", ""),
+        phys_e_istrg=d.get("phys_e_istrg", ""), phys_e_bnum=d.get("phys_e_bnum", ""),
+        phys_e_xnum=d.get("phys_e_xnum", ""), phys_e_rnok=d.get("phys_e_rnok", ""),
+        phys_e_enum=d.get("phys_e_enum", ""), phys_e_numb=d.get("phys_e_numb", ""),
+        phys_h_emax=d.get("phys_h_emax", ""), phys_h_ie=d.get("phys_h_ie", ""),
+        phys_h_ipr=d.get("phys_h_ipr", ""), phys_h_rgas=d.get("phys_h_rgas", ""),
+        phys_h_emin=d.get("phys_h_emin", ""), phys_h_ecut=d.get("phys_h_ecut", ""),
+        phys_he_emax=d.get("phys_he_emax", ""), phys_he_ie=d.get("phys_he_ie", ""),
+        phys_he_ipr=d.get("phys_he_ipr", ""), phys_he_rgas=d.get("phys_he_rgas", ""),
+        phys_he_emin=d.get("phys_he_emin", ""), phys_he_ecut=d.get("phys_he_ecut", ""),
+        source_mode=d.get("source_mode", "fixed"),
+        sdef_par=d.get("sdef_par", ""), sdef_erg=d.get("sdef_erg", ""),
+        sdef_pos_x=d.get("sdef_pos_x", ""), sdef_pos_y=d.get("sdef_pos_y", ""),
+        sdef_pos_z=d.get("sdef_pos_z", ""), sdef_wgt=d.get("sdef_wgt", ""),
+        sdef_dir=d.get("sdef_dir", ""), sdef_cel=d.get("sdef_cel", ""),
+        sdef_tme=d.get("sdef_tme", ""), sdef_vec=d.get("sdef_vec", ""),
+        sdef_axs=d.get("sdef_axs", ""), sdef_rad=d.get("sdef_rad", ""),
+        sdef_ext=d.get("sdef_ext", ""), sdef_sur=d.get("sdef_sur", ""),
+        sdef_nrm=d.get("sdef_nrm", ""), sdef_tr=d.get("sdef_tr", ""),
+        sdef_ccc=d.get("sdef_ccc", ""), sdef_ara=d.get("sdef_ara", ""),
+        sdef_rate=d.get("sdef_rate", ""), sdef_raw_text=d.get("sdef_raw_text", ""),
+        kcode_nsrc=d.get("kcode_nsrc", ""), kcode_rkk=d.get("kcode_rkk", ""),
+        kcode_ikz=d.get("kcode_ikz", ""), kcode_kct=d.get("kcode_kct", ""),
+        kcode_knrm=d.get("kcode_knrm", ""), ksrc_points=d.get("ksrc_points", ""),
+        kcode_msrk=d.get("kcode_msrk", ""), kcode_mrkp=d.get("kcode_mrkp", ""),
+        kcode_kc8=d.get("kcode_kc8", ""),
+        hsrc_enabled=d.get("hsrc_enabled", False), hsrc_text=d.get("hsrc_text", ""),
+        sdef_distributions=d.get("sdef_distributions", ""),
+        ssw_surf=d.get("ssw_surf", ""), ssw_sym=d.get("ssw_sym", ""),
+        ssw_pty=d.get("ssw_pty", ""), ssw_cel=d.get("ssw_cel", ""),
+        ssr_surf=d.get("ssr_surf", ""), ssr_mode=d.get("ssr_mode", ""),
+        ssr_cel=d.get("ssr_cel", ""), ssr_pty=d.get("ssr_pty", ""),
+        ssr_col=d.get("ssr_col", ""), ssr_wgt=d.get("ssr_wgt", ""),
+        ssr_tr=d.get("ssr_tr", ""), ssr_psc=d.get("ssr_psc", ""),
+    )
+
+def deck_from_json(data: dict) -> DeckData:
+    """JSON → DeckData 转换"""
+    return DeckData(
+        basic=_basic_from_dict(data.get("basic", {})),
+        surfaces=data.get("surfaces", ""), tr_cards=data.get("tr_cards", ""),
+        cells=_cells_from_list(data.get("cells", [])),
+        materials=_materials_from_list(data.get("materials", [])),
+        sources=_sources_from_list(data.get("sources", [])),
+        tally=_tally_from_dict(data.get("tally", {})),
+        adv=_adv_from_dict(data.get("adv", {})),
+    )
+
+
+# ===== HTTP 服务 =====
+
+class MCNPHandler(BaseHTTPRequestHandler):
+    """处理所有 API 请求"""
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self._cors()
+        self.end_headers()
+
+    def do_GET(self):
+        # Browser-friendly: handle GET the same as POST for API
+        self.do_POST()
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        handlers = {
+            "/api/generate": self._handle_generate,
+            "/api/expand-formula": self._handle_expand_formula,
+            "/api/parse-inp": self._handle_parse_inp,
+            "/api/save-inp": self._handle_save_inp,
+            "/api/choose-dir": self._handle_choose_dir,
+            "/api/choose-file": self._handle_choose_file,
+            "/api/run-mcnp": self._handle_run_mcnp,
+            "/api/xsdir-check": self._handle_xsdir_check,
+            "/api/import-step": self._handle_import_step,
+            "/api/mcnp-detect": self._handle_mcnp_detect,
+            "/api/check-freecad": self._handle_check_freecad,
+            "/api/set-freecad-path": self._handle_set_freecad_path,
+            "/api/choose-freecad-path": self._handle_choose_freecad_path,
+            "/api/validate-inp": self._handle_validate_inp,
+            "/api/validate-zaid": self._handle_validate_zaid,
+            "/api/parse-outp": self._handle_parse_outp,
+            "/api/xsdir-search": self._handle_xsdir_search,
+            "/api/generate-step": self._handle_generate_step,
+            "/api/export-step": self._handle_export_step,
+            "/api/preview-3d": self._handle_preview_3d,
+            "/api/serve-file": self._handle_serve_file,
+            "/api/cross-section": self._handle_cross_section,
+        }
+        handler = handlers.get(parsed.path)
+        if handler:
+            handler()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def _read_body(self) -> dict:
+        content_len = int(self.headers.get("Content-Length", 0))
+        return json.loads(self.rfile.read(content_len))
+
+    def _ok(self, data: dict):
+        self.send_response(200)
+        self._cors()
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"status": "ok", **data}, ensure_ascii=False).encode("utf-8"))
+
+    def _err(self, msg: str, status=500):
+        import traceback
+        tb = traceback.format_exc()
+        self.send_response(status)
+        self._cors()
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"status": "error", "message": msg, "traceback": tb}, ensure_ascii=False).encode("utf-8"))
+
+    def _cors(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+    # ── 生成 ──
+    def _handle_generate(self):
+        try:
+            data = self._read_body()
+            deck = deck_from_json(data)
+            # raw_overrides 是独立参数（DeckData 无此字段），必须单独传给生成器
+            inp_text = generate_inp_from_deck(deck, data.get("raw_overrides") or {})
+            self._ok({"inp": inp_text})
+        except Exception as e:
+            self._err(str(e))
+
+    # ── 化学式展开 ──
+    def _handle_expand_formula(self):
+        try:
+            data = self._read_body()
+            text = data.get("formula", "").strip()
+            if not text: raise ValueError("化学式为空")
+            import pymcnp
+            formulas = {}
+            for line in text.split("\n"):
+                for part in line.split(","):
+                    part = part.strip()
+                    if not part: continue
+                    if ":" in part:
+                        f, r = part.split(":", 1)
+                        formulas[f.strip()] = float(r.strip())
+                    else:
+                        tok = part.split()
+                        formulas[tok[0]] = float(tok[1]) if len(tok) > 1 else 1
+            all_rows = []
+            for sym, ratio in formulas.items():
+                sub = pymcnp.inp.M_0.from_formula({sym: 1}, cutoff=1e-9)
+                parts = str(sub).replace("&", " ").replace("\n", " ").split()
+                for k in range(1, len(parts)-1, 2):  # 跳过 m1 标签
+                    zaid = parts[k]
+                    frac = float(parts[k+1]) * ratio
+                    if xsdir_db.loaded and "." in zaid:
+                        num = zaid.split(".")[0]
+                        matches = [z for z in xsdir_db.zaids if z.split(".")[0] == num]
+                        if matches: zaid = matches[0]
+                    all_rows.append((zaid, frac))
+            if not all_rows: raise ValueError("pymcnp 返回空")
+            total = sum(abs(f) for _, f in all_rows)
+            if total > 0 and abs(total-1) > 1e-9:
+                all_rows = [(z, f/total) for z, f in all_rows]
+            nuclides = [{"zaid": z.lstrip("0") or "0", "fraction": f"{frac:.6f}"} for z, frac in all_rows]
+            self._ok({"nuclides": nuclides})
+        except Exception as e:
+            self._err(str(e))
+
+    # ── INP 解析 ──
+    def _handle_parse_inp(self):
+        try:
+            data = self._read_body()
+            text = data.get("inp", "")
+            if not text: raise ValueError("INP 内容为空")
+            deck, warnings = parse_inp_text(text)
+            import dataclasses
+            def to_dict(obj):
+                if dataclasses.is_dataclass(obj): return {k: to_dict(v) for k, v in dataclasses.asdict(obj).items()}
+                if isinstance(obj, list): return [to_dict(x) for x in obj]
+                return obj
+            deck_dict = to_dict(deck)
+            import sys as _s
+            print(f"[E0DBG] api tally: e_custom_enabled={deck_dict.get('tally', {}).get('e_custom_enabled')}", file=_s.stderr)
+            print(f"[E0DBG] api tally: e_custom_text[:50]={str(deck_dict.get('tally', {}).get('e_custom_text'))[:50]}", file=_s.stderr)
+            # 后端用 rows，前端用 nuclides → 加入映射
+            for m in deck_dict.get("materials", []):
+                if "rows" in m and "nuclides" not in m:
+                    m["nuclides"] = m["rows"]
+            for c in deck_dict.get("cells", []):
+                c["num"] = str(c.get("number", ""))
+                c["surfaces"] = c.get("surface_expr", "")
+                c["impN"] = c.get("imp_n", "")
+                c["impP"] = c.get("imp_p", "")
+                c["impE"] = c.get("imp_e", "")
+            # 源项模式：backend 的 adv.source_mode → 顶层 sourceMode
+            adv = deck_dict.get("adv", {})
+            deck_dict["sourceMode"] = {"distribution": "sdef", "fixed": "fixed", "kcode": "kcode", "surface": "surface"}.get(adv.get("source_mode", ""), "fixed")
+            deck_dict["sdefFields"] = {k: v for k, v in adv.items() if k.startswith("sdef_")}
+            deck_dict["kcodeFields"] = {k: v for k, v in adv.items() if k.startswith("kcode_")}
+            deck_dict["ksrcPoints"] = adv.get("ksrc_points", "")
+            deck_dict["sdefRawText"] = adv.get("sdef_raw_text", "")
+            # 结构化分布 + 面源（新）
+            try:
+                deck_dict["distributions"] = json.loads(adv.get("sdef_distributions", "[]"))
+            except Exception:
+                deck_dict["distributions"] = []
+            deck_dict["sswFields"] = {"surf": adv.get("ssw_surf", ""), "sym": adv.get("ssw_sym", ""),
+                                      "pty": adv.get("ssw_pty", ""), "cel": adv.get("ssw_cel", "")}
+            deck_dict["ssrFields"] = {"surf": adv.get("ssr_surf", ""), "mode": adv.get("ssr_mode", ""),
+                                      "cel": adv.get("ssr_cel", ""), "pty": adv.get("ssr_pty", ""),
+                                      "col": adv.get("ssr_col", ""), "wgt": adv.get("ssr_wgt", ""),
+                                      "tr": adv.get("ssr_tr", ""), "psc": adv.get("ssr_psc", "")}
+            # Tally: backend → frontend 字段名映射
+            tally_raw = deck_dict.get("tally", {})
+            raw_tallies = tally_raw.get("tallies", [])
+            deck_dict["tallies"] = [{
+                "type": td.get("type", ""),
+                "number": td.get("number", 0),
+                "particle": " ".join(td.get("particles", [])),
+                "params": td.get("params", ""),
+                "enableEn": td.get("generate_en", False),
+                "enableTn": td.get("generate_tn", False),
+            } for td in raw_tallies]
+            deck_dict["_warnings"] = warnings
+            self._ok({"deck": deck_dict})
+        except Exception as e:
+            self._err(str(e))
+
+    # ── 保存 INP 到目录 ──
+    def _handle_save_inp(self):
+        try:
+            data = self._read_body()
+            inp_text = data.get("inp", "")
+            filename = data.get("filename", "output.inp")
+            output_dir = data.get("outputDir", "D:/MCNP/new/claude")
+            run_bat = data.get("runBat", "")
+            os.makedirs(output_dir, exist_ok=True)
+            inp_path = os.path.join(output_dir, filename)
+            with open(inp_path, "w", encoding="utf-8") as f:
+                f.write(inp_text)
+            if run_bat:
+                bat_name = filename.rsplit(".", 1)[0] + ".bat"
+                bat_path = os.path.join(output_dir, bat_name)
+                with open(bat_path, "w", encoding="utf-8") as f:
+                    f.write(run_bat)
+            self._ok({"path": inp_path})
+        except Exception as e:
+            self._err(str(e))
+
+    # ── 选择目录 ──
+    def _handle_choose_dir(self):
+        """弹出系统原生目录选择窗口，返回所选路径（取消返回 cancelled）"""
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            data = self._read_body()
+            initial = data.get("initialDir", "") or os.getcwd()
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            try:
+                path = filedialog.askdirectory(title="选择输出目录", initialdir=initial)
+            finally:
+                root.destroy()
+            self._ok({"path": path or "", "cancelled": not path})
+        except Exception as e:
+            self._err(f"无法打开系统目录选择器: {e}")
+
+    # ── 选择文件（原生打开对话框，返回路径+内容）──
+    def _handle_choose_file(self):
+        """弹出系统原生文件选择窗口，返回所选文件路径和内容（取消返回 cancelled）"""
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            try:
+                path = filedialog.askopenfilename(
+                    title="选择 MCNP INP 文件",
+                    filetypes=[("MCNP 输入卡", "*.inp *.i *.txt"), ("所有文件", "*.*")],
+                )
+            finally:
+                root.destroy()
+            if not path:
+                self._ok({"path": "", "cancelled": True})
+                return
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            self._ok({"path": path, "content": content, "cancelled": False})
+        except Exception as e:
+            self._err(f"无法打开系统文件选择器: {e}")
+
+    # ── 运行 MCNP ──
+    def _handle_run_mcnp(self):
+        try:
+            import subprocess, threading
+            data = self._read_body()
+            inp_text = data.get("inp", "")
+            filename = data.get("filename", "output.inp")
+            output_dir = data.get("outputDir", "D:/MCNP/new/claude")
+            exe = data.get("mcnpExe", "") or ""
+            if not inp_text.strip():
+                raise ValueError("INP 内容为空")
+            os.makedirs(output_dir, exist_ok=True)
+            # 定位 MCNP 可执行文件（前端传的 > 自动检测）
+            if not exe or not os.path.isfile(exe):
+                exe = _find_mcnp_exe()
+            if not exe or not os.path.isfile(exe):
+                raise FileNotFoundError("未找到 mcnp6.exe，请检查 MCNP 安装或手动配置")
+            # 保存 inp 和 run.bat（临时，跑完自动删除）
+            inp_path = os.path.join(output_dir, filename)
+            base = filename.rsplit(".", 1)[0]
+            bat_path = os.path.join(output_dir, base + ".bat")
+            saved_mtime = os.path.getmtime(inp_path) if os.path.exists(inp_path) else None
+            with open(inp_path, "w", encoding="utf-8") as f:
+                f.write(inp_text)
+            run_bat = f"@echo off\r\ncall \"{exe}\" inp={filename} outp={base}.o\r\npause\r\n"
+            with open(bat_path, "w", encoding="utf-8") as f:
+                f.write(run_bat)
+            # 后台线程：MCNP 跑完后自动删除临时 inp + bat
+            def _run_and_cleanup():
+                try:
+                    proc = subprocess.Popen([exe, f"inp={filename}"], cwd=output_dir,
+                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    proc.communicate()
+                except Exception:
+                    pass
+                finally:
+                    for p in (inp_path, bat_path):
+                        try:
+                            # 仅当文件没被新一轮运行改写过才删除（防竞态）
+                            if not os.path.exists(p):
+                                continue
+                            if p == inp_path and saved_mtime is not None:
+                                if abs(os.path.getmtime(p) - saved_mtime) > 1.0:
+                                    continue
+                            os.remove(p)
+                        except OSError:
+                            pass
+            threading.Thread(target=_run_and_cleanup, daemon=True).start()
+            self._ok({"status": "started", "path": inp_path, "exe": exe})
+        except Exception as e:
+            self._err(str(e))
+
+    # ── xsdir 状态 ──
+    def _handle_xsdir_check(self):
+        try:
+            if not xsdir_db.loaded:
+                # Priority 1: environment variables (XSDIR, DATAPATH) - same as reference main_window._load_xsdir
+                env_path = ""
+                for _var in ("XSDIR", "xsdir"):
+                    _val = os.environ.get(_var, "")
+                    if _val and os.path.isfile(_val):
+                        env_path = _val; break
+                if not env_path:
+                    _dp = os.environ.get("DATAPATH", "")
+                    if _dp:
+                        _cand = os.path.join(_dp, "xsdir")
+                        if os.path.isfile(_cand): env_path = _cand
+                if env_path:
+                    xsdir_db.load(env_path)
+                else:
+                    # Priority 2: hardcoded common paths
+                    found = xsdir_db.find_xsdir()
+                    if found:
+                        xsdir_db.load(found)
+            count = xsdir_db.count() if hasattr(xsdir_db, 'count') else 0
+            self._ok({"loaded": xsdir_db.loaded, "count": count, "path": getattr(xsdir_db, 'path', None)})
+        except Exception as e:
+            self._ok({"loaded": False, "count": 0, "error": str(e)})
+
+    # ── STEP 导入 ──
+    def _handle_import_step(self):
+        try:
+            import sys as _sys, os, tempfile, json, shutil
+            data = self._read_body()
+            step_data = data.get("data", "")
+            step_path = data.get("path", "")
+            settings = data.get("settings", {})
+            material = settings.get("materialName", "MAT")
+            density_val = settings.get("density", "-1.0")
+            try: density = float(density_val)
+            except: density = -1.0
+            void_gen = settings.get("voidGeneration", True)
+            start_cell = int(settings.get("startCellNum", 1))
+            start_surf = int(settings.get("startSurfNum", 1))
+
+            # Save STEP data to temp file if provided as text
+            if step_data:
+                tmp = tempfile.NamedTemporaryFile(suffix=".step", delete=False, mode="w", encoding="utf-8")
+                tmp.write(step_data); tmp.close()
+                step_path = tmp.name
+            if not step_path or not os.path.isfile(step_path):
+                self._ok({"status": "error", "message": "STEP 文件不存在"})
+                return
+
+            # Use McCAD pipeline from app/step_importer.py
+            _app_dir = os.path.join(os.path.dirname(__file__), "..", "..", "app")
+            _sys.path.insert(0, _app_dir)
+            from step_importer import StepImporter, StandardSurfaceConverter, McCADSettings
+
+            # First try McCAD (if exe available)
+            mccad_exe = shutil.which("McCAD") or shutil.which("McCAD.exe") or ""
+            if not mccad_exe:
+                for p in [
+                    "D:/MCNP/MCNP输入卡生成器/_internal/mccad/McCAD.exe",
+                    "D:/MCNP/输入卡生成器源码/dist/MCNP输入卡生成器/_internal/mccad/McCAD.exe",
+                ]:
+                    if os.path.isfile(p): mccad_exe = p; break
+
+            freecad_bin = StepImporter.detect_freecad()
+            if not freecad_bin:
+                self._ok({"status": "error", "message": "需要 FreeCAD 才能导入 STEP"})
+                return
+
+            if mccad_exe:
+                # Full McCAD pipeline
+                from step_importer import McCADConverter
+                os.environ["PATH"] = mccad_exe + os.pathsep + os.environ.get("PATH", "")
+                mccad_dir = os.path.dirname(mccad_exe)
+                occ_dll = os.path.join(freecad_bin, "TKernel.dll")
+                if os.path.isfile(occ_dll):
+                    os.environ["PATH"] = freecad_bin + os.pathsep + os.environ.get("PATH", "")
+
+                mccad_settings = McCADSettings()
+                mccad_settings["voidGeneration"] = void_gen
+                mccad_settings["startCellNum"] = start_cell
+                mccad_settings["startSurfNum"] = start_surf
+
+                converter = McCADConverter()
+                if converter.is_available():
+                    work_dir = tempfile.mkdtemp(prefix="mccad_")
+                    result_path = converter.run(step_path, material, density, work_dir, dict(mccad_settings._data))
+                    if result_path:
+                        from step_importer import MCNPOutputParser
+                        parser = MCNPOutputParser()
+                        deck = parser.parse(result_path, {})
+                        if deck:
+                            self._ok({"status": "ok", "deck": {
+                                "surfaces": deck.surfaces or "",
+                                "cells": [{"number": c.number, "material": str(c.material), "density": str(c.density) if c.density else "", "surface_expr": c.surface_expr, "comment": c.comment or ""} for c in (deck.cells or [])],
+                            }})
+                            return
+            else:
+                # Fallback: StandardSurfaceConverter (FreeCAD OCC only)
+                result = StandardSurfaceConverter.convert(step_path, start_surf, freecad_bin)
+                if result:
+                    surfaces_dict, cells_list = result
+                    surf_text = " ".join(list(surfaces_dict.values()))
+                    self._ok({"status": "ok", "deck": {"surfaces": surf_text, "cells": cells_list or []}})
+                    return
+
+            self._ok({"status": "error", "message": "STEP 转换失败，请检查 FreeCAD/McCAD"})
+        except Exception as e:
+            import traceback
+            self._err(str(e) + " | " + traceback.format_exc())
+
+    # ── 生成 STEP（3D 预览用）──
+    def _handle_generate_step(self):
+        try:
+            data = self._read_body()
+            surfaces = data.get("surfaces", "")
+            import tempfile, os, json
+            # Import generate_step
+            step_path = os.path.join(tempfile.gettempdir(), "mcnp_geometry.step")
+            try:
+                sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+                from generate_step import generate_step
+                step_path = generate_step(surfaces.split("\\n") if surfaces else [])
+            except ImportError:
+                # Fallback: write surfaces as comments in STEP
+                with open(step_path, "w") as f:
+                    f.write('ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(());\n')
+                    f.write('FILE_NAME("mcnp_geometry.step");\n')
+                    f.write('FILE_SCHEMA(("CONFIG_CONTROL_DESIGN"));\nENDSEC;\nDATA;\n')
+                    for line in surfaces.split("\n")[:100]:
+                        f.write(f'# COMMENT: {line}\n')
+                    f.write('ENDSEC;\nEND-ISO-10303-21;\n')
+            self._ok({"step_file": step_path, "message": "STEP 文件已生成"})
+        except Exception as e:
+            self._err(str(e))
+
+    # ── 导出 STEP（通过 FreeCAD CSG 生成真实几何）──
+    def _handle_export_step(self):
+        try:
+            import sys, os, json, tempfile, re, base64, shutil
+            from step_importer import StepImporter
+            from freecad_preview import FreeCADEngine
+            from pymcnp.types.Geometry import Geometry
+            import pymcnp.inp as _pi
+
+            data = self._read_body()
+            surf_text = data.get("surfaces", "")
+            cell_list = data.get("cells", [])
+            tr_text = data.get("tr_cards", "")
+
+            freecad_bin = StepImporter.detect_freecad()
+            if not freecad_bin:
+                self._ok({"status": "error", "message": "需要 FreeCAD"})
+                return
+
+            # 解析曲面（共享 parse_surfaces）
+            surfs = parse_surfaces(surf_text)
+
+            # 解析栅元（跳过 void）
+            cells_data = []
+            for cell in cell_list:
+                expr = str(cell.get("surface_expr", "") or cell.get("surfaces", "")).strip()
+                if not expr: continue
+                raw_mat_raw = cell.get("material") or cell.get("mat") or ""
+                raw_mat = str(raw_mat_raw).strip().split()[0] if raw_mat_raw else ""
+                if raw_mat == "0": continue
+                mat_val = raw_mat or cell.get("material") or cell.get("mat") or ""
+                try:
+                    g = Geometry.from_mcnp(expr)
+                    cells_data.append({"number": cell.get("number", 0) or int(cell.get("num", 0)), "material": mat_val, "ast": g, "density": cell.get("density", "")})
+                except: pass
+
+            if not surfs or not cells_data:
+                self._ok({"status": "error", "message": "没有可导出的栅元"})
+                return
+
+            # 解析 TR 卡（共享 parse_tr_cards）
+            tr_cards = parse_tr_cards(tr_text)
+
+            # 完全按参考版逻辑：engine.export_step() + bound=5000
+            engine = FreeCADEngine(freecad_bin)
+            out_dir = tempfile.mkdtemp(prefix="mcnp_step_")
+            engine.export_step(surfs, cells_data, tr_cards, out_dir, bound=5000)
+            step_file = os.path.join(out_dir, "geometry.step")
+            content = b''
+            if os.path.isfile(step_file) and os.path.getsize(step_file) > 500:
+                with open(step_file, "rb") as f: content = f.read()
+            shutil.rmtree(out_dir, ignore_errors=True)
+            engine.cleanup()
+            if not content:
+                self._ok({"status": "error", "message": "STEP 生成失败"})
+                return
+            b64 = base64.b64encode(content).decode()
+            self._ok({"file": "mcnp_export.step", "data": b64, "message": "STEP 文件已导出"})
+        except Exception as e:
+            import traceback
+            self._err(str(e) + " | " + traceback.format_exc())
+
+    # ── MCNP 检测 ──
+    def _handle_preview_3d(self):
+        """3D 预览：解析曲面/栅元/TR → FreeCAD CSG → STL"""
+        try:
+            import sys, os, json, tempfile, re
+            data = self._read_body()
+            surf_text = data.get("surfaces", "")
+            cell_list = data.get("cells", [])
+            tr_text = data.get("tr_cards", "")
+
+            # 1. 检测 FreeCAD
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
+            from step_importer import StepImporter
+            freecad_bin = StepImporter.detect_freecad()
+            if not freecad_bin:
+                self._ok({"stl_files": {}, "message": "未检测到 FreeCAD，请安装后重试"})
+                return
+
+            # 2. 解析曲面（共享 parse_surfaces）
+            surfs = parse_surfaces(surf_text)
+            if not surfs:
+                self._ok({"stl_files": {}, "message": "未解析到有效曲面"})
+                return
+
+            # 3. 解析 TR 卡（共享 parse_tr_cards）
+            tr_cards = parse_tr_cards(tr_text)
+
+            # 4. 构建栅元 AST（参考 geometry_tab.py 逻辑）
+            from pymcnp.types.Geometry import Geometry
+            cells_data = []
+            for cell in cell_list:
+                expr = cell.get("surface_expr", "").strip()
+                if not expr: continue
+                raw_mat = str(cell.get("material", "")).strip().split()[0] if cell.get("material") else ""
+                if raw_mat == "0": continue  # 跳过 void
+                try:
+                    geometry = Geometry.from_mcnp(expr)
+                except Exception:
+                    geometry = None
+                cells_data.append({
+                    "number": cell.get("number", 0),
+                    "material": cell.get("material", ""),
+                    "ast": geometry,
+                    "density": cell.get("density", ""),
+                })
+            if not cells_data:
+                self._ok({"stl_files": {}, "message": "没有可预览的栅元（非 void）"})
+                return
+
+            # 5. FreeCAD CSG → STL
+            from freecad_preview import FreeCADEngine
+            engine = FreeCADEngine(freecad_bin)
+            result = engine.build_geometry(surfs, cells_data, tr_cards, fmt="stl")
+            import base64
+            stl_files = {}
+            stl_data = {}
+            for k, v in result.items():
+                sk = str(k)
+                stl_files[sk] = v
+                try:
+                    with open(v, "rb") as _f:
+                        stl_data[sk] = base64.b64encode(_f.read()).decode()
+                except:
+                    pass
+            engine.cleanup()
+            self._ok({"stl_files": stl_files, "stl_data": stl_data, "freecad": freecad_bin, "count": len(stl_data)})
+        except Exception as e:
+            import traceback
+            self._err(str(e) + " | " + traceback.format_exc())
+
+    def _handle_serve_file(self):
+        """服务 STL 文件供前端加载"""
+        import os, urllib.parse
+        query = urllib.parse.urlparse(self.path).query
+        params = urllib.parse.parse_qs(query)
+        file_path = params.get("path", [None])[0]
+        if not file_path or not os.path.exists(file_path):
+            self.send_response(404)
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(os.path.getsize(file_path)))
+        self.end_headers()
+        with open(file_path, "rb") as f:
+            self.wfile.write(f.read())
+
+    def _handle_cross_section(self):
+        """平面截面：直接调用独立函数"""
+        import sys, os, json
+        _app_dir = os.path.join(os.path.dirname(__file__), "..", "..", "app")
+        if _app_dir not in sys.path: sys.path.insert(0, _app_dir)
+        from _cross_section_helper import get_cross_section
+        data = self._read_body()
+        result = get_cross_section(data)
+        self._ok(result)
+
+
+    def _handle_mcnp_detect(self):
+        try:
+            exe = _find_mcnp_exe()
+            label = "MCNP6"
+            if exe and "5" in os.path.basename(exe).lower(): label = "MCNP5"
+            self._ok({"found": bool(exe), "exe": exe, "label": label if exe else "MCNP?"})
+        except Exception as e:
+            self._ok({"found": False, "exe": "", "label": "MCNP?", "error": str(e)})
+
+    # ── FreeCAD 检测 ──
+    def _freecad_config_path(self):
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        d = os.path.join(base, "mcnp_generator")
+        try: os.makedirs(d, exist_ok=True)
+        except Exception: pass
+        return os.path.join(d, "config.json")
+
+    def _load_saved_freecad(self):
+        """读取用户手动指定的 FreeCAD 路径（若仍有效则返回）"""
+        try:
+            import json as _json
+            cfg = self._freecad_config_path()
+            if os.path.isfile(cfg):
+                with open(cfg, "r", encoding="utf-8") as f:
+                    data = _json.load(f)
+                p = (data.get("freecad_path") or "").strip().strip('"')
+                bn = os.path.basename(p).lower()
+                if p and os.path.isfile(p) and bn in ("freecad.exe", "freecadcmd.exe"):
+                    return p
+        except Exception:
+            pass
+        return ""
+
+    def _handle_set_freecad_path(self):
+        """保存用户手动指定的 FreeCAD 路径（校验存在且为 freecad.exe/freecadcmd.exe）"""
+        try:
+            import json as _json
+            data = self._read_body() or {}
+            p = (data.get("path") or "").strip().strip('"')
+            if not p or not os.path.isfile(p):
+                self._ok({"status": "error", "message": "文件不存在"})
+                return
+            if os.path.basename(p).lower() not in ("freecad.exe", "freecadcmd.exe"):
+                self._ok({"status": "error", "message": "请选择 FreeCAD.exe 或 FreeCADCmd.exe"})
+                return
+            cfg = self._freecad_config_path()
+            with open(cfg, "w", encoding="utf-8") as f:
+                _json.dump({"freecad_path": p}, f)
+            self._ok({"status": "ok", "path": p})
+        except Exception as e:
+            self._ok({"status": "error", "message": str(e)})
+
+    def _handle_choose_freecad_path(self):
+        """弹出系统原生文件选择窗口选 FreeCAD.exe（取消返回 cancelled）"""
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            try:
+                path = filedialog.askopenfilename(
+                    title="选择 FreeCAD.exe",
+                    filetypes=[("FreeCAD", "*.exe"), ("所有文件", "*.*")],
+                )
+            finally:
+                root.destroy()
+            if not path:
+                self._ok({"path": "", "cancelled": True})
+                return
+            self._ok({"path": path, "cancelled": False})
+        except Exception as e:
+            self._ok({"path": "", "cancelled": True, "error": str(e)})
+
+    def _handle_check_freecad(self):
+        try:
+            import shutil, os, winreg
+            # 优先返回用户手动指定的路径（持久化）
+            saved = self._load_saved_freecad()
+            if saved:
+                self._ok({"found": True, "path": saved, "source": "saved"})
+                return
+            found = []; seen = set()
+            def _add(p):
+                if p and p not in seen: seen.add(p); found.append(p)
+            system_paths = set()
+            try:
+                h = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")
+                system_paths.update(winreg.QueryValueEx(h, "Path")[0].split(";"))
+                winreg.CloseKey(h)
+                try:
+                    h = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment")
+                    up = winreg.QueryValueEx(h, "Path")[0]
+                    if up: system_paths.update(up.split(";"))
+                    winreg.CloseKey(h)
+                except: pass
+            except: pass
+            all_paths = set()
+            for p in os.environ.get("PATH","").split(os.pathsep):
+                all_paths.add(p.strip().strip('"'))
+            all_paths.update(p.strip().strip('"') for p in system_paths if p.strip())
+            for d in all_paths:
+                if not d or not os.path.isdir(d): continue
+                for f in os.listdir(d):
+                    if f.lower() in ("freecad.exe","freecadcmd.exe"): _add(os.path.join(d, f))
+            try:
+                for key in [winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER]:
+                    for subkey in [r"SOFTWARE\FreeCAD", r"SOFTWARE\FreeCAD\Application"]:
+                        try:
+                            h = winreg.OpenKey(key, subkey)
+                            pv = winreg.QueryValueEx(h, "InstallPath")[0]
+                            for r, dd, ff in os.walk(os.path.join(pv, "bin")):
+                                for fn in ff:
+                                    if fn.lower() in ("freecad.exe","freecadcmd.exe"): _add(os.path.join(r, fn))
+                            winreg.CloseKey(h)
+                        except: pass
+            except: pass
+            # 4. Recursive search common locations
+            for base in ["D:/MCNP", "D:/FreeCAD*", "C:/Program Files/FreeCAD*", os.path.expandvars("%PROGRAMFILES%\\FreeCAD*")]:
+                import glob
+                for d in glob.glob(base):
+                    if os.path.isdir(d):
+                        for r, dd, ff in os.walk(d):
+                            for fn in ff:
+                                if fn.lower() in ("freecad.exe","freecadcmd.exe"): _add(os.path.join(r, fn))
+            self._ok({"found": bool(found), "path": found[0] if found else ""})
+        except Exception as e:
+            self._ok({"found": False, "path": "", "error": str(e)})
+
+    # ── INP 预校验 ──
+    def _handle_validate_inp(self):
+        try:
+            data = self._read_body()
+            from generator.parsers.validator import validate_inp_text
+            errors = validate_inp_text(data.get("inp", ""))
+            self._ok({"valid": len(errors) == 0, "errors": errors})
+        except Exception as e:
+            self._err(str(e))
+
+    # ── ZAID 校验 ──
+    def _handle_validate_zaid(self):
+        from urllib.parse import parse_qs
+        qs = parse_qs(urlparse(self.path).query)
+        zaid = qs.get("zaid", [""])[0].strip()
+        try:
+            if not xsdir_db.loaded:
+                env_path = os.environ.get("XSDIR", "") or os.environ.get("DATAPATH", "")
+                if env_path and os.path.isfile(env_path):
+                    xsdir_db.load(env_path)
+                elif os.environ.get("DATAPATH", ""):
+                    cand = os.path.join(os.environ["DATAPATH"], "xsdir")
+                    if os.path.isfile(cand): xsdir_db.load(cand)
+                else:
+                    found = xsdir_db.find_xsdir()
+                    if found: xsdir_db.load(found)
+            in_db = xsdir_db.has_zaid(zaid) if xsdir_db.loaded else None
+            self._ok({"zaid": zaid, "in_db": in_db, "loaded": xsdir_db.loaded})
+        except Exception as e:
+            self._err(str(e))
+
+    # ── OUTP 解析 ──
+    def _handle_parse_outp(self):
+        try:
+            data = self._read_body()
+            import pymcnp
+            result = pymcnp.Outp(data.get("outp", ""))
+            tallies = {}
+            for tnum, td in result.tallies.items():
+                df = td.dataframe
+                rows = []
+                for _, row in df.iterrows():
+                    rows.append({"energy": str(row.iloc[0]), "flux": str(row.iloc[1]), "error": str(row.iloc[2]) if len(row) > 2 else ""})
+                tallies[str(tnum)] = {"type": td.type, "rows": rows, "total": {"energy": "total", "flux": str(df.iloc[:, 1].sum()), "error": ""}}
+            self._ok({"nps": result.nps, "tallies": tallies, "warnings": []})
+        except ImportError:
+            self._ok({"error": True, "message": "pymcnp not installed"})
+        except Exception as e:
+            self._err(str(e))
+
+    # ── xsdir 搜索 ──
+    def _handle_xsdir_search(self):
+        from urllib.parse import parse_qs
+        qs = parse_qs(urlparse(self.path).query)
+        q = qs.get("q", [""])[0].strip()
+        try:
+            if not xsdir_db.loaded:
+                self._ok({"loaded": False, "results": []})
+                return
+            results = []
+            q_lower = q.lower()
+            for zaid in xsdir_db.zaids:
+                if q_lower in zaid.lower():
+                    results.append({"zaid": zaid})
+                    if len(results) >= 50: break
+            if not results:
+                from xsdir_db import SYMBOL_TO_Z
+                z = SYMBOL_TO_Z.get(q.capitalize())
+                if z:
+                    for zaid in xsdir_db.zaids:
+                        if zaid.startswith(str(z).zfill(3)) or zaid.startswith(str(z)):
+                            results.append({"zaid": zaid})
+                            if len(results) >= 50: break
+            self._ok({"loaded": True, "results": results})
+        except Exception as e:
+            self._ok({"loaded": False, "results": [], "error": str(e)})
+
+    def log_message(self, fmt, *args):
+        if args:
+            print(f"[API] {' '.join(str(a) for a in args)}")
+        else:
+            print(f"[API] {fmt}")
+
+
+def main():
+    server = HTTPServer(("0.0.0.0", PORT), MCNPHandler)
+    print(f"[API] MCNP API 服务启动 → http://localhost:{PORT}/api/generate")
+    print(f"   Python 后端路径: {APP_DIR}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nServer stopped")
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()

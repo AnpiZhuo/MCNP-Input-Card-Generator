@@ -7,6 +7,7 @@ text into structured DeckData, BasicSettings, TallySettings, and AdvancedSetting
 It coordinates sub-modules for line normalization, section splitting, and core parsing.
 """
 import json
+import re
 
 from app.models import BasicSettings, TallySettings, AdvancedSettings, DeckData
 
@@ -74,6 +75,8 @@ def parse_inp_text(text: str) -> tuple[DeckData, list[str]]:
         title=title, mode_n=data["mode_n"], mode_p=data["mode_p"],
         mode_e=data["mode_e"], mode_h=data["mode_h"],
         mode_he=data["mode_he"], nps=data["nps"], ctme=data["ctme"],
+        act=data.get("act", ""),
+        print_pr=data.get("print_pr", ""),
         mode_d=data.get("mode_d", False),
         mode_t=data.get("mode_t", False),
         mode_a=data.get("mode_a", False),
@@ -83,8 +86,27 @@ def parse_inp_text(text: str) -> tuple[DeckData, list[str]]:
     # Process tally data (TallyDefinition list) and E0 energy grid
     tally_defs = data.get("tally_defs", [])
     e_cards_text = "\n".join(data.get("e_cards_lines", []))
+    t_cards_lines = data.get("t_cards_lines", [])
     e0_vals = data["e0_values"]
     e0_data = {}
+
+    # Parse En cards → set generate_en=True on matching tallies
+    for e_line in data.get("e_cards_lines", []):
+        m = re.match(r'^E(\d+)\s+(.*)', e_line.strip(), re.IGNORECASE)
+        if m:
+            en_num = int(m.group(1))
+            for td in tally_defs:
+                if td.number == en_num:
+                    td.generate_en = True
+
+    # Parse Tn cards → set generate_tn=True on matching tallies（Tn 是逐计数时间卡）
+    for t_line in t_cards_lines:
+        m = re.match(r'^T(\d+)\s+(.*)', t_line.strip(), re.IGNORECASE)
+        if m:
+            tnum = int(m.group(1))
+            for td in tally_defs:
+                if td.number == tnum:
+                    td.generate_tn = True
     if data.get("e0_parametric"):
         # MCNP parametric syntax (nlog/nlin/nI) — use standard E0 fields, not custom grid
         e0_data = {
@@ -105,6 +127,17 @@ def parse_inp_text(text: str) -> tuple[DeckData, list[str]]:
             "e_bins": len(e0_vals) - 1,
         }
 
+    # T0 全局时间网格：只用 parse_data_cards 里 T0 卡的结构化字段（Tn 是逐计数卡，不定义 T0）
+    t0_data = {}
+    if data.get("t0_custom_enabled"):
+        t0_data = {"t0_custom_enabled": True, "t0_custom_text": data.get("t0_custom_text", "")}
+    elif data.get("t0_parametric"):
+        t0_data = {"t0_min": str(data.get("t0_min", "")), "t0_max": str(data.get("t0_max", "")),
+                   "t0_bins": int(data.get("t0_bins", 0)), "t0_log": bool(data.get("t0_log", False))}
+
+    import sys
+    print(f"[E0DBG] __init__: e0_parametric={data.get('e0_parametric')}, e0_vals={len(data.get('e0_values', []))}, e0_data={e0_data}", file=sys.stderr)
+    print(f"[E0DBG] __init__: t0_data={t0_data}, t_cards_lines={len(data.get('t_cards_lines', []))}", file=sys.stderr)
     # CUT fields still come from data["tallies"] dict
     tally_raw = data["tallies"]
 
@@ -112,6 +145,7 @@ def parse_inp_text(text: str) -> tuple[DeckData, list[str]]:
     tally = TallySettings(
         tallies=tally_defs,
         e_cards_text=e_cards_text,
+        t_cards_text="\n".join(t_cards_lines),
         cut_n_t=tally_raw.get("cut_n_t", ""), cut_n_e=tally_raw.get("cut_n_e", ""),
         cut_n_raw=tally_raw.get("cut_n_raw", ""),
         cut_n_wc1=tally_raw.get("cut_n_wc1", ""),
@@ -158,6 +192,7 @@ def parse_inp_text(text: str) -> tuple[DeckData, list[str]]:
         cut_a_wc2=tally_raw.get("cut_a_wc2", ""),
         cut_a_swtm=tally_raw.get("cut_a_swtm", ""),
         **e0_data,
+        **t0_data,
     )
 
     # Build AdvancedSettings: PHYS cards, SDEF source distribution, and other uncategorized cards
@@ -225,6 +260,26 @@ def parse_inp_text(text: str) -> tuple[DeckData, list[str]]:
         sdef_rate=data.get("sdef_rate", ""),
         sdef_extra=data.get("sdef_extra", ""),
         sdef_raw_text=data.get("sdef_raw_text", ""),
+        sdef_distributions=data.get("sdef_distributions", ""),
+        # SSW/SSR 面源
+        ssw_surf=data.get("ssw_surf", ""),
+        ssw_sym=data.get("ssw_sym", ""),
+        ssw_pty=data.get("ssw_pty", ""),
+        ssw_cel=data.get("ssw_cel", ""),
+        ssr_surf=data.get("ssr_surf", ""),
+        ssr_mode=data.get("ssr_mode", ""),
+        ssr_cel=data.get("ssr_cel", ""),
+        ssr_pty=data.get("ssr_pty", ""),
+        ssr_col=data.get("ssr_col", ""),
+        ssr_wgt=data.get("ssr_wgt", ""),
+        ssr_tr=data.get("ssr_tr", ""),
+        ssr_psc=data.get("ssr_psc", ""),
+        # KCODE 扩展 + HSRC
+        kcode_msrk=data.get("kcode_msrk", ""),
+        kcode_mrkp=data.get("kcode_mrkp", ""),
+        kcode_kc8=data.get("kcode_kc8", ""),
+        hsrc_enabled=data.get("hsrc_enabled", False),
+        hsrc_text=data.get("hsrc_text", ""),
     )
 
     # Extract TR cards from data section into DeckData.tr_cards

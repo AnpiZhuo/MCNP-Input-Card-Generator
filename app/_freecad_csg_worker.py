@@ -830,6 +830,17 @@ def main():
                     mesh.write(path)
                 elif fmt == "step":
                     shape.exportStep(path)
+                elif fmt == "mesh":
+                    # 返回网格数据（顶点+三角面），不写文件
+                    mesh = FcMesh.Mesh(shape.tessellate(1.0))
+                    verts = []
+                    faces = []
+                    for v in mesh.Points:
+                        verts.append([v.x, v.y, v.z])
+                    for facet in mesh.Facets:
+                        faces.append([facet.PointIndices[0], facet.PointIndices[1], facet.PointIndices[2]])
+                    files[num_str] = {"vertices": verts, "faces": faces}
+                    continue
                 else:
                     raise ValueError(f"不支持的导出格式: {fmt}")
                 files[num_str] = f"cell_{num_str}.{fmt}"

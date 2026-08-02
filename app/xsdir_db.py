@@ -134,7 +134,10 @@ class XsdirDB:
     def has_zaid(self, zaid: str) -> bool:
         if not self.loaded:
             return True
-        return zaid.lower() in self.zaids
+        z = zaid.lower()
+        if z in self.zaids:
+            return True
+        return any(k.startswith(z + '.') for k in self.zaids)
 
     def get_suggestions(self, prefix: str, max_count: int = 20) -> list[str]:
         if not self.loaded or not prefix:

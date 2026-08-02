@@ -3,4 +3,6 @@ PyQt5>=5.15
 pyinstaller>=5.0
 matplotlib
 pyvista
+pyvistaqt
+markdown
 # geouned — STEP→MCNP 转换引擎（自动装到 FreeCAD 的 Python 中）

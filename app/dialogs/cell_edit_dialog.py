@@ -5,7 +5,7 @@
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QComboBox, QLineEdit, QPushButton, QLabel,
-    QDialogButtonBox, QWidget
+    QDialogButtonBox, QWidget, QScrollArea,
 )
 from PyQt5.QtCore import Qt
 
@@ -26,6 +26,12 @@ class CellEditDialog(QDialog):
     def init_ui(self):
         layout = QVBoxLayout(self)
 
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        content = QWidget()
+        scroll.setWidget(content)
+        content_layout = QVBoxLayout(content)
         form = QFormLayout()
 
         # 栅元号
@@ -123,7 +129,7 @@ class CellEditDialog(QDialog):
         form.addRow("", vol_hint)
 
         # ── 折叠更多参数 ──
-        self.btn_extra = QPushButton("▼ 更多参数（PWT·EXT·FCL·U·FILL·LAT·TRCL）")
+        self.btn_extra = QPushButton("▼ 更多参数（PWT·EXT·FCL·U·FILL·LAT·TRCL·TMP·其他）")
         self.btn_extra.setToolTip("点击展开/收起不常用栅元参数")
         self.btn_extra.setStyleSheet("QPushButton { text-align: left; padding: 4px 8px; }")
         self.btn_extra.setCheckable(True)
@@ -184,18 +190,48 @@ class CellEditDialog(QDialog):
             "格式: TRCL=n 或 TRCL=n x y z")
         extra_form.addRow("TRCL:", self.trcl_edit)
 
-        layout.addLayout(form)
-        layout.addWidget(self.btn_extra)
-        layout.addWidget(self.extra_widget)
+        # ── 分隔 ──
+        sep_line = QLabel("<hr style='border:none;border-top:1px solid #ddd;margin:4px 0;'>")
+        extra_form.addRow("", sep_line)
+
+        # TMP
+        self.tmp_edit = QLineEdit(self.cell.tmp)
+        self.tmp_edit.setPlaceholderText("例: 2.53e-8（留空不生成）")
+        self.tmp_edit.setToolTip("TMP = 栅元温度（MeV）\n"
+            "影响中子截面数据库的温度相关截面（如热中子散射）。\n"
+            "2.53e-8 MeV ≈ 293K（室温）。"
+            "格式: TMP=a，a 为温度值，单位 MeV")
+        extra_form.addRow("TMP:", self.tmp_edit)
+
+        # 手工定义其他参数
+        self.other_params_edit = QLineEdit(self.cell.other_params)
+        self.other_params_edit.setPlaceholderText("如: DXC=ON  BFLX=1  PTS=1")
+        self.other_params_edit.setToolTip(
+            "其他栅元关键词（DXC/BFLX/PTS/PD/COSY/MAG 等），原样追加到参数末尾。\n"
+            "多个参数用空格分隔。"
+        )
+        extra_form.addRow("其他参数:", self.other_params_edit)
+
+        other_hint = QLabel(
+            "<span style='color:gray; font-size:11px;'>"
+            "UI 未单独列出的关键词可在此手动输入，如 DXC=ON BFLX=1 PTS=1</span>"
+        )
+        extra_form.addRow("", other_hint)
+
+        content_layout.addLayout(form)
+        content_layout.addWidget(self.btn_extra)
+        content_layout.addWidget(self.extra_widget)
 
         # 注释
         self.comment_edit = QLineEdit(self.cell.comment)
         self.comment_edit.setPlaceholderText("可选的注释文字，如「铁球壳、水反射层」")
         self.comment_edit.setToolTip("注释不影响计算，仅用于标识")
-        layout.addWidget(QLabel("注释:"))
-        layout.addWidget(self.comment_edit)
+        content_layout.addWidget(QLabel("注释:"))
+        content_layout.addWidget(self.comment_edit)
 
-        # 按钮
+        layout.addWidget(scroll, 1)
+
+        # 按钮（在滚动区域外，始终可见）
         btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btn_box.accepted.connect(self._on_accept)
         btn_box.rejected.connect(self.reject)
@@ -206,7 +242,7 @@ class CellEditDialog(QDialog):
         self.extra_widget.setVisible(visible)
         self.btn_extra.setText(
             "▲ 收起更多参数" if visible
-            else "▼ 更多参数（PWT·EXT·FCL·U·FILL·LAT·TRCL）"
+            else "▼ 更多参数（PWT·EXT·FCL·U·FILL·LAT·TRCL·TMP·其他）"
         )
 
     def _validate_surface(self):
@@ -259,5 +295,7 @@ class CellEditDialog(QDialog):
             fill=self.fill_edit.text().strip(),
             lat=self.lat_edit.text().strip(),
             trcl=self.trcl_edit.text().strip(),
+            tmp=self.tmp_edit.text().strip(),
+            other_params=self.other_params_edit.text().strip(),
             comment=self.comment_edit.text().strip(),
         )

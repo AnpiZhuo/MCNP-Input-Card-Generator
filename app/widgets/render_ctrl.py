@@ -11,9 +11,11 @@ Usage:
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
     QCheckBox, QLabel, QPushButton, QLineEdit, QToolTip,
+    QFrame, QMessageBox,
 )
 from PyQt5.QtCore import Qt, QTimer, QEvent, QPoint
 from PyQt5.QtGui import QColor, QCursor
+from app.widgets.ui_helpers import make_section_title, make_hseparator, app_icon
 
 
 class RenderControlWindow(QWidget):
@@ -30,7 +32,7 @@ class RenderControlWindow(QWidget):
     """
 
     def __init__(self, get_cells_fn, format_fn, on_changed=None, on_mat_changed=None,
-                 get_surface_info_fn=None):
+                 get_surface_info_fn=None, on_close_callback=None):
         """
         Args:
             get_cells_fn: callable() -> list[CellData]
@@ -51,6 +53,7 @@ class RenderControlWindow(QWidget):
         self._on_changed = on_changed
         self._on_mat_callback = on_mat_changed
         self._get_surface_info_fn = get_surface_info_fn
+        self._on_close_callback = on_close_callback
         self._checkboxes: list[QCheckBox] = []
         self._legend_entries: list[tuple[str, QColor]] = []
         self._cell_rows: list[tuple[QWidget, int, str]] = []  # (row_widget, cell_num, surface_expr)
@@ -63,29 +66,16 @@ class RenderControlWindow(QWidget):
         self._hovered_row_idx: int | None = None
 
         self.setWindowTitle("3D 渲染控制")
+        self.setWindowIcon(app_icon())
         self.setWindowFlags(
             Qt.Window | Qt.WindowStaysOnTopHint
             | Qt.WindowCloseButtonHint | Qt.WindowMinMaxButtonsHint
         )
         self.setMinimumWidth(340)
-        self.setMinimumHeight(260)
-        self.resize(380, 420)
+        self.setMinimumHeight(520)
+        self.resize(380, 840)
 
-        self.setStyleSheet("""
-            RenderControlWindow {
-                background-color: #fafbfc;
-            }
-            QPushButton {
-                padding: 4px 14px;
-                border: 1px solid #c0c4cc;
-                border-radius: 4px;
-                background: #fff;
-            }
-            QPushButton:hover {
-                background: #e8f0fe;
-                border-color: #4a90d9;
-            }
-        """)
+        # 不设固定样式表，继承应用全局 QSS（适配深浅主题）
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -156,7 +146,108 @@ class RenderControlWindow(QWidget):
         btn_layout.addWidget(btn_all)
         layout.addLayout(btn_layout)
 
+        # ── 截面生成面板 ──
+        layout.addWidget(make_hseparator())
+        layout.addWidget(make_section_title("<b>✂ 截面 (AX+BY+CZ=D)</b>", padding_top=4))
+
+        plane_row = QHBoxLayout()
+        plane_row.setSpacing(3)
+        self._inp_a = QLineEdit(); self._inp_a.setPlaceholderText("A"); self._inp_a.setMaxLength(8)
+        self._inp_b = QLineEdit(); self._inp_b.setPlaceholderText("B"); self._inp_b.setMaxLength(8)
+        self._inp_c = QLineEdit(); self._inp_c.setPlaceholderText("C"); self._inp_c.setMaxLength(8)
+        self._inp_d = QLineEdit(); self._inp_d.setPlaceholderText("D"); self._inp_d.setMaxLength(10)
+        for w in (self._inp_a, self._inp_b, self._inp_c):
+            w.setFixedWidth(55)
+        self._inp_d.setFixedWidth(65)
+        plane_row.addWidget(self._inp_a); plane_row.addWidget(QLabel("X"))
+        plane_row.addWidget(QLabel("+")); plane_row.addSpacing(2)
+        plane_row.addWidget(self._inp_b); plane_row.addWidget(QLabel("Y"))
+        plane_row.addWidget(QLabel("+")); plane_row.addSpacing(2)
+        plane_row.addWidget(self._inp_c); plane_row.addWidget(QLabel("Z"))
+        plane_row.addWidget(QLabel("=")); plane_row.addSpacing(2)
+        plane_row.addWidget(self._inp_d)
+        plane_row.addStretch()
+        layout.addLayout(plane_row)
+
+        self._btn_slice = QPushButton("🔪 生成截面")
+        self._btn_slice.setToolTip("基于选中的栅元生成该平面的截面预览")
+        self._btn_slice.clicked.connect(self._on_generate_slice)
+        layout.addWidget(self._btn_slice)
+
+        # ── 截面步进（仅在截面窗口打开后显示） ──
+        self._step_widget = QWidget()
+        self._step_widget.setVisible(False)
+        step_row = QHBoxLayout(self._step_widget)
+        step_row.setContentsMargins(16, 2, 0, 2)
+        step_row.setSpacing(6)
+        step_row.addWidget(QLabel("步进:"))
+        self._inp_step = QLineEdit("1")
+        self._inp_step.setFixedWidth(50)
+        self._inp_step.setToolTip("输入步进距离，点击 +/- 沿法线方向平移截面")
+        self._inp_step.setAlignment(Qt.AlignCenter)
+        step_row.addWidget(self._inp_step)
+        self._btn_step_minus = QPushButton("−")
+        self._btn_step_plus = QPushButton("+")
+        self._btn_step_minus.setFixedWidth(28)
+        self._btn_step_plus.setFixedWidth(28)
+        self._btn_step_minus.setToolTip("D 减去步进距离，重新生成截面")
+        self._btn_step_plus.setToolTip("D 加上步进距离，重新生成截面")
+        self._btn_step_minus.clicked.connect(self._on_step_minus)
+        self._btn_step_plus.clicked.connect(self._on_step_plus)
+        step_row.addWidget(self._btn_step_minus)
+        step_row.addWidget(self._btn_step_plus)
+        step_row.addStretch()
+        layout.addWidget(self._step_widget)
+
+        # ── 参考点坐标 ──
+        layout.addWidget(make_hseparator())
+        layout.addWidget(make_section_title("<b>🟡 参考点坐标</b>", padding_top=4))
+
+        ref_row = QHBoxLayout()
+        ref_row.setSpacing(3)
+        self._ref_x = QLineEdit("10"); self._ref_x.setMaxLength(10); self._ref_x.setFixedWidth(70)
+        self._ref_y = QLineEdit("10"); self._ref_y.setMaxLength(10); self._ref_y.setFixedWidth(70)
+        self._ref_z = QLineEdit("10"); self._ref_z.setMaxLength(10); self._ref_z.setFixedWidth(70)
+        ref_row.addWidget(QLabel("X:")); ref_row.addWidget(self._ref_x); ref_row.addSpacing(6)
+        ref_row.addWidget(QLabel("Y:")); ref_row.addWidget(self._ref_y); ref_row.addSpacing(6)
+        ref_row.addWidget(QLabel("Z:")); ref_row.addWidget(self._ref_z)
+        ref_row.addStretch()
+        layout.addLayout(ref_row)
+
+        def _on_ref_changed():
+            try:
+                x, y, z = float(self._ref_x.text()), float(self._ref_y.text()), float(self._ref_z.text())
+                if self._ref_point_callback:
+                    self._ref_point_callback((x, y, z))
+            except ValueError:
+                pass
+        self._ref_x.textChanged.connect(lambda: _on_ref_changed())
+        self._ref_y.textChanged.connect(lambda: _on_ref_changed())
+        self._ref_z.textChanged.connect(lambda: _on_ref_changed())
+        self._ref_point_callback = None
+
+        # 截面窗口引用（关闭渲染控制时一同关闭）
+        self._cross_section_win = None
+        self._gen_slice_callback = None
+
         self._rebuild()
+
+        # 窗口关闭时清理截面窗口
+        self.destroyed.connect(self._on_destroy)
+
+    def closeEvent(self, event):
+        """关闭时通知外部（如关掉 3D 预览）"""
+        if self._on_close_callback:
+            self._on_close_callback()
+        super().closeEvent(event)
+
+    def _on_destroy(self):
+        """清理子窗口"""
+        if self._cross_section_win is not None:
+            try:
+                self._cross_section_win.close()
+            except RuntimeError:
+                pass
 
     # ── 公开接口 ──────────────────────────────────────────
 
@@ -419,3 +510,147 @@ class RenderControlWindow(QWidget):
         )
         if self._on_changed:
             self._on_changed()
+
+    # ── 截面生成 ──────────────────────────────────────────────
+
+    @staticmethod
+    def _parse_coeff(s: str):
+        """解析系数输入，无效/空返回 None"""
+        if not s or s in ("-", "+", ".", "-.", "+."):
+            return None
+        try:
+            return float(s)
+        except ValueError:
+            return None
+
+    def set_gen_slice_callback(self, fn):
+        """注册截面生成回调：fn(A, B, C, D, selected_cells) -> CrossSectionWindow | None"""
+        self._gen_slice_callback = fn
+
+    def set_ref_point_callback(self, fn):
+        """注册参考点拖动回调：fn((x,y,z))"""
+        self._ref_point_callback = fn
+
+    def update_ref_point(self, pos: tuple):
+        """外部（3D 拖拽）更新参考点坐标，断开信号避免循环"""
+        x, y, z = pos
+        try:
+            self._ref_x.blockSignals(True)
+            self._ref_y.blockSignals(True)
+            self._ref_z.blockSignals(True)
+            self._ref_x.setText(f"{x:.2f}")
+            self._ref_y.setText(f"{y:.2f}")
+            self._ref_z.setText(f"{z:.2f}")
+        finally:
+            self._ref_x.blockSignals(False)
+            self._ref_y.blockSignals(False)
+            self._ref_z.blockSignals(False)
+
+    def get_selected_cells(self) -> list:
+        """返回当前勾选 (render=True) 的栅元列表"""
+        cells = self._cells
+        return [c for c in cells if getattr(c, 'render', True)]
+
+    def _on_generate_slice(self):
+        """读取 A/B/C/D → 校验 → 调用回调生成截面窗口"""
+        # 读取输入（空 = 0，允许 `-1`、`2.5`、`.5` 等合法数字）
+        raw_a, raw_b, raw_c, raw_d = self._inp_a.text().strip(), self._inp_b.text().strip(), self._inp_c.text().strip(), self._inp_d.text().strip()
+
+        a, b, c = self._parse_coeff(raw_a), self._parse_coeff(raw_b), self._parse_coeff(raw_c)
+        d_val = self._parse_coeff(raw_d)
+
+        # 补齐空缺为 0（允许部分系数为空，视为 0）
+        a = a if a is not None else 0.0
+        b = b if b is not None else 0.0
+        c = c if c is not None else 0.0
+        d_val = d_val if d_val is not None else 0.0
+
+        if self._gen_slice_callback is None:
+            QMessageBox.warning(self, "不可用", "请先打开 3D 预览")
+            return
+
+        if abs(a) < 1e-12 and abs(b) < 1e-12 and abs(c) < 1e-12:
+            QMessageBox.warning(self, "输入错误",
+                "至少一项系数非零才能构成平面。\n"
+                "格式示例：1X + 0Y + 0Z = 5")
+            return
+
+        selected = self.get_selected_cells()
+        if not selected:
+            QMessageBox.warning(self, "无选中栅元", "请先勾选要查看截面的栅元")
+            return
+
+        # 调用回调获取截面数据（plane_params, cell_slices, bg_color）
+        result = self._gen_slice_callback(a, b, c, d_val, selected)
+        if result is None:
+            return
+        plane_params, cell_slices, bg_color = result
+
+        # 检测现有窗口是否仍在
+        old_valid = False
+        if self._cross_section_win is not None:
+            try:
+                # 快速检查窗口是否存活
+                self._cross_section_win.windowTitle()
+                old_valid = True
+            except RuntimeError:
+                self._cross_section_win = None
+
+        if old_valid:
+            # 更新现有窗口，不重新打开
+            self._cross_section_win.update_content(plane_params, cell_slices, bg_color)
+        else:
+            from app.widgets.cross_section_window import CrossSectionWindow
+            win = CrossSectionWindow(
+                parent=None,
+                plane_params=plane_params,
+                cell_slices=cell_slices,
+                bg_color=bg_color,
+            )
+            self._cross_section_win = win
+            win.destroyed.connect(self._clear_cross_section_ref)
+
+        # 截面窗口已打开 → 显示步进行
+        self._step_widget.setVisible(True)
+
+    def _clear_cross_section_ref(self):
+        """截面窗口被用户关闭后清除引用"""
+        self._cross_section_win = None
+        self._step_widget.setVisible(False)
+
+    # ── 截面步进 ────────────────────────────────────────────────
+
+    def _on_step_minus(self):
+        """步进 - : D 减去步进值后重新生成截面"""
+        self._step_delta(-1)
+
+    def _on_step_plus(self):
+        """步进 + : D 加上步进值后重新生成截面"""
+        self._step_delta(+1)
+
+    def _step_delta(self, sign: int):
+        """按 sign 调整 D 值并回填输入框，然后自动重新生成截面"""
+        # 读取步进距离
+        raw_step = self._inp_step.text().strip()
+        try:
+            step = float(raw_step) if raw_step else 1.0
+        except ValueError:
+            step = 1.0
+        if abs(step) < 1e-12:
+            return
+
+        # 读取当前 D
+        raw_d = self._inp_d.text().strip()
+        d_val = self._parse_coeff(raw_d) or 0.0
+
+        # 计算新 D，去掉浮点尾数
+        new_d = d_val + sign * step
+        new_d_str = f"{new_d:.4g}"
+
+        # 回填 D（断开信号防止触发无关回调）
+        self._inp_d.blockSignals(True)
+        self._inp_d.setText(new_d_str)
+        self._inp_d.blockSignals(False)
+
+        # 自动重新生成截面
+        self._on_generate_slice()
