@@ -57,7 +57,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename: file.name, data: text, settings }),
       });
-      if (r.ok) { const j = await r.json(); if (j.status === "ok") { if (j.deck) patch({ surfaces: j.deck.surfaces || "", cells: j.deck.cells || [] }); alert("✅ STEP 导入成功"); setShowStepDlg(false); return; } }
+      if (r.ok) { const j = await r.json(); if (j.status === "ok") { if (j.deck) patch({ surfaces: j.deck.surfaces || "", tr_cards: j.deck.tr_cards || "", cells: j.deck.cells || [] }); alert("✅ STEP 导入成功"); setShowStepDlg(false); return; } }
     } catch {}
     alert("STEP 导入需要后端服务 + FreeCAD/McCAD");
     setShowStepDlg(false);
