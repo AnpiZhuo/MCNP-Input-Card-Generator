@@ -19,6 +19,14 @@ node_modules/
 *.runtpf
 *.runtpg
 *.runtph
+runtpe
+runtpf
+runtpg
+runtph
+
+# Tauri sidecar binaries (build outputs, regenerated at build time)
+gui/src-tauri/binaries/
+gui/src-tauri/python-x86_64-pc-windows-msvc.exe
 
 # OS
 Thumbs.db
