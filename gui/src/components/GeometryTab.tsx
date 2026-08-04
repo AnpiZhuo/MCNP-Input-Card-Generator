@@ -68,7 +68,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   };
   const handleExportSTEP = async () => {
     try {
-      const r = await fetch("http://localhost:5001/api/export-step",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({surfaces:surfText,cells:cells})});
+      const r = await fetch("http://localhost:5001/api/export-step",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({surfaces:surfText,cells:cells,tr_cards:trText})});
       const j = await r.json();
       if (j.status !== "ok") { alert(j.message || "导出失败"); return; }
       // 获取文件内容（支持新旧格式）
