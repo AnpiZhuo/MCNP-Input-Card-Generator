@@ -45,19 +45,35 @@ for _name in dir(_pi):
 
 def parse_surfaces(text: str) -> list:
     """将 MCNP 曲面文本解析为 pymcnp 表面对象列表（支持 TR 引用号）"""
+    import re
     surfs = []
     for _line in text.strip().splitlines():
         _l = _line.strip()
         if not _l or _l.startswith("C") or _l.startswith("c"): continue
-        if "$" in _l[:5]: _l = _l.split("$")[0].strip()
+        _l = _l.split("$")[0].strip()  # 去掉行内注释
         if not _l: continue
+        # 提取 TR 引用：后缀 *TRn（McCAD/GEOUNED 常见）或 100* 前缀（transform=曲面号）
+        tr_num = None
+        m_tr = re.search(r"\s*\*\s*TR\s*(\d+)\s*$", _l, re.IGNORECASE)
+        if m_tr:
+            tr_num = int(m_tr.group(1))
+            _l = _l[:m_tr.start()].rstrip()
+        else:
+            m_star = re.match(r"^(\d+)\s*\*\s*", _l)
+            if m_star:
+                tr_num = int(m_star.group(1))
+                _l = _l[m_star.end():].lstrip()
         _p = _l.split()
         if len(_p) < 2: continue
         _kw_idx = 1
         if len(_p) > 2 and _SURF_CLASSES.get(_p[2].upper()): _kw_idx = 2
         _cls = _SURF_CLASSES.get(_p[_kw_idx].upper())
         if _cls is None: continue
-        try: surfs.append(_cls.from_mcnp(_l))
+        try:
+            _s = _cls.from_mcnp(_l)
+            if tr_num is not None:
+                _s.transform = tr_num
+            surfs.append(_s)
         except: pass
     return surfs
 
