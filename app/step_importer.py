@@ -652,7 +652,8 @@ def _fmt_num_token(match) -> str:
         return tok
     if v == int(v) and abs(v) < 1e15:
         return str(int(v))
-    s = format(v, ".10f").rstrip("0").rstrip(".")
+    # .15f：极小值（如 1e-13）也转成固定小数，不保留科学计数法
+    s = format(v, ".15f").rstrip("0").rstrip(".")
     return "0" if s in ("", "-0") else s
 
 
@@ -754,6 +755,10 @@ class MCNPOutputParser:
         surf_text = _format_surface_numbers(surf_text)
 
         deck, warnings = parse_inp_text(surf_text)
+
+        # parse_inp_text 会用科学计数法重写曲面文本，这里再清一次
+        if deck:
+            deck.surfaces = _format_surface_numbers(deck.surfaces or "")
 
         # TR 卡放到 deck.tr_cards
         if tr_text and deck:
