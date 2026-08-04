@@ -685,9 +685,10 @@ class MCNPHandler(BaseHTTPRequestHandler):
             if converter_choice in ("auto",):
                 result = StandardSurfaceConverter.convert(step_path, start_surf, freecad_bin)
                 if result:
-                    surfaces_dict, tr_cards, cells_list = result  # 3 元组（tr_cards 原被静默丢弃）
+                    surfaces_dict, tr_cards, cells_list = result  # 3 元组
                     surf_text = " ".join(list(surfaces_dict.values()))
-                    self._ok({"status": "ok", "deck": {"surfaces": surf_text, "cells": cells_list or []}})
+                    tr_text = "\n".join(str(v) for v in (tr_cards or {}).values())
+                    self._ok({"status": "ok", "deck": {"surfaces": surf_text, "tr_cards": tr_text, "cells": cells_list or []}})
                     return
 
             self._ok({"status": "error", "message": "STEP 转换失败，请检查 FreeCAD/GEOUNED/McCAD"})
