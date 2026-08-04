@@ -762,15 +762,16 @@ class MCNPHandler(BaseHTTPRequestHandler):
             # 解析 TR 卡（共享 parse_tr_cards）
             tr_cards = parse_tr_cards(tr_text)
 
-            # 完全按参考版逻辑：engine.export_step() + bound=5000
+            # 与 3D 预览同一条路线：build_geometry(fmt="step", single_file=True)
+            # bound 用与预览一致的默认值(500)，避免巨大空盒导致几何不一致
             engine = FreeCADEngine(freecad_bin)
-            out_dir = tempfile.mkdtemp(prefix="mcnp_step_")
-            engine.export_step(surfs, cells_data, tr_cards, out_dir, bound=5000)
-            step_file = os.path.join(out_dir, "geometry.step")
+            result_map = engine.build_geometry(surfs, cells_data, tr_cards,
+                                               bound=500, fmt="step", single_file=True)
             content = b''
-            if os.path.isfile(step_file) and os.path.getsize(step_file) > 500:
-                with open(step_file, "rb") as f: content = f.read()
-            shutil.rmtree(out_dir, ignore_errors=True)
+            if result_map:
+                step_file = list(result_map.values())[0]
+                if os.path.isfile(step_file) and os.path.getsize(step_file) > 500:
+                    with open(step_file, "rb") as f: content = f.read()
             engine.cleanup()
             if not content:
                 self._ok({"status": "error", "message": "STEP 生成失败"})
