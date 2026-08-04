@@ -1,15 +1,29 @@
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
+
+# PyInstaller build outputs
 build/
 dist/
+build_onedir/
+dist_onedir/
+sidecar_dist/
 *.spec
+
+# Node
+node_modules/
+
+# MCNP runtime files
 *.runtpe
 *.runtpf
 *.runtpg
 *.runtph
-.vscode/
-.idea/
+
+# OS
 Thumbs.db
 .DS_Store
-gui/sidecar_dist/
+
+# IDE
+.vscode/
+.idea/
