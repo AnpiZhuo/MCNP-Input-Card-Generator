@@ -647,7 +647,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
             _app_dir = os.path.join(os.path.dirname(__file__), "..", "..", "app")
             _sys.path.insert(0, _app_dir)
             from step_importer import (StepImporter, StandardSurfaceConverter,
-                                       run_step_converter, MCNPOutputParser)
+                                       run_step_converter, MCNPOutputParser,
+                                       geometry_deck_response)
 
             freecad_bin = StepImporter.detect_freecad()
             if not freecad_bin:
@@ -670,15 +671,13 @@ class MCNPHandler(BaseHTTPRequestHandler):
             if result_path:
                 deck = MCNPOutputParser.parse(result_path, post_settings=settings)
                 if deck:
-                    self._ok({"status": "ok", "deck": {
-                        "surfaces": deck.surfaces or "",
-                        "tr_cards": deck.tr_cards or "",
-                        "cells": [{"number": c.number, "material": str(c.material),
-                                   "density": str(c.density) if c.density else "",
-                                   "surface_expr": c.surface_expr,
-                                   "comment": c.comment or ""}
-                                  for c in (deck.cells or [])],
-                    }})
+                    self._ok({"status": "ok", "deck": geometry_deck_response(
+                        deck.surfaces, deck.tr_cards,
+                        [{"number": c.number, "material": str(c.material),
+                          "density": str(c.density) if c.density else "",
+                          "surface_expr": c.surface_expr,
+                          "comment": c.comment or ""}
+                         for c in (deck.cells or [])])})
                     return
 
             # 兜底：auto 模式下用 FreeCAD OCC 直接转换（产结构化数据，不产文件）
@@ -688,7 +687,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
                     surfaces_dict, tr_cards, cells_list = result  # 3 元组
                     surf_text = " ".join(list(surfaces_dict.values()))
                     tr_text = "\n".join(str(v) for v in (tr_cards or {}).values())
-                    self._ok({"status": "ok", "deck": {"surfaces": surf_text, "tr_cards": tr_text, "cells": cells_list or []}})
+                    self._ok({"status": "ok", "deck": geometry_deck_response(surf_text, tr_text, cells_list or [])})
                     return
 
             self._ok({"status": "error", "message": "STEP 转换失败，请检查 FreeCAD/GEOUNED/McCAD"})

@@ -698,6 +698,20 @@ def _strip_data_cards(text: str) -> str:
     return "\n".join(lines[:cut])
 
 
+def geometry_deck_response(surfaces_text: str, tr_cards_text: str,
+                           cells_list: list) -> dict:
+    """STEP 导入响应的几何 deck JSON —— surfaces/tr_cards/cells 三件套。
+
+    所有 STEP 导入分支共用此函数，集中定义几何 deck 的形状，
+    防止在调用处手拼字典时漏掉某个字段（如 tr_cards）。
+    """
+    return {
+        "surfaces": surfaces_text or "",
+        "tr_cards": tr_cards_text or "",
+        "cells": cells_list or [],
+    }
+
+
 # ===================================================================
 # MCNPOutputParser — 解析 McCAD 生成的 MCNP 文件
 # ===================================================================
