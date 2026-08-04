@@ -15,6 +15,37 @@ import sys
 import json
 
 
+_NUM_RE = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
+
+
+def _fmt_num(match) -> str:
+    """科学计数法 → 干净十进制（整数去小数点、小数去尾零；极小值保精度）。"""
+    tok = match.group(0)
+    try:
+        v = float(tok)
+    except ValueError:
+        return tok
+    if v == int(v) and abs(v) < 1e15:
+        return str(int(v))
+    if abs(v) < 1e-9:            # 极小值不硬转（避免 .10f 舍成 0）
+        return format(v, ".10g")
+    s = format(v, ".10f").rstrip("0").rstrip(".")
+    return "0" if s in ("", "-0") else s
+
+
+def _format_numbers(text: str) -> str:
+    """把整个 MCNP 文件里的科学计数法数字换成普通数字（跳过注释行与 $ 注释）。"""
+    out = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if not stripped or stripped[0].lower() == "c" or stripped[0] == "$":
+            out.append(line)
+            continue
+        body, sep, comment = line.partition("$")
+        out.append(_NUM_RE.sub(_fmt_num, body) + (sep + comment if sep else ""))
+    return "\n".join(out)
+
+
 def _assign_default_material(mcnp_path: str, default_mat: int = 1) -> None:
     """GEOUNED 不给实体赋材料（STEP 无材料时全部 material=0），
     app 会把 material=0 当真空跳过 → 无法 3D 预览。
@@ -95,6 +126,11 @@ def main():
 
     # 实体栅元默认赋材料（STEP 无材料时 GEOUNED 全为 0，会挡住 3D 预览）
     _assign_default_material(mcnp_output)
+    # 科学计数法 → 干净数字（曲面/Vol/数据卡统一）
+    with open(mcnp_output, encoding="utf-8", errors="replace") as f:
+        _text = f.read()
+    with open(mcnp_output, "w", encoding="utf-8") as f:
+        f.write(_format_numbers(_text))
 
     print(json.dumps({"status": "ok", "mcnp_path": mcnp_output}))
 
