@@ -634,6 +634,47 @@ def run_step_converter(name: str, step_path: str, material: str,
 
 
 # ===================================================================
+# 曲面数字格式化 — 把科学计数法/尾零整理成干净的十进制
+# ===================================================================
+
+_SURF_MNE = set("P PX PY PZ SO S SX SY SZ C/X C/Y C/Z CX CY CZ "
+                "K/X K/Y K/Z KX KY KZ SQ GQ TX TY TZ "
+                "RPP RCC RHP HEX ARB BOX SPH REC TRC WED ELL".split())
+_NUM_RE = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
+
+
+def _fmt_num_token(match) -> str:
+    """把数值 token 转成干净十进制：整数去小数点、小数去尾零。"""
+    tok = match.group(0)
+    try:
+        v = float(tok)
+    except ValueError:
+        return tok
+    if v == int(v) and abs(v) < 1e15:
+        return str(int(v))
+    s = format(v, ".10f").rstrip("0").rstrip(".")
+    return "0" if s in ("", "-0") else s
+
+
+def _format_surface_numbers(surface_text: str) -> str:
+    """仅格式化曲面卡的数字，保留原间距与注释；栅元/数据卡不动。"""
+    lines = []
+    for line in surface_text.splitlines():
+        stripped = line.lstrip()
+        if not stripped or stripped[0].lower() == "c" or stripped[0] == "$":
+            lines.append(line)
+            continue
+        body, sep, comment = line.partition("$")
+        parts = body.split()
+        if len(parts) >= 2 and parts[1].upper() in _SURF_MNE:
+            lines.append(_NUM_RE.sub(_fmt_num_token, body)
+                         + (sep + comment if sep else ""))
+        else:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+# ===================================================================
 # MCNPOutputParser — 解析 McCAD 生成的 MCNP 文件
 # ===================================================================
 
@@ -684,7 +725,7 @@ class MCNPOutputParser:
                 tr_lines.append(line)
             else:
                 surf_lines.append(line)
-        surf_text = "\n".join(surf_lines)
+        surf_text = _format_surface_numbers("\n".join(surf_lines))
         tr_text = "\n".join(tr_lines)
 
         deck, warnings = parse_inp_text(surf_text)
