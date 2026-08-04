@@ -35,6 +35,7 @@ interface StepSettings {
   maxLineWidth: number;
   debugLevel: number;
   startMatNum: number;
+  converter: string;
 }
 
 interface Props {
@@ -52,6 +53,7 @@ const DEFAULTS: StepSettings = {
   simplifyTori: false, simplifyAllTori: false, torusSplitAngle: 30,
   compoundIsSingleCell: false, minVoidVolume: 1.0, maxSolidsPerVoidCell: 20,
   BVHVoid: false, maxLineWidth: 80, debugLevel: 0, startMatNum: 1,
+  converter: "auto",
 };
 
 const s: Record<string, React.CSSProperties> = {
@@ -87,7 +89,7 @@ export default function StepImportDialog({ onImport, onClose }: Props) {
   };
 
   return React.createElement(FloatingDialog, {
-    title: "📥 McCAD 导入设置",
+    title: "📥 STEP 导入设置",
     onClose,
     width: 520,
     footer: React.createElement(React.Fragment, null,
@@ -101,6 +103,17 @@ export default function StepImportDialog({ onImport, onClose }: Props) {
           React.createElement("div", { style: { flex: 1 } },
             React.createElement("label", { style: s.lbl }, "STEP 文件"),
             React.createElement("input", { type: "file", accept: ".step,.stp", onChange: handleFileChange, style: { ...s.inp, padding: "4px 8px" } }),
+          ),
+        ),
+        // Converter selector
+        React.createElement("div", { style: s.row as React.CSSProperties },
+          React.createElement("div", { style: { flex: 1 } },
+            React.createElement("label", { style: s.lbl }, "转换器"),
+            React.createElement("select", { className: "form-select", style: { height: 30, fontSize: 11 }, value: settings.converter, onChange: e => set("converter", e.target.value) },
+              React.createElement("option", { value: "auto" }, "自动 (GEOUNED优先)"),
+              React.createElement("option", { value: "geouned" }, "GEOUNED"),
+              React.createElement("option", { value: "mccad" }, "McCAD"),
+            ),
           ),
         ),
         // Common settings

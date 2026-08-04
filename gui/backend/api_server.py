@@ -627,63 +627,53 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 self._ok({"status": "error", "message": "STEP 文件不存在"})
                 return
 
-            # Use McCAD pipeline from app/step_importer.py
+            # STEP 转换：GEOUNED / McCAD / FreeCAD-OCC 三通道（转换器分发在 step_importer）
             _app_dir = os.path.join(os.path.dirname(__file__), "..", "..", "app")
             _sys.path.insert(0, _app_dir)
-            from step_importer import StepImporter, StandardSurfaceConverter, McCADSettings
-
-            # First try McCAD (if exe available)
-            mccad_exe = shutil.which("McCAD") or shutil.which("McCAD.exe") or ""
-            if not mccad_exe:
-                for p in [
-                    "D:/MCNP/MCNP输入卡生成器/_internal/mccad/McCAD.exe",
-                    "D:/MCNP/输入卡生成器源码/dist/MCNP输入卡生成器/_internal/mccad/McCAD.exe",
-                ]:
-                    if os.path.isfile(p): mccad_exe = p; break
+            from step_importer import (StepImporter, StandardSurfaceConverter,
+                                       run_step_converter, MCNPOutputParser)
 
             freecad_bin = StepImporter.detect_freecad()
             if not freecad_bin:
                 self._ok({"status": "error", "message": "需要 FreeCAD 才能导入 STEP"})
                 return
 
-            if mccad_exe:
-                # Full McCAD pipeline
-                from step_importer import McCADConverter
-                os.environ["PATH"] = mccad_exe + os.pathsep + os.environ.get("PATH", "")
-                mccad_dir = os.path.dirname(mccad_exe)
-                occ_dll = os.path.join(freecad_bin, "TKernel.dll")
-                if os.path.isfile(occ_dll):
-                    os.environ["PATH"] = freecad_bin + os.pathsep + os.environ.get("PATH", "")
+            converter_choice = settings.get("converter", "auto")
 
-                mccad_settings = McCADSettings()
-                mccad_settings["voidGeneration"] = void_gen
-                mccad_settings["startCellNum"] = start_cell
-                mccad_settings["startSurfNum"] = start_surf
+            # 得到 MCNP 文件路径（geouned / mccad 两个 adapter 共用接口）
+            result_path = None
+            if converter_choice in ("geouned", "mccad"):
+                result_path = run_step_converter(
+                    converter_choice, step_path, material, density, settings, freecad_bin)
+            else:  # auto：GEOUNED → McCAD
+                result_path = (
+                    run_step_converter("geouned", step_path, material, density, settings, freecad_bin)
+                    or run_step_converter("mccad", step_path, material, density, settings, freecad_bin)
+                )
 
-                converter = McCADConverter()
-                if converter.is_available():
-                    work_dir = tempfile.mkdtemp(prefix="mccad_")
-                    result_path = converter.run(step_path, material, density, work_dir, dict(mccad_settings._data))
-                    if result_path:
-                        from step_importer import MCNPOutputParser
-                        parser = MCNPOutputParser()
-                        deck = parser.parse(result_path, {})
-                        if deck:
-                            self._ok({"status": "ok", "deck": {
-                                "surfaces": deck.surfaces or "",
-                                "cells": [{"number": c.number, "material": str(c.material), "density": str(c.density) if c.density else "", "surface_expr": c.surface_expr, "comment": c.comment or ""} for c in (deck.cells or [])],
-                            }})
-                            return
-            else:
-                # Fallback: StandardSurfaceConverter (FreeCAD OCC only)
+            if result_path:
+                deck = MCNPOutputParser.parse(result_path, post_settings=settings)
+                if deck:
+                    self._ok({"status": "ok", "deck": {
+                        "surfaces": deck.surfaces or "",
+                        "cells": [{"number": c.number, "material": str(c.material),
+                                   "density": str(c.density) if c.density else "",
+                                   "surface_expr": c.surface_expr,
+                                   "comment": c.comment or ""}
+                                  for c in (deck.cells or [])],
+                    }})
+                    return
+
+            # 兜底：auto 模式下用 FreeCAD OCC 直接转换（产结构化数据，不产文件）
+            if converter_choice in ("auto",):
                 result = StandardSurfaceConverter.convert(step_path, start_surf, freecad_bin)
                 if result:
-                    surfaces_dict, cells_list = result
+                    surfaces_dict, tr_cards, cells_list = result  # 3 元组（tr_cards 原被静默丢弃）
                     surf_text = " ".join(list(surfaces_dict.values()))
                     self._ok({"status": "ok", "deck": {"surfaces": surf_text, "cells": cells_list or []}})
                     return
 
-            self._ok({"status": "error", "message": "STEP 转换失败，请检查 FreeCAD/McCAD"})
+            self._ok({"status": "error", "message": "STEP 转换失败，请检查 FreeCAD/GEOUNED/McCAD"})
         except Exception as e:
             import traceback
             self._err(str(e) + " | " + traceback.format_exc())

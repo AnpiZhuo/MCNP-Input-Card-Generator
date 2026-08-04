@@ -565,6 +565,75 @@ convert = false
 
 
 # ===================================================================
+# run_step_converter — 转换器分发（两个 adapter 构成真正的 seam）
+# ===================================================================
+
+def run_step_converter(name: str, step_path: str, material: str,
+                       density: float, settings: dict,
+                       freecad_bin: str | None = None) -> str | None:
+    """按转换器名运行 STEP→MCNP 转换，返回 MCNP 文件路径；不可用/失败返回 None。
+
+    name ∈ {"geouned", "mccad"}。McCADConverter 与 GeoUnedConverter 共用同一
+    接口（is_available() + run(...) -> mcnp 文件路径），本函数负责选择与兜底，
+    让调用方（api_server）无需关心具体转换器细节。
+    """
+    if name == "geouned":
+        try:
+            from step_importer_geouned import GeoUnedConverter
+            conv = GeoUnedConverter(freecad_bin=freecad_bin)
+            if not conv.is_available():
+                return None
+            work_dir = tempfile.mkdtemp(prefix="geouned_")
+            return conv.run(step_path, material, density, work_dir, settings)
+        except Exception:
+            return None
+
+    if name == "mccad":
+        try:
+            # McCAD.exe 检测（PATH 或硬编码路径）
+            mccad_exe = shutil.which("McCAD") or shutil.which("McCAD.exe") or ""
+            if not mccad_exe:
+                for p in [
+                    "D:/MCNP/MCNP输入卡生成器/_internal/mccad/McCAD.exe",
+                    "D:/MCNP/输入卡生成器源码/dist/MCNP输入卡生成器/_internal/mccad/McCAD.exe",
+                ]:
+                    if os.path.isfile(p):
+                        mccad_exe = p
+                        break
+            if not mccad_exe:
+                return None
+
+            # 把 McCAD/OCC 目录加进 PATH（McCAD.exe 运行需要 DLL）
+            os.environ["PATH"] = mccad_exe + os.pathsep + os.environ.get("PATH", "")
+            if freecad_bin:
+                occ_dll = os.path.join(freecad_bin, "TKernel.dll")
+                if os.path.isfile(occ_dll):
+                    os.environ["PATH"] = freecad_bin + os.pathsep + os.environ.get("PATH", "")
+
+            mccad_settings = McCADSettings()
+            mccad_settings["voidGeneration"] = bool(settings.get("voidGeneration", True))
+            mccad_settings["startCellNum"] = int(settings.get("startCellNum", 1))
+            mccad_settings["startSurfNum"] = int(settings.get("startSurfNum", 1))
+            for k in mccad_settings.KEYS:
+                if k in settings:
+                    try:
+                        mccad_settings[k] = settings[k]
+                    except Exception:
+                        pass
+
+            converter = McCADConverter()
+            if not converter.is_available():
+                return None
+            work_dir = tempfile.mkdtemp(prefix="mccad_")
+            return converter.run(step_path, material, density, work_dir,
+                                 dict(mccad_settings._data))
+        except Exception:
+            return None
+
+    return None
+
+
+# ===================================================================
 # MCNPOutputParser — 解析 McCAD 生成的 MCNP 文件
 # ===================================================================
 
