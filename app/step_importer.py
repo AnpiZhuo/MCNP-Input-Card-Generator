@@ -674,6 +674,29 @@ def _format_surface_numbers(surface_text: str) -> str:
     return "\n".join(lines)
 
 
+def _strip_data_cards(text: str) -> str:
+    """只保留栅元 + 曲面段，截掉数据卡段。
+
+    数据卡（MODE/NPS/SDEF/M1/F1...）是首列非缩进、以字母开头的行；
+    栅元/曲面卡以数字开头，注释以 C/$ 开头，续行缩进开头。
+    """
+    lines = text.splitlines()
+    cut = len(lines)
+    for i, line in enumerate(lines):
+        if i == 0:
+            continue  # 首行是 MCNP 标题（如 "MAT density=-1"），不是数据卡
+        s = line.lstrip()
+        if not s or s[0].lower() in ("c", "$"):
+            continue
+        # TR 卡也是数据卡，但需保留（parse 会单独分离到 tr_text）
+        if re.match(r"^\*?TR\d+\s", s, re.IGNORECASE):
+            continue
+        if not line[:1].isspace() and s[0].isalpha():
+            cut = i
+            break
+    return "\n".join(lines[:cut])
+
+
 # ===================================================================
 # MCNPOutputParser — 解析 McCAD 生成的 MCNP 文件
 # ===================================================================
@@ -721,12 +744,14 @@ class MCNPOutputParser:
         tr_lines = []
         surf_lines = []
         for line in modified_text.splitlines():
-            if re.match(r"^\s*TR\d+\s", line, re.IGNORECASE):
+            if re.match(r"^\s*\*?TR\d+\s", line, re.IGNORECASE):
                 tr_lines.append(line)
             else:
                 surf_lines.append(line)
-        surf_text = _format_surface_numbers("\n".join(surf_lines))
+        # 只识别曲面 + 栅元，截掉数据卡段（MODE/NPS/SDEF 等）
+        surf_text = _strip_data_cards("\n".join(surf_lines))
         tr_text = "\n".join(tr_lines)
+        surf_text = _format_surface_numbers(surf_text)
 
         deck, warnings = parse_inp_text(surf_text)
 
