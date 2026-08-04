@@ -10,8 +10,30 @@ stdin 收 JSON 配置，stdout 回 JSON 结果（与 _freecad_csg_worker 同一�
     stdout: {"status":"ok","mcnp_path":...} 或 {"status":"error","message":...}
 """
 import os
+import re
 import sys
 import json
+
+
+def _assign_default_material(mcnp_path: str, default_mat: int = 1) -> None:
+    """GEOUNED 不给实体赋材料（STEP 无材料时全部 material=0），
+    app 会把 material=0 当真空跳过 → 无法 3D 预览。
+    这里把 SOLID 段（VOID CELLS 之前）栅元的材料 0 改成默认材料，
+    与 McCAD 默认 material=1 对齐；真空/墓区段不动，已赋材料的也不动。"""
+    with open(mcnp_path, encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    out = []
+    in_solid = True
+    for line in text.splitlines():
+        if in_solid and re.search(r"VOID\s*CELLS|GRAVEYARD", line, re.IGNORECASE):
+            in_solid = False
+        if in_solid:
+            m = re.match(r"^(\s*\d+\s+)0(\s+\S.*)$", line)
+            if m:
+                line = m.group(1) + str(default_mat) + m.group(2)
+        out.append(line)
+    with open(mcnp_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(out))
 
 
 def main():
@@ -70,6 +92,9 @@ def main():
     mcnp_output = os.path.join(output_dir, f"{geometry_name}.mcnp")
     if not os.path.isfile(mcnp_output):
         raise RuntimeError(f"GEOUNED 未生成输出文件 {mcnp_output}")
+
+    # 实体栅元默认赋材料（STEP 无材料时 GEOUNED 全为 0，会挡住 3D 预览）
+    _assign_default_material(mcnp_output)
 
     print(json.dumps({"status": "ok", "mcnp_path": mcnp_output}))
 
