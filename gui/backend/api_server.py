@@ -672,6 +672,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 if deck:
                     self._ok({"status": "ok", "deck": {
                         "surfaces": deck.surfaces or "",
+                        "tr_cards": deck.tr_cards or "",
                         "cells": [{"number": c.number, "material": str(c.material),
                                    "density": str(c.density) if c.density else "",
                                    "surface_expr": c.surface_expr,
