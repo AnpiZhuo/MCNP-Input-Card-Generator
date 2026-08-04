@@ -671,6 +671,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             if result_path:
                 deck = MCNPOutputParser.parse(result_path, post_settings=settings)
                 if deck:
+                    print(f"[DEBUG-tr] import-step main: surfaces={len((deck.surfaces or '').splitlines())} tr_cards={len((deck.tr_cards or '').splitlines())} cells={len(deck.cells or [])}")
                     self._ok({"status": "ok", "deck": geometry_deck_response(
                         deck.surfaces, deck.tr_cards,
                         [{"number": c.number, "material": str(c.material),

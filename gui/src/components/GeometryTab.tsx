@@ -57,7 +57,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename: file.name, data: text, settings }),
       });
-      if (r.ok) { const j = await r.json(); if (j.status === "ok") { if (j.deck) patch({ surfaces: j.deck.surfaces || "", tr_cards: j.deck.tr_cards || "", cells: j.deck.cells || [] }); alert("✅ STEP 导入成功"); setShowStepDlg(false); return; } }
+      if (r.ok) { const j = await r.json(); console.log("[DEBUG-tr] import-step resp status=", j.status, "deckKeys=", j.deck ? Object.keys(j.deck) : null, "trLines=", (j.deck?.tr_cards || "").split("\n").length); if (j.status === "ok") { if (j.deck) patch({ surfaces: j.deck.surfaces || "", tr_cards: j.deck.tr_cards || "", cells: j.deck.cells || [] }); alert("✅ STEP 导入成功"); setShowStepDlg(false); return; } }
     } catch {}
     alert("STEP 导入需要后端服务 + FreeCAD/McCAD");
     setShowStepDlg(false);
@@ -111,6 +111,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   useEffect(() => {
     const newSurf = deck.surfaces || "";
     const newTr = deck.tr_cards || "";
+    console.log("[DEBUG-tr] pull deck.tr_cards lines=", newTr.split("\n").length, "content=", newTr.slice(0, 60).replace(/\n/g, "|"));
     const newCells = deck.cells?.length ? deck.cells.map(c => ({ num: String(c.number), mat: c.material, density: c.density, surfaces: c.surface_expr, impN: c.imp_n || "", impP: c.imp_p || "", impE: c.imp_e || "", vol: c.vol || "", pwt: c.pwt || "", ext: c.ext || "", fcl: c.fcl || "", u: c.u || "", fill: c.fill || "", lat: c.lat || "", trcl: c.trcl || "", tmp: c.tmp || "", otherParams: c.other_params || "", render: c.render !== false, comment: c.comment || "" })) : [];
     if (newSurf !== surfText) setSurfText(newSurf);
     if (newTr !== trText) setTrText(newTr);
