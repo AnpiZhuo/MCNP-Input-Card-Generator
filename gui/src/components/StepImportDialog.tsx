@@ -46,7 +46,7 @@ interface Props {
 const DEFAULTS: StepSettings = {
   materialName: "MAT", density: "-1.0", tmp: "",
   voidGeneration: true, startCellNum: 1, startSurfNum: 100, units: "cm",
-  decompose: true, recurrenceDepth: 20,
+  decompose: false, recurrenceDepth: 20,
   minSolidVolume: 1e-3, minFaceArea: 1e-4, scalingFactor: 100, precision: 1e-6,
   faceTolerance: 1e-8, edgeTolerance: 1e-8, parameterTolerance: 1e-8,
   angularTolerance: 1e-4, distanceTolerance: 1e-6,

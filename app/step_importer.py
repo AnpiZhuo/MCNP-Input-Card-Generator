@@ -56,7 +56,7 @@ class McCADSettings:
     DEFAULTS = {
         "voidGeneration": True, "startCellNum": 1, "startSurfNum": 1,
         "tmp": "2.53e-8",
-        "decompose": True, "recurrenceDepth": 20,
+        "decompose": False, "recurrenceDepth": 20,  # False: 减少碎块（复杂 CAD 需手动开启）
         "minSolidVolume": 1e-3, "minFaceArea": 1e-4,
         "scalingFactor": 100.0, "precision": 1e-6,
         "faceTolerance": 1e-8, "edgeTolerance": 1e-8,
