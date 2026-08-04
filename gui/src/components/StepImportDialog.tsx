@@ -64,7 +64,7 @@ const s: Record<string, React.CSSProperties> = {
   collHeader: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", cursor: "pointer", padding: "6px 0", borderTop: "1px solid var(--border-subtle)", marginTop: 6 },
 };
 
-function CollapsibleSection({ title, children, open: initOpen }: { title: string; children: React.ReactNode; open?: boolean }) {
+function CollapsibleSection({ title, children, open: initOpen }: { title: string; children?: React.ReactNode; open?: boolean }) {
   const [open, setOpen] = useState(initOpen || false);
   return React.createElement("div", null,
     React.createElement("div", { style: s.collHeader as React.CSSProperties, onClick: () => setOpen(!open) },
@@ -109,7 +109,7 @@ export default function StepImportDialog({ onImport, onClose }: Props) {
         React.createElement("div", { style: s.row as React.CSSProperties },
           React.createElement("div", { style: { flex: 1 } },
             React.createElement("label", { style: s.lbl }, "转换器"),
-            React.createElement("select", { className: "form-select", style: { height: 30, fontSize: 11 }, value: settings.converter, onChange: e => set("converter", e.target.value) },
+            React.createElement("select", { className: "form-select", style: { height: 30, fontSize: 11 }, value: settings.converter, onChange: (e: React.ChangeEvent<HTMLSelectElement>) => set("converter", e.target.value) },
               React.createElement("option", { value: "auto" }, "自动 (GEOUNED优先)"),
               React.createElement("option", { value: "geouned" }, "GEOUNED"),
               React.createElement("option", { value: "mccad" }, "McCAD"),
@@ -135,7 +135,7 @@ export default function StepImportDialog({ onImport, onClose }: Props) {
           ),
           React.createElement("div", { style: { flex: 1 } },
             React.createElement("label", { style: s.lbl }, "STEP 单位"),
-            React.createElement("select", { className: "form-select", style: { height: 30, fontSize: 11 }, value: settings.units, onChange: e => set("units", e.target.value) },
+            React.createElement("select", { className: "form-select", style: { height: 30, fontSize: 11 }, value: settings.units, onChange: (e: React.ChangeEvent<HTMLSelectElement>) => set("units", e.target.value) },
               React.createElement("option", { value: "cm" }, "cm"), React.createElement("option", { value: "m" }, "m"), React.createElement("option", { value: "mm" }, "mm"),
             ),
           ),
@@ -173,7 +173,7 @@ export default function StepImportDialog({ onImport, onClose }: Props) {
               React.createElement("label", { style: { ...s.lbl, width: 180, marginBottom: 0 } }, label),
               React.createElement("input", { style: { ...s.inp, width: 100 }, type: "number", step: "any",
                 value: (settings as any)[key as string], min, max,
-                onChange: e => set(key as keyof StepSettings, parseFloat(e.target.value) || 0) }),
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => set(key as keyof StepSettings, parseFloat(e.target.value) || 0) }),
             )
           ),
         ),
@@ -198,7 +198,7 @@ export default function StepImportDialog({ onImport, onClose }: Props) {
               React.createElement("label", { style: { ...s.lbl, width: 180, marginBottom: 0 } }, label),
               React.createElement("input", { style: { ...s.inp, width: 100 }, type: "number", step: typ === "float" ? "any" : "1",
                 value: (settings as any)[key],
-                onChange: e => set(key, typ === "float" ? parseFloat(e.target.value) || 0 : parseInt(e.target.value) || 0) }),
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => set(key, typ === "float" ? parseFloat(e.target.value) || 0 : parseInt(e.target.value) || 0) }),
             )
           ),
         ),

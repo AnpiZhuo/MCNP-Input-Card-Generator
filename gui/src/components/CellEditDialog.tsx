@@ -69,7 +69,7 @@ export default function CellEditDialog({ cell, onSave, onClose, availableMats }:
       ),
       React.createElement("div", { style: style.grp },
         React.createElement("label", { style: style.lbl }, "材料号 (0=void)"),
-        React.createElement("select", { style: style.inp, value: data.mat, onChange: (e) => set("mat", e.target.value) },
+        React.createElement("select", { style: style.inp, value: data.mat, onChange: (e: React.ChangeEvent<HTMLSelectElement>) => set("mat", e.target.value) },
           React.createElement("option", { value: "0" }, "0 = void"),
           ...(availableMats || []).map(m =>
             React.createElement("option", { key: m.number, value: String(m.number) },

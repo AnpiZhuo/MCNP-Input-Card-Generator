@@ -387,7 +387,7 @@ function initScene(
     renderer.setSize(w2, h2, false);
   }
   var ro = new ResizeObserver(function() { resizeRenderer(); });
-  ro.observe(canvas.parentElement);
+  if (canvas.parentElement) ro.observe(canvas.parentElement);
   setTimeout(resizeRenderer, 100); // 首次初始化延迟执行，等待布局
 
   /* 返回控制接口 */
@@ -413,8 +413,8 @@ function initScene(
         if (m instanceof THREE.LOD) {
           for (const lvl of m.levels) {
             if (lvl && (lvl as any).geometry) {
-              (lvl as THREE.Mesh).geometry.dispose();
-              ((lvl as THREE.Mesh).material as THREE.Material).dispose();
+              (lvl as any).geometry?.dispose();
+              (lvl as any).material?.dispose();
             }
           }
         } else {

@@ -119,13 +119,13 @@ export default function DistributionEditor({ entry, onChange, onDelete }: Props)
             React.createElement("select", {
               className: "form-select", style: { width: 84, height: 26, fontSize: 11 },
               value: entry.sb.type,
-              onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setSb({ ...entry.sb, type: e.target.value as SbEntry["type"] }),
+              onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setSb({ ...entry.sb, type: e.target.value as SbEntry["type"] } as SbEntry),
             },
               React.createElement("option", { value: "D" }, "D 概率"),
               React.createElement("option", { value: "-21" }, "-21 幂律"),
               React.createElement("option", { value: "-31" }, "-31 指数"),
             ),
-            row(entry.sb.values || [""], (v) => setSb({ ...entry.sb, values: v })),
+            row(entry.sb.values || [""], (v) => setSb({ ...entry.sb, values: v } as SbEntry)),
             React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: () => setSb(null) }, "移除"),
           )
         : React.createElement("button", { className: "btn btn-ghost btn-xs", style: { marginTop: 4 }, onClick: () => setSb({ type: "D", values: [""] }) }, "+ 添加偏倚"),
@@ -138,20 +138,20 @@ export default function DistributionEditor({ entry, onChange, onDelete }: Props)
             React.createElement("select", {
               className: "form-select", style: { width: 84, height: 26, fontSize: 11 },
               value: entry.ds.type,
-              onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setDs({ ...entry.ds, type: e.target.value as DsEntry["type"] }),
+              onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setDs({ ...entry.ds, type: e.target.value as DsEntry["type"] } as DsEntry),
             },
               ["H", "L", "S", "T", "Q"].map(t => React.createElement("option", { key: t, value: t }, t)),
             ),
             entry.ds.type !== "T"
               ? React.createElement("input", {
                   className: "form-input", style: { width: 70, height: 26, fontSize: 11 }, placeholder: "变量 ERG",
-                  value: entry.ds.param, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDs({ ...entry.ds, param: e.target.value }),
+                  value: entry.ds.param, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDs({ ...entry.ds, param: e.target.value } as DsEntry),
                 })
               : null,
             React.createElement("input", {
               className: "form-input", style: { width: 110, height: 26, fontSize: 11 }, placeholder: "依赖 Dn 编号",
               value: entry.ds.distributionIds.join(" "),
-              onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDs({ ...entry.ds, distributionIds: e.target.value.trim().split(/\s+/) }),
+              onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDs({ ...entry.ds, distributionIds: e.target.value.trim().split(/\s+/) } as DsEntry),
             }),
             React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: () => setDs(null) }, "移除"),
           )

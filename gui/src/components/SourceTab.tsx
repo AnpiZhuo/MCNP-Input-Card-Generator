@@ -182,7 +182,7 @@ export default function SourceTab() {
               onClick={() => {
                 setMode(opt.k as any);
                 // 切回表单模式时清掉 raw_overrides.sdef，让表单接管
-                if (opt.k !== "text") patch({ sourceMode: opt.k, rawOverrides: { ...deck.rawOverrides, sdef: "" } });
+                if (opt.k !== "text") patch({ sourceMode: opt.k as any, rawOverrides: { ...deck.rawOverrides, sdef: "" } });
               }}>
               {opt.l}
             </button>

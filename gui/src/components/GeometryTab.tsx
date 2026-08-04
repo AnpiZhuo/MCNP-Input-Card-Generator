@@ -91,7 +91,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
       } else {
         const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "mcnp_export.step"; a.click();
       }
-    } catch(e) { alert("导出失败: " + (e?.message || e)); }
+    } catch(e) { alert("导出失败: " + ((e as any)?.message || e)); }
   };
   const handleRawCells = (t: string) => patch({ rawOverrides: { ...deck.rawOverrides, cells: t } });
 

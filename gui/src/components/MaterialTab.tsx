@@ -1,17 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import MaterialEditDialog from "./MaterialEditDialog";
-import { useDeck } from "../utils/DeckContext";
-
-interface Nuclide {
-  zaid: string;
-  fraction: string;
-}
-
-interface MaterialData {
-  number: number;
-  comment: string;
-  nuclides: Nuclide[];
-}
+import { useDeck, MaterialData } from "../utils/DeckContext";
 
 interface MatTabProps {
   onMaterialAdded?: (matNum: number) => void;
@@ -36,7 +25,7 @@ export default function MaterialTab({ onMaterialAdded }: MatTabProps) {
   const addMat = () => {
     const maxNum = mats.length > 0 ? Math.max(...mats.map((m) => m.number)) : 0;
     const newNum = maxNum + 1;
-    const newMats = [...mats, { number: newNum, comment: "新材料", nuclides: [] }];
+    const newMats = [...mats, { number: newNum, comment: "新材料", nuclides: [], density: "", options: "", mt_card: "" }];
     setMats(newMats);
     setEditIdx(newMats.length - 1);
     onMaterialAdded?.(newNum);
