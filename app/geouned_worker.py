@@ -61,7 +61,8 @@ def _assign_default_material(mcnp_path: str, default_mat: int = 1) -> None:
         if in_solid:
             m = re.match(r"^(\s*\d+\s+)0(\s+\S.*)$", line)
             if m:
-                line = m.group(1) + str(default_mat) + m.group(2)
+                # 材料 0(真空) 无需密度；改成材料后必须补密度，否则第一个曲面号会被解析器当密度
+                line = m.group(1) + str(default_mat) + " -1.0" + m.group(2)
         out.append(line)
     with open(mcnp_path, "w", encoding="utf-8") as f:
         f.write("\n".join(out))
