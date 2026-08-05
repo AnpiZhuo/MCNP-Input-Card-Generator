@@ -644,17 +644,16 @@ _NUM_RE = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
 
 
 def _fmt_num_token(match) -> str:
-    """把数值 token 转成干净十进制：整数去小数点、小数去尾零。"""
+    """数值 token：浮点 → 保留 3 位小数；整数（曲面号/栅元引用）保持原样。"""
     tok = match.group(0)
+    # 整数保持整数，避免 100 → 100.000 破坏 MCNP 曲面号/引用
+    if re.fullmatch(r"[+-]?\d+", tok):
+        return tok
     try:
         v = float(tok)
     except ValueError:
         return tok
-    if v == int(v) and abs(v) < 1e15:
-        return str(int(v))
-    # .15f：极小值（如 1e-13）也转成固定小数，不保留科学计数法
-    s = format(v, ".15f").rstrip("0").rstrip(".")
-    return "0" if s in ("", "-0") else s
+    return format(v, ".3f")
 
 
 def _format_surface_numbers(surface_text: str) -> str:

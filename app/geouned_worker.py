@@ -19,18 +19,15 @@ _NUM_RE = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
 
 
 def _fmt_num(match) -> str:
-    """科学计数法 → 干净十进制（整数去小数点、小数去尾零；极小值保精度）。"""
+    """数值 token：浮点 → 3 位小数；整数（曲面号/栅元引用）保持原样。"""
     tok = match.group(0)
+    if re.fullmatch(r"[+-]?\d+", tok):
+        return tok
     try:
         v = float(tok)
     except ValueError:
         return tok
-    if v == int(v) and abs(v) < 1e15:
-        return str(int(v))
-    if abs(v) < 1e-9:            # 极小值不硬转（避免 .10f 舍成 0）
-        return format(v, ".10g")
-    s = format(v, ".10f").rstrip("0").rstrip(".")
-    return "0" if s in ("", "-0") else s
+    return format(v, ".3f")
 
 
 def _format_numbers(text: str) -> str:
