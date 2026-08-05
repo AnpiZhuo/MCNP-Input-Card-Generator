@@ -53,6 +53,29 @@ def _make_box(xmin, xmax, ymin, ymax, zmin, zmax):
 # 曲面 → FreeCAD Part.Shape 半空间
 # ============================================================
 
+def _plane_halfspace(normal, point, B: float):
+    """一般平面 n·x = n·point 的正侧半空间实体（n·x > n·point，限制在 [-B,B]³）。"""
+    bb = _make_box(-B, B, -B, B, -B, B)
+    n = normal.normalize()
+    if n.Length < 1e-15:
+        return bb
+    p = FreeCAD.Vector(point[0], point[1], point[2])
+    # 厚板：4B×4B×2B 盒（角在原点，几何中心 (2B,2B,B)），旋转 z→n，底面(z=0)落在平面 p 上
+    z = FreeCAD.Vector(0, 0, 1)
+    axis = z.cross(n)
+    if axis.Length < 1e-15:
+        rot = FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), 180) if n.z < 0 else FreeCAD.Rotation()
+    else:
+        angle = math.degrees(math.acos(max(-1.0, min(1.0, n.z))))
+        rot = FreeCAD.Rotation(axis, angle)
+    slab = Part.makeBox(4 * B, 4 * B, 2 * B)
+    c0 = FreeCAD.Vector(2 * B, 2 * B, B)  # 几何中心（局部）
+    target = p + n * B                      # 盒子中心目标（底面 z=0 → p，顶面 → p+2B·n）
+    base = target - rot.multVec(c0)         # Placement 的 Base
+    slab.Placement = FreeCAD.Placement(base, rot)
+    return bb.common(slab)
+
+
 def make_halfspace(surf_type: str, params: list[float], B: float = 500):
     """
     为 MCNP 曲面类型创建"正侧 (pos)"半空间形状。
@@ -81,34 +104,22 @@ def make_halfspace(surf_type: str, params: list[float], B: float = 500):
     # ── 一般平面 P (4参数: A B C D) ──
     elif surf_type == "P_0":
         A, Bc, C, D = params
-        # 用 A,B,C 构建方向，在包围盒内切割
-        bb = _make_box(-B, B, -B, B, -B, B)
         normal = FreeCAD.Vector(A, Bc, C)
-        if normal.Length < 1e-15:
-            return bb
-        # 构建通过原点的平面，平移到 D
-        plane = Part.makePlane(B * 2, B * 2,
-                               _vec(-B, -B, 0),
-                               _vec(0, 1, 0))
-        plane.translate(normal.normalize() * D / normal.Length)
-        # 取法向量指向的一侧
-        return bb.common(plane)
+        if abs(A) > 1e-15:
+            pt = (D / A, 0, 0)
+        elif abs(Bc) > 1e-15:
+            pt = (0, D / Bc, 0)
+        else:
+            pt = (0, 0, D / C)
+        return _plane_halfspace(normal, pt, B)
 
     # ── 三点定义平面 P_1 ──
     elif surf_type == "P_1":
         x1, y1, z1, x2, y2, z2, x3, y3, z3 = params
-        bb = _make_box(-B, B, -B, B, -B, B)
-        # FreeCAD 的 makePlane 通过三点创建
         edge1 = _vec(x2 - x1, y2 - y1, z2 - z1)
         edge2 = _vec(x3 - x1, y3 - y1, z3 - z1)
         normal = edge1.cross(edge2)
-        if normal.Length < 1e-15:
-            return bb
-        # 创建大平面
-        plane = Part.makePlane(B * 2, B * 2,
-                               _vec(x1 - B, y1 - B, z1),
-                               normal)
-        return bb.common(plane)
+        return _plane_halfspace(normal, (x1, y1, z1), B)
 
     # ── 球 ──
     elif surf_type == "SO":

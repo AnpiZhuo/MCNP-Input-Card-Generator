@@ -43,6 +43,26 @@ for _name in dir(_pi):
         _kw = (_obj._KEYWORD or '').upper()
         if _kw: _SURF_CLASSES[_kw] = _obj
 
+def _plane_coeff_to_points(A: float, B: float, C: float, D: float) -> list:
+    """平面 Ax+By+Cz=D → 3 个非共线点（pymcnp 的 P 类只支持三点定义）。
+
+    校正三点法向与 (A,B,C) 同向，否则正侧会被翻转导致几何方向错误。
+    """
+    if abs(A) >= abs(B) and abs(A) >= abs(C):
+        pts = [D / A, 0, 0, (D - B) / A, 1, 0, (D - C) / A, 0, 1]
+    elif abs(B) >= abs(C):
+        pts = [0, D / B, 0, 1, (D - A) / B, 0, 0, (D - C) / B, 1]
+    else:
+        pts = [0, 0, D / C, 1, 0, (D - A) / C, 0, 1, (D - B) / C]
+    # 三点法向 n=(P2-P1)×(P3-P1)，若与 (A,B,C) 反向则交换 P2/P3 翻转
+    import numpy as np
+    p1, p2, p3 = np.array(pts[0:3]), np.array(pts[3:6]), np.array(pts[6:9])
+    nrm = np.cross(p2 - p1, p3 - p1)
+    if np.dot(nrm, np.array([A, B, C])) < 0:
+        pts[3:6], pts[6:9] = pts[6:9], pts[3:6]
+    return pts
+
+
 def parse_surfaces(text: str) -> list:
     """将 MCNP 曲面文本解析为 pymcnp 表面对象列表（支持 TR 引用号）"""
     import re
@@ -74,7 +94,18 @@ def parse_surfaces(text: str) -> list:
             if tr_num is not None:
                 _s.transform = tr_num
             surfs.append(_s)
-        except: pass
+        except Exception:
+            # P A B C D 系数形式：pymcnp 的 P 只支持三点定义，转一下再试
+            if _p[_kw_idx].upper() == "P" and len(_p) == 6:
+                try:
+                    pts = _plane_coeff_to_points(float(_p[2]), float(_p[3]), float(_p[4]), float(_p[5]))
+                    _l2 = f"{_p[0]} P " + " ".join(str(v) for v in pts)
+                    _s = _cls.from_mcnp(_l2)
+                    if tr_num is not None:
+                        _s.transform = tr_num
+                    surfs.append(_s)
+                except Exception:
+                    pass
     return surfs
 
 def parse_tr_cards(text: str) -> dict:
