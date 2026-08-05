@@ -53,8 +53,8 @@ def _format_numbers(text: str) -> str:
 def _assign_default_material(mcnp_path: str, default_mat: int = 1) -> None:
     """GEOUNED 不给实体赋材料（STEP 无材料时全部 material=0），
     app 会把 material=0 当真空跳过 → 无法 3D 预览。
-    这里把 SOLID 段（VOID CELLS 之前）栅元的材料 0 改成默认材料，
-    与 McCAD 默认 material=1 对齐；真空/墓区段不动，已赋材料的也不动。"""
+    这里把 SOLID 段（VOID CELLS 之前）栅元的材料 0 改成默认材料 1；
+    真空/墓区段不动，已赋材料的也不动。"""
     with open(mcnp_path, encoding="utf-8", errors="replace") as f:
         text = f.read()
     out = []

@@ -72,7 +72,7 @@ def parse_surfaces(text: str) -> list:
         if not _l or _l.startswith("C") or _l.startswith("c"): continue
         _l = _l.split("$")[0].strip()  # 去掉行内注释
         if not _l: continue
-        # 提取 TR 引用：后缀 *TRn（McCAD/GEOUNED 常见）或 100* 前缀（transform=曲面号）
+        # 提取 TR 引用：后缀 *TRn（GEOUNED 常见）或 100* 前缀（transform=曲面号）
         tr_num = None
         m_tr = re.search(r"\s*\*\s*TR\s*(\d+)\s*$", _l, re.IGNORECASE)
         if m_tr:
@@ -705,7 +705,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 self._ok({"status": "error", "message": "STEP 文件不存在"})
                 return
 
-            # STEP 转换：GEOUNED / McCAD / FreeCAD-OCC 三通道（转换器分发在 step_importer）
+            # STEP 转换：GEOUNED 主通道 + FreeCAD-OCC 兜底
             _app_dir = os.path.join(os.path.dirname(__file__), "..", "..", "app")
             _sys.path.insert(0, _app_dir)
             from step_importer import (StepImporter, StandardSurfaceConverter,
@@ -717,18 +717,9 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 self._ok({"status": "error", "message": "需要 FreeCAD 才能导入 STEP"})
                 return
 
-            converter_choice = settings.get("converter", "auto")
-
-            # 得到 MCNP 文件路径（geouned / mccad 两个 adapter 共用接口）
-            result_path = None
-            if converter_choice in ("geouned", "mccad"):
-                result_path = run_step_converter(
-                    converter_choice, step_path, material, density, settings, freecad_bin)
-            else:  # auto：GEOUNED → McCAD
-                result_path = (
-                    run_step_converter("geouned", step_path, material, density, settings, freecad_bin)
-                    or run_step_converter("mccad", step_path, material, density, settings, freecad_bin)
-                )
+            # 只走 GEOUNED 通道
+            result_path = run_step_converter(
+                "geouned", step_path, material, density, settings, freecad_bin)
 
             if result_path:
                 deck = MCNPOutputParser.parse(result_path, post_settings=settings)
@@ -743,17 +734,16 @@ class MCNPHandler(BaseHTTPRequestHandler):
                          for c in (deck.cells or [])])})
                     return
 
-            # 兜底：auto 模式下用 FreeCAD OCC 直接转换（产结构化数据，不产文件）
-            if converter_choice in ("auto",):
-                result = StandardSurfaceConverter.convert(step_path, start_surf, freecad_bin)
-                if result:
-                    surfaces_dict, tr_cards, cells_list = result  # 3 元组
-                    surf_text = " ".join(list(surfaces_dict.values()))
-                    tr_text = "\n".join(str(v) for v in (tr_cards or {}).values())
-                    self._ok({"status": "ok", "deck": geometry_deck_response(surf_text, tr_text, cells_list or [])})
-                    return
+            # 兜底：GEOUNED 失败时用 FreeCAD OCC 直接转换（产结构化数据，不产文件）
+            result = StandardSurfaceConverter.convert(step_path, start_surf, freecad_bin)
+            if result:
+                surfaces_dict, tr_cards, cells_list = result  # 3 元组
+                surf_text = " ".join(list(surfaces_dict.values()))
+                tr_text = "\n".join(str(v) for v in (tr_cards or {}).values())
+                self._ok({"status": "ok", "deck": geometry_deck_response(surf_text, tr_text, cells_list or [])})
+                return
 
-            self._ok({"status": "error", "message": "STEP 转换失败，请检查 FreeCAD/GEOUNED/McCAD"})
+            self._ok({"status": "error", "message": "STEP 转换失败，请检查 FreeCAD/GEOUNED"})
         except Exception as e:
             import traceback
             self._err(str(e) + " | " + traceback.format_exc())

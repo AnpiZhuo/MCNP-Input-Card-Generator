@@ -1,5 +1,5 @@
 """
-GEOUNED STEP→MCNP 转换器封装（与 McCADConverter 同接口，作为转换器 seam 的第二个 adapter）。
+GEOUNED STEP→MCNP 转换器封装。
 
 用法:
     from step_importer_geouned import GeoUnedConverter
@@ -35,13 +35,12 @@ def _resolve_geouned_path() -> str:
 
 
 def _map_app_settings_to_geouned(app_settings: dict) -> dict:
-    """把 app 的 StepSettings（McCAD 风格）映射为 geouned worker 设置。"""
+    """把 app 的 StepSettings 映射为 geouned worker 设置。"""
     return {
         "voidGen": bool(app_settings.get("voidGeneration", True)),
         "compSolids": bool(app_settings.get("compoundIsSingleCell", False)),
         "simplify": "no",  # 安全默认；"voidfull" 可更优但耗时可增 5 倍
-        # McCAD 的 minVoidVolume(cm³) 与 GEOUNED 的 minVoidSize(mm 边长) 概念不同，
-        # 忽略 McCAD 值，用 GEOUNED 默认 200.0 mm
+        # minVoidSize 用 GEOUNED 默认 200.0 mm（app 无对应设置）
         "minVoidSize": 200.0,
         "startCell": int(app_settings.get("startCellNum", 1)),
         "startSurf": int(app_settings.get("startSurfNum", 1)),

@@ -34,7 +34,7 @@ A desktop application for visually creating, editing, and validating **MCNP** in
 | **表单化编辑 Form-based editing** | 8 个标签页覆盖所有 MCNP 输入段 |
 | **INP 生成 INP generation** | 自动生成标准 MCNP 输入卡，含 C/`$` 注释、En/Tn/E0/T0 网格 |
 | **INP 导入 INP import** | Windows 原生文件对话框选择 `.INP/.I/.TXT`，或直接拖入窗口；解析后一次性回填所有字段 |
-| **STEP 导入（双引擎）** | 几何标签页导入 `.STEP/.STP` 转 MCNP，转换器可在 **GEOUNED / McCAD / 自动** 间切换（自动优先 GEOUNED，随时可回退） |
+| **STEP 导入（GEOUNED）** | 几何标签页导入 `.STEP/.STP`，经 FreeCAD + GEOUNED 自动转换为 MCNP 曲面/栅元 |
 | **工作区保存/恢复 Save/Restore** | 关闭自动保存、手动保存按钮、一键清空；刷新/重开自动恢复全部输入 |
 | **3D 预览 (FreeCAD CSG)** | 精确几何渲染，逐栅元显隐勾选、按材料着色、材料图例 |
 | **平面截面 Cross-section** | AX+BY+CZ=D 平面对勾选栅元的 2D 矢量截面，缩放/平移/旋转、步进平移、悬停显示坐标与材料 |
@@ -56,8 +56,7 @@ A desktop application for visually creating, editing, and validating **MCNP** in
 - **Node.js 18+**（前端构建）
 - **Python 3.10+**（后端，含 pymcnp、numpy 等）
 - **Rust / Cargo**（仅打包 Tauri exe 时需要）
-- **FreeCAD ≥ 0.20**（可选，3D 预览/截面用，检测到才启用）
-- **McCAD**（可选，STEP 导入用）
+- **FreeCAD ≥ 0.20**（3D 预览/截面/STEP 导入用，检测到才启用）
 
 ### 开发运行 Run in Dev
 
@@ -111,7 +110,7 @@ RUSTUP_HOME=D:\rust\rustup CARGO_HOME=D:\rust\cargo npm run tauri build
 │   ├── freecad_preview.py          # FreeCAD 3D 预览封装
 │   ├── _freecad_csg_worker.py      # FreeCAD CSG 几何求值子进程
 │   ├── geouned_worker.py           # GEOUNED 转换 worker（FreeCAD python 子进程）
-│   ├── step_importer_geouned.py    # GEOUNED 转换器封装（与 McCAD 同接口）
+│   ├── step_importer_geouned.py    # GEOUNED 转换器封装
 │   ├── xsdir_db.py                 # xsdir 截面数据库
 │   └── material_presets.py         # 预设材料库
 └── gui/
@@ -151,14 +150,11 @@ RUSTUP_HOME=D:\rust\rustup CARGO_HOME=D:\rust\cargo npm run tauri build
 
 支持的曲面：P, PX/PY/PZ, S/SO/SX/SY/SZ, C/X/C/Y/C/Z, CX/CY/CZ, K/X/K/Y/K/Z, KX/KY/KZ, SQ, GQ, RPP, RCC, SPH, BOX, TRC, REC, WED, ARB 等，支持 TRn 坐标变换。
 
-### STEP 导入（GEOUNED / McCAD）
+### STEP 导入（GEOUNED）
 
-「几何」标签页 → 「导入 STEP」时可在转换器间切换（自动优先 GEOUNED，随时可回退）：
-
-- **GEOUNED**（西班牙 CIEMAT 开发，EUPL-1.2）：随程序打包、无需单独安装；运行时经 FreeCAD Python 调用，**用户仅需另装 FreeCAD**
-- **McCAD**（韩国首尔大学开发，AGPL-3.0）：外置可执行文件，OpenCascade 内核
-
-两者均自动转换并回填曲面/栅元卡。
+「几何」标签页 → 「导入 STEP」，经 **GEOUNED**（西班牙 CIEMAT 开发，EUPL-1.2）转换：
+- 随程序打包、无需单独安装；运行时经 FreeCAD Python 调用，**用户仅需另装 FreeCAD**
+- 自动转换并回填曲面/栅元卡，科学计数法自动整理为 3 位小数（GQ/SQ 保留精度）
 
 ---
 
@@ -172,9 +168,8 @@ RUSTUP_HOME=D:\rust\rustup CARGO_HOME=D:\rust\cargo npm run tauri build
 | [Three.js](https://threejs.org/) | 3D 渲染 | MIT |
 | [PyMCNP](https://github.com/FSIBT/PyMCNP) | MCNP 核心库（几何、生成、解析） | BSD-3-Clause |
 | [FreeCAD](https://www.freecad.org/) | 3D CAD 几何处理（CSG 求值引擎） | LGPL v2+ |
-| [McCAD](https://github.com/snukc1325/McCAD) | STEP → MCNP 几何转换引擎 | AGPL-3.0 |
-| [GEOUNED](https://geouned-org.github.io/GEOUNED/) | STEP → MCNP 几何转换引擎（双引擎可选，随程序打包） | EUPL-1.2 |
-| [OpenCascade](https://dev.opencascade.org/) | CAD 内核（McCAD + FreeCAD 共用） | LGPL v2.1 |
+| [GEOUNED](https://geouned-org.github.io/GEOUNED/) | STEP → MCNP 几何转换引擎（随程序打包） | EUPL-1.2 |
+| [OpenCascade](https://dev.opencascade.org/) | CAD 内核（FreeCAD 依赖） | LGPL v2.1 |
 | [NumPy](https://numpy.org/) | 科学计算 | BSD-3-Clause |
 
 ---
@@ -183,7 +178,7 @@ RUSTUP_HOME=D:\rust\rustup CARGO_HOME=D:\rust\cargo npm run tauri build
 
 **All Rights Reserved.** 版权所有 © 2026 魏祎卓
 
-> **本许可仅适用于本项目自有代码。** 所捆绑/调用的开源组件保留其各自许可证：McCAD（AGPL-3.0）、GEOUNED（EUPL-1.2）、OpenCascade（LGPL v2.1）、FreeCAD（LGPL v2+）、pymcnp（BSD-3-Clause）、React（MIT）、Vite（MIT）、Tauri（MIT/Apache-2.0）、Three.js（MIT）、NumPy（BSD）等，详见上方"引用与致谢"。
+> **本许可仅适用于本项目自有代码。** 所捆绑/调用的开源组件保留其各自许可证：GEOUNED（EUPL-1.2）、OpenCascade（LGPL v2.1）、FreeCAD（LGPL v2+）、pymcnp（BSD-3-Clause）、React（MIT）、Vite（MIT）、Tauri（MIT/Apache-2.0）、Three.js（MIT）、NumPy（BSD）等，详见上方"引用与致谢"。
 
 - ✅ 允许个人及机构内部**免费使用**
 - ✅ 允许为自用或内部使用**修改代码**

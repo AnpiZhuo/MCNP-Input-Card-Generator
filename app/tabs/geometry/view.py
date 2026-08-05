@@ -110,11 +110,11 @@ def create_ui(parent, main_window,
 
     # 按钮行
     btn_row = QHBoxLayout()
-    ui.lbl_step_warn = QLabel("✅ McCAD 已就绪")
+    ui.lbl_step_warn = QLabel("✅ GEOUNED 已就绪")
     ui.lbl_step_warn.setStyleSheet("font-size:12px;")
     btn_row.addWidget(ui.lbl_step_warn)
     ui.btn_import_step = QPushButton("📥 导入 STEP")
-    ui.btn_import_step.setToolTip("使用 McCAD 转换 STEP → MCNP 输入卡")
+    ui.btn_import_step.setToolTip("使用 GEOUNED 转换 STEP → MCNP 输入卡")
     btn_row.addWidget(ui.btn_import_step)
     ui.btn_3d = QPushButton("🔍 3D 预览")
     ui.btn_3d.setToolTip("基于当前曲面和栅元定义打开 3D 几何预览窗口")

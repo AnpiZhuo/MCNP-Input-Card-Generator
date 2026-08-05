@@ -59,7 +59,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
       });
       if (r.ok) { const j = await r.json(); console.log("[DEBUG-tr] import-step resp status=", j.status, "deckKeys=", j.deck ? Object.keys(j.deck) : null, "trLines=", (j.deck?.tr_cards || "").split("\n").length); if (j.status === "ok") { if (j.deck) patch({ surfaces: j.deck.surfaces || "", tr_cards: j.deck.tr_cards || "", cells: j.deck.cells || [] }); alert("✅ STEP 导入成功"); setShowStepDlg(false); return; } }
     } catch {}
-    alert("STEP 导入需要后端服务 + FreeCAD/McCAD");
+    alert("STEP 导入需要后端服务 + FreeCAD/GEOUNED");
     setShowStepDlg(false);
   };
   const handlePreview3D = () => {

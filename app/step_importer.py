@@ -1,5 +1,5 @@
 """
-STEP → MCNP 转换：封装 McCAD（外置转换器）调用 + 输出解析
+STEP → MCNP 转换：封装 GEOUNED（FreeCAD 转换器）调用 + 输出解析。
 
 使用方法：
     from app.step_importer import StepImporter
@@ -7,634 +7,25 @@ STEP → MCNP 转换：封装 McCAD（外置转换器）调用 + 输出解析
     # FreeCAD 检测（用于 3D 预览和 STEP 导出）
     bin_path = StepImporter.detect_freecad()
 
-    # McCAD STEP 导入
+    # GEOUNED STEP 导入
     deck = StepImporter.import_step("模型.stp", "SS", -7.93)
-注：McCAD.exe 为独立子进程，适用 AGPL-3.0 许可证，不影响主程序。
+注：GEOUNED 以 Python 包形式随程序分发，运行时经 FreeCAD Python 调用。
 """
 
 import os
 import sys
 import json
 import re
-import shutil
 import subprocess
 import tempfile
 import winreg
-import time as _time
 
 from pathlib import Path
-
-from PyQt5.QtCore import QSettings, Qt, QByteArray
-from PyQt5.QtWidgets import (
-    QMessageBox, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QGroupBox, QCheckBox, QSpinBox, QDoubleSpinBox, QLineEdit,
-    QComboBox, QPushButton, QDialogButtonBox, QScrollArea, QWidget,
-    QLabel
-)
+from PyQt5.QtCore import QSettings
 
 
 # ===================================================================
-# McCAD 导入设置对话框
-# ===================================================================
-
-class McCADSettings:
-    """McCAD 设置容器 — 默认值 + QSettings 持久化。"""
-
-    KEYS = [
-        # 常用
-        "voidGeneration", "startCellNum", "startSurfNum", "tmp",
-        # 分解
-        "decompose", "recurrenceDepth", "minSolidVolume", "minFaceArea",
-        "scalingFactor", "precision", "faceTolerance", "edgeTolerance",
-        "parameterTolerance", "angularTolerance", "distanceTolerance",
-        "simplifyTori", "simplifyAllTori", "torusSplitAngle",
-        # 转换
-        "compoundIsSingleCell", "minVoidVolume", "maxSolidsPerVoidCell",
-        "BVHVoid", "maxLineWidth", "debugLevel", "units", "startMatNum",
-    ]
-
-    DEFAULTS = {
-        "voidGeneration": True, "startCellNum": 1, "startSurfNum": 1,
-        "tmp": "2.53e-8",
-        "decompose": False, "recurrenceDepth": 20,  # False: 减少碎块（复杂 CAD 需手动开启）
-        "minSolidVolume": 1e-3, "minFaceArea": 1e-4,
-        "scalingFactor": 100.0, "precision": 1e-6,
-        "faceTolerance": 1e-8, "edgeTolerance": 1e-8,
-        "parameterTolerance": 1e-8, "angularTolerance": 1e-4,
-        "distanceTolerance": 1e-6,
-        "simplifyTori": False, "simplifyAllTori": False,
-        "torusSplitAngle": 30.0,
-        "compoundIsSingleCell": False, "minVoidVolume": 1.0,
-        "maxSolidsPerVoidCell": 20, "BVHVoid": False,
-        "maxLineWidth": 80, "debugLevel": 0, "units": "cm",
-        "startMatNum": 1,
-    }
-
-    def __init__(self):
-        self._data = dict(self.DEFAULTS)
-        self._load()
-
-    def _load(self):
-        s = QSettings("MCNPGen", "McCADImport")
-        for k in self.KEYS:
-            v = s.value(k)
-            if v is not None:
-                default = self.DEFAULTS[k]
-                if isinstance(default, bool):
-                    self._data[k] = str(v).lower() in ("true", "1", "yes")
-                elif isinstance(default, int):
-                    self._data[k] = int(str(v))
-                elif isinstance(default, float):
-                    self._data[k] = float(str(v))
-                else:
-                    self._data[k] = v
-
-    def save(self):
-        s = QSettings("MCNPGen", "McCADImport")
-        for k, v in self._data.items():
-            s.setValue(k, v)
-
-    def __getitem__(self, key):
-        return self._data[key]
-
-    def __setitem__(self, key, value):
-        if key in self._data:
-            self._data[key] = value
-
-    def update(self, **kw):
-        self._data.update(kw)
-
-
-class _CollapsibleSection(QWidget):
-    """可折叠区域：点击标题栏展开/收起内容。"""
-    def __init__(self, title: str, parent=None):
-        super().__init__(parent)
-        self._open = False
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        self._btn = QPushButton(f"▶ {title}")
-        self._btn.setStyleSheet(
-            "QPushButton { text-align: left; padding: 4px 8px; "
-            "border: 1px solid #ccc; border-radius: 3px; "
-            "background: #f5f5f5; font-weight: bold; }"
-            "QPushButton:hover { background: #e0e0e0; }"
-        )
-        self._btn.setCheckable(True)
-        self._btn.setChecked(False)
-        self._btn.clicked.connect(self._toggle)
-        layout.addWidget(self._btn)
-
-        self._content = QWidget()
-        self._content.setVisible(False)
-        self._form = QFormLayout(self._content)
-        self._form.setContentsMargins(12, 4, 4, 4)
-        layout.addWidget(self._content)
-
-    def _toggle(self):
-        self._open = not self._open
-        self._content.setVisible(self._open)
-        self._btn.setText(f"▼ {self._btn.text()[2:]}" if self._open
-                          else f"▶ {self._btn.text()[2:]}")
-
-    def add_row(self, label: str, widget):
-        self._form.addRow(label, widget)
-
-    def form_layout(self) -> QFormLayout:
-        return self._form
-
-
-class StepImportDialog(QDialog):
-    """McCAD 导入设置对话框。常用可见，高级可折叠，设置自动保存。"""
-
-    def __init__(self, parent=None, material="MAT", density=-1.0,
-                 step_path=""):
-        super().__init__(parent)
-        self.setWindowTitle("McCAD 导入设置")
-        self.setMinimumWidth(520)
-        self._settings = McCADSettings()
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        inner = QWidget()
-        layout = QVBoxLayout(inner)
-
-        # ==================== 常用设置（不折叠） ====================
-        common = QGroupBox("常用设置")
-        cf = QFormLayout(common)
-        self.material_edit = QLineEdit(material)
-        cf.addRow("材料名:", self.material_edit)
-        self.density_spin = QDoubleSpinBox()
-        self.density_spin.setRange(0.001, 100000)
-        self.density_spin.setDecimals(4)
-        self.density_spin.setValue(abs(density))
-        cf.addRow("密度 (g/cm³):", self.density_spin)
-        self.tmp_edit = QLineEdit(self._settings["tmp"])
-        cf.addRow("TMP 温度 (MeV):", self.tmp_edit)
-        self.void_cb = QCheckBox("生成真空栅元")
-        self.void_cb.setChecked(self._settings["voidGeneration"])
-        cf.addRow("", self.void_cb)
-        self.start_cell = QSpinBox()
-        self.start_cell.setRange(1, 99999)
-        self.start_cell.setValue(self._settings["startCellNum"])
-        cf.addRow("起始栅元号:", self.start_cell)
-        self.start_surf = QSpinBox()
-        self.start_surf.setRange(1, 99999)
-        self.start_surf.setValue(self._settings["startSurfNum"])
-        cf.addRow("起始曲面号:", self.start_surf)
-        self.units_combo = QComboBox()
-        self.units_combo.addItems(["cm", "m", "mm"])
-        self.units_combo.setCurrentText(self._settings["units"])
-        cf.addRow("STEP 单位:", self.units_combo)
-        layout.addWidget(common)
-
-        # ==================== 分解设置（折叠） ====================
-        decomp = _CollapsibleSection("分解设置")
-        for key, label, typ, *args in [
-            ("decompose", "启用分解", "bool"),
-            ("recurrenceDepth", "递归深度", "int", 1, 100),
-            ("minSolidVolume", "最小实体体积 (cm³)", "float", 1e-10, 1e6),
-            ("minFaceArea", "最小面面积 (cm²)", "float", 1e-10, 1e6),
-            ("scalingFactor", "缩放因子", "float", 0.1, 1e6),
-            ("precision", "精度", "float", 1e-12, 1.0),
-            ("faceTolerance", "面容差 (cm)", "float", 1e-12, 1.0),
-            ("edgeTolerance", "边容差 (cm)", "float", 1e-12, 1.0),
-            ("parameterTolerance", "参数容差 (cm)", "float", 1e-12, 1.0),
-            ("angularTolerance", "角度容差 (rad/PI)", "float", 1e-12, 1.0),
-            ("distanceTolerance", "距离容差 (cm)", "float", 1e-12, 1.0),
-            ("simplifyTori", "简化环面", "bool"),
-            ("simplifyAllTori", "简化全部环面", "bool"),
-            ("torusSplitAngle", "环面分割角度 (°)", "float", 0, 360),
-        ]:
-            w = self._make_widget(key, typ, *args)
-            decomp.add_row(label + ":", w)
-        layout.addWidget(decomp)
-
-        # ==================== 转换设置（折叠） ====================
-        conv = _CollapsibleSection("转换设置")
-        for key, label, typ, *args in [
-            ("compoundIsSingleCell", "复合体合并为单栅元", "bool"),
-            ("minVoidVolume", "最小真空体积 (cm³)", "float", 1e-10, 1e6),
-            ("maxSolidsPerVoidCell", "每真空栅元最大实体数", "int", 1, 1000),
-            ("BVHVoid", "BVH 真空", "bool"),
-            ("maxLineWidth", "最大行宽", "int", 40, 200),
-            ("debugLevel", "调试级别", "int", 0, 3),
-            ("startMatNum", "起始材料号", "int", 1, 99999),
-        ]:
-            w = self._make_widget(key, typ, *args)
-            conv.add_row(label + ":", w)
-        layout.addWidget(conv)
-
-        # ==================== 按钮 ====================
-        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btn_box.accepted.connect(self._on_accept)
-        btn_box.rejected.connect(self.reject)
-        layout.addWidget(btn_box)
-
-        scroll.setWidget(inner)
-        outer = QVBoxLayout(self)
-        outer.addWidget(scroll)
-
-    def _make_widget(self, key, typ, *args):
-        default = self._settings[key]
-        if typ == "bool":
-            w = QCheckBox()
-            w.setChecked(bool(default))
-        elif typ == "int":
-            w = QSpinBox()
-            lo = args[0] if len(args) > 0 else 0
-            hi = args[1] if len(args) > 1 else 999999
-            w.setRange(lo, hi)
-            w.setValue(int(default))
-        elif typ == "float":
-            w = QDoubleSpinBox()
-            lo = args[0] if len(args) > 0 else -1e12
-            hi = args[1] if len(args) > 1 else 1e12
-            w.setRange(lo, hi)
-            w.setDecimals(6)
-            w.setValue(float(default))
-        else:
-            w = QLineEdit(str(default))
-        w._key = key
-        return w
-
-    def _collect_values(self, parent_widget) -> dict:
-        result = {}
-        for w in parent_widget.findChildren(QCheckBox):
-            if hasattr(w, '_key'):
-                result[w._key] = w.isChecked()
-        for w in parent_widget.findChildren(QSpinBox):
-            if hasattr(w, '_key'):
-                result[w._key] = w.value()
-        for w in parent_widget.findChildren(QDoubleSpinBox):
-            if hasattr(w, '_key'):
-                result[w._key] = w.value()
-        for w in parent_widget.findChildren(QLineEdit):
-            if hasattr(w, '_key'):
-                try:
-                    result[w._key] = float(w.text())
-                except ValueError:
-                    result[w._key] = w.text()
-        return result
-
-    def _on_accept(self):
-        tmp_val = self.tmp_edit.text().strip()
-        # TMP 留空 → 不记录，让生成器不输出 TMP=
-        if tmp_val == "":
-            tmp_val = ""
-
-        data = {
-            "voidGeneration": self.void_cb.isChecked(),
-            "startCellNum": self.start_cell.value(),
-            "startSurfNum": self.start_surf.value(),
-            "units": self.units_combo.currentText(),
-            "tmp": tmp_val,
-        }
-        # 折叠区收集的值（不覆盖已存在的显式 key）
-        collected = self._collect_values(self)
-        for k, v in collected.items():
-            if k not in data:
-                data[k] = v
-        self._settings.update(**data)
-        self._settings.save()
-        self.accept()
-
-    def get_settings(self) -> dict:
-        return dict(self._settings._data)
-
-    def get_material(self) -> str:
-        return self.material_edit.text().strip()
-
-    def get_density(self) -> float:
-        return -abs(self.density_spin.value())
-
-
-# ===================================================================
-# StepImporter — 公共接口 (Seam)
-# ===================================================================
-
-class StepImporter:
-    """STEP 导入器。封装 McCAD 外部转换器的调用和输出解析。
-
-    用法：
-        StepImporter.detect_freecad()  → FreeCAD bin 目录路径
-        StepImporter.import_step(...)  → DeckData
-    """
-
-    # --- FreeCAD 检测（已有逻辑，包装为类方法）---
-
-    @classmethod
-    def detect_freecad(cls) -> str | None:
-        """检测 FreeCAD 可执行文件路径。返回 bin 目录或 None。"""
-        return _cached_detect()
-
-    @classmethod
-    def save_freecad_path(cls, exe_path: str) -> None:
-        """保存 FreeCAD 路径到 QSettings。"""
-        settings = QSettings("MCNPGen", "MCNPGenerator")
-        settings.setValue("freecad_path", exe_path)
-
-    # --- McCAD 导入 ---
-
-    @classmethod
-    def import_step(cls, step_path: str, material: str = "MAT",
-                    density: float = -1.0,
-                    settings: dict | None = None) -> "DeckData | None":
-        """STEP → McCAD 完整转换 → 解析 MCFile.i → DeckData。"""
-        if settings is None:
-            settings = {}
-        converter = McCADConverter()
-        if not converter.is_available():
-            raise RuntimeError("McCAD 不可用")
-
-        try:
-            mcnp_path = converter.run(step_path, material, density,
-                                      settings=settings)
-        except RuntimeError as e:
-            raise RuntimeError(f"McCAD 转换失败: {e}")
-
-        parser = MCNPOutputParser()
-        return parser.parse(mcnp_path, post_settings=settings)
-
-
-# ===================================================================
-# McCADConverter — 封装 McCAD 子进程
-# ===================================================================
-
-class McCADConverter:
-    """封装 McCAD 外部可执行文件的调用。
-
-    使用方式：
-        converter = McCADConverter()
-        if converter.is_available():
-            mcnp_file = converter.run("input.stp", "SS", -7.93)
-    """
-
-    # ── 路径：开发环境 vs 打包环境 ──
-    # 打包后 McCAD.exe 在 _internal/mccad/，OCC DLL 在 _internal/occ/
-    _BUNDLED = getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
-
-    @staticmethod
-    def _mccad_path() -> str:
-        """返回 McCAD.exe 路径（自动适配打包/开发环境）。"""
-        if McCADConverter._BUNDLED:
-            return os.path.join(sys._MEIPASS, "mccad", "McCAD.exe")
-        return r"D:\McCAD_build\src\McCAD\Release\McCAD.exe"
-
-    @staticmethod
-    def _occ_bin_dir() -> str:
-        """返回 OCC DLL 目录（自动适配打包/开发环境）。"""
-        if McCADConverter._BUNDLED:
-            return os.path.join(sys._MEIPASS, "occ")
-        return r"D:\OCC\win64\vc14\bin"
-
-    @staticmethod
-    def is_available() -> bool:
-        """检查 McCAD.exe 和 OCC DLL 是否可用。"""
-        mccad = McCADConverter._mccad_path()
-        occ = McCADConverter._occ_bin_dir()
-        if not os.path.isfile(mccad):
-            return False
-        key_dll = os.path.join(occ, "TKernel.dll")
-        return os.path.isfile(key_dll)
-
-    @staticmethod
-    def get_version() -> str:
-        """返回 McCAD 版本号。"""
-        try:
-            result = subprocess.run(
-                [McCADConverter._mccad_path(), "help"],
-                capture_output=True, text=True, timeout=10,
-                env=McCADConverter._build_env(),
-            )
-            match = re.search(r"v(\d+\.\d+)", result.stdout)
-            return match.group(0) if match else "unknown"
-        except Exception:
-            return "unknown"
-
-    @staticmethod
-    def run(step_path: str, material: str, density: float,
-            work_dir: str | None = None,
-            settings: dict | None = None) -> str:
-        if settings is None:
-            settings = {}
-        if work_dir is None:
-            work_dir = os.path.dirname(os.path.abspath(step_path))
-        os.makedirs(work_dir, exist_ok=True)
-
-        mat_filename = f"{material}_{density}.stp"
-        step_copy = os.path.join(work_dir, mat_filename)
-        shutil.copy2(step_path, step_copy)
-
-        # 写入 McCAD 配置文件，使用用户设置
-        def s(key, default=""):
-            return str(settings.get(key, default))
-
-        config_path = os.path.join(work_dir, "McCADInputConfig.i")
-        with open(config_path, "w", encoding="utf-8") as f:
-            f.write(f"""debugLevel = {s("debugLevel", "0")}
-units = {s("units", "cm")}
-inputFileName = {mat_filename}
-decompose = {s("decompose", "true")}
-recurrenceDepth = {s("recurrenceDepth", "20")}
-minSolidVolume = {s("minSolidVolume", "1.0e-3")} [cm3]
-minFaceArea = {s("minFaceArea", "1.0e-4")} [cm2]
-scalingFactor = {s("scalingFactor", "100.0")}
-precision = {s("precision", "1.0e-6")}
-faceTolerance = {s("faceTolerance", "1.0e-8")} [cm]
-edgeTolerance = {s("edgeTolerance", "1.0e-8")} [cm]
-parameterTolerance = {s("parameterTolerance", "1.0e-8")} [cm]
-angularTolerance = {s("angularTolerance", "1.0e-4")} [radian/PI]
-distanceTolerance = {s("distanceTolerance", "1.0e-6")} [cm]
-simplifyTori = {s("simplifyTori", "false")}
-simplifyAllTori = {s("simplifyAllTori", "false")}
-torusSplitAngle = {s("torusSplitAngle", "30.0")} [degrees]
-convert = true
-voidGeneration = {s("voidGeneration", "true")}
-compoundIsSingleCell = {s("compoundIsSingleCell", "false")}
-minVoidVolume = {s("minVoidVolume", "1.0")} [cm3]
-maxSolidsPerVoidCell = {s("maxSolidsPerVoidCell", "20")}
-BVHVoid = {s("BVHVoid", "false")}
-MCcode = mcnp
-startCellNum = {s("startCellNum", "1")}
-startSurfNum = {s("startSurfNum", "1")}
-startMatNum = {s("startMatNum", "1")}
-maxLineWidth = {s("maxLineWidth", "80")}
-MCFileName = MCFile.i
-""")
-
-        # 构建环境（加入 OCC DLL 路径）
-        env = McCADConverter._build_env()
-
-        # 运行 McCAD
-        try:
-            result = subprocess.run(
-                [McCADConverter._mccad_path(), "run"],
-                cwd=work_dir, env=env,
-                capture_output=True, text=True, timeout=600,
-            )
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("McCAD 执行超时（>10分钟）")
-
-        # McCAD 没有返回值错误码，检查输出文件是否存在
-        mcnp_path = os.path.join(work_dir, "MCFile.i")
-        if not os.path.isfile(mcnp_path) or os.path.getsize(mcnp_path) == 0:
-            stderr = result.stderr.strip() if result.stderr else ""
-            stdout = result.stdout.strip() if result.stdout else ""
-            raise RuntimeError(
-                f"McCAD 未生成输出文件。\nstdout:\n{stdout}\nstderr:\n{stderr}"
-            )
-
-        # 清理中间文件
-        for fname in os.listdir(work_dir):
-            if fname.startswith(material) and fname != mat_filename:
-                if fname.endswith((".stp", ".i")):
-                    try:
-                        os.remove(os.path.join(work_dir, fname))
-                    except OSError:
-                        pass
-
-        return mcnp_path
-
-    @staticmethod
-    def run_decompose(step_path: str, material: str, density: float,
-                      work_dir: str | None = None,
-                      settings: dict | None = None) -> str:
-        """运行 McCAD 只做分解（convert=false），返回 *Decomposed.stp 路径。"""
-        if work_dir is None:
-            work_dir = os.path.dirname(os.path.abspath(step_path))
-        os.makedirs(work_dir, exist_ok=True)
-
-        mat_filename = f"{material}_{density}.stp"
-        step_copy = os.path.join(work_dir, mat_filename)
-        shutil.copy2(step_path, step_copy)
-
-        def s(key, default=""):
-            return str(settings.get(key, default)) if settings else default
-
-        config_path = os.path.join(work_dir, "McCADInputConfig.i")
-        with open(config_path, "w", encoding="utf-8") as f:
-            f.write(f"""debugLevel = 0
-units = cm
-inputFileName = {mat_filename}
-decompose = true
-recurrenceDepth = 20
-minSolidVolume = 1.0e-3 [cm3]
-minFaceArea = 1.0e-4 [cm2]
-precision = 1.0e-6
-convert = false
-""")
-
-        env = McCADConverter._build_env()
-        result = subprocess.run(
-            [McCADConverter.MCCAD_PATH, "run"],
-            cwd=work_dir, env=env,
-            capture_output=True, text=True, timeout=600,
-        )
-
-        # McCAD 产出 *Decomposed.stp
-        dec_files = [f for f in os.listdir(work_dir)
-                     if f.endswith("Decomposed.stp")]
-        if not dec_files:
-            raise RuntimeError(
-                f"McCAD 未生成分解 STEP 文件。\nstdout:{result.stdout[:200]}")
-        dec_path = os.path.join(work_dir, dec_files[0])
-
-        # 清理中间文件
-        dec_basename = os.path.basename(dec_path)
-        for fname in os.listdir(work_dir):
-            if (fname.startswith(material) and fname != mat_filename
-                    and fname != dec_basename):
-                try:
-                    os.remove(os.path.join(work_dir, fname))
-                except OSError:
-                    pass
-        return dec_path
-
-    @staticmethod
-    def _build_env() -> dict:
-        """构建子进程环境变量，加入 OCC DLL 路径。"""
-        env = os.environ.copy()
-        occ_bin = McCADConverter._occ_bin_dir()
-        if "PATH" in env:
-            env["PATH"] = occ_bin + os.pathsep + env["PATH"]
-        else:
-            env["PATH"] = occ_bin
-        return env
-
-
-# ===================================================================
-# run_step_converter — 转换器分发（两个 adapter 构成真正的 seam）
-# ===================================================================
-
-def run_step_converter(name: str, step_path: str, material: str,
-                       density: float, settings: dict,
-                       freecad_bin: str | None = None) -> str | None:
-    """按转换器名运行 STEP→MCNP 转换，返回 MCNP 文件路径；不可用/失败返回 None。
-
-    name ∈ {"geouned", "mccad"}。McCADConverter 与 GeoUnedConverter 共用同一
-    接口（is_available() + run(...) -> mcnp 文件路径），本函数负责选择与兜底，
-    让调用方（api_server）无需关心具体转换器细节。
-    """
-    if name == "geouned":
-        try:
-            from step_importer_geouned import GeoUnedConverter
-            conv = GeoUnedConverter(freecad_bin=freecad_bin)
-            if not conv.is_available():
-                return None
-            work_dir = tempfile.mkdtemp(prefix="geouned_")
-            return conv.run(step_path, material, density, work_dir, settings)
-        except Exception:
-            return None
-
-    if name == "mccad":
-        try:
-            # McCAD.exe 检测（PATH 或硬编码路径）
-            mccad_exe = shutil.which("McCAD") or shutil.which("McCAD.exe") or ""
-            if not mccad_exe:
-                for p in [
-                    "D:/MCNP/MCNP输入卡生成器/_internal/mccad/McCAD.exe",
-                    "D:/MCNP/输入卡生成器源码/dist/MCNP输入卡生成器/_internal/mccad/McCAD.exe",
-                ]:
-                    if os.path.isfile(p):
-                        mccad_exe = p
-                        break
-            if not mccad_exe:
-                return None
-
-            # 把 McCAD/OCC 目录加进 PATH（McCAD.exe 运行需要 DLL）
-            os.environ["PATH"] = mccad_exe + os.pathsep + os.environ.get("PATH", "")
-            if freecad_bin:
-                occ_dll = os.path.join(freecad_bin, "TKernel.dll")
-                if os.path.isfile(occ_dll):
-                    os.environ["PATH"] = freecad_bin + os.pathsep + os.environ.get("PATH", "")
-
-            mccad_settings = McCADSettings()
-            mccad_settings["voidGeneration"] = bool(settings.get("voidGeneration", True))
-            mccad_settings["startCellNum"] = int(settings.get("startCellNum", 1))
-            mccad_settings["startSurfNum"] = int(settings.get("startSurfNum", 1))
-            for k in mccad_settings.KEYS:
-                if k in settings:
-                    try:
-                        mccad_settings[k] = settings[k]
-                    except Exception:
-                        pass
-
-            converter = McCADConverter()
-            if not converter.is_available():
-                return None
-            work_dir = tempfile.mkdtemp(prefix="mccad_")
-            return converter.run(step_path, material, density, work_dir,
-                                 dict(mccad_settings._data))
-        except Exception:
-            return None
-
-    return None
-
-
-# ===================================================================
-# 曲面数字格式化 — 把科学计数法/尾零整理成干净的十进制
+# 曲面数字格式化 — 科学计数法 → 干净十进制（GQ/SQ 保留精度）
 # ===================================================================
 
 _SURF_MNE = set("P PX PY PZ SO S SX SY SZ C/X C/Y C/Z CX CY CZ "
@@ -646,7 +37,6 @@ _NUM_RE = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
 def _fmt_num_token(match, prec: int = 3) -> str:
     """数值 token：浮点 → prec 位小数；整数（曲面号/栅元引用）保持原样。"""
     tok = match.group(0)
-    # 整数保持整数，避免 100 → 100.000 破坏 MCNP 曲面号/引用
     if re.fullmatch(r"[+-]?\d+", tok):
         return tok
     try:
@@ -656,10 +46,10 @@ def _fmt_num_token(match, prec: int = 3) -> str:
     return format(v, f".{prec}f")
 
 
-def _format_surface_numbers(surface_text: str) -> str:
-    """仅格式化曲面卡的数字，保留原间距与注释；栅元/数据卡不动。"""
+def _format_surface_numbers(text: str) -> str:
+    """把 MCNP 曲面文本的数字整理成 3 位小数（跳过注释行与 $ 注释）。"""
     lines = []
-    for line in surface_text.splitlines():
+    for line in text.splitlines():
         stripped = line.lstrip()
         if not stripped or stripped[0].lower() == "c" or stripped[0] == "$":
             lines.append(line)
@@ -678,22 +68,21 @@ def _format_surface_numbers(surface_text: str) -> str:
 
 
 def _strip_data_cards(text: str) -> str:
-    """只保留栅元 + 曲面段，截掉数据卡段。
+    """只保留栅元 + 曲面段，截掉数据卡段（MODE/NPS/SDEF 等）。
 
-    数据卡（MODE/NPS/SDEF/M1/F1...）是首列非缩进、以字母开头的行；
-    栅元/曲面卡以数字开头，注释以 C/$ 开头，续行缩进开头。
+    数据卡是首列非缩进、以字母开头的行；栅元/曲面卡以数字开头，
+    注释以 C/$ 开头，续行缩进开头。
     """
     lines = text.splitlines()
     cut = len(lines)
     for i, line in enumerate(lines):
         if i == 0:
-            continue  # 首行是 MCNP 标题（如 "MAT density=-1"），不是数据卡
+            continue  # 首行是 MCNP 标题
         s = line.lstrip()
         if not s or s[0].lower() in ("c", "$"):
             continue
-        # TR 卡也是数据卡，但需保留（parse 会单独分离到 tr_text）
         if re.match(r"^\*?TR\d+\s", s, re.IGNORECASE):
-            continue
+            continue  # TR 卡单独保留
         if not line[:1].isspace() and s[0].isalpha():
             cut = i
             break
@@ -702,11 +91,7 @@ def _strip_data_cards(text: str) -> str:
 
 def geometry_deck_response(surfaces_text: str, tr_cards_text: str,
                            cells_list: list) -> dict:
-    """STEP 导入响应的几何 deck JSON —— surfaces/tr_cards/cells 三件套。
-
-    所有 STEP 导入分支共用此函数，集中定义几何 deck 的形状，
-    防止在调用处手拼字典时漏掉某个字段（如 tr_cards）。
-    """
+    """STEP 导入响应的几何 deck JSON —— surfaces/tr_cards/cells 三件套。"""
     return {
         "surfaces": surfaces_text or "",
         "tr_cards": tr_cards_text or "",
@@ -715,15 +100,72 @@ def geometry_deck_response(surfaces_text: str, tr_cards_text: str,
 
 
 # ===================================================================
-# MCNPOutputParser — 解析 McCAD 生成的 MCNP 文件
+# run_step_converter — GEOUNED 转换
+# ===================================================================
+
+def run_step_converter(name: str, step_path: str, material: str,
+                       density: float, settings: dict,
+                       freecad_bin: str | None = None) -> str | None:
+    """运行 STEP→MCNP 转换（当前仅 GEOUNED），返回 MCNP 文件路径；失败返回 None。"""
+    if name == "geouned":
+        try:
+            from step_importer_geouned import GeoUnedConverter
+            conv = GeoUnedConverter(freecad_bin=freecad_bin)
+            if not conv.is_available():
+                return None
+            work_dir = tempfile.mkdtemp(prefix="geouned_")
+            return conv.run(step_path, material, density, work_dir, settings)
+        except Exception:
+            return None
+    return None
+
+
+# ===================================================================
+# StepImporter — 公共接口
+# ===================================================================
+
+class StepImporter:
+    """STEP 导入器。封装 GEOUNED 外部转换器的调用和输出解析。"""
+
+    # --- FreeCAD 检测 ---
+
+    @classmethod
+    def detect_freecad(cls) -> str | None:
+        """检测 FreeCAD 可执行文件路径。返回 bin 目录或 None。"""
+        return _cached_detect()
+
+    @classmethod
+    def save_freecad_path(cls, exe_path: str) -> None:
+        """保存 FreeCAD 路径到 QSettings。"""
+        settings = QSettings("MCNPGen", "MCNPGenerator")
+        settings.setValue("freecad_path", exe_path)
+
+    # --- GEOUNED 导入 ---
+
+    @classmethod
+    def import_step(cls, step_path: str, material: str = "MAT",
+                    density: float = -1.0,
+                    settings: dict | None = None) -> "DeckData | None":
+        """STEP → GEOUNED 转换 → 解析 .mcnp → DeckData。"""
+        if settings is None:
+            settings = {}
+        mcnp_path = run_step_converter("geouned", step_path, material,
+                                       density, settings)
+        if not mcnp_path:
+            raise RuntimeError("GEOUNED 不可用或转换失败")
+        return MCNPOutputParser.parse(mcnp_path, post_settings=settings)
+
+
+# ===================================================================
+# MCNPOutputParser — 解析 GEOUNED 生成的 MCNP 文件
 # ===================================================================
 
 class MCNPOutputParser:
-    """解析 McCAD 生成的 MCFile.i，提取栅元、曲面和数据卡。
+    """解析 GEOUNED 生成的 .mcnp，提取栅元、曲面、TR 卡。
 
     使用方式：
         parser = MCNPOutputParser()
-        deck = parser.parse("MCFile.i")
+        deck = parser.parse("csg.mcnp")
     """
 
     @staticmethod
@@ -749,7 +191,7 @@ class MCNPOutputParser:
                     r"^\s*c\s+M(\d+)\s*$", line, re.IGNORECASE).group(1)
                 processed.append(f"c M{mat_num}  $ TODO: add ZAID + fraction")
             elif re.match(r"^\s*c\s+\d+", line, re.IGNORECASE):
-                # 注释掉的栅元（如 McCAD 的体积计算卡 c 24 ...），跳过
+                # 注释掉的栅元（如体积计算卡 c 24 ...），跳过
                 pass
             else:
                 processed.append(line)
@@ -757,7 +199,7 @@ class MCNPOutputParser:
 
         modified_text = "\n".join(processed)
 
-        # 分离 TR 卡（McCAD 改版后 TR 卡写在曲面段末尾）
+        # 分离 TR 卡
         tr_lines = []
         surf_lines = []
         for line in modified_text.splitlines():
@@ -841,7 +283,7 @@ class StandardSurfaceConverter:
 
 
 # ===================================================================
-# FreeCAD 检测（已有代码，不做改动）
+# FreeCAD 检测
 # ===================================================================
 
 def _reg_query(key_path: str, value_name: str = "",
@@ -925,4 +367,3 @@ def _cached_detect() -> str | None:
     if _freecad_cache_state == 1 and _freecad_cache_path:
         return os.path.dirname(_freecad_cache_path)
     return None
-
