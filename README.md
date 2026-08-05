@@ -111,6 +111,7 @@ RUSTUP_HOME=D:\rust\rustup CARGO_HOME=D:\rust\cargo npm run tauri build
 │   ├── _freecad_csg_worker.py      # FreeCAD CSG 几何求值子进程
 │   ├── geouned_worker.py           # GEOUNED 转换 worker（FreeCAD python 子进程）
 │   ├── step_importer_geouned.py    # GEOUNED 转换器封装
+│   ├── freecad_locator.py          # FreeCAD 定位（检测/手动指定路径唯一入口）
 │   ├── xsdir_db.py                 # xsdir 截面数据库
 │   └── material_presets.py         # 预设材料库
 └── gui/
