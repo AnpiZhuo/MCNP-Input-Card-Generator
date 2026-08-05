@@ -3,18 +3,17 @@ FreeCAD 定位模块 — 唯一负责「找到 FreeCAD」的地方。
 
 所有需要 FreeCAD 的调用方都收敛到这个 seam：
     api_server 的 /api/check-freecad、/api/set-freecad-path、
-    step_importer 的 detect_freecad / save_freecad_path、
-    Qt 界面保存 FreeCAD 路径。
+    step_importer 的 detect_freecad / save_freecad_path。
 
 定位顺序：
-    1. 用户手动保存的路径（config.json 与 QSettings 双读，取任一有效）
+    1. 用户手动保存的路径（config.json，唯一持久化存储）
     2. Windows 注册表（App Paths 64/32 位视图 + InstallPath 递归）
     3. PATH 环境变量（进程 PATH + 系统/用户环境变量注册表）
     4. 常见安装目录递归搜索
 
 接口：
     saved()        -> str | None   用户手动保存的 FreeCAD.exe 完整路径
-    save(path)     -> None         持久化用户路径（config.json + QSettings 双写）
+    save(path)     -> None         持久化用户路径（config.json）
     locate()       -> str | None   FreeCAD.exe 完整路径（带进程内缓存）
     bin_dir()      -> str | None   FreeCAD 的 bin 目录（detect_freecad 契约）
     reset_cache()  -> None         清除进程内缓存（保存新路径后调用）
@@ -35,7 +34,7 @@ def _is_freecad_exe(p: str) -> bool:
 
 
 # ===================================================================
-# 持久化：config.json（web 端）+ QSettings（Qt 端）双写，保持两端同步
+# 持久化：config.json（唯一存储，web 路径）
 # ===================================================================
 
 def _config_path() -> str:
@@ -62,32 +61,15 @@ def _from_config_json() -> Optional[str]:
     return None
 
 
-def _from_qsettings() -> Optional[str]:
-    try:
-        from PyQt5.QtCore import QSettings
-        path = str(QSettings("MCNPGen", "MCNPGenerator").value("freecad_path", ""))
-        path = path.strip().strip('"')
-        if _is_freecad_exe(path):
-            return path
-    except Exception:
-        pass
-    return None
-
-
 def saved() -> Optional[str]:
-    """用户手动指定的 FreeCAD.exe 路径（config.json 优先，其次 QSettings）。"""
-    return _from_config_json() or _from_qsettings()
+    """用户手动指定的 FreeCAD.exe 路径。"""
+    return _from_config_json()
 
 
 def save(path: str) -> None:
-    """持久化用户手动指定的 FreeCAD.exe 路径（双写 + 清缓存）。"""
+    """持久化用户手动指定的 FreeCAD.exe 路径（config.json + 清缓存）。"""
     with open(_config_path(), "w", encoding="utf-8") as f:
         _json.dump({"freecad_path": path}, f)
-    try:
-        from PyQt5.QtCore import QSettings
-        QSettings("MCNPGen", "MCNPGenerator").setValue("freecad_path", path)
-    except Exception:
-        pass
     reset_cache()
 
 

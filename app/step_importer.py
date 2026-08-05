@@ -141,7 +141,7 @@ class StepImporter:
 
     @classmethod
     def save_freecad_path(cls, exe_path: str) -> None:
-        """保存 FreeCAD 路径（config.json + QSettings 双写）。"""
+        """保存 FreeCAD 路径到 config.json（唯一持久化存储）。"""
         save_freecad_locator(exe_path)
 
     # --- GEOUNED 导入 ---
