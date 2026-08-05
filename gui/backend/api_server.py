@@ -687,7 +687,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
     def _handle_xsdir_check(self):
         try:
             if not xsdir_db.loaded:
-                # Priority 1: environment variables (XSDIR, DATAPATH) - same as reference main_window._load_xsdir
+                # Priority 1: environment variables (XSDIR, DATAPATH)
                 env_path = ""
                 for _var in ("XSDIR", "xsdir"):
                     _val = os.environ.get(_var, "")
