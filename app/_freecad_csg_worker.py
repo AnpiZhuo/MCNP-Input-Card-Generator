@@ -583,6 +583,36 @@ def _quadric_to_native(qtype: str, coeffs: list[float], B: float):
         # ── 球 / 椭球 ──
         return _quadric_ellipsoid(w.tolist(), None, (V, Lp, k), B)
 
+    if len(nz) == 3:
+        # ── 圆锥：两个正特征值相等 + 一个负（直圆锥）──
+        pos = [i for i in range(3) if w[i] > tol]
+        neg = [i for i in range(3) if w[i] < -tol]
+        if (len(pos) == 2 and len(neg) == 1
+                and abs(w[pos[0]] - w[pos[1]]) < 1e-3 * scale):
+            lam = w[pos[0]]
+            mu = -w[neg[0]]
+            axis = V[:, neg[0]]
+            cp = np.zeros(3)
+            for i in range(3):
+                cp[i] = -Lp[i] / (2 * w[i])
+            # 残差 K = k - Σwᵢcᵢ² ≈ 0 才是锥（否则是双曲面）
+            K = k - sum(w[i] * cp[i] ** 2 for i in range(3))
+            if abs(K) > 1e-2 * max(1.0, abs(k)):
+                return None
+            tan2 = mu / lam
+            if tan2 <= 0:
+                return None
+            L = 2 * B
+            r = math.sqrt(tan2) * L
+            apex = V @ cp
+            try:
+                c1 = Part.makeCone(0, r, L, _vec(*apex), _vec(*axis))
+                c2 = Part.makeCone(0, r, L, _vec(*apex), _vec(*(-axis)))
+                dc = c1.fuse(c2)
+            except Exception:
+                return None
+            return _make_box(-B, B, -B, B, -B, B).cut(dc)  # 正侧 = 锥外
+
     return None
 
 
