@@ -13,15 +13,10 @@ STEP → MCNP 转换：封装 GEOUNED（FreeCAD 转换器）调用 + 输出解�
 """
 
 import os
-import sys
-import json
 import re
-import subprocess
 import tempfile
-import winreg
 
-from pathlib import Path
-from PyQt5.QtCore import QSettings
+from freecad_locator import bin_dir, save as save_freecad_locator
 
 
 # ===================================================================
@@ -103,21 +98,31 @@ def geometry_deck_response(surfaces_text: str, tr_cards_text: str,
 # run_step_converter — GEOUNED 转换
 # ===================================================================
 
+class StepConversionError(RuntimeError):
+    """STEP→MCNP 转换失败，message 可直接展示给用户。"""
+
+
 def run_step_converter(name: str, step_path: str, material: str,
                        density: float, settings: dict,
-                       freecad_bin: str | None = None) -> str | None:
-    """运行 STEP→MCNP 转换（当前仅 GEOUNED），返回 MCNP 文件路径；失败返回 None。"""
-    if name == "geouned":
-        try:
-            from step_importer_geouned import GeoUnedConverter
-            conv = GeoUnedConverter(freecad_bin=freecad_bin)
-            if not conv.is_available():
-                return None
-            work_dir = tempfile.mkdtemp(prefix="geouned_")
-            return conv.run(step_path, material, density, work_dir, settings)
-        except Exception:
-            return None
-    return None
+                       freecad_bin: str | None = None) -> str:
+    """运行 STEP→MCNP 转换（当前仅 GEOUNED），返回 MCNP 文件路径。
+
+    失败时抛 StepConversionError（message 含具体原因，不吞异常）。
+    """
+    if name != "geouned":
+        raise StepConversionError(f"未知转换器: {name}（当前仅支持 geouned）")
+    from step_importer_geouned import GeoUnedConverter
+    conv = GeoUnedConverter(freecad_bin=freecad_bin)
+    reason = conv.unavailable_reason()
+    if reason:
+        raise StepConversionError(f"GEOUNED 不可用：{reason}")
+    work_dir = tempfile.mkdtemp(prefix="geouned_")
+    try:
+        return conv.run(step_path, material, density, work_dir, settings)
+    except StepConversionError:
+        raise
+    except Exception as e:
+        raise StepConversionError(f"GEOUNED 转换失败：{e}") from e
 
 
 # ===================================================================
@@ -127,18 +132,17 @@ def run_step_converter(name: str, step_path: str, material: str,
 class StepImporter:
     """STEP 导入器。封装 GEOUNED 外部转换器的调用和输出解析。"""
 
-    # --- FreeCAD 检测 ---
+    # --- FreeCAD 检测（统一走 freecad_locator seam）---
 
     @classmethod
     def detect_freecad(cls) -> str | None:
         """检测 FreeCAD 可执行文件路径。返回 bin 目录或 None。"""
-        return _cached_detect()
+        return bin_dir()
 
     @classmethod
     def save_freecad_path(cls, exe_path: str) -> None:
-        """保存 FreeCAD 路径到 QSettings。"""
-        settings = QSettings("MCNPGen", "MCNPGenerator")
-        settings.setValue("freecad_path", exe_path)
+        """保存 FreeCAD 路径（config.json + QSettings 双写）。"""
+        save_freecad_locator(exe_path)
 
     # --- GEOUNED 导入 ---
 
@@ -151,8 +155,6 @@ class StepImporter:
             settings = {}
         mcnp_path = run_step_converter("geouned", step_path, material,
                                        density, settings)
-        if not mcnp_path:
-            raise RuntimeError("GEOUNED 不可用或转换失败")
         return MCNPOutputParser.parse(mcnp_path, post_settings=settings)
 
 
@@ -235,135 +237,3 @@ class MCNPOutputParser:
         return deck
 
 
-# ===================================================================
-# StandardSurfaceConverter — 用 FreeCAD OCC 将 STEP 转成标准 MCNP 曲面
-# ===================================================================
-
-class StandardSurfaceConverter:
-    """读取（分解后的）STEP 文件，用 FreeCAD OCC 生成标准 MCNP 曲面卡（无 GQ）。"""
-
-    CONVERTER_SCRIPT = os.path.join(
-        os.path.dirname(__file__), "step_to_standard.py")
-
-    @classmethod
-    def convert(cls, step_path: str, start_surf: int = 1,
-                freecad_bin: str | None = None) -> "tuple[dict, list] | None":
-        if freecad_bin is None:
-            freecad_bin = StepImporter.detect_freecad()
-        if not freecad_bin:
-            raise RuntimeError("FreeCAD 未找到")
-
-        python_exe = os.path.join(freecad_bin, "python.exe")
-        if not os.path.isfile(python_exe):
-            raise RuntimeError(f"FreeCAD Python 未找到: {python_exe}")
-
-        cmd = [python_exe, cls.CONVERTER_SCRIPT,
-               step_path, str(start_surf)]
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=300,
-            env=os.environ,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"FreeCAD 转换失败:\n{result.stderr[:500]}")
-
-        try:
-            data = json.loads(result.stdout.strip())
-        except json.JSONDecodeError:
-            raise RuntimeError(
-                f"FreeCAD 输出解析失败:\n{result.stdout[:500]}")
-
-        if "error" in data:
-            raise RuntimeError(f"FreeCAD 错误: {data['error']}")
-
-        surfaces = {int(k): v for k, v in data.get("surfaces", {}).items()}
-        tr_cards = {int(k): v for k, v in data.get("tr_cards", {}).items()}
-        cells = data.get("cells", [])
-        return surfaces, tr_cards, cells
-
-
-# ===================================================================
-# FreeCAD 检测
-# ===================================================================
-
-def _reg_query(key_path: str, value_name: str = "",
-               wow64_flag: int = 0) -> str | None:
-    """读取 Windows 注册表字符串值，返回 None 表示未找到。"""
-    try:
-        access = winreg.KEY_READ | wow64_flag if wow64_flag else winreg.KEY_READ
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, access) as k:
-            return winreg.QueryValueEx(k, value_name)[0]
-    except OSError:
-        return None
-
-def _find_freecad_from_registry() -> str | None:
-    """尝试从注册表定位 FreeCAD.exe，同时检查 64/32 位视图。"""
-    path = _reg_query(
-        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\FreeCAD.exe",
-        wow64_flag=winreg.KEY_WOW64_64KEY,
-    )
-    if path and os.path.isfile(path):
-        return path
-    path = _reg_query(
-        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\FreeCAD.exe",
-        wow64_flag=winreg.KEY_WOW64_32KEY,
-    )
-    if path and os.path.isfile(path):
-        return path
-    return None
-
-def _find_freecad_from_common_dirs() -> str | None:
-    """在常见安装目录下搜索 FreeCAD.exe。"""
-    _SEARCH_BASES = [
-        "C:\\Program Files",
-        "C:\\Program Files (x86)",
-        "D:\\",
-        os.path.expanduser("~"),
-    ]
-    for base in _SEARCH_BASES:
-        try:
-            for name in os.listdir(base):
-                if "FreeCAD" not in name:
-                    continue
-                freecad_dir = os.path.join(base, name)
-                exe = os.path.join(freecad_dir, "bin", "FreeCAD.exe")
-                if os.path.isfile(exe):
-                    return exe
-                try:
-                    for subname in os.listdir(freecad_dir):
-                        if "FreeCAD" in subname:
-                            exe = os.path.join(freecad_dir, subname, "bin", "FreeCAD.exe")
-                            if os.path.isfile(exe):
-                                return exe
-                except PermissionError:
-                    continue
-        except (FileNotFoundError, PermissionError, NotADirectoryError):
-            continue
-    return None
-
-_freecad_cache_state: int = 0
-_freecad_cache_path: str | None = None
-
-def _cached_detect() -> str | None:
-    """带缓存的 FreeCAD 检测。"""
-    global _freecad_cache_state, _freecad_cache_path
-    if _freecad_cache_state == 0:
-        settings = QSettings("MCNPGen", "MCNPGenerator")
-        saved = settings.value("freecad_path", "")
-        if saved and os.path.isfile(saved):
-            _freecad_cache_state = 1
-            _freecad_cache_path = saved
-            return os.path.dirname(saved)
-        exe = _find_freecad_from_registry()
-        if not exe:
-            exe = _find_freecad_from_common_dirs()
-        if exe and os.path.isfile(exe):
-            settings.setValue("freecad_path", exe)
-            _freecad_cache_state = 1
-            _freecad_cache_path = exe
-            return os.path.dirname(exe)
-        _freecad_cache_state = -1
-        _freecad_cache_path = None
-    if _freecad_cache_state == 1 and _freecad_cache_path:
-        return os.path.dirname(_freecad_cache_path)
-    return None

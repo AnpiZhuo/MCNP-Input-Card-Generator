@@ -62,25 +62,41 @@ class GeoUnedConverter:
 
     # ── 可用性 ──
 
-    def is_available(self) -> bool:
-        """检查 FreeCAD python.exe、geouned 包、worker 脚本是否齐全。"""
+    def _availability_reason(self) -> Optional[str]:
+        """不可用的原因；可用时返回 None。"""
         freecad_bin = self._get_freecad_bin()
         if not freecad_bin:
-            return False
+            return "未检测到 FreeCAD，请安装或指定 FreeCAD 路径"
         python_exe = os.path.join(freecad_bin, "python.exe")
         if not os.path.isfile(python_exe):
-            return False
+            return f"FreeCAD 缺少 python.exe: {python_exe}"
         if not os.path.isfile(self._WORKER_SCRIPT):
-            return False
+            return f"缺少 geouned worker 脚本: {self._WORKER_SCRIPT}"
         geouned_path = self._resolve_geouned_path()
-        return os.path.isdir(os.path.join(geouned_path, "geouned"))
+        if not os.path.isdir(os.path.join(geouned_path, "geouned")):
+            return f"缺少 geouned 包: {geouned_path}"
+        return None
+
+    def is_available(self) -> bool:
+        """检查 FreeCAD python.exe、geouned 包、worker 脚本是否齐全。"""
+        return self._availability_reason() is None
+
+    def unavailable_reason(self) -> Optional[str]:
+        """不可用的具体原因（可展示给用户）；可用时返回 None。"""
+        return self._availability_reason()
 
     # ── 转换 ──
 
     def run(self, step_path: str, material: str, density: float,
             work_dir: Optional[str] = None,
             settings: Optional[dict] = None) -> str:
-        """运行 GEOUNED 转换，返回输出 MCNP 文件路径。"""
+        """运行 GEOUNED 转换，返回输出 MCNP 文件路径。
+
+        不可用或失败时抛 RuntimeError，message 为可展示的具体原因。
+        """
+        reason = self._availability_reason()
+        if reason:
+            raise RuntimeError(f"GEOUNED 不可用：{reason}")
         if settings is None:
             settings = {}
         if work_dir is None:

@@ -166,6 +166,36 @@ def _parenthesize_unions(expr: str) -> str:
     return ":".join(wrapped)
 
 
+def build_cells_data(cell_list: list) -> list:
+    """把前端栅元 JSON 解析为 FreeCAD CSG 需要的 cells_data（跳过 void 栅元）。
+
+    export-step / preview-3d 共用：非空曲面表达式、材料非 0（跳过真空）、
+    pymcnp 几何 AST 解析失败时 ast 置 None（预览时该栅元不渲染）。
+    """
+    from pymcnp.types.Geometry import Geometry
+    cells_data = []
+    for cell in cell_list:
+        expr = str(cell.get("surface_expr", "") or cell.get("surfaces", "")).strip()
+        if not expr:
+            continue
+        raw_mat_raw = cell.get("material") or cell.get("mat") or ""
+        raw_mat = str(raw_mat_raw).strip().split()[0] if raw_mat_raw else ""
+        if raw_mat == "0":
+            continue  # void 栅元不参与 CSG
+        mat_val = raw_mat or raw_mat_raw
+        try:
+            ast = Geometry.from_mcnp(_parenthesize_unions(expr))
+        except Exception:
+            ast = None
+        cells_data.append({
+            "number": cell.get("number", 0) or int(cell.get("num", 0)),
+            "material": mat_val,
+            "ast": ast,
+            "density": cell.get("density", ""),
+        })
+    return cells_data
+
+
 # ===== JSON → Dataclass 转换 =====
 
 def _find_mcnp_exe() -> str:
@@ -683,67 +713,54 @@ class MCNPHandler(BaseHTTPRequestHandler):
     # ── STEP 导入 ──
     def _handle_import_step(self):
         try:
-            import sys as _sys, os, tempfile, json, shutil
+            import os, tempfile
+            from step_importer import (StepImporter, run_step_converter,
+                                       MCNPOutputParser, geometry_deck_response,
+                                       StepConversionError)
             data = self._read_body()
             step_data = data.get("data", "")
             step_path = data.get("path", "")
             settings = data.get("settings", {})
             material = settings.get("materialName", "MAT")
             density_val = settings.get("density", "-1.0")
-            try: density = float(density_val)
-            except: density = -1.0
-            void_gen = settings.get("voidGeneration", True)
-            start_cell = int(settings.get("startCellNum", 1))
-            start_surf = int(settings.get("startSurfNum", 1))
+            try:
+                density = float(density_val)
+            except Exception:
+                density = -1.0
 
-            # Save STEP data to temp file if provided as text
+            # STEP 数据以文本传入时落盘为临时文件
             if step_data:
-                tmp = tempfile.NamedTemporaryFile(suffix=".step", delete=False, mode="w", encoding="utf-8")
-                tmp.write(step_data); tmp.close()
+                tmp = tempfile.NamedTemporaryFile(
+                    suffix=".step", delete=False, mode="w", encoding="utf-8")
+                tmp.write(step_data)
+                tmp.close()
                 step_path = tmp.name
             if not step_path or not os.path.isfile(step_path):
                 self._ok({"status": "error", "message": "STEP 文件不存在"})
                 return
 
-            # STEP 转换：GEOUNED 主通道 + FreeCAD-OCC 兜底
-            _app_dir = os.path.join(os.path.dirname(__file__), "..", "..", "app")
-            _sys.path.insert(0, _app_dir)
-            from step_importer import (StepImporter, StandardSurfaceConverter,
-                                       run_step_converter, MCNPOutputParser,
-                                       geometry_deck_response)
-
+            # 只走 GEOUNED 通道；失败抛 StepConversionError，真实原因回传给前端
             freecad_bin = StepImporter.detect_freecad()
             if not freecad_bin:
                 self._ok({"status": "error", "message": "需要 FreeCAD 才能导入 STEP"})
                 return
 
-            # 只走 GEOUNED 通道
             result_path = run_step_converter(
                 "geouned", step_path, material, density, settings, freecad_bin)
-
-            if result_path:
-                deck = MCNPOutputParser.parse(result_path, post_settings=settings)
-                if deck:
-                    print(f"[DEBUG-tr] import-step main: surfaces={len((deck.surfaces or '').splitlines())} tr_cards={len((deck.tr_cards or '').splitlines())} cells={len(deck.cells or [])}")
-                    self._ok({"status": "ok", "deck": geometry_deck_response(
-                        deck.surfaces, deck.tr_cards,
-                        [{"number": c.number, "material": str(c.material),
-                          "density": str(c.density) if c.density else "",
-                          "surface_expr": c.surface_expr,
-                          "comment": c.comment or ""}
-                         for c in (deck.cells or [])])})
-                    return
-
-            # 兜底：GEOUNED 失败时用 FreeCAD OCC 直接转换（产结构化数据，不产文件）
-            result = StandardSurfaceConverter.convert(step_path, start_surf, freecad_bin)
-            if result:
-                surfaces_dict, tr_cards, cells_list = result  # 3 元组
-                surf_text = " ".join(list(surfaces_dict.values()))
-                tr_text = "\n".join(str(v) for v in (tr_cards or {}).values())
-                self._ok({"status": "ok", "deck": geometry_deck_response(surf_text, tr_text, cells_list or [])})
+            deck = MCNPOutputParser.parse(result_path, post_settings=settings)
+            if not deck:
+                self._ok({"status": "error", "message": "GEOUNED 输出无法解析"})
                 return
 
-            self._ok({"status": "error", "message": "STEP 转换失败，请检查 FreeCAD/GEOUNED"})
+            self._ok({"status": "ok", "deck": geometry_deck_response(
+                deck.surfaces, deck.tr_cards,
+                [{"number": c.number, "material": str(c.material),
+                  "density": str(c.density) if c.density else "",
+                  "surface_expr": c.surface_expr,
+                  "comment": c.comment or ""}
+                 for c in (deck.cells or [])])})
+        except StepConversionError as e:
+            self._ok({"status": "error", "message": str(e)})
         except Exception as e:
             import traceback
             self._err(str(e) + " | " + traceback.format_exc())
@@ -776,11 +793,9 @@ class MCNPHandler(BaseHTTPRequestHandler):
     # ── 导出 STEP（通过 FreeCAD CSG 生成真实几何）──
     def _handle_export_step(self):
         try:
-            import sys, os, json, tempfile, re, base64, shutil
+            import os, base64
             from step_importer import StepImporter
             from freecad_preview import FreeCADEngine
-            from pymcnp.types.Geometry import Geometry
-            import pymcnp.inp as _pi
 
             data = self._read_body()
             surf_text = data.get("surfaces", "")
@@ -795,19 +810,9 @@ class MCNPHandler(BaseHTTPRequestHandler):
             # 解析曲面（共享 parse_surfaces）
             surfs = parse_surfaces(surf_text)
 
-            # 解析栅元（跳过 void）
-            cells_data = []
-            for cell in cell_list:
-                expr = str(cell.get("surface_expr", "") or cell.get("surfaces", "")).strip()
-                if not expr: continue
-                raw_mat_raw = cell.get("material") or cell.get("mat") or ""
-                raw_mat = str(raw_mat_raw).strip().split()[0] if raw_mat_raw else ""
-                if raw_mat == "0": continue
-                mat_val = raw_mat or cell.get("material") or cell.get("mat") or ""
-                try:
-                    g = Geometry.from_mcnp(_parenthesize_unions(expr))
-                    cells_data.append({"number": cell.get("number", 0) or int(cell.get("num", 0)), "material": mat_val, "ast": g, "density": cell.get("density", "")})
-                except: pass
+            # 解析栅元（共享 build_cells_data；导出需几何可解析，剔除 ast=None）
+            cells_data = [c for c in build_cells_data(cell_list)
+                          if c["ast"] is not None]
 
             if not surfs or not cells_data:
                 self._ok({"status": "error", "message": "没有可导出的栅元"})
@@ -863,24 +868,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
             # 3. 解析 TR 卡（共享 parse_tr_cards）
             tr_cards = parse_tr_cards(tr_text)
 
-            # 4. 构建栅元 AST（参考 geometry_tab.py 逻辑）
-            from pymcnp.types.Geometry import Geometry
-            cells_data = []
-            for cell in cell_list:
-                expr = cell.get("surface_expr", "").strip()
-                if not expr: continue
-                raw_mat = str(cell.get("material", "")).strip().split()[0] if cell.get("material") else ""
-                if raw_mat == "0": continue  # 跳过 void
-                try:
-                    geometry = Geometry.from_mcnp(_parenthesize_unions(expr))
-                except Exception:
-                    geometry = None
-                cells_data.append({
-                    "number": cell.get("number", 0),
-                    "material": cell.get("material", ""),
-                    "ast": geometry,
-                    "density": cell.get("density", ""),
-                })
+            # 4. 构建栅元（共享 build_cells_data；ast 解析失败的不渲染但保留）
+            cells_data = build_cells_data(cell_list)
             if not cells_data:
                 self._ok({"stl_files": {}, "message": "没有可预览的栅元（非 void）"})
                 return
@@ -944,34 +933,11 @@ class MCNPHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._ok({"found": False, "exe": "", "label": "MCNP?", "error": str(e)})
 
-    # ── FreeCAD 检测 ──
-    def _freecad_config_path(self):
-        base = os.environ.get("APPDATA") or os.path.expanduser("~")
-        d = os.path.join(base, "mcnp_generator")
-        try: os.makedirs(d, exist_ok=True)
-        except Exception: pass
-        return os.path.join(d, "config.json")
-
-    def _load_saved_freecad(self):
-        """读取用户手动指定的 FreeCAD 路径（若仍有效则返回）"""
-        try:
-            import json as _json
-            cfg = self._freecad_config_path()
-            if os.path.isfile(cfg):
-                with open(cfg, "r", encoding="utf-8") as f:
-                    data = _json.load(f)
-                p = (data.get("freecad_path") or "").strip().strip('"')
-                bn = os.path.basename(p).lower()
-                if p and os.path.isfile(p) and bn in ("freecad.exe", "freecadcmd.exe"):
-                    return p
-        except Exception:
-            pass
-        return ""
+    # ── FreeCAD 检测（统一走 freecad_locator seam）──
 
     def _handle_set_freecad_path(self):
         """保存用户手动指定的 FreeCAD 路径（校验存在且为 freecad.exe/freecadcmd.exe）"""
         try:
-            import json as _json
             data = self._read_body() or {}
             p = (data.get("path") or "").strip().strip('"')
             if not p or not os.path.isfile(p):
@@ -980,9 +946,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
             if os.path.basename(p).lower() not in ("freecad.exe", "freecadcmd.exe"):
                 self._ok({"status": "error", "message": "请选择 FreeCAD.exe 或 FreeCADCmd.exe"})
                 return
-            cfg = self._freecad_config_path()
-            with open(cfg, "w", encoding="utf-8") as f:
-                _json.dump({"freecad_path": p}, f)
+            from freecad_locator import save
+            save(p)  # config.json + QSettings 双写
             self._ok({"status": "ok", "path": p})
         except Exception as e:
             self._ok({"status": "error", "message": str(e)})
@@ -1010,57 +975,12 @@ class MCNPHandler(BaseHTTPRequestHandler):
             self._ok({"path": "", "cancelled": True, "error": str(e)})
 
     def _handle_check_freecad(self):
+        """重新定位 FreeCAD（清缓存后完整搜索），返回 {found, path}"""
         try:
-            import shutil, os, winreg
-            # 优先返回用户手动指定的路径（持久化）
-            saved = self._load_saved_freecad()
-            if saved:
-                self._ok({"found": True, "path": saved, "source": "saved"})
-                return
-            found = []; seen = set()
-            def _add(p):
-                if p and p not in seen: seen.add(p); found.append(p)
-            system_paths = set()
-            try:
-                h = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")
-                system_paths.update(winreg.QueryValueEx(h, "Path")[0].split(";"))
-                winreg.CloseKey(h)
-                try:
-                    h = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment")
-                    up = winreg.QueryValueEx(h, "Path")[0]
-                    if up: system_paths.update(up.split(";"))
-                    winreg.CloseKey(h)
-                except: pass
-            except: pass
-            all_paths = set()
-            for p in os.environ.get("PATH","").split(os.pathsep):
-                all_paths.add(p.strip().strip('"'))
-            all_paths.update(p.strip().strip('"') for p in system_paths if p.strip())
-            for d in all_paths:
-                if not d or not os.path.isdir(d): continue
-                for f in os.listdir(d):
-                    if f.lower() in ("freecad.exe","freecadcmd.exe"): _add(os.path.join(d, f))
-            try:
-                for key in [winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER]:
-                    for subkey in [r"SOFTWARE\FreeCAD", r"SOFTWARE\FreeCAD\Application"]:
-                        try:
-                            h = winreg.OpenKey(key, subkey)
-                            pv = winreg.QueryValueEx(h, "InstallPath")[0]
-                            for r, dd, ff in os.walk(os.path.join(pv, "bin")):
-                                for fn in ff:
-                                    if fn.lower() in ("freecad.exe","freecadcmd.exe"): _add(os.path.join(r, fn))
-                            winreg.CloseKey(h)
-                        except: pass
-            except: pass
-            # 4. Recursive search common locations
-            for base in ["D:/MCNP", "D:/FreeCAD*", "C:/Program Files/FreeCAD*", os.path.expandvars("%PROGRAMFILES%\\FreeCAD*")]:
-                import glob
-                for d in glob.glob(base):
-                    if os.path.isdir(d):
-                        for r, dd, ff in os.walk(d):
-                            for fn in ff:
-                                if fn.lower() in ("freecad.exe","freecadcmd.exe"): _add(os.path.join(r, fn))
-            self._ok({"found": bool(found), "path": found[0] if found else ""})
+            from freecad_locator import reset_cache, locate
+            reset_cache()
+            p = locate()
+            self._ok({"found": bool(p), "path": p or ""})
         except Exception as e:
             self._ok({"found": False, "path": "", "error": str(e)})
 

@@ -7,6 +7,7 @@ import Preview3D from "./Preview3D";
 import StepImportDialog from "./StepImportDialog";
 import FloatingDialog from "./FloatingDialog";
 import { useDeck } from "../utils/DeckContext";
+import { useFreecadStatus } from "../utils/useFreecadStatus";
 
 interface GeoProps {
   pendingCellFromMaterial?: number;
@@ -22,12 +23,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const [cellRawText, setCellRawText] = useState("");
   const [show3D, setShow3D] = useState(false);
   const [showStepDlg, setShowStepDlg] = useState(false);
-  const [showFcDlg, setShowFcDlg] = useState(false);
-  const [freecadOk, setFreecadOk] = useState<boolean|null>(null);
-  const requireFreecad = () => {
-    if (freecadOk === false) { setShowFcDlg(true); return false; }
-    return true;
-  };
+  const fc = useFreecadStatus();
   const cellsRef = useRef(cells);
   cellsRef.current = cells;
   const surfRef = useRef(surfText);
@@ -35,12 +31,6 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const trRef = useRef(trText);
   trRef.current = trText;
   const { deck, patch } = useDeck();
-
-  useEffect(() => {
-    fetch("http://localhost:5001/api/check-freecad", {method:"POST"})
-      .then(r => r.json()).then(j => { if (j.status === "ok") setFreecadOk(j.found); })
-      .catch(() => setFreecadOk(false));
-  }, []);
 
   // 材料→栅元联动：新材料添加时自动创建栅元行
   useEffect(() => {
@@ -57,25 +47,33 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   }, [pendingCellFromMaterial]);
 
   const handleStepImport = async (settings: any, file: File) => {
-    if (!requireFreecad()) { setShowStepDlg(false); return; }
+    if (!fc.require()) { setShowStepDlg(false); return; }
     try {
       const text = await file.text();
       const r = await fetch("http://localhost:5001/api/import-step", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename: file.name, data: text, settings }),
       });
-      if (r.ok) { const j = await r.json(); console.log("[DEBUG-tr] import-step resp status=", j.status, "deckKeys=", j.deck ? Object.keys(j.deck) : null, "trLines=", (j.deck?.tr_cards || "").split("\n").length); if (j.status === "ok") { if (j.deck) patch({ surfaces: j.deck.surfaces || "", tr_cards: j.deck.tr_cards || "", cells: j.deck.cells || [] }); alert("✅ STEP 导入成功"); setShowStepDlg(false); return; } }
-    } catch {}
-    alert("STEP 导入需要后端服务 + FreeCAD/GEOUNED");
+      const j = await r.json();
+      if (j.status === "ok" && j.deck) {
+        patch({ surfaces: j.deck.surfaces || "", tr_cards: j.deck.tr_cards || "", cells: j.deck.cells || [] });
+        alert("✅ STEP 导入成功");
+        setShowStepDlg(false);
+        return;
+      }
+      alert(j.message || "STEP 导入失败");
+    } catch {
+      alert("STEP 导入需要后端服务");
+    }
     setShowStepDlg(false);
   };
   const handlePreview3D = () => {
     if (cells.length === 0) { alert("请先添加栅元"); return; }
-    if (!requireFreecad()) return;
+    if (!fc.require()) return;
     setShow3D(true);
   };
   const handleExportSTEP = async () => {
-    if (!requireFreecad()) return;
+    if (!fc.require()) return;
     try {
       const r = await fetch("http://localhost:5001/api/export-step",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({surfaces:surfText,cells:cells,tr_cards:trText})});
       const j = await r.json();
@@ -153,23 +151,8 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
         </div>
         {/* 3D 预览 & STEP 操作按钮 */}
         <div style={{display:"flex", gap:8, justifyContent:"flex-end", marginTop:8}}>
-          <span style={{fontSize:11, color:freecadOk ? "#2e7d32" : "#c62828", alignSelf:"center"}}>{freecadOk === null ? "检测中..." : freecadOk ? "✅ FreeCAD 已安装" : "⚠ 需要 FreeCAD"}</span>
-          {freecadOk === false && <button className="btn btn-ghost btn-xs" onClick={async () => {
-            try {
-              const r1 = await fetch("http://localhost:5001/api/choose-freecad-path", { method: "POST" });
-              const j1 = await r1.json();
-              if (j1.cancelled || !j1.path) return;
-              const r2 = await fetch("http://localhost:5001/api/set-freecad-path", {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ path: j1.path }),
-              });
-              const j2 = await r2.json();
-              if (j2.status !== "ok") { alert(j2.message || "设置失败"); return; }
-              const r3 = await fetch("http://localhost:5001/api/check-freecad", { method: "POST" });
-              const j3 = await r3.json();
-              if (j3.status === "ok") setFreecadOk(j3.found);
-            } catch (e: any) { alert("设置失败: " + (e?.message || "")); }
-          }}>指定 FreeCAD 路径</button>}
+          <span style={{fontSize:11, color:fc.status === "ok" ? "#2e7d32" : "#c62828", alignSelf:"center"}}>{fc.status === "checking" ? "检测中..." : fc.status === "ok" ? "✅ FreeCAD 已安装" : "⚠ 需要 FreeCAD"}</span>
+          {fc.status === "missing" && <button className="btn btn-ghost btn-xs" onClick={fc.pickPath}>指定 FreeCAD 路径</button>}
           <button className="btn btn-ghost btn-xs" onClick={() => setShowStepDlg(true)}>📥 导入 STEP</button>
           <button className="btn btn-primary btn-xs" onClick={handlePreview3D}>🔍 3D 预览</button>
           <button className="btn btn-ghost btn-xs" onClick={handleExportSTEP}>📐 导出 STEP</button>
@@ -210,10 +193,10 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
       {doc && <DocViewer path={doc.path} title={doc.title} onClose={() => setDoc(null)} />}
       {show3D && <Preview3D cells={cells} surfaces={surfText} trCards={trText} onClose={() => setShow3D(false)} />}
       {showStepDlg && <StepImportDialog onImport={handleStepImport} onClose={() => setShowStepDlg(false)} />}
-      {showFcDlg && <FloatingDialog title="⚠ 需要 FreeCAD" onClose={() => setShowFcDlg(false)} width={460}
-        footer={React.createElement("button", { className: "btn btn-primary btn-sm", onClick: () => setShowFcDlg(false) }, "知道了")}>
+      {fc.showDialog && <FloatingDialog title="⚠ 需要 FreeCAD" onClose={fc.closeDialog} width={460}
+        footer={React.createElement("button", { className: "btn btn-primary btn-sm", onClick: fc.closeDialog }, "知道了")}>
         <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.7 }}>
-          <p>未检测到 FreeCAD。**STEP 导入 / 导出 / 3D 预览** 需要 FreeCAD 参与几何计算。</p>
+          <p>未检测到 FreeCAD。STEP 导入 / 导出 / 3D 预览 需要 FreeCAD 参与几何计算。</p>
           <p>请前往 <a href="https://www.freecad.org/downloads.php?lang=zh_CN" target="_blank" rel="noreferrer" style={{ color: "var(--accent)", textDecoration: "underline" }}>FreeCAD 官网下载</a>，安装后在本页点「指定 FreeCAD 路径」。</p>
         </div>
       </FloatingDialog>}
