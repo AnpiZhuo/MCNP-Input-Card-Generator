@@ -18,8 +18,8 @@ import json
 _NUM_RE = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
 
 
-def _fmt_num(match) -> str:
-    """数值 token：浮点 → 3 位小数；整数（曲面号/栅元引用）保持原样。"""
+def _fmt_num(match, prec: int = 3) -> str:
+    """数值 token：浮点 → prec 位小数；整数（曲面号/栅元引用）保持原样。"""
     tok = match.group(0)
     if re.fullmatch(r"[+-]?\d+", tok):
         return tok
@@ -27,19 +27,26 @@ def _fmt_num(match) -> str:
         v = float(tok)
     except ValueError:
         return tok
-    return format(v, ".3f")
+    return format(v, f".{prec}f")
 
 
 def _format_numbers(text: str) -> str:
     """把整个 MCNP 文件里的科学计数法数字换成普通数字（跳过注释行与 $ 注释）。"""
     out = []
+    in_gq = False
     for line in text.splitlines():
         stripped = line.lstrip()
         if not stripped or stripped[0].lower() == "c" or stripped[0] == "$":
             out.append(line)
             continue
+        # 新卡行（列 0 起、以数字开头）判断是否 GQ/SQ 卡；GQ 卡跨多行，续行保持 in_gq
+        if not line[:1].isspace():
+            in_gq = bool(re.match(r"^\s*\d+\s+(GQ|SQ)\b", line, re.I))
         body, sep, comment = line.partition("$")
-        out.append(_NUM_RE.sub(_fmt_num, body) + (sep + comment if sep else ""))
+        if in_gq:
+            out.append(line)  # GQ/SQ 系数是几何定义，保留原始精度
+        else:
+            out.append(_NUM_RE.sub(lambda m: _fmt_num(m, 3), body) + (sep + comment if sep else ""))
     return "\n".join(out)
 
 

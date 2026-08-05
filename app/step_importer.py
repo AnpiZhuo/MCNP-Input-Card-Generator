@@ -643,8 +643,8 @@ _SURF_MNE = set("P PX PY PZ SO S SX SY SZ C/X C/Y C/Z CX CY CZ "
 _NUM_RE = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
 
 
-def _fmt_num_token(match) -> str:
-    """数值 token：浮点 → 保留 3 位小数；整数（曲面号/栅元引用）保持原样。"""
+def _fmt_num_token(match, prec: int = 3) -> str:
+    """数值 token：浮点 → prec 位小数；整数（曲面号/栅元引用）保持原样。"""
     tok = match.group(0)
     # 整数保持整数，避免 100 → 100.000 破坏 MCNP 曲面号/引用
     if re.fullmatch(r"[+-]?\d+", tok):
@@ -653,7 +653,7 @@ def _fmt_num_token(match) -> str:
         v = float(tok)
     except ValueError:
         return tok
-    return format(v, ".3f")
+    return format(v, f".{prec}f")
 
 
 def _format_surface_numbers(surface_text: str) -> str:
@@ -667,8 +667,11 @@ def _format_surface_numbers(surface_text: str) -> str:
         body, sep, comment = line.partition("$")
         parts = body.split()
         if len(parts) >= 2 and parts[1].upper() in _SURF_MNE:
-            lines.append(_NUM_RE.sub(_fmt_num_token, body)
-                         + (sep + comment if sep else ""))
+            if parts[1].upper() in ("GQ", "SQ"):
+                lines.append(line)  # GQ/SQ 系数保留原始精度（几何定义）
+            else:
+                lines.append(_NUM_RE.sub(lambda m: _fmt_num_token(m, 3), body)
+                             + (sep + comment if sep else ""))
         else:
             lines.append(line)
     return "\n".join(lines)

@@ -546,7 +546,9 @@ def _quadric_to_native(qtype: str, coeffs: list[float], B: float):
     L = np.array([g, h, j], dtype=float)
     Lp = V.T @ L
     scale = max(1.0, max(abs(x) for x in w))
-    tol = 1e-6 * scale
+    # 系数可能被格式化成 3 位小数，圆柱的"零特征值"会有 ~1e-3 的舍入噪声，
+    # 用相对容差，否则圆柱会被误判成椭球
+    tol = 1e-3 * scale
     nz = [i for i, x in enumerate(w) if abs(x) > tol]
 
     if len(nz) == 2:
@@ -567,7 +569,9 @@ def _quadric_to_native(qtype: str, coeffs: list[float], B: float):
         r = math.sqrt(r2)
         center_g = V @ cp
         axis_g = V[:, zi]
-        cyl = Part.makeCylinder(r, 2 * B, _vec(*center_g), _vec(*axis_g))
+        # Part.makeCylinder 的 center 是底面端点，不是中心 → 用 center-2B*axis 作底面、4B 高，确保覆盖整个盒子
+        base = center_g - 2 * B * axis_g
+        cyl = Part.makeCylinder(r, 4 * B, _vec(*base), _vec(*axis_g))
         return _make_box(-B, B, -B, B, -B, B).cut(cyl)  # 正侧 = 柱外
 
     if len(nz) == 3 and all(x > 0 for x in w):
