@@ -141,6 +141,10 @@ def _compute_bound_from_surfaces(surf_dicts: list, default: float = 500) -> floa
     """
     max_coord = 0.0
     for s in surf_dicts:
+        # GQ/SQ 的参数是二次型系数（含大常数项），不是空间坐标，跳过
+        # 否则会把 bound 撑到上万，导致所有几何用巨大盒子渲染而失真
+        if s.get("type") in ("GQ", "SQ"):
+            continue
         for v in s.get("params", []) or []:
             try:
                 f = float(v)

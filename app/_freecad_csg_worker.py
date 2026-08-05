@@ -524,11 +524,102 @@ def _make_rec(params: list[float], B: float):
 
 
 # ============================================================
-# GQ / SQ → VTK Marching Cubes
+# GQ / SQ → FreeCAD 原生曲面（精确，优先）或 VTK Marching Cubes（兜底）
 # ============================================================
 
+def _quadric_to_native(qtype: str, coeffs: list[float], B: float):
+    """GQ/SQ 系数 → FreeCAD 原生曲面（精确），返回正侧半空间；无法分类返回 None。
+
+    通过二次型矩阵特征值分解分类：
+      (0, λ, λ)          → 圆柱  Part.makeCylinder
+      (λ, λ, λ) / (λ1λ2λ3 同号) → 球 / 椭球  Part.makeSphere / makeEllipsoid
+    其余（平面/锥/椭圆柱/双曲面）→ None → 回退 marching cubes。
+    """
+    if qtype == "sq":
+        # SQ 已轴对齐，中心 (cx,cy,cz)
+        a, b, c, _d, _e, _f, g, cx, cy, cz = coeffs
+        return _quadric_ellipsoid([a, b, c], [cx, cy, cz], g, B)
+
+    a, b, c, d, e, f, g, h, j, k = coeffs
+    M = np.array([[a, d / 2, f / 2], [d / 2, b, e / 2], [f / 2, e / 2, c]], dtype=float)
+    w, V = np.linalg.eigh(M)  # w 升序，V 列 = 特征向量
+    L = np.array([g, h, j], dtype=float)
+    Lp = V.T @ L
+    scale = max(1.0, max(abs(x) for x in w))
+    tol = 1e-6 * scale
+    nz = [i for i, x in enumerate(w) if abs(x) > tol]
+
+    if len(nz) == 2:
+        # ── 圆柱（两非零特征值相等）──
+        zi = [i for i in range(3) if i not in nz][0]
+        lam = w[nz]
+        if abs(Lp[zi]) > tol:
+            return None  # 轴方向有线性项 → 不是正圆柱
+        if abs(lam[0] - lam[1]) > 1e-3 * max(1.0, abs(lam[0])):
+            return None  # 椭圆圆柱暂不支持
+        lam0 = lam[0]
+        cp = np.zeros(3)
+        for idx in nz:
+            cp[idx] = -Lp[idx] / (2 * lam0)
+        r2 = (Lp[nz[0]] ** 2 + Lp[nz[1]] ** 2) / (4 * lam0 ** 2) - k / lam0
+        if r2 <= 0:
+            return None
+        r = math.sqrt(r2)
+        center_g = V @ cp
+        axis_g = V[:, zi]
+        cyl = Part.makeCylinder(r, 2 * B, _vec(*center_g), _vec(*axis_g))
+        return _make_box(-B, B, -B, B, -B, B).cut(cyl)  # 正侧 = 柱外
+
+    if len(nz) == 3 and all(x > 0 for x in w):
+        # ── 球 / 椭球 ──
+        return _quadric_ellipsoid(w.tolist(), None, (V, Lp, k), B)
+
+    return None
+
+
+def _quadric_ellipsoid(w, center, extra, B):
+    """由主轴特征值/中心生成椭球或球半空间（正侧 = 外部）。"""
+    if isinstance(extra, tuple):
+        V, Lp, k = extra
+        # 主轴系配方：Σ w_i (x_i-c_i)² = C，c_i=-Lp_i/(2w_i)
+        cp = np.zeros(3)
+        for i in range(3):
+            cp[i] = -Lp[i] / (2 * w[i])
+        C = sum(Lp[i] ** 2 / (4 * w[i]) for i in range(3)) - k
+        semi = [math.sqrt(C / w[i]) for i in range(3)]
+        cg = V @ cp
+    else:
+        # SQ 轴对齐形式
+        a, b, c = w
+        cx, cy, cz = center
+        C = -extra
+        semi = [math.sqrt(C / a), math.sqrt(C / b), math.sqrt(C / c)]
+        cg = np.array([cx, cy, cz])
+        V = None
+    if any(x <= 0 for x in semi):
+        return None
+    # 三半轴近似相等 → 球
+    if max(semi) - min(semi) < 1e-4 * max(1.0, max(semi)):
+        sph = Part.makeSphere(semi[0], _vec(*cg))
+        return _make_box(-B, B, -B, B, -B, B).cut(sph)
+    # 一般椭球：建球→非均匀缩放→旋转
+    ell = Part.makeSphere(1.0)
+    ell.scale(FreeCAD.Vector(*semi))
+    if V is not None:
+        rot = FreeCAD.Matrix(V[0, 0], V[0, 1], V[0, 2], 0,
+                             V[1, 0], V[1, 1], V[1, 2], 0,
+                             V[2, 0], V[2, 1], V[2, 2], 0,
+                             0, 0, 0, 1)
+        ell.Placement = FreeCAD.Placement(rot)
+    ell.translate(FreeCAD.Vector(*cg))
+    return _make_box(-B, B, -B, B, -B, B).cut(ell)
+
+
 def _quadric_to_shape(qtype: str, coeffs: list[float], B: float, grid_res: int = 40):
-    """从二次曲面系数生成 Part.Shape (正侧 pos = 外部)"""
+    """从二次曲面系数生成 Part.Shape (正侧 pos = 外部)。先试原生，再回退 marching cubes。"""
+    native = _quadric_to_native(qtype, coeffs, B)
+    if native is not None:
+        return native
     if not _HAVE_VTK:
         raise RuntimeError("VTK 不可用，无法处理 GQ/SQ 曲面")
 
@@ -573,7 +664,8 @@ def _quadric_to_shape(qtype: str, coeffs: list[float], B: float, grid_res: int =
     n_tri = polydata.GetNumberOfPolys()
 
     if n_pts == 0 or n_tri == 0:
-        return _make_box(-B, B, -B, B, -B, B)
+        # 找不到等值面（特征太细/网格太粗）：报错让该曲面被跳过，而不是回退成整盒导致几何错/崩溃
+        raise RuntimeError("GQ/SQ 曲面 marching cubes 未提取到等值面（特征过细）")
 
     # 转换为 FreeCAD Mesh
     verts = [polydata.GetPoint(i) for i in range(n_pts)]
