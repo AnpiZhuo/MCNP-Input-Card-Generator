@@ -536,9 +536,14 @@ def _quadric_to_native(qtype: str, coeffs: list[float], B: float):
     其余（平面/锥/椭圆柱/双曲面）→ None → 回退 marching cubes。
     """
     if qtype == "sq":
-        # SQ 已轴对齐，中心 (cx,cy,cz)
-        a, b, c, _d, _e, _f, g, cx, cy, cz = coeffs
-        return _quadric_ellipsoid([a, b, c], [cx, cy, cz], g, B)
+        # SQ → GQ 展开，共用同一套特征值分类（否则会忽略 D/E/F 交叉项导致旋转 SQ 出错）
+        A, B, C, D, E, F, G, x0, y0, z0 = coeffs
+        coeffs = [A, B, C, D, E, F,
+                  -2 * A * x0 - D * y0 - F * z0,
+                  -2 * B * y0 - D * x0 - E * z0,
+                  -2 * C * z0 - E * y0 - F * x0,
+                  A * x0 * x0 + B * y0 * y0 + C * z0 * z0
+                  + D * x0 * y0 + E * y0 * z0 + F * z0 * x0 + G]
 
     a, b, c, d, e, f, g, h, j, k = coeffs
     M = np.array([[a, d / 2, f / 2], [d / 2, b, e / 2], [f / 2, e / 2, c]], dtype=float)
@@ -606,17 +611,20 @@ def _quadric_ellipsoid(w, center, extra, B):
     if max(semi) - min(semi) < 1e-4 * max(1.0, max(semi)):
         sph = Part.makeSphere(semi[0], _vec(*cg))
         return _make_box(-B, B, -B, B, -B, B).cut(sph)
-    # 一般椭球：建球→非均匀缩放→旋转
-    ell = Part.makeSphere(1.0)
-    ell.scale(FreeCAD.Vector(*semi))
-    if V is not None:
-        rot = FreeCAD.Matrix(V[0, 0], V[0, 1], V[0, 2], 0,
-                             V[1, 0], V[1, 1], V[1, 2], 0,
-                             V[2, 0], V[2, 1], V[2, 2], 0,
-                             0, 0, 0, 1)
-        ell.Placement = FreeCAD.Placement(rot)
-    ell.translate(FreeCAD.Vector(*cg))
-    return _make_box(-B, B, -B, B, -B, B).cut(ell)
+    # 一般椭球：建球→非均匀缩放→旋转；此版本 scale(Vector) 不支持则回退 marching cubes
+    try:
+        ell = Part.makeSphere(1.0)
+        ell.scale(FreeCAD.Vector(*semi))
+        if V is not None:
+            rot = FreeCAD.Matrix(V[0, 0], V[0, 1], V[0, 2], 0,
+                                 V[1, 0], V[1, 1], V[1, 2], 0,
+                                 V[2, 0], V[2, 1], V[2, 2], 0,
+                                 0, 0, 0, 1)
+            ell.Placement = FreeCAD.Placement(rot)
+        ell.translate(FreeCAD.Vector(*cg))
+        return _make_box(-B, B, -B, B, -B, B).cut(ell)
+    except Exception:
+        return None  # 非球椭球无法原生创建 → 回退 marching cubes
 
 
 def _quadric_to_shape(qtype: str, coeffs: list[float], B: float, grid_res: int = 40):
