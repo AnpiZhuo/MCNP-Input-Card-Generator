@@ -29,18 +29,29 @@ export function useFreecadStatus(): FreecadGate {
   const [status, setStatus] = useState<FreecadStatus>("checking");
   const [showDialog, setShowDialog] = useState(false);
 
-  const check = useCallback(async () => {
+  const check = useCallback(async (): Promise<boolean> => {
     try {
       const r = await fetch(`${API}/check-freecad`, { method: "POST" });
       const j = await r.json();
       setStatus(j.status === "ok" && j.found ? "ok" : "missing");
+      return true; // 拿到后端的明确答案（有/无 FreeCAD）
     } catch {
-      setStatus("missing"); // 后端不可达等同缺失
+      return false; // 后端未就绪（sidecar 冷启动），需要重试
     }
   }, []);
 
+  // 挂载后检测；后端冷启动 ~3s（Defender 扫描更久），失败则轮询重试，
+  // 避免把"后端未就绪"误判成"FreeCAD 缺失"
   useEffect(() => {
-    check();
+    let stopped = false;
+    const poll = async () => {
+      for (let i = 0; i < 15 && !stopped; i++) {
+        if (await check()) return;
+        await new Promise((res) => setTimeout(res, 1500));
+      }
+    };
+    poll();
+    return () => { stopped = true; };
   }, [check]);
 
   const require = useCallback(() => {
