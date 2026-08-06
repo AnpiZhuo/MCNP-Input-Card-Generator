@@ -102,6 +102,11 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   };
   const handleRawCells = (t: string) => patch({ rawOverrides: { ...deck.rawOverrides, cells: t } });
 
+  // 3D 预览里点击材料号改材料 → 更新本地 cells，local→deck 同步自动 patch
+  const handleCellMaterialChange = (cellNum: string, newMat: string) => {
+    setCells(prev => prev.map(c => c.num === cellNum ? { ...c, mat: newMat } : c));
+  };
+
   // local → deck（只推 cells，曲面/TR 由 DOM 采集，避免频闪）
   const lastCellsRef = useRef("");
   const lastSurfRef = useRef("");
@@ -191,7 +196,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
         </>)}
       </div>
       {doc && <DocViewer path={doc.path} title={doc.title} onClose={() => setDoc(null)} />}
-      {show3D && <Preview3D cells={cells} surfaces={surfText} trCards={trText} onClose={() => setShow3D(false)} />}
+      {show3D && <Preview3D cells={cells} surfaces={surfText} trCards={trText} onClose={() => setShow3D(false)} onMaterialChange={handleCellMaterialChange} />}
       {showStepDlg && <StepImportDialog onImport={handleStepImport} onClose={() => setShowStepDlg(false)} />}
       {fc.showDialog && <FloatingDialog title="⚠ 需要 FreeCAD" onClose={fc.closeDialog} width={460}
         footer={React.createElement("button", { className: "btn btn-primary btn-sm", onClick: fc.closeDialog }, "知道了")}>

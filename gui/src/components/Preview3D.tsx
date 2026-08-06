@@ -20,11 +20,14 @@ interface Preview3DProps {
   surfaces?: string;
   trCards?: string;
   onClose: () => void;
+  /** 用户改了某个栅元的材料号后回调（num=栅元号, newMat=新材料号） */
+  onMaterialChange?: (cellNum: string, newMat: string) => void;
 }
 
 /* ---- 色板（10 色，按材料号取模） ---- */
 import { getMatColor as getColor } from "../utils/materialColors";
 import { MaterialLegend, CellList } from "./MaterialPanel";
+import { useDeck } from "../utils/DeckContext";
 
 /* ---- plane eq formatting/parsing ---- */
 function planeToStr(plane: any): string {
@@ -399,6 +402,15 @@ function initScene(
         if (meshes[_mi].userData.index === index) { meshes[_mi].visible = vis; return; }
       }
     },
+    setColor(index: number, color: string) {
+      for (var _mi = 0; _mi < meshes.length; _mi++) {
+        if (meshes[_mi].userData.index === index) {
+          var _mat = (meshes[_mi] as THREE.Mesh).material as THREE.MeshStandardMaterial;
+          _mat.color.set(color);
+          return;
+        }
+      }
+    },
     selectAll(vis: boolean) {
       meshes.forEach((m) => { m.visible = vis; });
     },
@@ -428,10 +440,11 @@ function initScene(
 }
 
 /* ---- React 组件 ---- */
-export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose }: Preview3DProps) {
+export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose, onMaterialChange }: Preview3DProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const ctrlRef = useRef<ReturnType<typeof initScene> | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const { deck } = useDeck();
 
   // 初始化 cellView 状态（非 void 默认可见：否则无 FreeCAD 时截面过滤会滤掉全部栅元）
   const [cellViews, setCellViews] = useState<CellView[]>(() =>
@@ -451,6 +464,9 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose 
   const [dbgLog, setDbgLog] = useState<string[]>([]);
   const log = (msg: string) => { console.log('[3Ddbg]', msg); setDbgLog(p => [...p, msg]); };
   const [csSlices, setCsSlices] = useState<any[] | null>(null);
+  // 材料选择浮层：i=cellViews 索引, x/y=点击屏幕坐标
+  const [matPicker, setMatPicker] = useState<{ i: number; x: number; y: number } | null>(null);
+  const [customMat, setCustomMat] = useState("");
 
   // 截面请求（供步进按钮复用）
   const fetchCrossSection = useCallback(function(newPlane: {A:number; B:number; C:number; D:number}) {
@@ -552,6 +568,25 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose 
     setCellViews((prev) => prev.map((c) => c.mat === "0" ? c : { ...c, visible: vis }));
     ctrlRef.current?.selectAll(vis);
   }, []);
+
+  // 材料变更：更新本地 cellViews（颜色）+ 3D 网格颜色 + 回写 deck
+  const applyMaterial = useCallback((i: number, newMat: string) => {
+    const m = newMat.trim();
+    if (!m || !cellViews[i]) return;
+    setCellViews((prev) => prev.map((cv, ci) => ci === i ? { ...cv, mat: m, color: getColor(m) } : cv));
+    ctrlRef.current?.setColor(i, getColor(m));
+    onMaterialChange?.(cellViews[i].num, m);
+    setMatPicker(null);
+  }, [cellViews, onMaterialChange]);
+
+  // 材料可选项：deck.materials（带注释）+ 真空 M0
+  const materialOptions: { num: string; label: string }[] = [
+    { num: "0", label: "M0 - 真空" },
+    ...deck.materials.map((mt) => ({
+      num: String(mt.number),
+      label: `M${mt.number}${mt.comment ? " - " + mt.comment : ""}`,
+    })),
+  ].sort((a, b) => parseInt(a.num) - parseInt(b.num));
 
   // 面板宽度的动态计算（基于 canvas 尺寸）
   const [panelHeight, setPanelHeight] = useState(400);
@@ -716,10 +751,11 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose 
             }, "▶"),
           ),
         ),
-        /* 栅元列表（共享组件）—— checkbox + 栅元N + 色点 + M材料号 + 注释 */
+        /* 栅元列表（共享组件）—— checkbox + 栅元N + 色点 + M材料号(可点) + 注释 */
         React.createElement(CellList, {
           rows: cellViews.map(cv => ({ num: cv.num, mat: cv.mat, comment: cv.comment, visible: cv.visible, locked: cv.mat === "0" })),
           onToggle: toggleCell,
+          onMaterialClick: (i: number, e: React.MouseEvent) => { setCustomMat(""); setMatPicker({ i, x: e.clientX, y: e.clientY }); },
         }),
         /* 底部：计数 + 关闭 */
         React.createElement("div", {
@@ -745,5 +781,44 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose 
       onClose: function() { setCsSlices(null); },
       onPlaneChange: function(newPlane: any) { fetchCrossSection(newPlane); },
     }),
+    /* 材料选择浮层（点击栅元行的 M材料号 弹出） */
+    matPicker && React.createElement("div", {
+      key: "mat-picker",
+      style: {
+        position: "fixed",
+        left: Math.min(matPicker.x, window.innerWidth - 220),
+        top: Math.min(matPicker.y, window.innerHeight - 320),
+        zIndex: 1200, width: 210, maxHeight: 300, overflow: "auto",
+        background: "rgba(15,15,40,0.97)",
+        border: "1px solid rgba(255,255,255,0.15)", borderRadius: 8,
+        boxShadow: "0 8px 24px rgba(0,0,0,0.5)", padding: "8px",
+      } as React.CSSProperties,
+    },
+      React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 } as React.CSSProperties },
+        `选择材料 — 栅元 ${cellViews[matPicker.i]?.num ?? ""}`),
+      materialOptions.map((o) => React.createElement("button", {
+        key: o.num,
+        onClick: function() { applyMaterial(matPicker.i, o.num); },
+        style: {
+          display: "block", width: "100%", textAlign: "left", padding: "5px 8px", marginBottom: 2,
+          fontSize: 11, borderRadius: 4, cursor: "pointer", border: "none",
+          color: o.num === cellViews[matPicker.i]?.mat ? "var(--accent)" : "var(--text-primary)",
+          background: o.num === cellViews[matPicker.i]?.mat ? "rgba(255,255,255,0.08)" : "transparent",
+        } as React.CSSProperties,
+      }, o.label)),
+      React.createElement("div", { style: { display: "flex", gap: 4, marginTop: 6, borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: 6 } as React.CSSProperties },
+        React.createElement("input", {
+          type: "text", value: customMat, placeholder: "自定义材料号",
+          onChange: function(e: React.ChangeEvent<HTMLInputElement>) { setCustomMat(e.target.value); },
+          onKeyDown: function(e: React.KeyboardEvent<HTMLInputElement>) { if (e.key === "Enter") applyMaterial(matPicker.i, customMat); },
+          style: { flex: 1, minWidth: 0, padding: "3px 6px", fontSize: 11, background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.15)", color: "var(--text-primary)", borderRadius: 4, outline: "none" } as React.CSSProperties,
+        }),
+        React.createElement("button", {
+          className: "btn btn-primary btn-xs",
+          onClick: function() { applyMaterial(matPicker.i, customMat); },
+          style: { flexShrink: 0 },
+        }, "确定"),
+      ),
+    ),
   );
 }

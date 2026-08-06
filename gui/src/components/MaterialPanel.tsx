@@ -33,8 +33,12 @@ export function MaterialLegend({ entries }: { entries: { mat: string; comment?: 
   );
 }
 
-/** 栅元列表：checkbox(可选) + 栅元N + 色点 + M材料号 + 注释/trailing */
-export function CellList({ rows, onToggle }: { rows: MaterialCellRow[]; onToggle?: (i: number) => void }) {
+/** 栅元列表：checkbox(可选) + 栅元N + 色点 + M材料号(可点) + 注释/trailing */
+export function CellList({ rows, onToggle, onMaterialClick }: {
+  rows: MaterialCellRow[];
+  onToggle?: (i: number) => void;
+  onMaterialClick?: (i: number, e: React.MouseEvent) => void;
+}) {
   return (
     <div style={{ flex: 1, overflow: "auto" }}>
       {rows.map((r, i) => (
@@ -58,7 +62,20 @@ export function CellList({ rows, onToggle }: { rows: MaterialCellRow[]; onToggle
           )}
           <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-primary)", minWidth: 52 }}>{`栅元 ${r.num}`}</span>
           <span style={{ width: 8, height: 8, borderRadius: "50%", background: getMatColor(r.mat), flexShrink: 0, border: "1px solid rgba(255,255,255,0.2)" }} />
-          <span style={{ fontSize: 10, color: "var(--text-secondary)", minWidth: 30 }}>{`M${r.mat}`}</span>
+          {onMaterialClick ? (
+            <button
+              onClick={(e) => { e.stopPropagation(); onMaterialClick(i, e); }}
+              title="点击更改材料"
+              style={{
+                fontSize: 10, color: "var(--accent)", background: "rgba(255,255,255,0.06)",
+                border: "1px solid rgba(255,255,255,0.15)", borderRadius: 3,
+                padding: "0 5px", cursor: "pointer", lineHeight: "16px",
+                flexShrink: 0, minWidth: 30,
+              } as React.CSSProperties}
+            >{`M${r.mat}`}</button>
+          ) : (
+            <span style={{ fontSize: 10, color: "var(--text-secondary)", minWidth: 30 }}>{`M${r.mat}`}</span>
+          )}
           {r.comment ? (
             <span style={{ fontSize: 10, color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{`(${r.comment})`}</span>
           ) : r.trailing ? (
