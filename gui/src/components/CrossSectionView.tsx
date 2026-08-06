@@ -79,6 +79,7 @@ function makeProjector(base: { u: number[]; v: number[]; ox: number; oy: number;
 /* ---- 主组件（SVG 渲染） ---- */
 export default function CrossSectionView({ slices, plane, onClose, onPlaneChange }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const groupRef = useRef<SVGGElement>(null);
   const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: 600, h: 500 });
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
@@ -152,27 +153,18 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
   // 悬停检测：鼠标位置 → 命中多边形 → 3D 坐标
   const handleSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
     const svg = svgRef.current;
-    if (!svg || !baseProj) return;
+    const g = groupRef.current;
+    if (!svg || !g || !baseProj) return;
     const r = svg.getBoundingClientRect();
-    const vbx = viewBox.x - pan.x, vby = viewBox.y - pan.y;
-    const vbw = viewBox.w / zoom, vbh = viewBox.h / zoom;
-    // Step 1: 屏幕 → SVG 用户坐标（标准 viewBox 映射，不含 Y 翻转）
-    const ux = vbx + (e.clientX - r.left) / r.width * vbw;
-    const uy = vby + (e.clientY - r.top) / r.height * vbh;
-    // Step 2: 消除组变换 scale(1,-1) rotate(θ) —— 必须逆序求逆。
-    //   组变换矩阵 = Scale·Rotate（点先旋转、后 Y 翻转），
-    //   所以求逆要先把翻转还原、再逆旋转；顺序反了旋转非 0 时
-    //   悬停坐标与画面出现位移偏差。
-    const rotRad = rotation * Math.PI / 180;
-    const cosR = Math.cos(rotRad), sinR = Math.sin(rotRad);
-    // 先逆 scale(1,-1): Y 取反
-    const sx = ux;
-    const sy = -uy;
-    // 再逆旋转（绕 rotCx/rotCy）
-    const mx = rotCx + (sx - rotCx) * cosR + (sy - rotCy) * sinR;
-    const my = rotCy - (sx - rotCx) * sinR + (sy - rotCy) * cosR;
     setHoverPos({ x: e.clientX - r.left + 10, y: e.clientY - r.top - 10 });
-    // 命中检测
+    // 用 SVG DOM 自带的屏幕矩阵（getScreenCTM）换算鼠标坐标到 <g> 本地用户坐标。
+    // 该矩阵已包含 viewBox 缩放 + preserveAspectRatio 留白 + 组变换
+    // scale(1,-1) rotate(θ)，一键求逆即可，不再手工拆解变换 —— 消除所有位移偏差。
+    const ctm = g.getScreenCTM();
+    if (!ctm) return;
+    const local = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse());
+    const mx = local.x, my = local.y;
+    // 命中检测（多边形点即 <g> 本地坐标，无需再变换）
     let found: { num: number; mat: string } | null = null;
     for (const cd of cellData) {
       for (const poly of cd.polygons) {
@@ -241,7 +233,7 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
         onMouseUp: handleMouseUp,
         onMouseLeave: function() { handleMouseUp(); handleSvgMouseLeave(); },
       },
-        React.createElement("g", { transform: `scale(1,-1) rotate(${rotation} ${rotCx} ${rotCy})` },
+        React.createElement("g", { ref: groupRef, transform: `scale(1,-1) rotate(${rotation} ${rotCx} ${rotCy})` },
           cellData.map(cd =>
             cd.polygons.map((poly, pi) =>
               React.createElement("polygon", {
