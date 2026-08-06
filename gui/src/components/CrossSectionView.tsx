@@ -159,15 +159,18 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
     // Step 1: 屏幕 → SVG 用户坐标（标准 viewBox 映射，不含 Y 翻转）
     const ux = vbx + (e.clientX - r.left) / r.width * vbw;
     const uy = vby + (e.clientY - r.top) / r.height * vbh;
-    // Step 2: 消除组变换 scale(1,-1) rotate(θ)
-    // 先逆旋转
+    // Step 2: 消除组变换 scale(1,-1) rotate(θ) —— 必须逆序求逆。
+    //   组变换矩阵 = Scale·Rotate（点先旋转、后 Y 翻转），
+    //   所以求逆要先把翻转还原、再逆旋转；顺序反了旋转非 0 时
+    //   悬停坐标与画面出现位移偏差。
     const rotRad = rotation * Math.PI / 180;
     const cosR = Math.cos(rotRad), sinR = Math.sin(rotRad);
-    const rx = rotCx + (ux - rotCx) * cosR + (uy - rotCy) * sinR;
-    const ry = rotCy - (ux - rotCx) * sinR + (uy - rotCy) * cosR;
-    // 再逆 scale(1,-1): Y 取反
-    const mx = rx;
-    const my = -ry;
+    // 先逆 scale(1,-1): Y 取反
+    const sx = ux;
+    const sy = -uy;
+    // 再逆旋转（绕 rotCx/rotCy）
+    const mx = rotCx + (sx - rotCx) * cosR + (sy - rotCy) * sinR;
+    const my = rotCy - (sx - rotCx) * sinR + (sy - rotCy) * cosR;
     setHoverPos({ x: e.clientX - r.left + 10, y: e.clientY - r.top - 10 });
     // 命中检测
     let found: { num: number; mat: string } | null = null;
