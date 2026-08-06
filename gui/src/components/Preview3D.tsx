@@ -472,7 +472,6 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   const [csSlices, setCsSlices] = useState<any[] | null>(null);
   // 材料选择浮层：i=cellViews 索引, x/y=点击屏幕坐标
   const [matPicker, setMatPicker] = useState<{ i: number; x: number; y: number } | null>(null);
-  const [customMat, setCustomMat] = useState("");
 
   // 截面请求（供步进按钮复用）
   const fetchCrossSection = useCallback(function(newPlane: {A:number; B:number; C:number; D:number}) {
@@ -762,7 +761,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         React.createElement(CellList, {
           rows: cellViews.map(cv => ({ num: cv.num, mat: cv.mat, comment: cv.comment, visible: cv.visible, locked: cv.mat === "0" })),
           onToggle: toggleCell,
-          onMaterialClick: (i: number, e: React.MouseEvent) => { setCustomMat(""); setMatPicker({ i, x: e.clientX, y: e.clientY }); },
+          onMaterialClick: (i: number, e: React.MouseEvent) => { setMatPicker({ i, x: e.clientX, y: e.clientY }); },
         }),
         /* 底部：计数 + 关闭 */
         React.createElement("div", {
@@ -788,43 +787,42 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       onClose: function() { setCsSlices(null); },
       onPlaneChange: function(newPlane: any) { fetchCrossSection(newPlane); },
     }),
-    /* 材料选择浮层（点击栅元行的 M材料号 弹出） */
-    matPicker && React.createElement("div", {
-      key: "mat-picker",
-      style: {
-        position: "fixed",
-        left: Math.min(matPicker.x, window.innerWidth - 220),
-        top: Math.min(matPicker.y, window.innerHeight - 320),
-        zIndex: 1200, width: 210, maxHeight: 300, overflow: "auto",
-        background: "rgba(15,15,40,0.97)",
-        border: "1px solid rgba(255,255,255,0.15)", borderRadius: 8,
-        boxShadow: "0 8px 24px rgba(0,0,0,0.5)", padding: "8px",
-      } as React.CSSProperties,
-    },
-      React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 } as React.CSSProperties },
-        `选择材料 — 栅元 ${cellViews[matPicker.i]?.num ?? ""}`),
-      materialOptions.map((o) => React.createElement("button", {
-        key: o.num,
-        onClick: function() { applyMaterial(matPicker.i, o.num); },
+    /* 材料选择浮层（点击栅元行的 M材料号 弹出）——点击外部遮罩或 ✕ 关闭 */
+    matPicker && React.createElement(React.Fragment, { key: "mat-picker" },
+      React.createElement("div", {
+        onClick: function() { setMatPicker(null); },
+        style: { position: "fixed", inset: 0, zIndex: 1150, background: "transparent" } as React.CSSProperties,
+      }),
+      React.createElement("div", {
+        className: "preview-overlay",  // 强制深色文字变量，亮色主题下可读
         style: {
-          display: "block", width: "100%", textAlign: "left", padding: "5px 8px", marginBottom: 2,
-          fontSize: 11, borderRadius: 4, cursor: "pointer", border: "none",
-          color: o.num === cellViews[matPicker.i]?.mat ? "var(--accent)" : "var(--text-primary)",
-          background: o.num === cellViews[matPicker.i]?.mat ? "rgba(255,255,255,0.08)" : "transparent",
+          position: "fixed",
+          left: Math.min(matPicker.x, window.innerWidth - 220),
+          top: Math.min(matPicker.y, window.innerHeight - 300),
+          zIndex: 1200, width: 210, maxHeight: 300, overflow: "auto",
+          background: "rgba(15,15,40,0.97)",
+          border: "1px solid rgba(255,255,255,0.15)", borderRadius: 8,
+          boxShadow: "0 8px 24px rgba(0,0,0,0.5)", padding: "8px",
         } as React.CSSProperties,
-      }, o.label)),
-      React.createElement("div", { style: { display: "flex", gap: 4, marginTop: 6, borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: 6 } as React.CSSProperties },
-        React.createElement("input", {
-          type: "text", value: customMat, placeholder: "自定义材料号",
-          onChange: function(e: React.ChangeEvent<HTMLInputElement>) { setCustomMat(e.target.value); },
-          onKeyDown: function(e: React.KeyboardEvent<HTMLInputElement>) { if (e.key === "Enter") applyMaterial(matPicker.i, customMat); },
-          style: { flex: 1, minWidth: 0, padding: "3px 6px", fontSize: 11, background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.15)", color: "var(--text-primary)", borderRadius: 4, outline: "none" } as React.CSSProperties,
-        }),
-        React.createElement("button", {
-          className: "btn btn-primary btn-xs",
-          onClick: function() { applyMaterial(matPicker.i, customMat); },
-          style: { flexShrink: 0 },
-        }, "确定"),
+      },
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 } as React.CSSProperties },
+          React.createElement("span", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" } as React.CSSProperties },
+            `选择材料 — 栅元 ${cellViews[matPicker.i]?.num ?? ""}`),
+          React.createElement("button", {
+            onClick: function() { setMatPicker(null); },
+            style: { background: "transparent", border: "none", color: "var(--text-tertiary)", fontSize: 13, cursor: "pointer", padding: "0 2px", lineHeight: 1 } as React.CSSProperties,
+          }, "✕"),
+        ),
+        materialOptions.map((o) => React.createElement("button", {
+          key: o.num,
+          onClick: function() { applyMaterial(matPicker.i, o.num); },
+          style: {
+            display: "block", width: "100%", textAlign: "left", padding: "5px 8px", marginBottom: 2,
+            fontSize: 11, borderRadius: 4, cursor: "pointer", border: "none",
+            color: o.num === cellViews[matPicker.i]?.mat ? "var(--accent)" : "var(--text-primary)",
+            background: o.num === cellViews[matPicker.i]?.mat ? "rgba(255,255,255,0.08)" : "transparent",
+          } as React.CSSProperties,
+        }, o.label)),
       ),
     ),
   );
