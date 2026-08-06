@@ -191,6 +191,7 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
   const totalPolys = cellData.reduce((s, c) => s + c.polygons.length, 0);
 
   return React.createElement("div", {
+    className: "preview-overlay",
     style: {
       position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
       backdropFilter: "blur(8px)", display: "flex",

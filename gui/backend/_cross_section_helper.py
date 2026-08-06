@@ -4,7 +4,11 @@ Cross-section helper — 调 FreeCAD 子进程（_freecad_cross_section_worker.p
 """
 import sys, os, json, re, subprocess
 
-_APP_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "app")
+_here = os.path.dirname(__file__)
+# 打包后：helper 与 worker 同在 _internal/app/ 同级目录
+# 开发时：helper 在 gui/backend/，worker 在 ../../app/
+_candidate = os.path.join(_here, "_freecad_cross_section_worker.py")
+_APP_DIR = _here if os.path.isfile(_candidate) else os.path.join(_here, "..", "..", "app")
 if _APP_DIR not in sys.path:
     sys.path.insert(0, _APP_DIR)
 

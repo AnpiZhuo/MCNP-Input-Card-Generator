@@ -90,6 +90,15 @@
   --text-on-glass: rgba(44,30,22,0.85);
 }
 
+/* ===== Preview Overlay：3D 预览/截面等全屏覆盖层强制深色文字变量，不受亮色主题影响 ===== */
+.preview-overlay {
+  --text-primary: #F1F1F9;
+  --text-secondary: rgba(241,241,249,0.60);
+  --text-tertiary: rgba(241,241,249,0.30);
+  --accent: #FF0080;
+  --accent-glow: #00E5FF;
+}
+
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%;font-family:var(--font);background:transparent;color:var(--text-primary);-webkit-font-smoothing:antialiased;overflow:hidden}
 #root{height:100vh;display:flex;flex-direction:column}

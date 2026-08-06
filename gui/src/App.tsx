@@ -19,7 +19,14 @@ type Theme = "dark" | "light" | "dopamine" | "traditional";
 
 function AppInner() {
   const [activeTab, setActiveTab] = useState("basic");
-  const [theme, setTheme] = useState<Theme>("dark");
+  const [theme, setTheme] = useState<Theme>(() => {
+    try {
+      const s = JSON.parse(localStorage.getItem("mcnp_workspace_v1") || "null");
+      const t = s?.theme;
+      if (t === "dark" || t === "light" || t === "dopamine" || t === "traditional") return t;
+    } catch {}
+    return "dark";
+  });
   const [preview, setPreview] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"form" | "raw">("form");
   const [rawInp, setRawInp] = useState("");
@@ -74,7 +81,7 @@ function AppInner() {
 
   const saveWorkspace = () => {
     try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ version: 1, deck, outputPath, suffix }));
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ version: 1, deck, outputPath, suffix, theme }));
       return true;
     } catch { return false; }
   };
@@ -114,6 +121,10 @@ function AppInner() {
       }
       if (s?.outputPath) setOutputPath(s.outputPath);
       if (s?.suffix) setSuffix(s.suffix);
+      if (s?.theme) {
+        const t = s.theme;
+        if (t === "dark" || t === "light" || t === "dopamine" || t === "traditional") setTheme(t);
+      }
     } catch (e) { console.warn("[Restore] 恢复失败", e); }
   }, []);
 

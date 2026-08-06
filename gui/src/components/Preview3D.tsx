@@ -621,6 +621,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
 
     return React.createElement(React.Fragment, null,
     React.createElement("div", {
+    className: "preview-overlay",
     style: {
       position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
       backdropFilter: "blur(8px)", display: "flex",
