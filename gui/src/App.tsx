@@ -17,13 +17,20 @@ const TABS = [
 
 type Theme = "dark" | "light" | "dopamine" | "traditional";
 
+/** 主题独立持久化键——清空工作区（mcnp_workspace_v1）不影响主题 */
+const THEME_KEY = "mcnp_theme";
+const isTheme = (t: any): t is Theme =>
+  t === "dark" || t === "light" || t === "dopamine" || t === "traditional";
+
 function AppInner() {
   const [activeTab, setActiveTab] = useState("basic");
   const [theme, setTheme] = useState<Theme>(() => {
     try {
+      const t = localStorage.getItem(THEME_KEY);
+      if (isTheme(t)) return t;
+      // 兼容旧版：主题曾存在工作区 JSON 里，首次读一次后由下面 useEffect 迁移到独立键
       const s = JSON.parse(localStorage.getItem("mcnp_workspace_v1") || "null");
-      const t = s?.theme;
-      if (t === "dark" || t === "light" || t === "dopamine" || t === "traditional") return t;
+      if (isTheme(s?.theme)) return s.theme;
     } catch {}
     return "dark";
   });
@@ -65,6 +72,8 @@ function AppInner() {
   const { deck, patch, loadDeck } = useDeck();
 
   useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, [theme]);
+  // 主题一变就持久化到独立键（清空工作区不影响主题）
+  useEffect(() => { try { localStorage.setItem(THEME_KEY, theme); } catch {} }, [theme]);
 
   // 打包后自动启动 Python 后端（浏览器模式自动失效）；卸载/关闭时一起关
   useEffect(() => {
@@ -81,7 +90,7 @@ function AppInner() {
 
   const saveWorkspace = () => {
     try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ version: 1, deck, outputPath, suffix, theme }));
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ version: 1, deck, outputPath, suffix }));
       return true;
     } catch { return false; }
   };
@@ -121,10 +130,6 @@ function AppInner() {
       }
       if (s?.outputPath) setOutputPath(s.outputPath);
       if (s?.suffix) setSuffix(s.suffix);
-      if (s?.theme) {
-        const t = s.theme;
-        if (t === "dark" || t === "light" || t === "dopamine" || t === "traditional") setTheme(t);
-      }
     } catch (e) { console.warn("[Restore] 恢复失败", e); }
   }, []);
 
