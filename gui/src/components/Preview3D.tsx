@@ -305,8 +305,8 @@ function initScene(
         var geo = loader.parse(buf.buffer);
         var idx = cellIndex(key);
         var cv = cellViews[idx] || cellViews[0];
-        var color = new THREE.Color(cv.color);
-        var mat = new THREE.MeshStandardMaterial({ color: color, roughness: 0.3, metalness: 0.0, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.FrontSide });
+        var color = new THREE.Color(cv.color === "transparent" ? "#000000" : cv.color);
+        var mat = new THREE.MeshStandardMaterial({ color: color, roughness: 0.3, metalness: 0.0, transparent: true, opacity: cv.color === "transparent" ? 0 : 0.6, depthWrite: false, side: THREE.FrontSide });
         var mesh = new THREE.Mesh(geo, mat);
         mesh.userData.index = idx;
         scene.add(mesh);
@@ -406,7 +406,13 @@ function initScene(
       for (var _mi = 0; _mi < meshes.length; _mi++) {
         if (meshes[_mi].userData.index === index) {
           var _mat = (meshes[_mi] as THREE.Mesh).material as THREE.MeshStandardMaterial;
-          _mat.color.set(color);
+          if (color === "transparent") {
+            _mat.color.set("#000000");
+            _mat.opacity = 0;   // M0 真空 → 全透明
+          } else {
+            _mat.color.set(color);
+            _mat.opacity = 0.6; // 实体材料 → 恢复半透明
+          }
           return;
         }
       }

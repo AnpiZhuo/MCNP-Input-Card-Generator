@@ -22,12 +22,19 @@ export function MaterialLegend({ entries }: { entries: { mat: string; comment?: 
     <div style={{ padding: "8px 14px", borderBottom: "1px solid rgba(255,255,255,0.06)", fontSize: 11 }}>
       <div style={{ fontWeight: 600, color: "var(--text-secondary)", marginBottom: 4 }}>材料颜色对照</div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 10px" }}>
-        {uniq.map((e, i) => (
-          <span key={i} style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 10, color: "var(--text-secondary)" }}>
-            <span style={{ color: getMatColor(e.mat), fontSize: 16, lineHeight: 1 }}>●</span>
-            {e.comment ? `M${e.mat} - ${e.comment}` : `M${e.mat}`}
-          </span>
-        ))}
+        {uniq.map((e, i) => {
+          const isVoid = e.mat === "0";
+          return (
+            <span key={i} style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 10, color: "var(--text-secondary)" }}>
+              {isVoid ? (
+                <span style={{ width: 10, height: 10, borderRadius: "50%", border: "2px solid rgba(255,255,255,0.35)", flexShrink: 0 }} />
+              ) : (
+                <span style={{ color: getMatColor(e.mat), fontSize: 16, lineHeight: 1 }}>●</span>
+              )}
+              {isVoid ? "M0 - 真空" : (e.comment ? `M${e.mat} - ${e.comment}` : `M${e.mat}`)}
+            </span>
+          );
+        })}
       </div>
     </div>
   );
@@ -61,7 +68,7 @@ export function CellList({ rows, onToggle, onMaterialClick }: {
             />
           )}
           <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-primary)", minWidth: 52 }}>{`栅元 ${r.num}`}</span>
-          <span style={{ width: 8, height: 8, borderRadius: "50%", background: getMatColor(r.mat), flexShrink: 0, border: "1px solid rgba(255,255,255,0.2)" }} />
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: r.mat === "0" ? "transparent" : getMatColor(r.mat), flexShrink: 0, border: r.mat === "0" ? "1px dashed rgba(255,255,255,0.45)" : "1px solid rgba(255,255,255,0.2)" }} />
           {onMaterialClick ? (
             <button
               onClick={(e) => { e.stopPropagation(); onMaterialClick(i, e); }}

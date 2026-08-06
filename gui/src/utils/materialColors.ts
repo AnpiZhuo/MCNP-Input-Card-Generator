@@ -7,8 +7,9 @@ const COLORS = [
   "#FF6D00", "#FF4081", "#76FF03", "#6200EA", "#1DE9B6", "#FFAB40",
 ];
 
-/** 材料号 → 颜色（材料 0 为真空/不关注区域，取第 0 个颜色） */
+/** 材料号 → 颜色（M0 定义为真空，透明色） */
 export function getMatColor(mat: string): string {
-  const n = parseInt(mat) || 0;
+  const n = parseInt(mat);
+  if (!n) return "transparent"; // 材料 0 = 真空，透明
   return COLORS[Math.abs(n) % COLORS.length];
 }
