@@ -74,12 +74,13 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, on
   const [zaidValid, setZaidValid] = useState<Record<number, boolean|null>>({});
 
   // 用拍平映射快速查找
-  const flatPresets: Record<string, {name:string;formula:string}> = {};
+  const flatPresets: Record<string, PresetItem> = {};
   for (const [, items] of PRESET_CATEGORIES) for (const item of items) flatPresets[item.key] = item;
   const handlePreset = (key: string) => {
     const p = flatPresets[key]; if (!p) return;
     setComment(p.name); setFormulaText(p.formula); setMode("formula");
     setParsed(null); parseFormula(p.formula);
+    if (p.density) setDensity(p.density);  // 预设密度自动填入密度栏
   };
 
   const parseFormula = async (text?: string) => {
@@ -123,7 +124,7 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, on
           React.createElement("label", { style: s.lbl }, "预设材料"),
           React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
             React.createElement("select", { className: "form-select", style: { height: 34, flex: 1 }, onChange: (e: React.ChangeEvent<HTMLSelectElement>) => e.target.value && handlePreset(e.target.value), value: "" },
-              React.createElement("option", { value: "" }, "-- " + (58 + userPresets.length) + " 种预设材料 --"),
+              React.createElement("option", { value: "" }, "-- " + (PRESET_CATEGORIES.flatMap(([, items]) => items).length + userPresets.length) + " 种预设材料 --"),
               userPresets.length > 0 ? React.createElement(React.Fragment, null,
                 React.createElement("optgroup", { key: "_user", label: "用户预设" }),
                 userPresets.map((p, ui) => React.createElement("option", { key: p.key, value: p.key }, p.name)),
@@ -140,7 +141,7 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, on
                 var nm = prompt("预设名称:", comment || "自定义材料");
                 if (!nm) return;
                 var key = "user_" + Date.now();
-                var newPs = [...userPresets, { key: key, name: nm, formula: formulaText, desc: "" }];
+                var newPs = [...userPresets, { key: key, name: nm, formula: formulaText, desc: "", density: density || "" }];
                 setUserPresets(newPs); saveUP(newPs);
               },
             }, "+ 保存"),
