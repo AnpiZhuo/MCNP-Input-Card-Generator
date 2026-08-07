@@ -29,6 +29,37 @@ def _lazy_import_geometry():
         )
 
 
+def parenthesize_unions(expr: str) -> str:
+    """把 MCNP 顶层 ':' 并集的每段包上括号，让 pymcnp 正确解析为顶层 union。
+
+    MCNP 语义 'a b c:d e f' = (a∩b∩c) ∪ (d∩e∩f)；pymcnp 会把 ':' 解析成
+    链中普通并集导致几何错误。包上括号后 pymcnp 识别为顶层 union。
+    已带括号的段保持原样；括号内的 ':' 不切分。
+    """
+    expr = (expr or "").strip()
+    if not expr:
+        return expr
+    parts = []
+    depth = 0
+    start = 0
+    for i, ch in enumerate(expr):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif ch == ":" and depth == 0:
+            parts.append(expr[start:i].strip())
+            start = i + 1
+    parts.append(expr[start:].strip())
+    wrapped = []
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        wrapped.append(p if (p.startswith("(") and p.endswith(")")) else "(" + p + ")")
+    return ":".join(wrapped)
+
+
 def _geometry_ast_to_json(node):
     """递归遍历 pymcnp Geometry AST → JSON 列表"""
     _lazy_import_geometry()

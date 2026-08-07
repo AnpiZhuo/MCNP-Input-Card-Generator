@@ -13,7 +13,8 @@ if _APP_DIR not in sys.path:
     sys.path.insert(0, _APP_DIR)
 
 from step_importer import StepImporter
-from freecad_preview import _pymcnp_surf_to_dict, _geometry_ast_to_json, resolve_cell_complements
+from freecad_preview import (_pymcnp_surf_to_dict, _geometry_ast_to_json,
+                             resolve_cell_complements, parenthesize_unions)
 import pymcnp.inp as _pi
 
 _SURF_CLASSES = {}
@@ -79,7 +80,7 @@ def get_cross_section(data: dict) -> dict:
         if not expr:
             continue
         try:
-            g = Geometry.from_mcnp(expr)
+            g = Geometry.from_mcnp(parenthesize_unions(expr))
         except Exception:
             continue
         parsed.append((cell.get("number", 0), cell.get("material", "0"), g.ast))

@@ -135,35 +135,6 @@ def parse_tr_cards(text: str) -> dict:
     return tr_cards
 
 
-def _parenthesize_unions(expr: str) -> str:
-    """把 MCNP 顶层 ':' 并集的每段包上括号，让 pymcnp 正确解析为顶层 union。
-
-    MCNP 语义 'a b c:d e f' = (a∩b∩c) ∪ (d∩e∩f)；pymcnp 会把 ':' 解析成
-    链中普通并集导致几何错误。包上括号后 pymcnp 识别为顶层 union。
-    已带括号的段保持原样；括号内的 ':' 不切分。
-    """
-    expr = (expr or "").strip()
-    if not expr:
-        return expr
-    parts = []
-    depth = 0
-    start = 0
-    for i, ch in enumerate(expr):
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth = max(0, depth - 1)
-        elif ch == ":" and depth == 0:
-            parts.append(expr[start:i].strip())
-            start = i + 1
-    parts.append(expr[start:].strip())
-    wrapped = []
-    for p in parts:
-        p = p.strip()
-        if not p:
-            continue
-        wrapped.append(p if (p.startswith("(") and p.endswith(")")) else "(" + p + ")")
-    return ":".join(wrapped)
 
 
 def build_cells_data(cell_list: list, include_void: bool = True) -> list:
@@ -179,7 +150,7 @@ def build_cells_data(cell_list: list, include_void: bool = True) -> list:
     pymcnp 几何 AST 解析失败时 ast 置 None（预览时该栅元不渲染）。
     """
     from pymcnp.types.Geometry import Geometry
-    from freecad_preview import resolve_cell_complements
+    from freecad_preview import resolve_cell_complements, parenthesize_unions
     entries = []  # (number, mat_val, density, ast_node)
     seen_numbers = set()
     for cell in cell_list:
@@ -201,7 +172,7 @@ def build_cells_data(cell_list: list, include_void: bool = True) -> list:
         raw_mat = str(raw_mat_raw).strip().split()[0] if raw_mat_raw else ""
         mat_val = raw_mat or raw_mat_raw
         try:
-            ast = Geometry.from_mcnp(_parenthesize_unions(expr))
+            ast = Geometry.from_mcnp(parenthesize_unions(expr))
             ast_node = ast.ast
         except Exception:
             ast_node = None
