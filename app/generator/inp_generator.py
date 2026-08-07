@@ -608,20 +608,25 @@ def _generate_kcode(adv: AdvancedSettings) -> list[str]:
     compact = _compress_j_skip(kcode_parts)
     lines.append(f"KCODE  {compact}")
 
-    # KSRC coordinate points
+    # KSRC coordinate points — 合并成单张 KSRC 卡（MCNP 只允许一张 KSRC 卡，
+    # 多张卡会报错；多个点用 5 空格续行）
     if adv.ksrc_points:
         import json as _json
         try:
             points = _json.loads(adv.ksrc_points)
             if points:
-                line_parts = ["C  KSRC Initial Fission Points"]
+                coords = []
                 for pt in points:
                     x = (pt.get("x") or "").strip()
                     y = (pt.get("y") or "").strip()
                     z = (pt.get("z") or "").strip()
                     if x and y and z:
-                        line_parts.append(f"KSRC  {x}  {y}  {z}")
-                lines.extend(line_parts)
+                        coords.append(f"{x}  {y}  {z}")
+                if coords:
+                    lines.append("C  KSRC Initial Fission Points")
+                    lines.append("KSRC  " + coords[0])   # 首行 1 点
+                    for c in coords[1:]:                 # 续行每行 1 点，方便阅读
+                        lines.append("     " + c)
         except (_json.JSONDecodeError, TypeError):
             lines.append("C  KSRC points: failed to parse")
 
