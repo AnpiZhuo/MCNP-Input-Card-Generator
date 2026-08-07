@@ -21,6 +21,8 @@ function makeRunBat(inpFilename: string, mcnpExe?: string): string {
   const name = inpFilename.replace(/\.inp$/i, "").replace(/\.i$/i, "");
   const exe = mcnpExe || "mcnp6.exe";
   return `@echo off
+rem 显卡选择：本机 GPU0 是核显，GPU1 是独显。设 CUDA_VISIBLE_DEVICES=1 让 MCNP 走独显加速
+set CUDA_VISIBLE_DEVICES=1
 call ${exe} inp=${inpFilename} outp=${name}.o
 pause
 `;

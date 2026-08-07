@@ -689,15 +689,21 @@ class MCNPHandler(BaseHTTPRequestHandler):
             saved_mtime = os.path.getmtime(inp_path) if os.path.exists(inp_path) else None
             with open(inp_path, "w", encoding="utf-8") as f:
                 f.write(inp_text)
-            run_bat = f"@echo off\r\ncall \"{exe}\" inp={filename} outp={base}.o\r\npause\r\n"
+            # 显卡选择：本机 GPU0 是核显，GPU1 是独显（CUDA 只认 NVIDIA）。
+            # CUDA_VISIBLE_DEVICES=1 让 MCNP 跳过核显直接用独显加速。
+            gpu_device = os.environ.get("MCNP_GPU_DEVICE", "1")
+            run_bat = (f"@echo off\r\nset CUDA_VISIBLE_DEVICES={gpu_device}\r\n"
+                       f"call \"{exe}\" inp={filename} outp={base}.o\r\npause\r\n")
             with open(bat_path, "w", encoding="utf-8") as f:
                 f.write(run_bat)
-            # 后台线程：MCNP 跑完后自动删除临时 inp + bat
+            # 后台线程：在新控制台窗口里跑 run.bat（窗口可见，用户能看到 MCNP 在跑，
+            # pause 让跑完的窗口停住）；MCNP 结束后自动删除临时 inp + bat。
             def _run_and_cleanup():
                 try:
-                    proc = subprocess.Popen([exe, f"inp={filename}"], cwd=output_dir,
-                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    proc.communicate()
+                    proc = subprocess.Popen(
+                        ["cmd.exe", "/c", bat_path], cwd=output_dir,
+                        creationflags=subprocess.CREATE_NEW_CONSOLE)
+                    proc.wait()
                 except Exception:
                     pass
                 finally:
