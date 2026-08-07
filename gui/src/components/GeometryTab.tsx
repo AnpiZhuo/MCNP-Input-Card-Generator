@@ -20,6 +20,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const [doc, setDoc] = useState<{path:string;title:string}|null>(null);
   const [cells, setCells] = useState<LocalCellRow[]>([]);
   const cellDragIdx = useRef<number | null>(null);
+  const [cellDragOverIdx, setCellDragOverIdx] = useState<number | null>(null);
   const addCellRow = () => setCells([...cells, { kind: "cell", cell: { num:String(cells.length+1), mat:"0", density:"", surfaces:"", impN:"", impP:"", impE:"", vol:"", pwt:"", ext:"", fcl:"", u:"", fill:"", lat:"", trcl:"", tmp:"", otherParams:"", render:false, comment:"" } }]);
   const addRawCell = (text: string) => setCells([...cells, { kind: "raw", text }]);
   const addConditionalCells = () => {
@@ -30,6 +31,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const moveCellRow = (from: number, to: number) => {
     if (from === to) return;
     const c = [...cells]; const [m] = c.splice(from, 1); c.splice(to, 0, m); setCells(c);
+    setCellDragOverIdx(null);
   };
   const [editCell, setEditCell] = useState<number | null>(null);
   const [surfText, setSurfText] = useState("");
@@ -195,7 +197,6 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
           <div className="btn-group">
             <button className="btn btn-success btn-xs" onClick={addCellRow}>+ 栅元</button>
             <button className="btn btn-ghost btn-xs" onClick={addConditionalCells} title="插入 #ifdef 名称 / #else / #endif 三行"># 条件</button>
-            <button className="btn btn-ghost btn-xs" onClick={() => addRawCell("#ifdef ENDF7")}># 行</button>
           </div>
         </div>
         <div className="table-wrap">
@@ -203,16 +204,16 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
             <thead><tr><th>#</th><th>材料</th><th>密度</th><th>曲面表达式</th><th>IMP:N</th><th>注释</th><th>操作</th></tr></thead>
             <tbody>
               {cells.map((c, i) => c.kind === "raw" ? (
-                <tr key={i} draggable onDragStart={(e) => { cellDragIdx.current = i; e.dataTransfer.effectAllowed = "move"; }} onDragOver={(e) => e.preventDefault()} onDrop={() => { if (cellDragIdx.current !== null) { moveCellRow(cellDragIdx.current, i); cellDragIdx.current = null; } }}
-                  style={{ background: "rgba(255,255,255,0.04)", cursor: "grab" }}>
+                <tr key={i} draggable onDragStart={(e) => { cellDragIdx.current = i; setCellDragOverIdx(null); e.dataTransfer.effectAllowed = "move"; }} onDragOver={(e) => { e.preventDefault(); if (cellDragOverIdx !== i) setCellDragOverIdx(i); }} onDragLeave={() => { if (cellDragOverIdx === i) setCellDragOverIdx(null); }} onDrop={() => { if (cellDragIdx.current !== null && cellDragIdx.current !== i) moveCellRow(cellDragIdx.current, i); cellDragIdx.current = null; setCellDragOverIdx(null); }} onDragEnd={() => { cellDragIdx.current = null; setCellDragOverIdx(null); }}
+                  style={{ background: "rgba(255,255,255,0.04)", cursor: "grab", opacity: cellDragIdx.current === i ? 0.4 : 1, boxShadow: cellDragOverIdx === i ? "inset 0 2px 0 0 var(--accent)" : "none" }}>
                   <td colSpan={6} style={{ fontFamily: "Consolas,monospace", fontSize: 12, color: "#ce93d8" }}>{c.text}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button className="btn btn-danger btn-xs" onClick={() => setCells(cells.filter((_, j) => j !== i))}>×</button>
                   </td>
                 </tr>
               ) : (
-                <tr key={i} draggable onDragStart={(e) => { cellDragIdx.current = i; e.dataTransfer.effectAllowed = "move"; }} onDragOver={(e) => e.preventDefault()} onDrop={() => { if (cellDragIdx.current !== null) { moveCellRow(cellDragIdx.current, i); cellDragIdx.current = null; } }}
-                  style={{ cursor: "grab" }}>
+                <tr key={i} draggable onDragStart={(e) => { cellDragIdx.current = i; setCellDragOverIdx(null); e.dataTransfer.effectAllowed = "move"; }} onDragOver={(e) => { e.preventDefault(); if (cellDragOverIdx !== i) setCellDragOverIdx(i); }} onDragLeave={() => { if (cellDragOverIdx === i) setCellDragOverIdx(null); }} onDrop={() => { if (cellDragIdx.current !== null && cellDragIdx.current !== i) moveCellRow(cellDragIdx.current, i); cellDragIdx.current = null; setCellDragOverIdx(null); }} onDragEnd={() => { cellDragIdx.current = null; setCellDragOverIdx(null); }}
+                  style={{ cursor: "grab", opacity: cellDragIdx.current === i ? 0.4 : 1, boxShadow: cellDragOverIdx === i ? "inset 0 2px 0 0 var(--accent)" : "none" }}>
                   <td style={{fontWeight:600,color:"var(--text-primary)"}}>{c.cell.num}</td>
                   <td>{c.cell.mat}</td><td>{c.cell.density}</td><td>{c.cell.surfaces}</td><td>{c.cell.impN}</td>
                   <td style={{fontSize:11,color:"var(--text-secondary)",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.cell.comment||"—"}</td>

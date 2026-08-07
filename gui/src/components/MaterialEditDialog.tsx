@@ -66,6 +66,7 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
   const [mode, setMode] = useState<"manual" | "formula">(initial.length > 0 ? "manual" : "formula");
   const [nucs, setNucs] = useState<MaterialRow[]>(initial.length > 0 ? initial : [{ kind: "nuclide", zaid: "", fraction: "" }]);
   const dragIdx = React.useRef<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const [comment, setComment] = useState(name);
   const [options, setOptions] = useState(initOptions || "");
   const [mtCard, setMtCard] = useState(initMtCard || "");
@@ -125,6 +126,7 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
     const [m] = c.splice(from, 1);
     c.splice(to, 0, m);
     setNucs(c);
+    setDragOverIdx(null);
   };
 
   return React.createElement(FloatingDialog, {
@@ -235,16 +237,17 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
               React.createElement("div", { style: { display: "flex", gap: 6 } },
                 React.createElement("button", { className: "btn btn-success btn-xs", onClick: addRow }, "+ 核素"),
                 React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: addConditional, title: "插入 #ifdef 名称 / #else / #endif 三行" }, "# 条件"),
-                React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: () => addRawRow("#ifdef ENDF7") }, "# 行"),
               ),
             ),
             ...nucs.map((nu, i) =>
               React.createElement("div", {
                 key: i, draggable: true,
-                onDragStart: (e: React.DragEvent) => { dragIdx.current = i; e.dataTransfer.effectAllowed = "move"; },
-                onDragOver: (e: React.DragEvent) => e.preventDefault(),
-                onDrop: () => { if (dragIdx.current !== null) { moveRow(dragIdx.current, i); dragIdx.current = null; } },
-                style: { display: "flex", gap: 8, marginBottom: 6, alignItems: "center", cursor: "grab", ...(nu.kind === "raw" ? { background: "rgba(255,255,255,0.05)", padding: "4px 8px", borderRadius: 4 } : {}) } as React.CSSProperties,
+                onDragStart: (e: React.DragEvent) => { dragIdx.current = i; setDragOverIdx(null); e.dataTransfer.effectAllowed = "move"; },
+                onDragOver: (e: React.DragEvent) => { e.preventDefault(); if (dragOverIdx !== i) setDragOverIdx(i); },
+                onDragLeave: () => { if (dragOverIdx === i) setDragOverIdx(null); },
+                onDrop: () => { if (dragIdx.current !== null && dragIdx.current !== i) moveRow(dragIdx.current, i); dragIdx.current = null; setDragOverIdx(null); },
+                onDragEnd: () => { dragIdx.current = null; setDragOverIdx(null); },
+                style: { display: "flex", gap: 8, marginBottom: 6, alignItems: "center", cursor: "grab", opacity: dragIdx.current === i ? 0.4 : 1, boxShadow: dragOverIdx === i ? "inset 0 2px 0 0 var(--accent)" : "none", ...(nu.kind === "raw" ? { background: "rgba(255,255,255,0.05)", padding: "4px 8px", borderRadius: 4 } : {}) } as React.CSSProperties,
               },
                 nu.kind === "raw" ? (
                   React.createElement(React.Fragment, null,
