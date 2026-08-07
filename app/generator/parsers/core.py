@@ -201,7 +201,7 @@ def parse_cells(cell_lines: list[str]) -> list[CellRow]:
                     surf_start = 3
 
         surf_parts = []
-        imp_n = "1"
+        imp_n = ""   # 不强制默认 1；只有显式 IMP:N 或全局 imp:n 卡才填
         imp_p = ""
         imp_e = ""
         vol = ""
@@ -327,6 +327,23 @@ def parse_surfaces(surf_lines: list[str]) -> str:
 def _is_zaid_line(first: str) -> bool:
     """粗略判断行首 token 是否为 ZAID（数字开头，或元素-质量数，可能带 .lib 后缀）。"""
     return bool(re.match(r'^([A-Za-z]{1,2}-)?\d+(\.\w*)?$', first))
+
+
+def _expand_repeat(tokens: list[str]) -> list[str]:
+    """展开 MCNP 数值卡的 r 重复语法：'1.0 42r 0.0 5r' → 43×'1.0' + 6×'0.0'。
+
+    'Nr' = 把前一个值重复 N 次。
+    """
+    values: list[str] = []
+    prev = None
+    for tok in tokens:
+        m = re.match(r'^(\d+)\s*[rR]$', tok)
+        if m and prev is not None:
+            values.extend([prev] * int(m.group(1)))
+        else:
+            prev = tok
+            values.append(tok)
+    return values
 
 
 def _parse_material(parts: list[str], m_str: str) -> MaterialData:
@@ -1163,6 +1180,16 @@ def parse_data_cards(data_lines: list[str]) -> dict:
                 raw_lines.append(data[i + 1]); i += 1
             vals, _ = _parse_card_with_continuation(data, i, first, parts)
             result["t_cards_lines"].append("\n".join(raw_lines))
+            i += 1
+        elif first.startswith("IMP:"):
+            # imp:n/p/e 数据卡：'imp:n 1.0 42r 0.0 5r' 或逐值赋值。
+            # 展开 r 重复后按粒子存值，稍后按栅元号应用。
+            spec = first[4:].upper()  # "N" / "P" / "N,P" / "N,P,E"
+            vals = _expand_repeat(parts[1:])
+            for p in spec.split(","):
+                p = p.strip().lower()
+                if p in ("n", "p", "e"):
+                    result.setdefault(f"imp_{p}_values", []).extend(vals)
             i += 1
         elif first in _KNOWN_OTHER_CARDS or _TALLY_MODIFIER_RE.match(first):
             # 标准 MCNP 卡片但无对应 UI，保留原样到 other_cards

@@ -9,7 +9,7 @@ It coordinates sub-modules for line normalization, section splitting, and core p
 import json
 import re
 
-from app.models import BasicSettings, TallySettings, AdvancedSettings, DeckData
+from app.models import BasicSettings, CellRow, TallySettings, AdvancedSettings, DeckData
 
 from .lines import normalize_lines
 from .sections import split_sections
@@ -284,6 +284,19 @@ def parse_inp_text(text: str) -> tuple[DeckData, list[str]]:
 
     # Extract TR cards from data section into DeckData.tr_cards
     tr_cards = "\n".join(data.get("tr_cards", []))
+
+    # 应用 imp:n/p/e 数据卡（含 r 重复语法）到栅元，按栅元号顺序。
+    # 只有显式指定 imp 的栅元才填；默认留空（MCNP 默认 1.0）。
+    def _apply_imp(cells: list[CellRow], values: list, attr: str) -> None:
+        # 标准 MCNP：值按栅元号顺序应用；少于栅元数的剩余留空（MCNP 默认 1.0）
+        rows = [c for c in cells if c.kind == "cell"]
+        rows.sort(key=lambda r: r.cell.number)
+        for idx, row in enumerate(rows):
+            if idx < len(values):
+                setattr(row.cell, attr, str(values[idx]))
+    for _k, _attr in (("imp_n_values", "imp_n"), ("imp_p_values", "imp_p"), ("imp_e_values", "imp_e")):
+        if data.get(_k):
+            _apply_imp(cells, data[_k], _attr)
 
     # Assemble the final DeckData object combining all parsed sections
     deck = DeckData(basic=basic, surfaces=surfaces, cells=cells,
