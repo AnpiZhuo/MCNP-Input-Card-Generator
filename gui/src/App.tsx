@@ -10,7 +10,7 @@ import { startPythonBackend, stopPythonBackend } from "./utils/backend";
 
 const TABS = [
   { key: "basic", label: "基本" },
-  { key: "geo", label: "几何" }, { key: "mat", label: "材料" },
+  { key: "mat", label: "材料" }, { key: "geo", label: "几何" },
   { key: "src", label: "源项" }, { key: "tally", label: "计数" },
   { key: "adv", label: "高级" }, { key: "output", label: "输出" },
 ];
