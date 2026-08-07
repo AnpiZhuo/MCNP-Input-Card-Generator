@@ -51,6 +51,45 @@ def _geometry_ast_to_json(node):
     raise ValueError(f"未知 AST 节点: {type(node).__name__}")
 
 
+def resolve_cell_complements(ast_node, cells_by_num: dict, stack=None):
+    """把 AST 中的 #n（栅元补集算子）展开为对应栅元的完整几何。
+
+    MCNP 语义：#n = 除栅元 n 外的所有空间 = bound_box 中不属于栅元 n 的区域。
+    展开方法：把 `#n` 的 operand 从『曲面 n』替换成『栅元 n 的完整几何』，
+    序列化后 worker 对 ["unary", X, "complement"] 执行 bound_box.cut(X)，
+    即挖掉栅元 n 的实体。这样 `#43` 会挖掉栅元 43（空心反射体）而不是曲面 43。
+
+    注意 #n 的操作数永远是栅元号（MCNP 语法无歧义，`#` 即判别器），
+    与曲面号重合时查的是栅元表。preview-3d / export-step / cross-section 共用。
+    """
+    _lazy_import_geometry()
+    if stack is None:
+        stack = set()
+    if isinstance(ast_node, _Unary) and ast_node.operator == "#":
+        operand = ast_node.operand
+        if isinstance(operand, _Digit):
+            n = int(operand.value)
+            if n in stack or n not in cells_by_num:
+                return ast_node  # 循环引用或未知栅元，保持原样
+            ref = cells_by_num[n]
+            if ref is None:
+                return ast_node
+            inner = resolve_cell_complements(ref, cells_by_num, stack | {n})
+            return _Unary("#", inner)
+        return ast_node
+    if isinstance(ast_node, _Intersection):
+        return _Intersection(
+            resolve_cell_complements(ast_node.left, cells_by_num, stack),
+            resolve_cell_complements(ast_node.right, cells_by_num, stack))
+    if isinstance(ast_node, _Union):
+        return _Union(
+            resolve_cell_complements(ast_node.left, cells_by_num, stack),
+            resolve_cell_complements(ast_node.right, cells_by_num, stack))
+    if isinstance(ast_node, _Paren):
+        return _Paren(resolve_cell_complements(ast_node.ast, cells_by_num, stack))
+    return ast_node
+
+
 def _pymcnp_surf_to_dict(surf):
     """从 pymcnp 表面对象提取 type/params/transform"""
     info = {"number": int(surf.number)}

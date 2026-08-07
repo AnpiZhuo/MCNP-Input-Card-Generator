@@ -13,7 +13,7 @@ if _APP_DIR not in sys.path:
     sys.path.insert(0, _APP_DIR)
 
 from step_importer import StepImporter
-from freecad_preview import _pymcnp_surf_to_dict, _geometry_ast_to_json
+from freecad_preview import _pymcnp_surf_to_dict, _geometry_ast_to_json, resolve_cell_complements
 import pymcnp.inp as _pi
 
 _SURF_CLASSES = {}
@@ -70,24 +70,26 @@ def get_cross_section(data: dict) -> dict:
         except Exception:
             pass
 
-    # 3. 栅元 AST JSON（跳过 void）
+    # 3. 栅元 AST JSON（含 void：真空栅元参与 #n 补集解析，截面仍要画边界）
     from pymcnp.types.Geometry import Geometry
-    cells_json = []
+    # 第一遍：收集所有栅元（含 void）的 AST，供 #n 引用解析
+    parsed = []
     for cell in cell_list:
-        expr = cell.get("surface_expr", "").strip()
+        expr = str(cell.get("surface_expr", "")).strip()
         if not expr:
-            continue
-        raw_mat = str(cell.get("material", "")).strip().split()[0] if cell.get("material") else ""
-        if raw_mat == "0":
             continue
         try:
             g = Geometry.from_mcnp(expr)
-            ast = _geometry_ast_to_json(g.ast)
-            cells_json.append({
-                "number": cell.get("number", 0),
-                "material": cell.get("material", "0"),
-                "ast": ast,
-            })
+        except Exception:
+            continue
+        parsed.append((cell.get("number", 0), cell.get("material", "0"), g.ast))
+    cells_by_num = {num: node for num, _, node in parsed}
+    cells_json = []
+    for num, mat, node in parsed:
+        try:
+            resolved = resolve_cell_complements(node, cells_by_num)
+            ast = _geometry_ast_to_json(resolved)
+            cells_json.append({"number": num, "material": mat, "ast": ast})
         except Exception:
             pass
 

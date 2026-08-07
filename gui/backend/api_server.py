@@ -166,15 +166,21 @@ def _parenthesize_unions(expr: str) -> str:
     return ":".join(wrapped)
 
 
-def build_cells_data(cell_list: list) -> list:
+def build_cells_data(cell_list: list, include_void: bool = True) -> list:
     """把前端栅元 JSON（CellRow 判别联合或旧平铺格式）解析为 FreeCAD CSG 需要的
-    cells_data（跳过 raw 条件行、void 栅元；同一栅元号多定义只取第一个）。
+    cells_data（跳过 raw 条件行；同一栅元号多定义只取第一个）。
 
-    export-step / preview-3d 共用：非空曲面表达式、材料非 0（跳过真空）、
+    两遍处理：
+      1. 先收集所有栅元（含真空）的 AST，供 #n 栅元补集引用解析；
+      2. 再逐个解析 #n → 栅元 n 的完整几何补集，输出 cells_data。
+
+    include_void=True（3D 预览）时保留真空栅元（材料 0），前端染成透明色；
+    include_void=False（STEP 导出）时跳过真空栅元，但 #n 解析仍会用到其几何。
     pymcnp 几何 AST 解析失败时 ast 置 None（预览时该栅元不渲染）。
     """
     from pymcnp.types.Geometry import Geometry
-    cells_data = []
+    from freecad_preview import resolve_cell_complements
+    entries = []  # (number, mat_val, density, ast_node)
     seen_numbers = set()
     for cell in cell_list:
         if not isinstance(cell, dict):
@@ -193,18 +199,28 @@ def build_cells_data(cell_list: list) -> list:
         seen_numbers.add(number)
         raw_mat_raw = cell.get("material") or cell.get("mat") or ""
         raw_mat = str(raw_mat_raw).strip().split()[0] if raw_mat_raw else ""
-        if raw_mat == "0":
-            continue  # void 栅元不参与 CSG
         mat_val = raw_mat or raw_mat_raw
         try:
             ast = Geometry.from_mcnp(_parenthesize_unions(expr))
+            ast_node = ast.ast
         except Exception:
-            ast = None
+            ast_node = None
+        entries.append((number, mat_val, cell.get("density", ""), ast_node))
+
+    # #n 栅元补集引用解析：先建 number → ast_node 映射（含真空栅元）
+    cells_by_num = {num: node for num, _, _, node in entries}
+    cells_data = []
+    for number, mat_val, density, ast_node in entries:
+        if not include_void and str(mat_val).split()[0] == "0":
+            continue  # STEP 导出跳过真空；其几何已在上面的映射里用于 #n 解析
+        if ast_node is not None:
+            ast_node = resolve_cell_complements(ast_node, cells_by_num)
+        # 包回 Geometry 对象（下游 _geometry_ast_to_json 用 c["ast"].ast）
         cells_data.append({
             "number": number,
             "material": mat_val,
-            "ast": ast,
-            "density": cell.get("density", ""),
+            "ast": Geometry(ast_node) if ast_node is not None else None,
+            "density": density,
         })
     return cells_data
 
@@ -864,8 +880,9 @@ class MCNPHandler(BaseHTTPRequestHandler):
             # 解析曲面（共享 parse_surfaces）
             surfs = parse_surfaces(surf_text)
 
-            # 解析栅元（共享 build_cells_data；导出需几何可解析，剔除 ast=None）
-            cells_data = [c for c in build_cells_data(cell_list)
+            # 解析栅元（共享 build_cells_data；导出需几何可解析，剔除 ast=None；
+            # 真空栅元不导出为实体——它们只参与 #n 补集解析，不进入 STEP）
+            cells_data = [c for c in build_cells_data(cell_list, include_void=False)
                           if c["ast"] is not None]
 
             if not surfs or not cells_data:
