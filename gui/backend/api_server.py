@@ -274,20 +274,26 @@ def _basic_from_dict(d: dict) -> BasicSettings:
     )
 
 def _cells_from_list(arr: list) -> list[CellRow]:
-    """前端 cells（CellRow 判别联合）→ 后端 CellRow[]"""
+    """前端 cells（CellRow 判别联合）→ 后端 CellRow[]。
+
+    CellRow 的字段嵌在 c["cell"] 里（判别联合）；旧平铺格式字段在顶层。
+    """
     out = []
     for c in arr:
-        if isinstance(c, dict) and c.get("kind") == "raw":
+        if not isinstance(c, dict):
+            continue
+        if c.get("kind") == "raw":
             out.append(CellRow(kind="raw", text=c.get("text", "")))
-        else:
-            out.append(CellRow(kind="cell", cell=CellData(
-                number=c.get("number", 0), material=c.get("material", "0"), density=c.get("density", ""),
-                surface_expr=c.get("surface_expr", ""), imp_n=c.get("imp_n", ""), imp_p=c.get("imp_p", ""),
-                imp_e=c.get("imp_e", ""), vol=c.get("vol", ""), pwt=c.get("pwt", ""), ext=c.get("ext", ""),
-                fcl=c.get("fcl", ""), u=c.get("u", ""), fill=c.get("fill", ""), lat=c.get("lat", ""),
-                trcl=c.get("trcl", ""), tmp=c.get("tmp", ""), other_params=c.get("other_params", ""),
-                render=c.get("render", True), comment=c.get("comment", ""),
-            )))
+            continue
+        cell_dict = c.get("cell") if isinstance(c.get("cell"), dict) else c
+        out.append(CellRow(kind="cell", cell=CellData(
+            number=cell_dict.get("number", 0), material=cell_dict.get("material", "0"), density=cell_dict.get("density", ""),
+            surface_expr=cell_dict.get("surface_expr", ""), imp_n=cell_dict.get("imp_n", ""), imp_p=cell_dict.get("imp_p", ""),
+            imp_e=cell_dict.get("imp_e", ""), vol=cell_dict.get("vol", ""), pwt=cell_dict.get("pwt", ""), ext=cell_dict.get("ext", ""),
+            fcl=cell_dict.get("fcl", ""), u=cell_dict.get("u", ""), fill=cell_dict.get("fill", ""), lat=cell_dict.get("lat", ""),
+            trcl=cell_dict.get("trcl", ""), tmp=cell_dict.get("tmp", ""), other_params=cell_dict.get("other_params", ""),
+            render=cell_dict.get("render", True), comment=cell_dict.get("comment", ""),
+        )))
     return out
 
 def _materials_from_list(arr: list) -> list[MaterialData]:
