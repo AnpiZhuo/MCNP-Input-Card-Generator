@@ -43,6 +43,9 @@ export default function MaterialTab({ onMaterialAdded }: MatTabProps) {
           matNum={String(mats[editIdx].number)}
           name={mats[editIdx].comment}
           nuclides={mats[editIdx].nuclides}
+          density={mats[editIdx].density}
+          options={mats[editIdx].options}
+          mtCard={mats[editIdx].mt_card}
           onSave={(d) => {
             const c = [...mats];
             c[editIdx] = {

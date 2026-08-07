@@ -45,7 +45,8 @@ export default function CellEditDialog({ cell, onSave, onClose, availableMats }:
     if (k === "mat" && availableMats?.length) {
       const matNum = parseInt(v);
       const mat = availableMats.find(m => m.number === matNum);
-      if (mat && mat.density && !data.density) {
+      // 材料有密度就始终同步到栅元卡（切换材料也更新，不再被旧密度挡住）
+      if (mat && mat.density) {
         setData({ ...data, mat: v, density: mat.density });
         return;
       }

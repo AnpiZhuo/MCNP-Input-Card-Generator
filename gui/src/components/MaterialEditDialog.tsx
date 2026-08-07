@@ -3,7 +3,7 @@ import FloatingDialog from "./FloatingDialog";
 
 interface Nuclide { zaid: string; fraction: string }
 interface MaterialFormData { matNum: string; name: string; nuclides: Nuclide[]; options: string; mtCard: string; density: string }
-interface Props { matNum: string; name: string; nuclides: Nuclide[]; onSave: (d: MaterialFormData) => void; onClose: () => void }
+interface Props { matNum: string; name: string; nuclides: Nuclide[]; density?: string; options?: string; mtCard?: string; onSave: (d: MaterialFormData) => void; onClose: () => void }
 
 import { PRESET_CATEGORIES, type PresetItem } from "./MaterialPresets";
 
@@ -60,14 +60,14 @@ async function expandFormula(formula: string): Promise<Nuclide[]> {
   return j.nuclides;
 }
 
-export default function MaterialEditDialog({ matNum, name, nuclides: initial, onSave, onClose }: Props) {
+export default function MaterialEditDialog({ matNum, name, nuclides: initial, density: initDensity, options: initOptions, mtCard: initMtCard, onSave, onClose }: Props) {
   const [userPresets, setUserPresets] = useState<PresetItem[]>(() => loadUP());
   const [mode, setMode] = useState<"manual" | "formula">(initial.length > 0 ? "manual" : "formula");
   const [nucs, setNucs] = useState<Nuclide[]>(initial.length > 0 ? initial : [{ zaid: "", fraction: "" }]);
   const [comment, setComment] = useState(name);
-  const [options, setOptions] = useState("");
-  const [mtCard, setMtCard] = useState("");
-  const [density, setDensity] = useState("");
+  const [options, setOptions] = useState(initOptions || "");
+  const [mtCard, setMtCard] = useState(initMtCard || "");
+  const [density, setDensity] = useState(initDensity || "");
   const [formulaText, setFormulaText] = useState("");
   const [parsing, setParsing] = useState(false);
   const [parsed, setParsed] = useState<Nuclide[] | null>(null);
