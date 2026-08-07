@@ -104,6 +104,15 @@ def normalize_lines(raw_text: str) -> list[str]:
             merged.append(line)
             continue
 
+        # MCNP 预处理器行（#ifdef/#else/#endif/#define…）：续行断点，单独保留。
+        # 否则 #ifdef 之后的缩进核素行会被错误并入 #ifdef 行。
+        if stripped.startswith("#"):
+            if current.strip():
+                merged.append(current.strip())
+                current = ""
+            merged.append(line.rstrip())
+            continue
+
         # If we are already building a merged continuation line
         if current:
             cur_no_dollar = strip_comment(current)

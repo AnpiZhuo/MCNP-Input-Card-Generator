@@ -5,7 +5,8 @@ INP 生成器：使用 pymcnp 库构建 MCNP 数据卡，cells/surfaces 保留�
 import json
 import math
 import re
-from app.models import BasicSettings, CellData, MaterialData, SourceData, AdvancedSettings, DeckData, TallySettings
+from app.models import (BasicSettings, CellData, CellRow, MaterialData, MaterialRow,
+                        SourceData, AdvancedSettings, DeckData, TallySettings)
 
 
 # ===== Cells & Surfaces: 保留原始文本 pass-through =====
@@ -21,10 +22,14 @@ def _dist_json_nonempty(dist_json: str) -> bool:
         return False
 
 
-def _generate_cells(cells: list[CellData]) -> list[str]:
-    """生成栅元卡 — 空值不输出"""
+def _generate_cells(cells: list[CellRow]) -> list[str]:
+    """生成栅元卡 — 空值不输出；CellRow 可为 cell 或 raw 条件行"""
     lines = []
-    for cell in cells:
+    for row in cells:
+        if getattr(row, 'kind', 'cell') == "raw":
+            lines.append(row.text)  # 原样条件行（#ifdef/#else/#endif…）
+            continue
+        cell = row.cell
         mat = cell.material
         if " " in mat:
             mat = mat.split()[0]
@@ -187,8 +192,11 @@ def _generate_materials(materials: list[MaterialData]) -> list[str]:
 
         # 首行: M{n}
         card = f"M{mat.number}"
-        # 续行: 每个 ZAID/fraction 一行
+        # 续行: 每个 ZAID/fraction 一行；raw 条件行原样独立成行（#ifdef/#else/#endif…）
         for row in mat.rows:
+            if getattr(row, 'kind', 'nuclide') == "raw":
+                card += f"\n{row.text}"
+                continue
             zaid = _normalize_zaid(row.zaid)
             frac = row.fraction
             card += f"\n     {zaid}  {frac}"

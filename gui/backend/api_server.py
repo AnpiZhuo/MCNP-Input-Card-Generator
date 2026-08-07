@@ -23,7 +23,7 @@ if PROJECT_DIR not in sys.path:
     sys.path.insert(0, PROJECT_DIR)
 
 from models import (
-    BasicSettings, CellData, MaterialData, MaterialRow,
+    BasicSettings, CellData, CellRow, MaterialData, MaterialRow,
     SourceData, TallySettings, TallyDefinition, AdvancedSettings, DeckData
 )
 from generator.inp_generator import generate_inp_from_deck
@@ -167,17 +167,30 @@ def _parenthesize_unions(expr: str) -> str:
 
 
 def build_cells_data(cell_list: list) -> list:
-    """把前端栅元 JSON 解析为 FreeCAD CSG 需要的 cells_data（跳过 void 栅元）。
+    """把前端栅元 JSON（CellRow 判别联合或旧平铺格式）解析为 FreeCAD CSG 需要的
+    cells_data（跳过 raw 条件行、void 栅元；同一栅元号多定义只取第一个）。
 
     export-step / preview-3d 共用：非空曲面表达式、材料非 0（跳过真空）、
     pymcnp 几何 AST 解析失败时 ast 置 None（预览时该栅元不渲染）。
     """
     from pymcnp.types.Geometry import Geometry
     cells_data = []
+    seen_numbers = set()
     for cell in cell_list:
+        if not isinstance(cell, dict):
+            continue
+        # CellRow 判别联合：raw 跳过；cell 用嵌套 cell
+        if cell.get("kind") == "raw":
+            continue
+        if cell.get("kind") == "cell":
+            cell = cell.get("cell") or {}
         expr = str(cell.get("surface_expr", "") or cell.get("surfaces", "")).strip()
         if not expr:
             continue
+        number = cell.get("number", 0) or int(cell.get("num", 0) or 0)
+        if number in seen_numbers:
+            continue  # #ifdef 分支里同一栅元号两个定义，只取第一个
+        seen_numbers.add(number)
         raw_mat_raw = cell.get("material") or cell.get("mat") or ""
         raw_mat = str(raw_mat_raw).strip().split()[0] if raw_mat_raw else ""
         if raw_mat == "0":
@@ -188,7 +201,7 @@ def build_cells_data(cell_list: list) -> list:
         except Exception:
             ast = None
         cells_data.append({
-            "number": cell.get("number", 0) or int(cell.get("num", 0)),
+            "number": number,
             "material": mat_val,
             "ast": ast,
             "density": cell.get("density", ""),
@@ -260,22 +273,33 @@ def _basic_from_dict(d: dict) -> BasicSettings:
         print_pr=d.get("print_pr", ""), phys_fis=d.get("phys_fis", True),
     )
 
-def _cells_from_list(arr: list) -> list[CellData]:
-    return [CellData(
-        number=c.get("number", 0), material=c.get("material", "0"), density=c.get("density", ""),
-        surface_expr=c.get("surface_expr", ""), imp_n=c.get("imp_n", ""), imp_p=c.get("imp_p", ""),
-        imp_e=c.get("imp_e", ""), vol=c.get("vol", ""), pwt=c.get("pwt", ""), ext=c.get("ext", ""),
-        fcl=c.get("fcl", ""), u=c.get("u", ""), fill=c.get("fill", ""), lat=c.get("lat", ""),
-        trcl=c.get("trcl", ""), tmp=c.get("tmp", ""), other_params=c.get("other_params", ""),
-        render=c.get("render", True), comment=c.get("comment", ""),
-    ) for c in arr]
+def _cells_from_list(arr: list) -> list[CellRow]:
+    """前端 cells（CellRow 判别联合）→ 后端 CellRow[]"""
+    out = []
+    for c in arr:
+        if isinstance(c, dict) and c.get("kind") == "raw":
+            out.append(CellRow(kind="raw", text=c.get("text", "")))
+        else:
+            out.append(CellRow(kind="cell", cell=CellData(
+                number=c.get("number", 0), material=c.get("material", "0"), density=c.get("density", ""),
+                surface_expr=c.get("surface_expr", ""), imp_n=c.get("imp_n", ""), imp_p=c.get("imp_p", ""),
+                imp_e=c.get("imp_e", ""), vol=c.get("vol", ""), pwt=c.get("pwt", ""), ext=c.get("ext", ""),
+                fcl=c.get("fcl", ""), u=c.get("u", ""), fill=c.get("fill", ""), lat=c.get("lat", ""),
+                trcl=c.get("trcl", ""), tmp=c.get("tmp", ""), other_params=c.get("other_params", ""),
+                render=c.get("render", True), comment=c.get("comment", ""),
+            )))
+    return out
 
 def _materials_from_list(arr: list) -> list[MaterialData]:
     # 前端 deck 统一用 nuclides，导入路径会额外带 rows（api_server 405-407 映射）。
-    # 这里兼容两者：rows 优先，nuclides 兜底，保证手动添加的材料也能参与生成。
+    # 这里兼容两者：rows 优先，nuclides 兜底；行按 kind 判别（nuclide | raw）。
+    def _row(r: dict) -> MaterialRow:
+        if isinstance(r, dict) and r.get("kind") == "raw":
+            return MaterialRow(kind="raw", text=r.get("text", ""))
+        return MaterialRow(kind="nuclide", zaid=r.get("zaid", ""), fraction=r.get("fraction", ""))
     return [MaterialData(
         number=m.get("number", 0),
-        rows=[MaterialRow(zaid=r.get("zaid", ""), fraction=r.get("fraction", "")) for r in (m.get("rows") or m.get("nuclides") or [])],
+        rows=[_row(r) for r in (m.get("rows") or m.get("nuclides") or [])],
         comment=m.get("comment", ""), options=m.get("options", ""), mt_card=m.get("mt_card", ""),
         formula=m.get("formula", ""),
     ) for m in arr]
@@ -522,16 +546,20 @@ class MCNPHandler(BaseHTTPRequestHandler):
             import sys as _s
             print(f"[E0DBG] api tally: e_custom_enabled={deck_dict.get('tally', {}).get('e_custom_enabled')}", file=_s.stderr)
             print(f"[E0DBG] api tally: e_custom_text[:50]={str(deck_dict.get('tally', {}).get('e_custom_text'))[:50]}", file=_s.stderr)
-            # 后端用 rows，前端用 nuclides → 加入映射
+            # 后端用 rows，前端用 nuclides → 加入映射（行含 kind 判别）
             for m in deck_dict.get("materials", []):
                 if "rows" in m and "nuclides" not in m:
                     m["nuclides"] = m["rows"]
+            # cells: CellRow 判别联合（raw 行保留 text；cell 行嵌套 CellData，并补 camelCase 字段）
             for c in deck_dict.get("cells", []):
-                c["num"] = str(c.get("number", ""))
-                c["surfaces"] = c.get("surface_expr", "")
-                c["impN"] = c.get("imp_n", "")
-                c["impP"] = c.get("imp_p", "")
-                c["impE"] = c.get("imp_e", "")
+                if c.get("kind") == "raw":
+                    continue
+                cell = c.get("cell") or {}
+                cell["num"] = str(cell.get("number", ""))
+                cell["surfaces"] = cell.get("surface_expr", "")
+                cell["impN"] = cell.get("imp_n", "")
+                cell["impP"] = cell.get("imp_p", "")
+                cell["impE"] = cell.get("imp_e", "")
             # 源项模式：backend 的 adv.source_mode → 顶层 sourceMode
             adv = deck_dict.get("adv", {})
             deck_dict["sourceMode"] = {"distribution": "sdef", "fixed": "fixed", "kcode": "kcode", "surface": "surface"}.get(adv.get("source_mode", ""), "fixed")

@@ -2,10 +2,11 @@ import React, { useState } from "react";
 import FloatingDialog from "./FloatingDialog";
 
 interface Nuclide { zaid: string; fraction: string }
-interface MaterialFormData { matNum: string; name: string; nuclides: Nuclide[]; options: string; mtCard: string; density: string }
-interface Props { matNum: string; name: string; nuclides: Nuclide[]; density?: string; options?: string; mtCard?: string; onSave: (d: MaterialFormData) => void; onClose: () => void }
+interface MaterialFormData { matNum: string; name: string; nuclides: MaterialRow[]; options: string; mtCard: string; density: string }
+interface Props { matNum: string; name: string; nuclides: MaterialRow[]; density?: string; options?: string; mtCard?: string; onSave: (d: MaterialFormData) => void; onClose: () => void }
 
 import { PRESET_CATEGORIES, type PresetItem } from "./MaterialPresets";
+import type { MaterialRow } from "../utils/DeckContext";
 
 // 元素→质子数映射
 const Z_EL: Record<string, string> = {};
@@ -63,7 +64,8 @@ async function expandFormula(formula: string): Promise<Nuclide[]> {
 export default function MaterialEditDialog({ matNum, name, nuclides: initial, density: initDensity, options: initOptions, mtCard: initMtCard, onSave, onClose }: Props) {
   const [userPresets, setUserPresets] = useState<PresetItem[]>(() => loadUP());
   const [mode, setMode] = useState<"manual" | "formula">(initial.length > 0 ? "manual" : "formula");
-  const [nucs, setNucs] = useState<Nuclide[]>(initial.length > 0 ? initial : [{ zaid: "", fraction: "" }]);
+  const [nucs, setNucs] = useState<MaterialRow[]>(initial.length > 0 ? initial : [{ kind: "nuclide", zaid: "", fraction: "" }]);
+  const dragIdx = React.useRef<number | null>(null);
   const [comment, setComment] = useState(name);
   const [options, setOptions] = useState(initOptions || "");
   const [mtCard, setMtCard] = useState(initMtCard || "");
@@ -89,7 +91,7 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
     try {
       const result = await expandFormula(t);
       setParsed(result);
-      setNucs(result);
+      setNucs(result.map(n => ({ kind: "nuclide" as const, zaid: n.zaid, fraction: n.fraction })));
       // 验证每个解析出来的 ZAID
       const valMap: Record<number, boolean|null> = {};
       result.forEach((n: Nuclide) => {
@@ -106,8 +108,24 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
     finally { setParsing(false); }
   };
 
-  const addRow = () => setNucs([...nucs, { zaid: "", fraction: "" }]);
+  const addRow = () => setNucs([...nucs, { kind: "nuclide", zaid: "", fraction: "" }]);
   const delRow = (i: number) => { if (nucs.length > 1) setNucs(nucs.filter((_, j) => j !== i)); };
+  // 插入一条原样条件行（#ifdef/#else/#endif/其它）
+  const addRawRow = (text: string) => setNucs([...nucs, { kind: "raw", text }]);
+  // 一键生成 #ifdef 名称 / #else / #endif 三行（名称用 prompt 填）
+  const addConditional = () => {
+    const name = window.prompt("条件名（如 ENDF7）", "ENDF7");
+    if (name === null) return;
+    setNucs([...nucs, { kind: "raw", text: `#ifdef ${name.trim()}` }, { kind: "raw", text: "#else" }, { kind: "raw", text: "#endif" }]);
+  };
+  // 拖动排序：把 from 行移到 to 行位置
+  const moveRow = (from: number, to: number) => {
+    if (from === to) return;
+    const c = [...nucs];
+    const [m] = c.splice(from, 1);
+    c.splice(to, 0, m);
+    setNucs(c);
+  };
 
   return React.createElement(FloatingDialog, {
     title: `材料 M${matNum}`,
@@ -115,7 +133,7 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
     width: 600,
     footer: React.createElement(React.Fragment, null,
       React.createElement("button", { className: "btn btn-ghost btn-sm", onClick: onClose }, "取消"),
-      React.createElement("button", { className: "btn btn-primary btn-sm", onClick: () => onSave({ matNum, name: comment, nuclides: (mode === "formula" && parsed ? parsed : nucs), options, mtCard, density }) }, "保存"),
+      React.createElement("button", { className: "btn btn-primary btn-sm", onClick: () => onSave({ matNum, name: comment, nuclides: (mode === "formula" && parsed ? parsed.map(n => ({ kind: "nuclide" as const, zaid: n.zaid, fraction: n.fraction })) : nucs), options, mtCard, density }) }, "保存"),
     ),
   },
     React.createElement("div", { style: { padding: 0 } },
@@ -213,45 +231,54 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
         ) : (
           React.createElement(React.Fragment, null,
             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } },
-              React.createElement("span", { style: s.lbl }, "核素组成（元素 + 质量数 + 份额，如 U-235 0.05）"),
-              React.createElement("button", { className: "btn btn-success btn-xs", onClick: addRow }, "+ 添加"),
-            ),
-            ...nucs.map((nu, i) =>
-              React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 6, alignItems: "center" }, key: i },
-                React.createElement("span", { style: { width: 8, height: 8, borderRadius: "50%", background: zaidValid[i] === true ? "#4caf50" : zaidValid[i] === false ? "#e53935" : "#555", flexShrink: 0, display: "inline-block" } as React.CSSProperties }),
-                React.createElement("span", { style: { fontSize: 9, color: "var(--text-tertiary)", minWidth: 20 } }, (i+1) + "."),
-                React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, flex: 1 } },
-              React.createElement("div", { style: { display: "flex", gap: 4, flex: 1, alignItems: "center" } },
-                React.createElement("input", { style: { ...s.inp, flex: 1 }, placeholder: "元素 (如 U, 92, H, Fe)", value: (nu.zaid.match(/^\d/) ? zaidToEl(nu.zaid).split("-")[0] : nu.zaid.split("-")[0]) || "",
-                  onChange: (e) => {
-                    const c = [...nucs]; var old = nu.zaid.split("-"); c[i] = { ...c[i], zaid: e.target.value + "-" + (old[1]||"") }; setNucs(c);
-                    var el = e.target.value.trim();
-                    var mass = (old[1]||"");
-                    if (!el || !mass) { setZaidValid(function(p){var n={...p}; n[i]=null; return n;}); return; }
-                    var z = elToZaid(el, mass);
-                    var idx = i;
-                    fetch("http://localhost:5001/api/validate-zaid?zaid=" + encodeURIComponent(z)).then(function(r){return r.json();}).then(function(j){
-                      setZaidValid(function(p){var n={...p}; n[idx]=j.in_db; return n;});
-                    }).catch(function(){});
-                  },
-                }),
-                React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 11 } }, "-"),
-                React.createElement("input", { style: { ...s.inp, maxWidth: 70 }, placeholder: "质量数", value: (nu.zaid.match(/^\d/) ? zaidToEl(nu.zaid).split("-")[1] : nu.zaid.split("-")[1]) || "",
-                  onChange: (e) => {
-                    const c = [...nucs]; var el = nu.zaid.split("-")[0]; c[i] = { ...c[i], zaid: el + "-" + e.target.value }; setNucs(c);
-                    var mass = e.target.value.trim();
-                    if (!el || !mass) { setZaidValid(function(p){var n={...p}; n[i]=null; return n;}); return; }
-                    var z = elToZaid(el, mass);
-                    var idx = i;
-                    fetch("http://localhost:5001/api/validate-zaid?zaid=" + encodeURIComponent(z)).then(function(r){return r.json();}).then(function(j){
-                      setZaidValid(function(p){var n={...p}; n[idx]=j.in_db; return n;});
-                    }).catch(function(){});
-                  },
-                }),
+              React.createElement("span", { style: s.lbl }, "核素组成（核素/条件行，所有行可拖动排序）"),
+              React.createElement("div", { style: { display: "flex", gap: 6 } },
+                React.createElement("button", { className: "btn btn-success btn-xs", onClick: addRow }, "+ 核素"),
+                React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: addConditional, title: "插入 #ifdef 名称 / #else / #endif 三行" }, "# 条件"),
+                React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: () => addRawRow("#ifdef ENDF7") }, "# 行"),
               ),
             ),
-                React.createElement("input", { style: { ...s.inp, maxWidth: 90 }, placeholder: "份额", value: nu.fraction, onChange: (e: React.ChangeEvent<HTMLInputElement>) => { const c = [...nucs]; c[i] = { ...c[i], fraction: e.target.value }; setNucs(c); } }),
-                React.createElement("button", { className: "btn btn-danger btn-xs", onClick: () => delRow(i) }, "x"),
+            ...nucs.map((nu, i) =>
+              React.createElement("div", {
+                key: i, draggable: true,
+                onDragStart: (e: React.DragEvent) => { dragIdx.current = i; e.dataTransfer.effectAllowed = "move"; },
+                onDragOver: (e: React.DragEvent) => e.preventDefault(),
+                onDrop: () => { if (dragIdx.current !== null) { moveRow(dragIdx.current, i); dragIdx.current = null; } },
+                style: { display: "flex", gap: 8, marginBottom: 6, alignItems: "center", cursor: "grab", ...(nu.kind === "raw" ? { background: "rgba(255,255,255,0.05)", padding: "4px 8px", borderRadius: 4 } : {}) } as React.CSSProperties,
+              },
+                nu.kind === "raw" ? (
+                  React.createElement(React.Fragment, null,
+                    React.createElement("span", { style: { width: 8, height: 8, borderRadius: "50%", background: "#9c27b0", flexShrink: 0, display: "inline-block" } }),
+                    React.createElement("input", { style: { ...s.inp, flex: 1, fontFamily: "Consolas,monospace" } as React.CSSProperties, value: nu.text, onChange: (e: React.ChangeEvent<HTMLInputElement>) => { const c = [...nucs]; c[i] = { kind: "raw", text: e.target.value }; setNucs(c); }, placeholder: "#ifdef ENDF7 / #else / #endif" }),
+                    React.createElement("button", { className: "btn btn-danger btn-xs", onClick: () => delRow(i) }, "x"),
+                  )
+                ) : (
+                  React.createElement(React.Fragment, null,
+                    React.createElement("span", { style: { width: 8, height: 8, borderRadius: "50%", background: zaidValid[i] === true ? "#4caf50" : zaidValid[i] === false ? "#e53935" : "#555", flexShrink: 0, display: "inline-block" } as React.CSSProperties }),
+                    React.createElement("span", { style: { fontSize: 9, color: "var(--text-tertiary)", minWidth: 20 } }, (i+1) + "."),
+                    React.createElement("input", { style: { ...s.inp, flex: 1 } as React.CSSProperties, placeholder: "元素 (如 U, 92, H, Fe)", value: (nu.zaid.match(/^\d/) ? zaidToEl(nu.zaid).split("-")[0] : nu.zaid.split("-")[0]) || "",
+                      onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+                        const c = [...nucs]; var old = nu.zaid.split("-"); c[i] = { kind: "nuclide", zaid: e.target.value + "-" + (old[1] || ""), fraction: nu.fraction }; setNucs(c);
+                        var el = e.target.value.trim(); var mass = (old[1] || "");
+                        if (!el || !mass) { setZaidValid(function(p){var n={...p}; n[i]=null; return n;}); return; }
+                        var z = elToZaid(el, mass); var idx = i;
+                        fetch("http://localhost:5001/api/validate-zaid?zaid=" + encodeURIComponent(z)).then(function(r){return r.json();}).then(function(j){ setZaidValid(function(p){var n={...p}; n[idx]=j.in_db; return n;}); }).catch(function(){});
+                      },
+                    }),
+                    React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 11 } }, "-"),
+                    React.createElement("input", { style: { ...s.inp, maxWidth: 70 } as React.CSSProperties, placeholder: "质量数", value: (nu.zaid.match(/^\d/) ? zaidToEl(nu.zaid).split("-")[1] : nu.zaid.split("-")[1]) || "",
+                      onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+                        const c = [...nucs]; var el = nu.zaid.split("-")[0]; c[i] = { kind: "nuclide", zaid: el + "-" + e.target.value, fraction: nu.fraction }; setNucs(c);
+                        var mass = e.target.value.trim();
+                        if (!el || !mass) { setZaidValid(function(p){var n={...p}; n[i]=null; return n;}); return; }
+                        var z = elToZaid(el, mass); var idx = i;
+                        fetch("http://localhost:5001/api/validate-zaid?zaid=" + encodeURIComponent(z)).then(function(r){return r.json();}).then(function(j){ setZaidValid(function(p){var n={...p}; n[idx]=j.in_db; return n;}); }).catch(function(){});
+                      },
+                    }),
+                    React.createElement("input", { style: { ...s.inp, maxWidth: 90 } as React.CSSProperties, placeholder: "份额", value: nu.fraction, onChange: (e: React.ChangeEvent<HTMLInputElement>) => { const c = [...nucs]; c[i] = { kind: "nuclide", zaid: nu.zaid, fraction: e.target.value }; setNucs(c); } }),
+                    React.createElement("button", { className: "btn btn-danger btn-xs", onClick: () => delRow(i) }, "x"),
+                  )
+                ),
               )
             ),
           )

@@ -3,8 +3,16 @@ import type { GridValue } from "./gridState";
 
 /* 数据模型 */
 export interface Nuclide { zaid: string; fraction: string }
-export interface MaterialData { number: number; comment: string; nuclides: Nuclide[]; density: string; options: string; mt_card: string }
+/** 材料行：核素行或原样条件/预处理器行（判别联合，语义由 kind 决定） */
+export type MaterialRow =
+  | { kind: "nuclide"; zaid: string; fraction: string }
+  | { kind: "raw"; text: string };
+export interface MaterialData { number: number; comment: string; nuclides: MaterialRow[]; density: string; options: string; mt_card: string }
 export interface CellData { number: number; material: string; density: string; surface_expr: string; imp_n: string; imp_p: string; imp_e: string; vol: string; pwt: string; ext: string; fcl: string; u: string; fill: string; lat: string; trcl: string; tmp: string; other_params: string; render: boolean; comment: string }
+/** 栅元行：真正的栅元或原样条件/预处理器行（判别联合） */
+export type CellRow =
+  | { kind: "cell"; cell: CellData }
+  | { kind: "raw"; text: string };
 export interface SourceItem {
   number: number; par: string; erg: string;
   pos_x: string; pos_y: string; pos_z: string;
@@ -39,7 +47,7 @@ export interface SsrFields { surf: string; mode: string; cel: string; pty: strin
 export interface DeckData {
   basic: Record<string, any>;
   surfaces: string; tr_cards: string;
-  cells: CellData[];
+  cells: CellRow[];
   materials: MaterialData[];
   sources: SourceItem[];
   tallies: TallyDef[];

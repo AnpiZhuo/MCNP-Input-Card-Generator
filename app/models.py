@@ -56,18 +56,32 @@ class CellData:
 
 
 @dataclass
+class CellRow:
+    """
+    栅元列表中的一行：要么是真正的栅元，要么是原样条件/预处理器行。
+
+    判别联合：kind 决定语义（"cell" | "raw"）。
+    - kind=="cell": cell 有效（嵌套 CellData）
+    - kind=="raw": text 有效（如 "#ifdef ENDF7"、"#else"、"#endif"）
+    """
+    kind: str = "cell"            # "cell" | "raw"
+    cell: Optional[CellData] = None  # kind=="cell" 时有效
+    text: str = ""                # kind=="raw" 时有效
+
+
+@dataclass
 class MaterialRow:
     """
-    A single ZAID + fraction entry within a material card.
+    材料卡中的一行：要么是 ZAID+份额 核素行，要么是原样条件/预处理器行。
 
-    Each row represents one nuclide in an MCNP material definition (Mm card),
-    consisting of a ZAID identifier (e.g. "92235.06c") and its atomic or
-    weight fraction (e.g. "-0.05" for a negative weight fraction).
-
-    材料卡中一行 ZAID + 份额
+    判别联合：kind 决定语义（"nuclide" | "raw"）。
+    - kind=="nuclide": zaid + fraction 有效（如 "92235.06c", "-0.05"）
+    - kind=="raw": text 有效（如 "#ifdef ENDF7"、"#else"、"#endif" 或任意 verbatim 行）
     """
-    zaid: str            # ZAID identifier, e.g. "92235.06c" / 如 "92235.06c"
-    fraction: str        # Atomic or weight fraction, e.g. "-0.05" / 如 "-0.05"
+    kind: str = "nuclide"  # "nuclide" | "raw"
+    zaid: str = ""         # kind=="nuclide" 时有效，如 "92235.06c"
+    fraction: str = ""     # kind=="nuclide" 时有效，如 "-0.05"
+    text: str = ""         # kind=="raw" 时有效，如 "#ifdef ENDF7"
 
 
 @dataclass
@@ -420,7 +434,7 @@ class DeckData:
     basic: BasicSettings = field(default_factory=BasicSettings)       # Title, mode, NPS, CTME / 标题、模式、NPS、CTME
     surfaces: str = ""                                                # Surface cards as raw text / 曲面卡片原始文本
     tr_cards: str = ""                                                 # TR transformation cards as raw text / TR 变换卡原始文本
-    cells: list[CellData] = field(default_factory=list)               # Cell definitions / 栅元定义列表
+    cells: list[CellRow] = field(default_factory=list)                # Cell rows (cell | raw) / 栅元行列表
     materials: list[MaterialData] = field(default_factory=list)       # Material definitions / 材料定义列表
     sources: list[SourceData] = field(default_factory=list)           # Source definitions / 源定义列表
     tally: TallySettings | None = None                                # Tally settings (optional) / 计数设置（可选）

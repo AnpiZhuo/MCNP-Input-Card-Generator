@@ -87,7 +87,7 @@ export default function MaterialTab({ onMaterialAdded }: MatTabProps) {
                 <tr key={i}>
                   <td style={{ fontWeight: 600, color: "var(--text-primary)" }}>M{m.number}</td>
                   <td>{m.comment}</td>
-                  <td>{m.nuclides?.length || 0}</td>
+                  <td>{(m.nuclides || []).filter(n => n.kind !== "raw").length}</td>
                   <td>
                     <button className="btn btn-ghost btn-xs" onClick={() => setEditIdx(i)}>✎</button>
                     <button className="btn btn-danger btn-xs" onClick={() => delMat(i)}>×</button>

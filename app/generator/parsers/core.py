@@ -15,7 +15,7 @@ This module contains the main parsing logic for MCNP input card types:
 import json
 import math
 import re
-from app.models import CellData, MaterialData, MaterialRow, SourceData, TallyDefinition
+from app.models import CellData, CellRow, MaterialData, MaterialRow, SourceData, TallyDefinition
 from .lines import _SURFACE_TYPES, extract_comment, strip_comment
 
 
@@ -155,8 +155,8 @@ def _parse_sisp_structured(sisp_lines: list[str]) -> list[dict]:
     return [entries[n] for n in order]
 
 
-def parse_cells(cell_lines: list[str]) -> list[CellData]:
-    """解析栅元卡行 → CellData 列表（C 注释行关联到下一个栅元，$ 注释优先）"""
+def parse_cells(cell_lines: list[str]) -> list[CellRow]:
+    """解析栅元卡行 → CellRow 列表（cell | raw；C 注释关联下一个栅元，$ 注释优先）"""
     cells = []
     pending_c = ""  # 最近的 C 注释行
     for line in cell_lines:
@@ -165,6 +165,11 @@ def parse_cells(cell_lines: list[str]) -> list[CellData]:
             continue
         if stripped.upper().startswith("C ") or stripped.upper().startswith("C\t"):
             pending_c = stripped
+            continue
+        # MCNP 预处理器/条件行（#ifdef/#else/#endif…）→ 原样 CellRow
+        if stripped.startswith("#"):
+            pending_c = ""
+            cells.append(CellRow(kind="raw", text=line.rstrip()))
             continue
         comment = extract_comment(line)
         if not comment and pending_c:
@@ -301,7 +306,7 @@ def parse_cells(cell_lines: list[str]) -> list[CellData]:
                     surf_parts.append(token)
             idx += 1
 
-        cells.append(CellData(
+        cells.append(CellRow(kind="cell", cell=CellData(
             number=number, material=material, density=density,
             surface_expr=" ".join(surf_parts),
             imp_n=imp_n, imp_p=imp_p, imp_e=imp_e,
@@ -309,7 +314,7 @@ def parse_cells(cell_lines: list[str]) -> list[CellData]:
             u=u_, fill=fill, lat=lat, trcl=trcl,
             tmp=tmp, other_params=other_params,
             comment=comment,
-        ))
+        )))
 
     return cells
 
@@ -317,6 +322,11 @@ def parse_cells(cell_lines: list[str]) -> list[CellData]:
 def parse_surfaces(surf_lines: list[str]) -> str:
     """曲面卡直接返回原始文本"""
     return "\n".join(surf_lines).strip()
+
+
+def _is_zaid_line(first: str) -> bool:
+    """粗略判断行首 token 是否为 ZAID（数字开头，或元素-质量数，可能带 .lib 后缀）。"""
+    return bool(re.match(r'^([A-Za-z]{1,2}-)?\d+(\.\w*)?$', first))
 
 
 def _parse_material(parts: list[str], m_str: str) -> MaterialData:
@@ -853,6 +863,8 @@ def parse_data_cards(data_lines: list[str]) -> dict:
 
     i = 0
     pending_c = ""  # 最近的 C 注释行（关联到下一个 M 卡）
+    current_mat = None   # 当前正在构建的材料（条件行/裸核素行归属）
+    pending_raw = []     # 材料开始前的预处理器行缓冲（#ifdef 等，前置到材料头后）
     while i < len(data):
         raw_line = data[i]
         line = strip_comment(raw_line.strip())
@@ -909,7 +921,17 @@ def parse_data_cards(data_lines: list[str]) -> dict:
             elif pending_c:
                 mat.comment = pending_c[1:].strip()  # 去掉 C 前缀
             pending_c = ""
-            result["materials"].append(mat)
+            # 条件编译：重复 M{n} 只认第一个为材料头；后续 m2 并入同一材料（关键字丢弃）。
+            # #ifdef 后紧跟 M{n} → M 头相当于提到 #ifdef 前（pending_raw 前置）。
+            existing = next((m for m in result["materials"] if m.number == mat.number), None)
+            if existing is not None:
+                existing.rows.extend(mat.rows)
+            else:
+                if pending_raw:
+                    mat.rows = [MaterialRow(kind="raw", text=t) for t in pending_raw] + mat.rows
+                    pending_raw = []
+                result["materials"].append(mat)
+            current_mat = existing if existing is not None else mat
             i += 1
         elif re.match(r'^MT\d+$', first, re.IGNORECASE):
             # MT 热中子卡 — 附加到对应材料
@@ -1146,8 +1168,36 @@ def parse_data_cards(data_lines: list[str]) -> dict:
             # 标准 MCNP 卡片但无对应 UI，保留原样到 other_cards
             result["other_cards"].append(line)
             i += 1
+        elif line.startswith("#"):
+            # MCNP 预处理器/条件行：#ifdef/#else/#endif/#define 等。
+            # 若紧随其后是【尚未出现过的】M{n} 材料头 → 进 pending_raw（前置到该材料，
+            # 实现"M 头提到 #ifdef 前"）；否则归属当前材料（如 #else/#endif）。
+            nxt_first = None
+            for _ni in range(i + 1, min(i + 4, len(data))):
+                _ns = data[_ni].strip()
+                if not _ns or re.match(r'^C\s', _ns, re.IGNORECASE):
+                    continue
+                nxt_first = _ns.split()[0].upper()
+                break
+            _m = re.match(r'^M(\d+)$', nxt_first or "")
+            if _m and not any(mm.number == int(_m.group(1)) for mm in result["materials"]):
+                pending_raw.append(line)
+            else:
+                if current_mat is not None:
+                    current_mat.rows.append(MaterialRow(kind="raw", text=line))
+                else:
+                    pending_raw.append(line)
+            i += 1
         else:
-            result["other_cards"].append(line)
+            # 裸核素行（#endif 后 "13027. 5.7816e-2" 之类）：归属当前材料
+            if current_mat is not None and _is_zaid_line(first):
+                j = 0
+                while j + 1 < len(parts):
+                    current_mat.rows.append(
+                        MaterialRow(kind="nuclide", zaid=parts[j], fraction=parts[j + 1]))
+                    j += 2
+            else:
+                result["other_cards"].append(line)
             i += 1
 
     return result

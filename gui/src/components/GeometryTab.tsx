@@ -13,9 +13,24 @@ interface GeoProps {
   pendingCellFromMaterial?: number;
 }
 
+/** 本地栅元行：真正的栅元(camelCase) 或原样条件行 */
+type LocalCellRow = { kind: "cell"; cell: CellData } | { kind: "raw"; text: string };
+
 export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const [doc, setDoc] = useState<{path:string;title:string}|null>(null);
-  const [cells, setCells] = useState<CellData[]>([]);
+  const [cells, setCells] = useState<LocalCellRow[]>([]);
+  const cellDragIdx = useRef<number | null>(null);
+  const addCellRow = () => setCells([...cells, { kind: "cell", cell: { num:String(cells.length+1), mat:"0", density:"", surfaces:"", impN:"", impP:"", impE:"", vol:"", pwt:"", ext:"", fcl:"", u:"", fill:"", lat:"", trcl:"", tmp:"", otherParams:"", render:false, comment:"" } }]);
+  const addRawCell = (text: string) => setCells([...cells, { kind: "raw", text }]);
+  const addConditionalCells = () => {
+    const name = window.prompt("条件名（如 ENDF7）", "ENDF7");
+    if (name === null) return;
+    setCells([...cells, { kind: "raw", text: `#ifdef ${name.trim()}` }, { kind: "raw", text: "#else" }, { kind: "raw", text: "#endif" }]);
+  };
+  const moveCellRow = (from: number, to: number) => {
+    if (from === to) return;
+    const c = [...cells]; const [m] = c.splice(from, 1); c.splice(to, 0, m); setCells(c);
+  };
   const [editCell, setEditCell] = useState<number | null>(null);
   const [surfText, setSurfText] = useState("");
   const [trText, setTrText] = useState("");
@@ -35,14 +50,14 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   // 材料→栅元联动：新材料添加时自动创建栅元行
   useEffect(() => {
     if (pendingCellFromMaterial && pendingCellFromMaterial > 0) {
-      const maxNum = cells.length > 0 ? Math.max(...cells.map(c => parseInt(c.num) || 0)) : 0;
-      setCells([...cells, {
+      const maxNum = cells.length > 0 ? Math.max(...cells.map(c => c.kind === "cell" ? parseInt(c.cell.num) || 0 : 0)) : 0;
+      setCells([...cells, { kind: "cell", cell: {
         num: String(maxNum + 1), mat: String(pendingCellFromMaterial),
         density: "-1.0", surfaces: "", impN: "", impP: "", impE: "",
         vol: "", pwt: "", ext: "", fcl: "", u: "", fill: "", lat: "",
         trcl: "", tmp: "", otherParams: "", render: true,
         comment: `材料 M${pendingCellFromMaterial} 对应栅元`,
-      }]);
+      } }]);
     }
   }, [pendingCellFromMaterial]);
 
@@ -104,7 +119,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
 
   // 3D 预览里点击材料号改材料 → 更新本地 cells，local→deck 同步自动 patch
   const handleCellMaterialChange = (cellNum: string, newMat: string) => {
-    setCells(prev => prev.map(c => c.num === cellNum ? { ...c, mat: newMat } : c));
+    setCells(prev => prev.map(c => c.kind === "cell" && c.cell.num === cellNum ? { ...c, cell: { ...c.cell, mat: newMat } } : c));
   };
 
   // local → deck（只推 cells，曲面/TR 由 DOM 采集，避免频闪）
@@ -112,8 +127,10 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const lastSurfRef = useRef("");
   const lastTrRef = useRef("");
   useEffect(() => {
-    // local → deck：cells / surfaces / tr 全部受控推送（仅值真正变化时才 patch）
-    const curCells = JSON.stringify(cells.map(c => ({ number: parseInt(c.num)||0, material: c.mat, density: c.density, surface_expr: c.surfaces, imp_n: c.impN, imp_p: c.impP, imp_e: c.impE, vol: c.vol, pwt: c.pwt, ext: c.ext, fcl: c.fcl, u: c.u, fill: c.fill, lat: c.lat, trcl: c.trcl, tmp: c.tmp, other_params: c.otherParams, render: c.render, comment: c.comment })));
+    // local → deck：cells（CellRow 判别联合）/ surfaces / tr 全部受控推送
+    const curCells = JSON.stringify(cells.map(c => c.kind === "raw"
+      ? { kind: "raw", text: c.text }
+      : { kind: "cell", cell: { number: parseInt(c.cell.num) || 0, material: c.cell.mat, density: c.cell.density, surface_expr: c.cell.surfaces, imp_n: c.cell.impN, imp_p: c.cell.impP, imp_e: c.cell.impE, vol: c.cell.vol, pwt: c.cell.pwt, ext: c.cell.ext, fcl: c.cell.fcl, u: c.cell.u, fill: c.cell.fill, lat: c.cell.lat, trcl: c.cell.trcl, tmp: c.cell.tmp, other_params: c.cell.otherParams, render: c.cell.render, comment: c.cell.comment } }));
     const p: Record<string, any> = {};
     if (curCells !== lastCellsRef.current) { lastCellsRef.current = curCells; p.cells = JSON.parse(curCells); }
     if (surfText !== lastSurfRef.current) { lastSurfRef.current = surfText; p.surfaces = surfText; }
@@ -123,8 +140,11 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   useEffect(() => {
     const newSurf = deck.surfaces || "";
     const newTr = deck.tr_cards || "";
-    console.log("[DEBUG-tr] pull deck.tr_cards lines=", newTr.split("\n").length, "content=", newTr.slice(0, 60).replace(/\n/g, "|"));
-    const newCells = deck.cells?.length ? deck.cells.map(c => ({ num: String(c.number), mat: c.material, density: c.density, surfaces: c.surface_expr, impN: c.imp_n || "", impP: c.imp_p || "", impE: c.imp_e || "", vol: c.vol || "", pwt: c.pwt || "", ext: c.ext || "", fcl: c.fcl || "", u: c.u || "", fill: c.fill || "", lat: c.lat || "", trcl: c.trcl || "", tmp: c.tmp || "", otherParams: c.other_params || "", render: c.render !== false, comment: c.comment || "" })) : [];
+    const newCells = deck.cells?.length ? deck.cells.map((c: any) =>
+      c.kind === "raw"
+        ? { kind: "raw" as const, text: c.text }
+        : { kind: "cell" as const, cell: { num: String(c.cell.number), mat: c.cell.material, density: c.cell.density, surfaces: c.cell.surface_expr, impN: c.cell.imp_n || "", impP: c.cell.imp_p || "", impE: c.cell.imp_e || "", vol: c.cell.vol || "", pwt: c.cell.pwt || "", ext: c.cell.ext || "", fcl: c.cell.fcl || "", u: c.cell.u || "", fill: c.cell.fill || "", lat: c.cell.lat || "", trcl: c.cell.trcl || "", tmp: c.cell.tmp || "", otherParams: c.cell.other_params || "", render: c.cell.render !== false, comment: c.cell.comment || "" } }
+    ) : [];
     if (newSurf !== surfText) setSurfText(newSurf);
     if (newTr !== trText) setTrText(newTr);
     if (newCells.length && JSON.stringify(newCells) !== JSON.stringify(cellsRef.current)) {
@@ -134,7 +154,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
 
   return (
     <>
-      {editCell !== null && <CellEditDialog cell={cells[editCell]} onSave={(d) => { const c = [...cells]; c[editCell] = d; setCells(c); setEditCell(null); }} onClose={() => setEditCell(null)} availableMats={deck.materials} />}
+      {editCell !== null && cells[editCell]?.kind === "cell" && <CellEditDialog cell={cells[editCell].cell} onSave={(d) => { const c = [...cells]; c[editCell] = { kind: "cell", cell: d }; setCells(c); setEditCell(null); }} onClose={() => setEditCell(null)} availableMats={deck.materials} />}
       <div className="glass-card">
         <div className="card-header">
           <span className="card-title" style={{ flexShrink: 0 }}>曲面卡 &amp; TR 变换</span>
@@ -170,20 +190,31 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
             style={{width:"100%",minHeight:200,fontFamily:"Consolas,monospace",fontSize:12}} placeholder="栅元卡原始文本..." />
         ) : (
         <><div className="card-header">
-          <span className="card-title">栅元列表</span>
+          <span className="card-title">栅元列表（所有行可拖动排序）</span>
           <div className="btn-group">
-            <button className="btn btn-success btn-xs" onClick={() => setCells([...cells, { num:String(cells.length+1), mat:"0", density:"", surfaces:"", impN:"", impP:"", impE:"", vol:"", pwt:"", ext:"", fcl:"", u:"", fill:"", lat:"", trcl:"", tmp:"", otherParams:"", render:false, comment:"" }])}>+ 添加</button>
+            <button className="btn btn-success btn-xs" onClick={addCellRow}>+ 栅元</button>
+            <button className="btn btn-ghost btn-xs" onClick={addConditionalCells} title="插入 #ifdef 名称 / #else / #endif 三行"># 条件</button>
+            <button className="btn btn-ghost btn-xs" onClick={() => addRawCell("#ifdef ENDF7")}># 行</button>
           </div>
         </div>
         <div className="table-wrap">
           <table>
             <thead><tr><th>#</th><th>材料</th><th>密度</th><th>曲面表达式</th><th>IMP:N</th><th>注释</th><th>操作</th></tr></thead>
             <tbody>
-              {cells.map((c, i) => (
-                <tr key={c.num}>
-                  <td style={{fontWeight:600,color:"var(--text-primary)"}}>{c.num}</td>
-                  <td>{c.mat}</td><td>{c.density}</td><td>{c.surfaces}</td><td>{c.impN}</td>
-                  <td style={{fontSize:11,color:"var(--text-secondary)",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.comment||"—"}</td>
+              {cells.map((c, i) => c.kind === "raw" ? (
+                <tr key={i} draggable onDragStart={(e) => { cellDragIdx.current = i; e.dataTransfer.effectAllowed = "move"; }} onDragOver={(e) => e.preventDefault()} onDrop={() => { if (cellDragIdx.current !== null) { moveCellRow(cellDragIdx.current, i); cellDragIdx.current = null; } }}
+                  style={{ background: "rgba(255,255,255,0.04)", cursor: "grab" }}>
+                  <td colSpan={6} style={{ fontFamily: "Consolas,monospace", fontSize: 12, color: "#ce93d8" }}>{c.text}</td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <button className="btn btn-danger btn-xs" onClick={() => setCells(cells.filter((_, j) => j !== i))}>×</button>
+                  </td>
+                </tr>
+              ) : (
+                <tr key={i} draggable onDragStart={(e) => { cellDragIdx.current = i; e.dataTransfer.effectAllowed = "move"; }} onDragOver={(e) => e.preventDefault()} onDrop={() => { if (cellDragIdx.current !== null) { moveCellRow(cellDragIdx.current, i); cellDragIdx.current = null; } }}
+                  style={{ cursor: "grab" }}>
+                  <td style={{fontWeight:600,color:"var(--text-primary)"}}>{c.cell.num}</td>
+                  <td>{c.cell.mat}</td><td>{c.cell.density}</td><td>{c.cell.surfaces}</td><td>{c.cell.impN}</td>
+                  <td style={{fontSize:11,color:"var(--text-secondary)",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.cell.comment||"—"}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button className="btn btn-ghost btn-xs" onClick={() => setEditCell(i)}>✎</button>
                     <button className="btn btn-danger btn-xs" onClick={() => setCells(cells.filter((_, j) => j !== i))}>×</button>
@@ -196,7 +227,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
         </>)}
       </div>
       {doc && <DocViewer path={doc.path} title={doc.title} onClose={() => setDoc(null)} />}
-      {show3D && <Preview3D cells={cells} surfaces={surfText} trCards={trText} onClose={() => setShow3D(false)} onMaterialChange={handleCellMaterialChange} />}
+      {show3D && <Preview3D cells={cells.filter(c => c.kind === "cell").map(c => ({ num: c.cell.num, mat: c.cell.mat, density: c.cell.density, surfaces: c.cell.surfaces, comment: c.cell.comment, render: c.cell.render }))} surfaces={surfText} trCards={trText} onClose={() => setShow3D(false)} onMaterialChange={handleCellMaterialChange} />}
       {showStepDlg && <StepImportDialog onImport={handleStepImport} onClose={() => setShowStepDlg(false)} />}
       {fc.showDialog && <FloatingDialog title="⚠ 需要 FreeCAD" onClose={fc.closeDialog} width={460}
         footer={React.createElement("button", { className: "btn btn-primary btn-sm", onClick: fc.closeDialog }, "知道了")}>

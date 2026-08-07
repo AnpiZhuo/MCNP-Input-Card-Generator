@@ -91,7 +91,7 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
   const dragStart = useRef({ x: 0, y: 0, px: 0, py: 0 });
   // 从 deck 查栅元注释（slice 数据不带注释）
   const { deck } = useDeck();
-  const commentOf = (num: number): string => deck.cells?.find(c => c.number === num)?.comment || "";
+  const commentOf = (num: number): string => ((deck.cells?.find((c: any) => c.kind === "cell" && c.cell?.number === num) as any)?.cell?.comment) || "";
 
   // 投影：Z+ 向上（不带旋转，旋转由 SVG transform 处理）
   const baseProj = buildBaseProjection(plane.A, plane.B, plane.C, plane.D);
