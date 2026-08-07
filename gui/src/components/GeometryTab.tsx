@@ -8,6 +8,7 @@ import StepImportDialog from "./StepImportDialog";
 import FloatingDialog from "./FloatingDialog";
 import { useDeck } from "../utils/DeckContext";
 import { useFreecadStatus } from "../utils/useFreecadStatus";
+import { useRowDrag } from "../utils/useRowDrag";
 
 interface GeoProps {
   pendingCellFromMaterial?: number;
@@ -19,19 +20,17 @@ type LocalCellRow = { kind: "cell"; cell: CellData } | { kind: "raw"; text: stri
 export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const [doc, setDoc] = useState<{path:string;title:string}|null>(null);
   const [cells, setCells] = useState<LocalCellRow[]>([]);
-  const cellDragIdx = useRef<number | null>(null);
-  const [cellDragOverIdx, setCellDragOverIdx] = useState<number | null>(null);
+  const moveCellRow = (from: number, to: number) => {
+    if (from === to) return;
+    const c = [...cells]; const [m] = c.splice(from, 1); c.splice(to, 0, m); setCells(c);
+  };
+  const cellDrag = useRowDrag(moveCellRow);
   const addCellRow = () => setCells([...cells, { kind: "cell", cell: { num:String(cells.length+1), mat:"0", density:"", surfaces:"", impN:"", impP:"", impE:"", vol:"", pwt:"", ext:"", fcl:"", u:"", fill:"", lat:"", trcl:"", tmp:"", otherParams:"", render:false, comment:"" } }]);
   const addRawCell = (text: string) => setCells([...cells, { kind: "raw", text }]);
   const addConditionalCells = () => {
     const name = window.prompt("条件名（如 ENDF7）", "ENDF7");
     if (name === null) return;
     setCells([...cells, { kind: "raw", text: `#ifdef ${name.trim()}` }, { kind: "raw", text: "#else" }, { kind: "raw", text: "#endif" }]);
-  };
-  const moveCellRow = (from: number, to: number) => {
-    if (from === to) return;
-    const c = [...cells]; const [m] = c.splice(from, 1); c.splice(to, 0, m); setCells(c);
-    setCellDragOverIdx(null);
   };
   const [editCell, setEditCell] = useState<number | null>(null);
   const [surfText, setSurfText] = useState("");
@@ -204,16 +203,16 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
             <thead><tr><th>#</th><th>材料</th><th>密度</th><th>曲面表达式</th><th>IMP:N</th><th>注释</th><th>操作</th></tr></thead>
             <tbody>
               {cells.map((c, i) => c.kind === "raw" ? (
-                <tr key={i} draggable onDragStart={(e) => { cellDragIdx.current = i; setCellDragOverIdx(null); e.dataTransfer.effectAllowed = "move"; }} onDragOver={(e) => { e.preventDefault(); if (cellDragOverIdx !== i) setCellDragOverIdx(i); }} onDragLeave={() => { if (cellDragOverIdx === i) setCellDragOverIdx(null); }} onDrop={() => { if (cellDragIdx.current !== null && cellDragIdx.current !== i) moveCellRow(cellDragIdx.current, i); cellDragIdx.current = null; setCellDragOverIdx(null); }} onDragEnd={() => { cellDragIdx.current = null; setCellDragOverIdx(null); }}
-                  style={{ background: "rgba(255,255,255,0.04)", cursor: "grab", opacity: cellDragIdx.current === i ? 0.4 : 1, boxShadow: cellDragOverIdx === i ? "inset 0 2px 0 0 var(--accent)" : "none" }}>
+                <tr key={i} {...cellDrag.rowHandlers(i)}
+                  style={{ background: "rgba(255,255,255,0.04)", ...cellDrag.rowStyle(i) }}>
                   <td colSpan={6} style={{ fontFamily: "Consolas,monospace", fontSize: 12, color: "#ce93d8" }}>{c.text}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button className="btn btn-danger btn-xs" onClick={() => setCells(cells.filter((_, j) => j !== i))}>×</button>
                   </td>
                 </tr>
               ) : (
-                <tr key={i} draggable onDragStart={(e) => { cellDragIdx.current = i; setCellDragOverIdx(null); e.dataTransfer.effectAllowed = "move"; }} onDragOver={(e) => { e.preventDefault(); if (cellDragOverIdx !== i) setCellDragOverIdx(i); }} onDragLeave={() => { if (cellDragOverIdx === i) setCellDragOverIdx(null); }} onDrop={() => { if (cellDragIdx.current !== null && cellDragIdx.current !== i) moveCellRow(cellDragIdx.current, i); cellDragIdx.current = null; setCellDragOverIdx(null); }} onDragEnd={() => { cellDragIdx.current = null; setCellDragOverIdx(null); }}
-                  style={{ cursor: "grab", opacity: cellDragIdx.current === i ? 0.4 : 1, boxShadow: cellDragOverIdx === i ? "inset 0 2px 0 0 var(--accent)" : "none" }}>
+                <tr key={i} {...cellDrag.rowHandlers(i)}
+                  style={cellDrag.rowStyle(i)}>
                   <td style={{fontWeight:600,color:"var(--text-primary)"}}>{c.cell.num}</td>
                   <td>{c.cell.mat}</td><td>{c.cell.density}</td><td>{c.cell.surfaces}</td><td>{c.cell.impN}</td>
                   <td style={{fontSize:11,color:"var(--text-secondary)",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.cell.comment||"—"}</td>

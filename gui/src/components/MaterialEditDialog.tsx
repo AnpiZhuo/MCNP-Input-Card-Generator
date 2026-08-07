@@ -7,6 +7,7 @@ interface Props { matNum: string; name: string; nuclides: MaterialRow[]; density
 
 import { PRESET_CATEGORIES, type PresetItem } from "./MaterialPresets";
 import type { MaterialRow } from "../utils/DeckContext";
+import { useRowDrag } from "../utils/useRowDrag";
 
 // 元素→质子数映射
 const Z_EL: Record<string, string> = {};
@@ -65,8 +66,6 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
   const [userPresets, setUserPresets] = useState<PresetItem[]>(() => loadUP());
   const [mode, setMode] = useState<"manual" | "formula">(initial.length > 0 ? "manual" : "formula");
   const [nucs, setNucs] = useState<MaterialRow[]>(initial.length > 0 ? initial : [{ kind: "nuclide", zaid: "", fraction: "" }]);
-  const dragIdx = React.useRef<number | null>(null);
-  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const [comment, setComment] = useState(name);
   const [options, setOptions] = useState(initOptions || "");
   const [mtCard, setMtCard] = useState(initMtCard || "");
@@ -126,8 +125,8 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
     const [m] = c.splice(from, 1);
     c.splice(to, 0, m);
     setNucs(c);
-    setDragOverIdx(null);
   };
+  const drag = useRowDrag(moveRow);
 
   return React.createElement(FloatingDialog, {
     title: `材料 M${matNum}`,
@@ -241,13 +240,9 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
             ),
             ...nucs.map((nu, i) =>
               React.createElement("div", {
-                key: i, draggable: true,
-                onDragStart: (e: React.DragEvent) => { dragIdx.current = i; setDragOverIdx(null); e.dataTransfer.effectAllowed = "move"; },
-                onDragOver: (e: React.DragEvent) => { e.preventDefault(); if (dragOverIdx !== i) setDragOverIdx(i); },
-                onDragLeave: () => { if (dragOverIdx === i) setDragOverIdx(null); },
-                onDrop: () => { if (dragIdx.current !== null && dragIdx.current !== i) moveRow(dragIdx.current, i); dragIdx.current = null; setDragOverIdx(null); },
-                onDragEnd: () => { dragIdx.current = null; setDragOverIdx(null); },
-                style: { display: "flex", gap: 8, marginBottom: 6, alignItems: "center", cursor: "grab", opacity: dragIdx.current === i ? 0.4 : 1, boxShadow: dragOverIdx === i ? "inset 0 2px 0 0 var(--accent)" : "none", ...(nu.kind === "raw" ? { background: "rgba(255,255,255,0.05)", padding: "4px 8px", borderRadius: 4 } : {}) } as React.CSSProperties,
+                key: i,
+                ...drag.rowHandlers(i),
+                style: { display: "flex", gap: 8, marginBottom: 6, alignItems: "center", ...drag.rowStyle(i), ...(nu.kind === "raw" ? { background: "rgba(255,255,255,0.05)", padding: "4px 8px", borderRadius: 4 } : {}) } as React.CSSProperties,
               },
                 nu.kind === "raw" ? (
                   React.createElement(React.Fragment, null,
