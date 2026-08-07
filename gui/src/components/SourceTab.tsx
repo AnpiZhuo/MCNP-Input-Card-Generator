@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import SourceEditDialog from "./SourceEditDialog";
 import DistributionEditor from "./DistributionEditor";
 import SswSsrForm from "./SswSsrForm";
@@ -75,8 +75,18 @@ export default function SourceTab() {
       } as any)));
     }
   }, [deck.sources]);
+  // KSRC deck↔local 双向同步（加守卫防止来回 patch 造成频闪/死循环）
+  const lastKsrcRef = useRef("");
   useEffect(() => {
-    if (deck.ksrcPoints) { try { setKsrc(JSON.parse(deck.ksrcPoints)); } catch {} }
+    const dv = deck.ksrcPoints || "";
+    if (!dv || dv === lastKsrcRef.current) return;
+    try {
+      const arr = JSON.parse(dv);
+      if (Array.isArray(arr)) {
+        lastKsrcRef.current = dv;
+        setKsrc(arr);
+      }
+    } catch {}
   }, [deck.ksrcPoints]);
 
   // Dn 自动检测：sdef 字段含 D{n} → 自动建分布条目
@@ -122,7 +132,13 @@ export default function SourceTab() {
       })) });
     }
   }, [fixedSources]);
-  useEffect(() => { patch({ ksrcPoints: JSON.stringify(ksrcPoints) }); }, [ksrcPoints]);
+  useEffect(() => {
+    const json = JSON.stringify(ksrcPoints);
+    if (json !== lastKsrcRef.current) {
+      lastKsrcRef.current = json;
+      patch({ ksrcPoints: json });
+    }
+  }, [ksrcPoints]);
 
   // 模板切换默认值（对照说明书：体积源各轴独立分布、能谱源用内置函数）
   const applyTemplate = (id: string) => {
