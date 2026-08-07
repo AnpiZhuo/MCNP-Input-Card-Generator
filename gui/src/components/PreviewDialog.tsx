@@ -90,7 +90,7 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
               method: "POST", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ inp: content, filename: safeName, outputDir: outputPath || "D:/MCNP/new/claude", mcnpExe: mcnpExe || "" }),
             }).then(r => r.json()).then(j => {
-              alert(j.status === "ok" ? "🚀 MCNP 已启动" : "启动失败: " + (j.message || ""));
+              alert(j.status === "ok" || j.status === "started" ? "🚀 MCNP 已启动" : "启动失败: " + (j.message || "未知错误"));
             }).catch(() => alert("需要后端支持运行 MCNP"));
           } catch {}
         },
