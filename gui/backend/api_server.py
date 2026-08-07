@@ -264,6 +264,18 @@ def _find_mcnp_exe() -> str:
         return ""
 
 
+def _open_in_explorer(path: str) -> None:
+    """在文件资源管理器中打开目录（Windows）。失败静默，不打断主流程。"""
+    try:
+        if not path:
+            return
+        os.makedirs(path, exist_ok=True)
+        if os.path.isdir(path):
+            os.startfile(path)  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
 def _basic_from_dict(d: dict) -> BasicSettings:
     return BasicSettings(
         title=d.get("title", ""), mode_n=d.get("mode_n", False), mode_p=d.get("mode_p", False),
@@ -618,6 +630,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 with open(bat_path, "w", encoding="utf-8") as f:
                     f.write(run_bat)
             self._ok({"path": inp_path})
+            _open_in_explorer(output_dir)
         except Exception as e:
             self._err(str(e))
 
@@ -720,6 +733,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
                             pass
             threading.Thread(target=_run_and_cleanup, daemon=True).start()
             self._ok({"status": "started", "path": inp_path, "exe": exe})
+            _open_in_explorer(output_dir)
         except Exception as e:
             self._err(str(e))
 
