@@ -18,6 +18,9 @@ export function useRowDrag(onMove: (from: number, to: number) => void) {
   const rowHandlers = (i: number) => ({
     onMouseDown: (e: React.MouseEvent) => {
       if (e.button !== 0) return;
+      // 交互元素（输入框/按钮/下拉/链接）不触发拖动，保留正常编辑/点击
+      const t = e.target as HTMLElement;
+      if (t.closest && t.closest("input, textarea, select, button, a, label")) return;
       setFromIdx(i);
       setOverIdx(null);
       e.preventDefault(); // 阻止文本选择/图片拖动干扰
