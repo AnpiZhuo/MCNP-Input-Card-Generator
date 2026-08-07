@@ -140,11 +140,12 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   useEffect(() => {
     const newSurf = deck.surfaces || "";
     const newTr = deck.tr_cards || "";
-    const newCells = deck.cells?.length ? deck.cells.map((c: any) =>
-      c.kind === "raw"
-        ? { kind: "raw" as const, text: c.text }
-        : { kind: "cell" as const, cell: { num: String(c.cell.number), mat: c.cell.material, density: c.cell.density, surfaces: c.cell.surface_expr, impN: c.cell.imp_n || "", impP: c.cell.imp_p || "", impE: c.cell.imp_e || "", vol: c.cell.vol || "", pwt: c.cell.pwt || "", ext: c.cell.ext || "", fcl: c.cell.fcl || "", u: c.cell.u || "", fill: c.cell.fill || "", lat: c.cell.lat || "", trcl: c.cell.trcl || "", tmp: c.cell.tmp || "", otherParams: c.cell.other_params || "", render: c.cell.render !== false, comment: c.cell.comment || "" } }
-    ) : [];
+    const newCells = deck.cells?.length ? deck.cells.map((c: any) => {
+      if (c?.kind === "raw") return { kind: "raw" as const, text: c.text };
+      // CellRow（嵌套 cell）或旧平铺格式（STEP 导入）都兼容
+      const cell = c?.kind === "cell" ? c.cell : c;
+      return { kind: "cell" as const, cell: { num: String(cell?.number ?? cell?.num ?? ""), mat: cell?.material ?? cell?.mat ?? "", density: cell?.density ?? "", surfaces: cell?.surface_expr ?? cell?.surfaces ?? "", impN: cell?.imp_n ?? cell?.impN ?? "", impP: cell?.imp_p ?? cell?.impP ?? "", impE: cell?.imp_e ?? cell?.impE ?? "", vol: cell?.vol ?? "", pwt: cell?.pwt ?? "", ext: cell?.ext ?? "", fcl: cell?.fcl ?? "", u: cell?.u ?? "", fill: cell?.fill ?? "", lat: cell?.lat ?? "", trcl: cell?.trcl ?? "", tmp: cell?.tmp ?? "", otherParams: cell?.other_params ?? cell?.otherParams ?? "", render: cell?.render !== false, comment: cell?.comment ?? "" } };
+    }) : [];
     if (newSurf !== surfText) setSurfText(newSurf);
     if (newTr !== trText) setTrText(newTr);
     if (newCells.length && JSON.stringify(newCells) !== JSON.stringify(cellsRef.current)) {
