@@ -32,6 +32,21 @@ from xsdir_db import DB as xsdir_db
 
 PORT = 5001
 
+# ── 3D 预览 STL 会话 ──
+# 3D 预览生成的 STL 保留在此（不随请求清理），供截面复用（numpy 切平面）。
+# 只在关掉 3D 预览窗口 / 主界面清空时调用 _clear_stl_session() 删除。
+_STL_SESSION = {"dir": "", "cells": {}}  # cells: {number: {"material", "path"}}
+
+
+def _clear_stl_session() -> None:
+    """删除当前 STL 会话目录（关 3D 预览窗口 / 清空时调用）。"""
+    import shutil
+    global _STL_SESSION
+    d = _STL_SESSION.get("dir")
+    if d and os.path.isdir(d):
+        shutil.rmtree(d, ignore_errors=True)
+    _STL_SESSION = {"dir": "", "cells": {}}
+
 
 # ===== 共享曲面解析（preview-3d / export-step / cross-section 共用） =====
 import pymcnp.inp as _pi
@@ -452,6 +467,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             "/api/preview-3d": self._handle_preview_3d,
             "/api/serve-file": self._handle_serve_file,
             "/api/cross-section": self._handle_cross_section,
+            "/api/clear-stl": self._handle_clear_stl,
         }
         handler = handlers.get(parsed.path)
         if handler:
@@ -920,18 +936,33 @@ class MCNPHandler(BaseHTTPRequestHandler):
             from freecad_preview import FreeCADEngine
             engine = FreeCADEngine(freecad_bin)
             result = engine.build_geometry(surfs, cells_data, tr_cards, fmt="stl")
-            import base64
+            import base64, shutil
+
+            # STL 复制到会话专用目录（engine 析构会删它自己的临时目录，必须复制走）
+            global _STL_SESSION
+            _clear_stl_session()  # 覆盖上一轮预览
+            session_dir = tempfile.mkdtemp(prefix="mcnp_stl_session_")
+            _STL_SESSION = {"dir": session_dir, "cells": {}}
+            # 会话路径 → base64（先读源文件，engine.cleanup() 之前）
             stl_files = {}
             stl_data = {}
-            for k, v in result.items():
-                sk = str(k)
-                stl_files[sk] = v
-                try:
-                    with open(v, "rb") as _f:
-                        stl_data[sk] = base64.b64encode(_f.read()).decode()
-                except:
-                    pass
-            engine.cleanup()
+            for cd in cells_data:
+                num = cd.get("number")
+                if num in result and os.path.isfile(result[num]):
+                    src = result[num]
+                    dst = os.path.join(session_dir, f"cell_{num}.stl")
+                    try:
+                        shutil.copy2(src, dst)
+                        with open(src, "rb") as _f:
+                            stl_data[str(num)] = base64.b64encode(_f.read()).decode()
+                    except OSError:
+                        continue
+                    stl_files[str(num)] = dst
+                    _STL_SESSION["cells"][num] = {
+                        "material": cd.get("material", "0"),
+                        "path": dst,
+                    }
+            engine.cleanup()  # 引擎临时目录可删，会话目录已独立
             self._ok({"stl_files": stl_files, "stl_data": stl_data, "freecad": freecad_bin, "count": len(stl_data)})
         except Exception as e:
             import traceback
@@ -956,15 +987,53 @@ class MCNPHandler(BaseHTTPRequestHandler):
             self.wfile.write(f.read())
 
     def _handle_cross_section(self):
-        """平面截面：直接调用独立函数"""
-        import sys, os, json
-        _app_dir = os.path.join(os.path.dirname(__file__), "..", "..", "app")
-        if _app_dir not in sys.path: sys.path.insert(0, _app_dir)
-        from _cross_section_helper import get_cross_section
-        data = self._read_body()
-        result = get_cross_section(data)
-        self._ok(result)
+        """平面截面：从 3D 预览保留的 STL 会话切（numpy），不再调 FreeCAD CSG。
 
+        前端传 cellNums（勾选且非真空的栅元号）+ plane；真空/未勾选栅元的
+        STL 不参与。无会话时提示先做 3D 预览。
+        """
+        try:
+            import sys, os, json
+            _app_dir = os.path.join(os.path.dirname(__file__), "..", "..", "app")
+            if _app_dir not in sys.path: sys.path.insert(0, _app_dir)
+            from stl_cross_section import cross_section_from_stl
+            data = self._read_body()
+            cell_nums = data.get("cellNums") or []
+            plane = data.get("plane") or {"A": 0, "B": 0, "C": 1, "D": 0}
+            A = float(plane.get("A", 0)); B = float(plane.get("B", 0))
+            C = float(plane.get("C", 0)); D = float(plane.get("D", 0))
+
+            if not _STL_SESSION.get("dir") or not _STL_SESSION.get("cells"):
+                self._ok({"slices": [], "message": "请先生成 3D 预览（STL 会话为空）"})
+                return
+
+            slices = []
+            for num in cell_nums:
+                num = int(num)
+                info = _STL_SESSION["cells"].get(num)
+                if not info:
+                    continue
+                material = info.get("material", "0")
+                if str(material).split()[0] == "0":
+                    continue  # 真空 STL 不参与截面
+                path = info.get("path")
+                if not path or not os.path.isfile(path):
+                    continue
+                polys = cross_section_from_stl(path, A, B, C, D)
+                if polys:
+                    slices.append({"number": num, "material": material, "polygons": polys})
+            self._ok({"slices": slices, "count": len(slices)})
+        except Exception as e:
+            import traceback
+            self._err(str(e) + " | " + traceback.format_exc())
+
+    def _handle_clear_stl(self):
+        """关 3D 预览窗口 / 主界面清空时调用：删除 STL 会话目录"""
+        try:
+            _clear_stl_session()
+            self._ok({"status": "ok"})
+        except Exception as e:
+            self._err(str(e))
 
     def _handle_mcnp_detect(self):
         try:
