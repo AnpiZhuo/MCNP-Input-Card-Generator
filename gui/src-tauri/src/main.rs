@@ -53,6 +53,11 @@ fn create_or_focus(
         let _ = win.set_focus();
         return Ok(());
     }
+    if let Some(win) = app.get_window(label) {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return Ok(());
+    }
     tauri::WindowBuilder::new(
         app,
         label,
@@ -66,12 +71,12 @@ fn create_or_focus(
 }
 
 #[tauri::command]
-fn open_preview3d_window(app: tauri::AppHandle) -> Result<(), String> {
+async fn open_preview3d_window(app: tauri::AppHandle) -> Result<(), String> {
     create_or_focus(&app, "preview3d", "3D 预览", 1300.0, 820.0)
 }
 
 #[tauri::command]
-fn open_cross_section_window(app: tauri::AppHandle) -> Result<(), String> {
+async fn open_cross_section_window(app: tauri::AppHandle) -> Result<(), String> {
     create_or_focus(&app, "cross_section", "截面", 1000.0, 700.0)
 }
 
