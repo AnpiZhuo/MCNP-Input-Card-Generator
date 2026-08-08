@@ -411,6 +411,9 @@ function AppInner() {
 function WindowRouter() {
   const [label, setLabel] = useState<string>("main");
   useEffect(() => {
+    // 调试入口：URL hash #/preview3d 或 #/cross_section 可强制窗口类型（浏览器模式测试用）
+    const h = window.location.hash.replace(/^#\/?/, "");
+    if (h === "preview3d" || h === "cross_section") { setLabel(h); return; }
     currentWindowLabel().then(setLabel).catch(() => setLabel("main"));
   }, []);
   if (label === "preview3d") return <Preview3DWindow />;
