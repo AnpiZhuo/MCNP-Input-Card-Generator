@@ -927,7 +927,10 @@ class MCNPHandler(BaseHTTPRequestHandler):
             tr_cards = parse_tr_cards(tr_text)
 
             # 4. 构建栅元（共享 build_cells_data；ast 解析失败的不渲染但保留）
-            cells_data = build_cells_data(cell_list)
+            # 真空栅元参与 #n 补集解析，但不生成 STL（透明不可见，且巨型边界
+            # void 的 STL 会把前端相机拉远导致模型缩成针尖）。include_void=False
+            # 时真空仍在 entries 映射里供 #n 解析，只是不输出。
+            cells_data = build_cells_data(cell_list, include_void=False)
             if not cells_data:
                 self._ok({"stl_files": {}, "message": "没有可预览的栅元（非 void）"})
                 return

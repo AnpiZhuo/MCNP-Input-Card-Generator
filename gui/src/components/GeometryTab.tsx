@@ -40,6 +40,8 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const [cellRawText, setCellRawText] = useState("");
   const [show3D, setShow3D] = useState(false);
   const [showStepDlg, setShowStepDlg] = useState(false);
+  // 栅元表材料列点击下拉：i=正在编辑材料号的栅元行索引
+  const [matPicker, setMatPicker] = useState<number | null>(null);
   const fc = useFreecadStatus();
   const cellsRef = useRef(cells);
   cellsRef.current = cells;
@@ -134,6 +136,35 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const handleCellMaterialChange = (cellNum: string, newMat: string) => {
     setCells(prev => prev.map(c => c.kind === "cell" && c.cell.num === cellNum ? { ...c, cell: { ...c.cell, mat: newMat } } : c));
   };
+
+  // 主页面栅元表：点击材料号选材料 → 更新材料号 + 自动填充该材料密度
+  const applyMatFromPicker = (i: number, newMat: string) => {
+    const m = newMat.trim();
+    if (!m) return;
+    setCells(prev => prev.map((c, ci) => {
+      if (ci !== i || c.kind !== "cell") return c;
+      const next = { ...c, cell: { ...c.cell, mat: m } };
+      // 自动填充密度：查 deck.materials 对应材料（M0 真空 → 密度清空）
+      if (m === "0") {
+        next.cell.density = "";
+      } else {
+        const found = deck.materials.find(mt => String(mt.number) === m);
+        if (found && found.density) next.cell.density = found.density;
+      }
+      return next;
+    }));
+    setMatPicker(null);
+  };
+
+  // 材料选项（与 3D 预览一致）：M0 真空 + deck.materials（带注释）
+  const matOptions: { num: string; label: string; density: string }[] = [
+    { num: "0", label: "M0 - 真空", density: "" },
+    ...deck.materials.map(mt => ({
+      num: String(mt.number),
+      label: `M${mt.number}${mt.comment ? " - " + mt.comment : ""}`,
+      density: mt.density || "",
+    })),
+  ].sort((a, b) => parseInt(a.num) - parseInt(b.num));
 
   // 独立 3D 窗口里改材料号 → storage 事件回写主窗口（双向同步）
   useEffect(() => {
@@ -233,7 +264,27 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
                 <tr key={i} {...cellDrag.rowHandlers(i)}
                   style={cellDrag.rowStyle(i)}>
                   <td style={{fontWeight:600,color:"var(--text-primary)"}}>{c.cell.num}</td>
-                  <td>{c.cell.mat}</td><td>{c.cell.density}</td><td>{c.cell.surfaces}</td><td>{c.cell.impN}</td>
+                  <td style={{ position: "relative" }}>
+                    {/* 材料号可点击，弹下拉选择（同 3D 预览）；样式：可点外观 */}
+                    <button type="button" className="mat-cell-btn" title="点击选择材料"
+                      onClick={() => setMatPicker(matPicker === i ? null : i)}
+                      style={{ background: "transparent", border: "none", cursor: "pointer", padding: "0 4px", fontWeight: 600, color: c.cell.mat === "0" ? "var(--text-tertiary)" : "var(--accent)", fontFamily: "inherit", fontSize: "inherit" }}>
+                      {c.cell.mat}
+                    </button>
+                    {matPicker === i && (
+                      <div className="preview-overlay"
+                        style={{ position: "absolute", left: 0, top: "100%", zIndex: 1200, width: 200, maxHeight: 260, overflow: "auto", background: "rgba(15,15,40,0.97)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 6, boxShadow: "0 8px 24px rgba(0,0,0,0.5)", padding: "6px" }}>
+                        {matOptions.map(o => (
+                          <button key={o.num} type="button"
+                            onClick={() => applyMatFromPicker(i, o.num)}
+                            style={{ display: "block", width: "100%", textAlign: "left", padding: "5px 8px", marginBottom: 2, fontSize: 11, borderRadius: 4, cursor: "pointer", border: "none", background: o.num === c.cell.mat ? "rgba(255,255,255,0.12)" : "transparent", color: o.num === c.cell.mat ? "var(--accent)" : "var(--text-primary)" }}>
+                            {o.label}{o.density ? `  ·  ρ=${o.density}` : ""}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </td>
+                  <td>{c.cell.density}</td><td>{c.cell.surfaces}</td><td>{c.cell.impN}</td>
                   <td style={{fontSize:11,color:"var(--text-secondary)",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.cell.comment||"—"}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button className="btn btn-ghost btn-xs" onClick={() => setEditCell(i)}>✎</button>
