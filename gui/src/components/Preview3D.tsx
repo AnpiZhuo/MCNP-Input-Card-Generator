@@ -22,12 +22,15 @@ interface Preview3DProps {
   onClose: () => void;
   /** 用户改了某个栅元的材料号后回调（num=栅元号, newMat=新材料号） */
   onMaterialChange?: (cellNum: string, newMat: string) => void;
+  /** 独立窗口模式：由宿主传入材料列表（{number, comment}），替代 useDeck() */
+  materials?: { number: number; comment?: string }[];
 }
 
 /* ---- 色板（10 色，按材料号取模） ---- */
 import { getMatColor as getColor } from "../utils/materialColors";
 import { MaterialLegend, CellList } from "./MaterialPanel";
 import { useDeck } from "../utils/DeckContext";
+import { openCrossSection } from "../utils/windows";
 
 /* ---- plane eq formatting/parsing ---- */
 function planeToStr(plane: any): string {
@@ -446,11 +449,13 @@ function initScene(
 }
 
 /* ---- React 组件 ---- */
-export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose, onMaterialChange }: Preview3DProps) {
+export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose, onMaterialChange, materials }: Preview3DProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const ctrlRef = useRef<ReturnType<typeof initScene> | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const { deck } = useDeck();
+  // 独立窗口模式：材料列表由宿主传入（materials），否则回退主窗口 deck
+  const matList = materials ?? deck.materials;
 
   // 初始化 cellView 状态（非 void 默认可见：否则无 FreeCAD 时截面过滤会滤掉全部栅元）
   const [cellViews, setCellViews] = useState<CellView[]>(() =>
@@ -473,32 +478,40 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   // 材料选择浮层：i=cellViews 索引, x/y=点击屏幕坐标
   const [matPicker, setMatPicker] = useState<{ i: number; x: number; y: number } | null>(null);
 
-  // 截面请求（供步进按钮复用）
+  // 截面请求 → 结果写入数据桥并开独立截面窗口；非 Tauri 环境回退内嵌覆盖层
+  // 只传勾选且非真空的栅元号 + plane（后端从 3D 预览保留的 STL 切，真空/未勾选不参与）
   const fetchCrossSection = useCallback(function(newPlane: {A:number; B:number; C:number; D:number}) {
     setCsPlane(newPlane);
-    var cellsForBackend = rawCells.filter(function(_: any, i: number) {
-      return cellViews[i]?.visible !== false;
-    }).map(function(c: any) {
-      return { number: parseInt(c.num) || 0, material: c.mat, density: c.density || "", surface_expr: (c as any).surfaces || (c as any).surface_expr || "" };
-    });
+    var cellNums = rawCells
+      .filter(function(_: any, i: number) { return cellViews[i]?.visible !== false; })
+      .filter(function(c: any) { return String(c.mat).split(" ")[0] !== "0"; })  // 排除真空
+      .map(function(c: any) { return parseInt(c.num) || 0; });
     fetch("http://localhost:5001/api/cross-section", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        surfaces: surfaces || "",
-        cells: cellsForBackend,
-        tr_cards: trCards || "",
+        cellNums: cellNums,
         plane: newPlane,
       }),
     }).then(function(r: Response) { return r.json(); }).then(function(j: any) {
       if (j.slices && j.slices.length > 0) {
-        setCsSlices(j.slices);
+        // 开独立截面窗口；失败（非 Tauri）时回退内嵌覆盖层
+        openCrossSection({
+          slices: j.slices,
+          plane: newPlane,
+          cells: rawCells.map(function(c: any) {
+            return { num: c.num, mat: c.mat, comment: c.comment || "" };
+          }),
+          cellNums: cellNums,
+        }).then(function(opened) {
+          if (!opened) setCsSlices(j.slices);
+        });
       } else {
         setCsSlices(null);
         alert("截面无结果: " + (j.message || "无交点"));
       }
     }).catch(function() { alert("截面请求失败"); });
-  }, [rawCells, surfaces, trCards, cellViews]);
+  }, [rawCells, cellViews]);
   const [csStep, setCsStep] = useState("1");
   const [eqInput, setEqInput] = useState(function() { return planeToStr(csPlane); });
   useEffect(function() { setEqInput(planeToStr(csPlane)); }, [csPlane]);
@@ -584,10 +597,10 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
     setMatPicker(null);
   }, [cellViews, onMaterialChange]);
 
-  // 材料可选项：deck.materials（带注释）+ 真空 M0
+  // 材料可选项：材料列表（独立窗口用 props，主窗口用 deck）+ 真空 M0
   const materialOptions: { num: string; label: string }[] = [
     { num: "0", label: "M0 - 真空" },
-    ...deck.materials.map((mt) => ({
+    ...matList.map((mt) => ({
       num: String(mt.number),
       label: `M${mt.number}${mt.comment ? " - " + mt.comment : ""}`,
     })),

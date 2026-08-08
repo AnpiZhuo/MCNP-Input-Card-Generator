@@ -9,6 +9,7 @@ import FloatingDialog from "./FloatingDialog";
 import { useDeck } from "../utils/DeckContext";
 import { useFreecadStatus } from "../utils/useFreecadStatus";
 import { useRowDrag } from "../utils/useRowDrag";
+import { openPreview3D, onMaterialChange } from "../utils/windows";
 
 interface GeoProps {
   pendingCellFromMaterial?: number;
@@ -83,10 +84,21 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     }
     setShowStepDlg(false);
   };
-  const handlePreview3D = () => {
+  const handlePreview3D = async () => {
     if (cells.length === 0) { alert("请先添加栅元"); return; }
     if (!fc.require()) return;
-    setShow3D(true);
+    // 3D 预览 → 独立系统窗口（Tauri）；浏览器模式回退原有覆盖层
+    const opened = await openPreview3D({
+      cells: cells.filter(c => c.kind === "cell").map(c => ({
+        num: (c as any).cell.num, mat: (c as any).cell.mat,
+        density: (c as any).cell.density, surfaces: (c as any).cell.surfaces,
+        comment: (c as any).cell.comment, render: (c as any).cell.render,
+      })),
+      surfaces: surfText,
+      trCards: trText,
+      deck,
+    });
+    if (!opened) setShow3D(true); // 非 Tauri 环境回退
   };
   const handleExportSTEP = async () => {
     if (!fc.require()) return;
@@ -122,6 +134,13 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const handleCellMaterialChange = (cellNum: string, newMat: string) => {
     setCells(prev => prev.map(c => c.kind === "cell" && c.cell.num === cellNum ? { ...c, cell: { ...c.cell, mat: newMat } } : c));
   };
+
+  // 独立 3D 窗口里改材料号 → storage 事件回写主窗口（双向同步）
+  useEffect(() => {
+    return onMaterialChange((cellNum, newMat) => {
+      setCells(prev => prev.map(c => c.kind === "cell" && c.cell.num === cellNum ? { ...c, cell: { ...c.cell, mat: newMat } } : c));
+    });
+  }, []);
 
   // local → deck（只推 cells，曲面/TR 由 DOM 采集，避免频闪）
   const lastCellsRef = useRef("");

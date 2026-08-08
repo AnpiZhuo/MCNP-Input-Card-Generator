@@ -2,7 +2,10 @@ import React, { useState, useEffect, useCallback } from "react";
 import Sidebar from "./components/Sidebar";
 import TabPanels from "./components/TabPanels";
 import PreviewDialog from "./components/PreviewDialog";
+import Preview3DWindow from "./components/Preview3DWindow";
+import CrossSectionWindow from "./components/CrossSectionWindow";
 import { generateInp } from "./utils/dataCollector";
+import { currentWindowLabel, clearStlSession } from "./utils/windows";
 
 import { DeckProvider, useDeck } from "./utils/DeckContext";
 import { buildGridsFromTally, buildTallyFromGrids } from "./utils/gridState";
@@ -113,6 +116,7 @@ function AppInner() {
     if (!window.confirm("确定一键清空？所有输入内容将丢失且不可恢复。")) return;
     skipAutoSaveRef.current = true;   // 阻止 beforeunload 把清空前的旧状态又存回去
     localStorage.removeItem(SAVE_KEY);
+    clearStlSession();                // 一并清掉 3D 预览 STL 会话
     window.location.reload();
   };
 
@@ -403,4 +407,15 @@ function AppInner() {
   );
 }
 
-export default function App() { return <DeckProvider><AppInner /></DeckProvider>; }
+/** 独立窗口路由：按当前窗口 label 分派渲染（主界面 / 3D 预览 / 截面） */
+function WindowRouter() {
+  const [label, setLabel] = useState<string>("main");
+  useEffect(() => {
+    currentWindowLabel().then(setLabel).catch(() => setLabel("main"));
+  }, []);
+  if (label === "preview3d") return <Preview3DWindow />;
+  if (label === "cross_section") return <CrossSectionWindow />;
+  return <DeckProvider><AppInner /></DeckProvider>;
+}
+
+export default function App() { return <WindowRouter />; }

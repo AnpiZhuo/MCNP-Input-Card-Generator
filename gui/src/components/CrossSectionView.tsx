@@ -19,6 +19,8 @@ interface Props {
   plane: { A: number; B: number; C: number; D: number };
   onClose: () => void;
   onPlaneChange?: (plane: { A: number; B: number; C: number; D: number }) => void;
+  /** 独立窗口模式：由宿主传入栅元注释（{number, comment}），替代 useDeck() */
+  cellComments?: { number: number; comment?: string }[];
 }
 
 /* ---- 色板（按材料号取模） ---- */
@@ -77,7 +79,7 @@ function makeProjector(base: { u: number[]; v: number[]; ox: number; oy: number;
 }
 
 /* ---- 主组件（SVG 渲染） ---- */
-export default function CrossSectionView({ slices, plane, onClose, onPlaneChange }: Props) {
+export default function CrossSectionView({ slices, plane, onClose, onPlaneChange, cellComments }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const groupRef = useRef<SVGGElement>(null);
   const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: 600, h: 500 });
@@ -89,9 +91,14 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
   const [hoverInfo, setHoverInfo] = useState<{ num: number; mat: string; x: number; y: number; z: number } | null>(null);
   const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
   const dragStart = useRef({ x: 0, y: 0, px: 0, py: 0 });
-  // 从 deck 查栅元注释（slice 数据不带注释）
+  // 从 deck 查栅元注释（slice 数据不带注释）；独立窗口用 props，否则回退 useDeck
   const { deck } = useDeck();
-  const commentOf = (num: number): string => ((deck.cells?.find((c: any) => c.kind === "cell" && c.cell?.number === num) as any)?.cell?.comment) || "";
+  const commentOf = (num: number): string => {
+    if (cellComments) {
+      return cellComments.find((c) => c.number === num)?.comment || "";
+    }
+    return ((deck.cells?.find((c: any) => c.kind === "cell" && c.cell?.number === num) as any)?.cell?.comment) || "";
+  };
 
   // 投影：Z+ 向上（不带旋转，旋转由 SVG transform 处理）
   const baseProj = buildBaseProjection(plane.A, plane.B, plane.C, plane.D);
