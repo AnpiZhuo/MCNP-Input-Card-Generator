@@ -10,6 +10,7 @@ build_onedir/
 dist_onedir/
 sidecar_dist/
 *.spec
+!gui/mcnp_sidecar.spec
 
 # Node
 node_modules/
