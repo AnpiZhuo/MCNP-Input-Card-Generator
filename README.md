@@ -6,7 +6,7 @@ A desktop application for visually creating, editing, and validating **MCNP** in
 
 ![应用截图](![alt text](<屏幕截图 2026-08-01 015145.png>))
 
-![Version](https://img.shields.io/badge/Version-1.6.1-blue)
+![Version](https://img.shields.io/badge/Version-1.6.3-blue)
 ![Frontend](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-teal)
 ![Shell](https://img.shields.io/badge/Shell-Tauri-green)
 ![License](https://img.shields.io/badge/License-All%20Rights%20Reserved-red)
@@ -36,14 +36,15 @@ A desktop application for visually creating, editing, and validating **MCNP** in
 | **INP 导入 INP import** | Windows 原生文件对话框选择 `.INP/.I/.TXT`，或直接拖入窗口；解析后一次性回填所有字段 |
 | **STEP 导入（GEOUNED）** | 几何标签页导入 `.STEP/.STP`，经 FreeCAD + GEOUNED 自动转换为 MCNP 曲面/栅元 |
 | **工作区保存/恢复 Save/Restore** | 关闭自动保存、手动保存按钮、一键清空；刷新/重开自动恢复全部输入 |
-| **3D 预览 (FreeCAD CSG)** | 精确几何渲染，逐栅元显隐勾选、按材料着色、材料图例 |
-| **平面截面 Cross-section** | AX+BY+CZ=D 平面对勾选栅元的 2D 矢量截面，缩放/平移/旋转、步进平移、悬停显示坐标与材料 |
-| **自定义窗口 Custom window** | 无系统边框 + 自绘标题栏（拖拽、最小化/最大化/关闭），保留系统缩放与圆角，类似 VSCode |
+| **3D 预览 / 截面** | FreeCAD 精确几何渲染，独立窗口可边编辑边看；截面由 STL 直接切出，支持 `#n` 栅元补集 |
+| **条件编译行** | 材料/栅元支持 `#ifdef/#else/#endif`，所有行可拖拽排序 |
+| **材料下拉选择** | 栅元表格与 3D 预览中点击材料号下拉选择，**自动填充材料密度** |
+| **自定义窗口 Custom window** | 无系统边框 + 自绘标题栏（拖拽、最小化/最大化/关闭），类似 VSCode |
 | **材料库 Material library** | 50+ 预设材料 + 化学式换算，xsdir 校验 |
 | **E0/En/T0/Tn 网格** | 全局能谱/时间网格 + 每计数独立 En/Tn，线性/对数/自定义三模式 |
 | **源模式 Source modes** | 固定多源 / SDEF 分布源（SI/SP）/ KCODE 临界源 |
 | **主题 Themes** | 4 套 CSS 主题：夜之城（霓虹）/ 青空 / 护眼 / 多巴胺 |
-| **MCNP 检测与运行** | 自动检测 mcnp6.exe，保存后一键运行、跑完自动清理临时文件 |
+| **MCNP 检测与运行** | 自动检测 mcnp6.exe，一键运行、跑完清理临时文件；默认走独显 GPU |
 | **内联参考文档 Inline references** | 曲面卡、计数卡等结构参考一键查看 |
 | **输出分析 Output analysis** | 解析 MCNP 输出文件并绘图 |
 
@@ -112,6 +113,7 @@ RUSTUP_HOME=D:\rust\rustup CARGO_HOME=D:\rust\cargo npm run tauri build
 │   ├── geouned_worker.py           # GEOUNED 转换 worker（FreeCAD python 子进程）
 │   ├── step_importer_geouned.py    # GEOUNED 转换器封装
 │   ├── freecad_locator.py          # FreeCAD 定位（检测/手动指定路径唯一入口）
+│   ├── stl_cross_section.py        # 从 STL 切平面（numpy，截面用，不依赖 FreeCAD）
 │   ├── xsdir_db.py                 # xsdir 截面数据库
 │   └── material_presets.py         # 预设材料库
 └── gui/
@@ -145,9 +147,9 @@ RUSTUP_HOME=D:\rust\rustup CARGO_HOME=D:\rust\cargo npm run tauri build
 
 ### 3D 预览（FreeCAD CSG）
 
-- 以 JSON AST 序列化 pymcnp 几何树，发送给 FreeCAD 子进程
-- 子进程用 `Part.Shape` 布尔运算（cut, common, fuse）逐个求值
-- 输出 STL 三角网格返回前端渲染；按材料号着色（共享调色板）
+- 以 JSON AST 序列化 pymcnp 几何树，FreeCAD 子进程用 `Part.Shape` 布尔运算求值
+- 支持 `#n` 栅元补集算子（如空心反射体），输出 STL 网格按材料着色
+- 3D 预览与截面均为独立窗口；截面直接从保留的 STL 切（numpy），不重新调 FreeCAD
 
 支持的曲面：P, PX/PY/PZ, S/SO/SX/SY/SZ, C/X/C/Y/C/Z, CX/CY/CZ, K/X/K/Y/K/Z, KX/KY/KZ, SQ, GQ, RPP, RCC, SPH, BOX, TRC, REC, WED, ARB 等，支持 TRn 坐标变换。
 
