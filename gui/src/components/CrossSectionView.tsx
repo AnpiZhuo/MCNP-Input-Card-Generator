@@ -140,6 +140,8 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
   };
 
   // 拖拽平移
+  // 屏幕像素 → viewBox 用户单位：viewBox 宽高(w/zoom)映射到 SVG 实际渲染尺寸，
+  // 用 getBoundingClientRect 算出每像素对应的用户单位数，避免"拖 1 步动 2 步"。
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     setDragging(true);
@@ -147,8 +149,17 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
   };
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!dragging) return;
-    setPan({ x: dragStart.current.px + (e.clientX - dragStart.current.x) / zoom,
-             y: dragStart.current.py + (e.clientY - dragStart.current.y) / zoom });
+    const svg = svgRef.current;
+    if (!svg) return;
+    const r = svg.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return;
+    // 每屏幕像素 = (viewBox.w/zoom) / r.width 用户单位（X 方向同理用 viewBox.h）
+    const kx = (viewBox.w / zoom) / r.width;
+    const ky = (viewBox.h / zoom) / r.height;
+    setPan({
+      x: dragStart.current.px + (e.clientX - dragStart.current.x) * kx,
+      y: dragStart.current.py + (e.clientY - dragStart.current.y) * ky,
+    });
   };
   const handleMouseUp = () => setDragging(false);
 
