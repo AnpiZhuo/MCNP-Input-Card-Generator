@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import DocViewer from "./DocViewer";
-import TextModeSection from "./TextModeSection";
 import { useDeck } from "../utils/DeckContext";
 
 const MODE_LABELS = ["N 中子", "P 光子", "E 电子", "H 质子", "HE 重离子", "D 氘核", "T 氚核", "A α粒子"];
@@ -8,20 +7,17 @@ const MODE_IDS = ["mode-n", "mode-p", "mode-e", "mode-h", "mode-he", "mode-d", "
 
 export default function BasicSettings() {
   const [doc, setDoc] = useState<{path:string;title:string}|null>(null);
-  const [rawMode, setRawMode] = useState(false);
-  const [rawText, setRawText] = useState("");
   const { deck, patch } = useDeck();
   const b: Record<string, any> = deck.basic || {};
   const setB = (key: string, v: any) => patch({ basic: { ...b, [key]: v } });
 
   return (
     <>
-      <TextModeSection label="基本设置" active={rawMode} onToggle={() => setRawMode(!rawMode)} onDiscard={() => { setRawMode(false); setRawText(""); patch({rawOverrides:{...deck.rawOverrides,basic:""}}); }}
-        extra={<a href="mailto:1378963177@qq.com" style={{ color: "var(--accent-glow)", fontSize: 13, whiteSpace: "nowrap", textDecoration: "none" }}>发现 Bug 或有好建议？欢迎联系 → 1378963177@qq.com</a>} />
-      {rawMode ? (
-        <textarea className="form-input" value={rawText} onChange={e => {setRawText(e.target.value);patch({rawOverrides:{...deck.rawOverrides,basic:e.target.value}});}}
-          style={{width:"100%",minHeight:300,fontFamily:"Consolas,monospace",fontSize:12}} placeholder="基本设置原始文本..." />
-      ) : (
+      <div className="glass-card" style={{ marginBottom: 10, padding: "8px 14px", display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)" }}>基本设置</span>
+        <div style={{ flex: 1 }} />
+        <a href="mailto:1378963177@qq.com" style={{ color: "var(--accent-glow)", fontSize: 13, whiteSpace: "nowrap", textDecoration: "none" }}>发现 Bug 或有好建议？欢迎联系 → 1378963177@qq.com</a>
+      </div>
       <><div className="glass-card">
         <div className="card-header">
           <span className="card-title" style={{ flexShrink: 0 }}>标题 & 运行控制</span>
@@ -81,7 +77,7 @@ export default function BasicSettings() {
           </label>
         </div>
       </div>
-      </>)}
+      </>
       {doc && <DocViewer path={doc.path} title={doc.title} onClose={() => setDoc(null)} />}
     </>
   );

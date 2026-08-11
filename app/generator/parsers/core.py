@@ -1146,7 +1146,10 @@ def parse_data_cards(data_lines: list[str]) -> dict:
                 nr = data[i + 1].strip()
                 if not nr: i += 1; continue
                 nf = nr.split()[0].upper()
-                if re.match(r'^[A-Z][A-Z0-9]*$', nf) or nf.startswith("C"): break
+                # 下一行是"新卡片"（字母开头，非纯数值/续行）则停止收集。
+                # 数字/科学计数法开头 = E 卡的数值续行；字母开头（含 F2:P 这种
+                # 带粒子后缀的 F 卡）= 新卡片，必须 break，否则 F 卡会被误吞。
+                if re.match(r'^[A-Z][A-Z0-9]*$', nf) or ":" in nf or nf.startswith("C"): break
                 raw_lines.append(data[i + 1]); i += 1
             vals, _ = _parse_card_with_continuation(data, i, first, parts)
             result["e_cards_lines"].append("\n".join(raw_lines))

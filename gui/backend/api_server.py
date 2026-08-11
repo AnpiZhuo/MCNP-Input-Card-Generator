@@ -428,6 +428,45 @@ def deck_from_json(data: dict) -> DeckData:
     )
 
 
+def _deck_to_frontend_dict(deck: DeckData) -> dict:
+    """后端 DeckData → 前端 deck JSON（与 /api/parse-inp 的序列化一致）。
+
+    供 /api/text-to-section 复用：把解析出的 deck 转成前端可 patch 的结构。
+    """
+    import dataclasses
+    def to_dict(obj):
+        if dataclasses.is_dataclass(obj):
+            return {k: to_dict(v) for k, v in dataclasses.asdict(obj).items()}
+        if isinstance(obj, list):
+            return [to_dict(x) for x in obj]
+        return obj
+    deck_dict = to_dict(deck)
+    # 后端用 rows，前端用 nuclides → 加入映射（行含 kind 判别）
+    for m in deck_dict.get("materials", []):
+        if "rows" in m and "nuclides" not in m:
+            m["nuclides"] = m["rows"]
+    # cells: CellRow 判别联合（raw 行保留 text；cell 行嵌套 CellData，并补 camelCase 字段）
+    for c in deck_dict.get("cells", []):
+        if c.get("kind") == "raw":
+            continue
+        cell = c.get("cell") or {}
+        cell["num"] = str(cell.get("number", ""))
+        cell["surfaces"] = cell.get("surface_expr", "")
+        cell["impN"] = cell.get("imp_n", "")
+        cell["impP"] = cell.get("imp_p", "")
+        cell["impE"] = cell.get("imp_e", "")
+    # Tally: backend → frontend 字段名映射
+    tally_raw = deck_dict.get("tally", {})
+    deck_dict["tallies"] = [{
+        "type": td.get("type", ""), "number": td.get("number", 0),
+        "particle": " ".join(td.get("particles", [])),
+        "params": td.get("params", ""),
+        "enableEn": td.get("generate_en", False),
+        "enableTn": td.get("generate_tn", False),
+    } for td in tally_raw.get("tallies", [])]
+    return deck_dict
+
+
 # ===== HTTP 服务 =====
 
 class MCNPHandler(BaseHTTPRequestHandler):
@@ -468,6 +507,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
             "/api/serve-file": self._handle_serve_file,
             "/api/cross-section": self._handle_cross_section,
             "/api/clear-stl": self._handle_clear_stl,
+            "/api/section-to-text": self._handle_section_to_text,
+            "/api/text-to-section": self._handle_text_to_section,
         }
         handler = handlers.get(parsed.path)
         if handler:
@@ -614,6 +655,66 @@ class MCNPHandler(BaseHTTPRequestHandler):
             self._ok({"deck": deck_dict})
         except Exception as e:
             self._err(str(e))
+
+    # ── 片段互转：表单 → 文本 ──
+    def _handle_section_to_text(self):
+        """把某模块的表单数据生成该模块的 INP 文本（供切到文本模式时预填）。
+
+        入参: {section: "materials"|"cells"|"tally", deck: {前端 deck}}
+        返回: {text}
+        """
+        try:
+            data = self._read_body()
+            section = data.get("section", "")
+            deck = deck_from_json(data.get("deck") or {})
+            from generator.inp_generator import _generate_materials, _generate_cells
+            text = ""
+            if section == "materials":
+                text = "\n".join(_generate_materials(deck.materials))
+            elif section == "cells":
+                text = "\n".join(_generate_cells(deck.cells))
+            elif section == "tally":
+                # 复用生成器的 F 卡 + En/Tn 段（与完整生成一致）
+                from generator.inp_generator import _generate_tallies, _generate_en_cards, _generate_tn_cards
+                text = "\n".join(_generate_tallies(deck.tally) + _generate_en_cards(deck.tally) + _generate_tn_cards(deck.tally))
+            else:
+                raise ValueError(f"不支持的 section: {section}")
+            self._ok({"text": text})
+        except Exception as e:
+            import traceback
+            self._err(str(e) + " | " + traceback.format_exc())
+
+    # ── 片段互转：文本 → 表单 ──
+    def _handle_text_to_section(self):
+        """把某模块的 INP 文本解析回表单数据（供切回表单时回填）。
+
+        入参: {section: "materials"|"cells"|"tally", text}
+        返回: {data: 该模块的结构化数据}
+          materials → {materials: [...]}
+          cells     → {cells: [...]}
+          tally     → {tallies: [...]}
+        """
+        try:
+            data = self._read_body()
+            section = data.get("section", "")
+            text = data.get("text", "")
+            if not text.strip():
+                raise ValueError("文本为空")
+            # 包最小假 INP 壳：标题 + 空栅元 + 空曲面 + 数据卡段 = 该模块文本
+            shell = f"C  shell\n1 0 -1\n\nC  surf\n1 pz -1e9\n\n{text}\n"
+            deck, _warnings = parse_inp_text(shell)
+            d = _deck_to_frontend_dict(deck)
+            if section == "materials":
+                self._ok({"data": {"materials": d.get("materials", [])}})
+            elif section == "cells":
+                self._ok({"data": {"cells": d.get("cells", [])}})
+            elif section == "tally":
+                self._ok({"data": {"tallies": d.get("tallies", [])}})
+            else:
+                raise ValueError(f"不支持的 section: {section}")
+        except Exception as e:
+            import traceback
+            self._err(str(e) + " | " + traceback.format_exc())
 
     # ── 保存 INP 到目录 ──
     def _handle_save_inp(self):

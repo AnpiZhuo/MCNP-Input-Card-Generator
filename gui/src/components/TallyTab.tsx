@@ -3,6 +3,7 @@ import GridEditor from "./GridEditor";
 import TextModeSection from "./TextModeSection";
 import DocViewer from "./DocViewer";
 import { useDeck } from "../utils/DeckContext";
+import { useSectionTextMode } from "../utils/useSectionTextMode";
 
 type TallyType = "F1" | "F2" | "F4" | "F5" | "F6" | "F7" | "F8";
 type TallyPrefix = "" | "*" | "+";
@@ -54,8 +55,25 @@ export default function TallyTab() {
   const [doc, setDoc] = useState<{path:string;title:string}|null>(null);
   const [tallies, setTallies] = useState<Tally[]>([]);
   const { deck, patch } = useDeck();
-  const [tallyRawMode, setTallyRawMode] = useState(false);
-  const [tallyRawText, setTallyRawText] = useState("");
+  // 文本↔表单互转（深模块：逻辑在 useSectionTextMode 一处）
+  const tallyText = useSectionTextMode("tally", {
+    deck, patch, overrideKey: "tally",
+    onBackToForm: (data) => {
+      if (data.tallies?.length) setTallies(data.tallies);
+      // Fn 卡带其它字段（如 ft14=1）：弹窗提示并填入高级「其他卡片」
+      const others = (data.tallies || [])
+        .map((t: any) => String(t.params || ""))
+        .filter((p: string) => /=/.test(p));
+      if (others.length) {
+        const merged = [...others, (deck.adv?.other_cards || "")].filter(Boolean).join("\n");
+        patch({ adv: { ...(deck.adv || {}), other_cards: merged } });
+        alert("F 计数卡含其它字段，已填入高级标签页的『其他卡片』框：\n\n" + others.join("\n"));
+      }
+    },
+    initialText: deck.rawOverrides?.tally || "",
+    initialMode: deck.textMode?.tally,
+  });
+  const { rawMode: tallyRawMode, rawText: tallyRawText, busy: tallyBusy, setRawText: setTallyRawText, toggleRawMode: toggleTallyRawMode, onDiscard: discardTallyRaw } = tallyText;
   const lastPushRef = useRef("[]");       // 初始为 []：挂载时空 tallies 不把导入的 deck.tallies 冲成 []
   const lastPullRef = useRef<string|null>(null);  // 只在 deck 数据确实变了才拉
   // local → deck
@@ -108,7 +126,7 @@ export default function TallyTab() {
   return (
     <>
       <div className="glass-card">
-        <TextModeSection label="计数卡" active={tallyRawMode} onToggle={() => setTallyRawMode(!tallyRawMode)} onDiscard={() => { setTallyRawMode(false); setTallyRawText(""); patch({rawOverrides:{...deck.rawOverrides,tally:""}}); }} />
+        <TextModeSection label="计数卡" active={tallyRawMode} onToggle={toggleTallyRawMode} onDiscard={discardTallyRaw} />
         {tallyRawMode ? (
           <textarea className="form-input" value={tallyRawText} onChange={e => {setTallyRawText(e.target.value);patch({rawOverrides:{...deck.rawOverrides,tally:e.target.value}});}}
             style={{width:"100%",minHeight:200,fontFamily:"Consolas,monospace",fontSize:12}} placeholder="计数卡原始文本..." />

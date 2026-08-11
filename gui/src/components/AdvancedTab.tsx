@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from "react";
-import TextModeSection from "./TextModeSection";
 import DocViewer from "./DocViewer";
 import { useDeck } from "../utils/DeckContext";
 
@@ -30,8 +29,6 @@ export default function AdvancedTab() {
   const [xsdirStatus, setXsdirStatus] = useState("检查中...");
   const [xsdirColor, setXsdirColor] = useState("var(--text-tertiary)");
   const { deck, patch } = useDeck();
-  const [advRawMode, setAdvRawMode] = useState(false);
-  const [advRawText, setAdvRawText] = useState("");
 
   useEffect(() => {
     fetch("http://localhost:5001/api/xsdir-check", { method: "POST" })
@@ -57,11 +54,6 @@ export default function AdvancedTab() {
 
   return (
     <>
-      <TextModeSection label="高级参数" active={advRawMode} onToggle={() => setAdvRawMode(!advRawMode)} onDiscard={() => { setAdvRawMode(false); setAdvRawText(""); patch({rawOverrides:{...deck.rawOverrides,adv:""}}); }} />
-      {advRawMode ? (
-        <textarea className="form-input" value={advRawText} onChange={e => {setAdvRawText(e.target.value);patch({rawOverrides:{...deck.rawOverrides,adv:e.target.value}});}}
-          style={{width:"100%",minHeight:400,fontFamily:"Consolas,monospace",fontSize:12}} placeholder="高级参数原始文本..." />
-      ) : (
       <>
       {/* PHYS:N */}
       <div className="glass-card">
@@ -315,7 +307,7 @@ export default function AdvancedTab() {
         </div>
       </div>
       {doc && <DocViewer path={doc.path} title={doc.title} onClose={() => setDoc(null)} />}
-      </>)}
+      </>
     </>
   );
 }

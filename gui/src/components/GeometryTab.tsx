@@ -10,6 +10,8 @@ import { useDeck } from "../utils/DeckContext";
 import { useFreecadStatus } from "../utils/useFreecadStatus";
 import { useRowDrag } from "../utils/useRowDrag";
 import { openPreview3D, onMaterialChange } from "../utils/windows";
+import { useSectionTextMode } from "../utils/useSectionTextMode";
+import { textToSection } from "../utils/sectionConvert";
 
 interface GeoProps {
   pendingCellFromMaterial?: number;
@@ -36,8 +38,6 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const [editCell, setEditCell] = useState<number | null>(null);
   const [surfText, setSurfText] = useState("");
   const [trText, setTrText] = useState("");
-  const [cellRawMode, setCellRawMode] = useState(false);
-  const [cellRawText, setCellRawText] = useState("");
   const [show3D, setShow3D] = useState(false);
   const [showStepDlg, setShowStepDlg] = useState(false);
   // 栅元表材料列点击下拉：i=正在编辑材料号的栅元行索引
@@ -50,6 +50,24 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const trRef = useRef(trText);
   trRef.current = trText;
   const { deck, patch } = useDeck();
+
+  // 文本↔表单互转（深模块：逻辑在 useSectionTextMode 一处）
+  // 切回表单时，把解析出的 cells（后端 CellRow 判别联合）映射回本地 LocalCellRow
+  const cellsText = useSectionTextMode("cells", {
+    deck, patch, overrideKey: "cells",
+    onBackToForm: (data) => {
+      const arr: any[] = data.cells || [];
+      const mapped = arr.map((c: any) => {
+        if (c?.kind === "raw") return { kind: "raw" as const, text: c.text };
+        const cell = c?.kind === "cell" ? c.cell : c;
+        return { kind: "cell" as const, cell: { num: String(cell?.number ?? cell?.num ?? ""), mat: cell?.material ?? cell?.mat ?? "", density: cell?.density ?? "", surfaces: cell?.surface_expr ?? cell?.surfaces ?? "", impN: cell?.imp_n ?? cell?.impN ?? "", impP: cell?.imp_p ?? cell?.impP ?? "", impE: cell?.imp_e ?? cell?.impE ?? "", vol: cell?.vol ?? "", pwt: cell?.pwt ?? "", ext: cell?.ext ?? "", fcl: cell?.fcl ?? "", u: cell?.u ?? "", fill: cell?.fill ?? "", lat: cell?.lat ?? "", trcl: cell?.trcl ?? "", tmp: cell?.tmp ?? "", otherParams: cell?.other_params ?? cell?.otherParams ?? "", render: cell?.render !== false, comment: cell?.comment ?? "" } };
+      });
+      if (mapped.length) setCells(mapped);
+    },
+    initialText: deck.rawOverrides?.cells || "",
+    initialMode: deck.textMode?.cells,
+  });
+  const { rawMode: cellRawMode, rawText: cellRawText, busy: cellBusy, setRawText: setCellRawText, toggleRawMode: toggleCellRawMode, onDiscard: discardCellRaw } = cellsText;
 
   // 材料→栅元联动：新材料添加时自动创建栅元行
   useEffect(() => {
@@ -87,8 +105,27 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     setShowStepDlg(false);
   };
   const handlePreview3D = async () => {
-    if (cells.length === 0) { alert("请先添加栅元"); return; }
+    if (cells.length === 0 && !cellRawMode) { alert("请先添加栅元"); return; }
     if (!fc.require()) return;
+    // 若栅元在文本模式：先解析文本回填表单 cells，再取表单 cells 预览（用当前实际内容）
+    if (cellRawMode) {
+      const txt = cellRawText || deck.rawOverrides?.cells || "";
+      if (txt.trim()) {
+        try {
+          const data = await textToSection("cells", txt);
+          const arr: any[] = data.cells || [];
+          const mapped = arr.map((c: any) => {
+            if (c?.kind === "raw") return { kind: "raw" as const, text: c.text };
+            const cell = c?.kind === "cell" ? c.cell : c;
+            return { kind: "cell" as const, cell: { num: String(cell?.number ?? cell?.num ?? ""), mat: cell?.material ?? cell?.mat ?? "", density: cell?.density ?? "", surfaces: cell?.surface_expr ?? cell?.surfaces ?? "", impN: cell?.imp_n ?? cell?.impN ?? "", impP: cell?.imp_p ?? cell?.impP ?? "", impE: cell?.imp_e ?? cell?.impE ?? "", vol: cell?.vol ?? "", pwt: cell?.pwt ?? "", ext: cell?.ext ?? "", fcl: cell?.fcl ?? "", u: cell?.u ?? "", fill: cell?.fill ?? "", lat: cell?.lat ?? "", trcl: cell?.trcl ?? "", tmp: cell?.tmp ?? "", otherParams: cell?.other_params ?? cell?.otherParams ?? "", render: cell?.render !== false, comment: cell?.comment ?? "" } };
+          });
+          if (mapped.length) setCells(mapped);
+        } catch (e: any) {
+          alert("栅元文本解析失败: " + (e?.message || e));
+          return;
+        }
+      }
+    }
     // 3D 预览 → 独立系统窗口（Tauri）；浏览器模式回退原有覆盖层
     const opened = await openPreview3D({
       cells: cells.filter(c => c.kind === "cell").map(c => ({
@@ -236,7 +273,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
         </div>
       </div>
       <div className="glass-card">
-        <TextModeSection label="栅元列表" active={cellRawMode} onToggle={() => setCellRawMode(!cellRawMode)} onDiscard={() => { setCellRawMode(false); setCellRawText(""); patch({rawOverrides:{...deck.rawOverrides,cells:""}}); }} />
+        <TextModeSection label="栅元列表" active={cellRawMode} onToggle={toggleCellRawMode} onDiscard={discardCellRaw} />
         {cellRawMode ? (
           <textarea className="form-input" value={cellRawText} onChange={e => {setCellRawText(e.target.value);patch({rawOverrides:{...deck.rawOverrides,cells:e.target.value}});}}
             style={{width:"100%",minHeight:200,fontFamily:"Consolas,monospace",fontSize:12}} placeholder="栅元卡原始文本..." />

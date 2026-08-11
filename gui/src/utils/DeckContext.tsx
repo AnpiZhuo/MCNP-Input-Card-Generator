@@ -66,6 +66,8 @@ export interface DeckData {
   ksrcPoints: string;
   // Raw text overrides (for TextModeSection)
   rawOverrides: Record<string, string>;  // key: "materials"|"cells"|"sdef"|"tally"|"phys"|"e0"|"cut"
+  // 各标签页当前是否处于文本模式（生成时决定用文本还是表单数据）
+  textMode: Record<string, boolean>;     // key: "materials"|"cells"|"tally"
 }
 
 const DEFAULT: DeckData = {
@@ -76,7 +78,7 @@ const DEFAULT: DeckData = {
   sourceTemplate: "free", distributions: [],
   sswFields: { surf: "", sym: "", pty: "", cel: "" },
   ssrFields: { surf: "", mode: "", cel: "", pty: "", col: "", wgt: "", tr: "", psc: "" },
-  kcodeFields: {}, ksrcPoints: "", rawOverrides: {},
+  kcodeFields: {}, ksrcPoints: "", rawOverrides: {}, textMode: {},
 };
 
 interface Ctx {

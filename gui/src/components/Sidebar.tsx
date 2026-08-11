@@ -27,7 +27,9 @@ export default function Sidebar({ active, onSelect, tabs, theme, onThemeChange, 
     <nav className="sidebar" style={{ width: expanded ? 96 : 52 }}
       onMouseEnter={() => { if (timer.current) clearTimeout(timer.current); setExpanded(true); }}
       onMouseLeave={() => { timer.current = window.setTimeout(() => setExpanded(false), 180); }}>
-      <div className="sidebar-avatar" style={{ margin: "0 0 8px 6px" }}>U</div>
+      <div className="sidebar-avatar" style={{ margin: "0 0 8px 6px", overflow: "hidden" }}>
+        <img src="/app_icon.png" alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "50%" }} />
+      </div>
       {tabs.map(tab => (
         <button key={tab.key} className={"sidebar-btn" + (active === tab.key ? " active" : "")}
           onClick={() => onSelect(tab.key)} title={tab.label}>

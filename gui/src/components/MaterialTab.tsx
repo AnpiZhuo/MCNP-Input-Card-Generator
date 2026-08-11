@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import MaterialEditDialog from "./MaterialEditDialog";
 import { useDeck, MaterialData } from "../utils/DeckContext";
+import { useSectionTextMode } from "../utils/useSectionTextMode";
 
 interface MatTabProps {
   onMaterialAdded?: (matNum: number) => void;
@@ -9,9 +10,18 @@ interface MatTabProps {
 export default function MaterialTab({ onMaterialAdded }: MatTabProps) {
   const [mats, setMats] = useState<MaterialData[]>([]);
   const [editIdx, setEditIdx] = useState<number | null>(null);
-  const [rawMode, setRawMode] = useState(false);
-  const [rawText, setRawText] = useState("");
   const { deck, patch } = useDeck();
+
+  // 文本↔表单互转（深模块：逻辑在 useSectionTextMode 一处，这里只传回填回调）
+  const text = useSectionTextMode("materials", {
+    deck,
+    patch,
+    overrideKey: "materials",
+    onBackToForm: (data) => { if (data.materials) setMats(data.materials); },
+    initialText: deck.rawOverrides?.materials || "",
+    initialMode: deck.textMode?.materials,
+  });
+  const { rawMode, rawText, busy, setRawText, toggleRawMode } = text;
   const matsRef = useRef(mats);
   matsRef.current = mats;
   // local → deck（仅推不拉）
@@ -66,12 +76,12 @@ export default function MaterialTab({ onMaterialAdded }: MatTabProps) {
         
           <div style={{display:"flex",gap:8,marginBottom:8,alignItems:"center"}}>
             <span style={{fontSize:12,fontWeight:600,color:"var(--text-secondary)",flex:1}}>材料定义（密度在栅元卡中设置）</span>
-            <button className={"btn btn-xs " + (rawMode ? "btn-primary" : "btn-ghost")} onClick={() => setRawMode(!rawMode)} style={{whiteSpace:"nowrap"}}>
-              {rawMode ? "← 回到表单" : "✎ 文本模式"}
+            <button className={"btn btn-xs " + (rawMode ? "btn-primary" : "btn-ghost")} onClick={toggleRawMode} style={{whiteSpace:"nowrap"}} disabled={busy}>
+              {busy ? "转换中..." : (rawMode ? "← 回到表单" : "✎ 文本模式")}
             </button>
             <button className="btn btn-success btn-sm" onClick={addMat}>+ 添加</button>
           </div>
-        
+
         {rawMode ? <textarea className="form-input" value={rawText} onChange={e => {setRawText(e.target.value);patch({rawOverrides:{...deck.rawOverrides,materials:e.target.value}});}} style={{width:"100%",minHeight:200,fontFamily:"Consolas,monospace",fontSize:12}} placeholder="材料卡原始文本..." /> : <div className="table-wrap">
           <table>
             <thead>
