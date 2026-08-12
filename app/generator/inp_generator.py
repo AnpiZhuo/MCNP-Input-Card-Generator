@@ -5,6 +5,7 @@ INP 生成器：使用 pymcnp 库构建 MCNP 数据卡，cells/surfaces 保留�
 import json
 import math
 import re
+from pymcnp import inp as pymcnp_inp
 from app.models import (BasicSettings, CellData, CellRow, MaterialData, MaterialRow,
                         SourceData, AdvancedSettings, DeckData, TallySettings)
 from .banners import (
@@ -107,7 +108,6 @@ def _generate_surfaces(surfaces_text: str) -> list[str]:
 
 def _generate_basic(basic: BasicSettings) -> list[str]:
     """基本设置 → pymcnp Mode / Nps / Ctme / Nonu"""
-    from pymcnp import inp as pymcnp_inp
     lines = []
 
     particles = []
