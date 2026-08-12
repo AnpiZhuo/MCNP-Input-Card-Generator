@@ -32,6 +32,12 @@ from xsdir_db import DB as xsdir_db
 
 PORT = 5001
 
+# ── preview-3d deck 指纹缓存（P0a：同 deck 二次打开免 FreeCAD 子进程）──
+# 深模块见 app/preview_cache.py：put 把会话 STL 拷进缓存自有目录，clear-stl 删除
+# 的是会话目录，缓存拷贝存活 → 关预览窗口后重开同一 deck 仍命中（≤1s）。
+from preview_cache import PreviewCache
+_PREVIEW_CACHE = PreviewCache()
+
 # ── 3D 预览 STL 会话 ──
 # 3D 预览生成的 STL 保留在此（不随请求清理），供截面复用（numpy 切平面）。
 # 只在关掉 3D 预览窗口 / 主界面清空时调用 _clear_stl_session() 删除。
@@ -39,10 +45,17 @@ _STL_SESSION = {"dir": "", "cells": {}}  # cells: {number: {"material", "path"}}
 
 
 def _clear_stl_session() -> None:
-    """删除当前 STL 会话目录（关 3D 预览窗口 / 清空时调用）。"""
+    """删除当前 STL 会话目录（关 3D 预览窗口 / 清空时调用）。
+
+    与 preview_cache 联动：会话目录被清时同步驱逐指向它的缓存项，防悬挂。
+    命中路径 _STL_SESSION 指向缓存目录时，本调用驱逐该缓存项并删除其目录，
+    之后对已删目录的 rmtree 是无害空操作。
+    """
     import shutil
     global _STL_SESSION
     d = _STL_SESSION.get("dir")
+    if d:
+        _PREVIEW_CACHE.evict_dir(d)
     if d and os.path.isdir(d):
         shutil.rmtree(d, ignore_errors=True)
     _STL_SESSION = {"dir": "", "cells": {}}
@@ -999,13 +1012,35 @@ class MCNPHandler(BaseHTTPRequestHandler):
 
     # ── MCNP 检测 ──
     def _handle_preview_3d(self):
-        """3D 预览：解析曲面/栅元/TR → FreeCAD CSG → STL"""
+        """3D 预览：解析曲面/栅元/TR → FreeCAD CSG → STL（同 deck 指纹缓存命中免 FreeCAD）"""
+        global _STL_SESSION
         try:
-            import tempfile, re
+            import tempfile, re, base64, shutil
             data = self._read_body()
             surf_text = data.get("surfaces", "")
             cell_list = data.get("cells", [])
             tr_text = data.get("tr_cards", "")
+
+            # 0. 指纹缓存：同 deck 命中免 FreeCAD 子进程（二次打开 ≤1s）
+            fp = _PREVIEW_CACHE.fingerprint(surf_text, cell_list, tr_text)
+            cached = _PREVIEW_CACHE.get(fp)
+            if cached is not None:
+                prev_dir = _STL_SESSION.get("dir")
+                if prev_dir and prev_dir != cached["dir"]:
+                    _clear_stl_session()  # 清上一会话（与命中缓存目录不同时）
+                # 缓存目录作为本会话 STL 源（供 serve-file/截面复用）
+                _STL_SESSION = {"dir": cached["dir"], "cells": cached["cells"]}
+                stl_files = {}
+                stl_data = {}
+                for num, info in cached["cells"].items():
+                    p = info.get("path")
+                    if p and os.path.isfile(p):
+                        with open(p, "rb") as _f:
+                            stl_data[str(num)] = base64.b64encode(_f.read()).decode()
+                        stl_files[str(num)] = p
+                self._ok({"stl_files": stl_files, "stl_data": stl_data,
+                          "freecad": cached.get("freecad"), "count": len(stl_data)})
+                return
 
             # 1. 检测 FreeCAD
             sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
@@ -1037,10 +1072,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
             from freecad_preview import FreeCADEngine
             engine = FreeCADEngine(freecad_bin)
             result = engine.build_geometry(surfs, cells_data, tr_cards, fmt="stl")
-            import base64, shutil
 
             # STL 复制到会话专用目录（engine 析构会删它自己的临时目录，必须复制走）
-            global _STL_SESSION
             _clear_stl_session()  # 覆盖上一轮预览
             session_dir = tempfile.mkdtemp(prefix="mcnp_stl_session_")
             _STL_SESSION = {"dir": session_dir, "cells": {}}
@@ -1064,6 +1097,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
                         "path": dst,
                     }
             engine.cleanup()  # 引擎临时目录可删，会话目录已独立
+            # 存入指纹缓存：会话 STL 拷入缓存自有目录，clear-stl 删除会话目录不影响缓存
+            _PREVIEW_CACHE.put(fp, {"dir": session_dir, "cells": _STL_SESSION["cells"], "freecad": freecad_bin})
             self._ok({"stl_files": stl_files, "stl_data": stl_data, "freecad": freecad_bin, "count": len(stl_data)})
         except Exception as e:
             import traceback
