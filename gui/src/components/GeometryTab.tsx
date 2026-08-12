@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import CellEditDialog, { type CellData } from "./CellEditDialog";
 import McnpEditor from "./McnpEditor";
 import TextModeSection from "./TextModeSection";
@@ -13,6 +14,12 @@ import { openPreview3D, onMaterialChange } from "../utils/windows";
 import { apiUrl } from "../utils/api";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
 import { textToSection } from "../utils/sectionConvert";
+
+/** 下拉右缘防溢出：x 超过视口右缘时 clamp 到 viewportWidth - dropdownWidth - 20。
+ *  对齐现行为（现 220 = 200 宽 + 20 边距）。viewportWidth 为 0/负数时 Math.min 自然兜底（返回 min(x, 负数)）。 */
+export function clampDropdownLeft(x: number, viewportWidth: number, dropdownWidth = 200): number {
+  return Math.min(x, viewportWidth - dropdownWidth - 20);
+}
 
 interface GeoProps {
   pendingCellFromMaterial?: number;
@@ -41,8 +48,8 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const [trText, setTrText] = useState("");
   const [show3D, setShow3D] = useState(false);
   const [showStepDlg, setShowStepDlg] = useState(false);
-  // 栅元表材料列点击下拉：i=正在编辑材料号的栅元行索引
-  const [matPicker, setMatPicker] = useState<number | null>(null);
+  // 栅元表材料列点击下拉：i=正在编辑材料号的栅元行索引，x/y=按钮位置（用于 portal 定点浮层）
+  const [matPicker, setMatPicker] = useState<{ i: number; x: number; y: number } | null>(null);
   const fc = useFreecadStatus();
   const cellsRef = useRef(cells);
   cellsRef.current = cells;
@@ -305,21 +312,30 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
                   <td style={{ position: "relative" }}>
                     {/* 材料号可点击，弹下拉选择（同 3D 预览）；样式：可点外观 */}
                     <button type="button" className="mat-cell-btn" title="点击选择材料"
-                      onClick={() => setMatPicker(matPicker === i ? null : i)}
+                      onClick={(e) => {
+                        if (matPicker?.i === i) { setMatPicker(null); return; }
+                        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                        setMatPicker({ i, x: r.right, y: r.bottom + 4 });
+                      }}
                       style={{ background: "transparent", border: "none", cursor: "pointer", padding: "0 4px", fontWeight: 600, color: c.cell.mat === "0" ? "var(--text-tertiary)" : "var(--accent)", fontFamily: "inherit", fontSize: "inherit" }}>
                       {c.cell.mat}
                     </button>
-                    {matPicker === i && (
-                      <div className="preview-overlay"
-                        style={{ position: "absolute", left: 0, top: "100%", zIndex: 1200, width: 200, maxHeight: 260, overflow: "auto", background: "rgba(15,15,40,0.97)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 6, boxShadow: "0 8px 24px rgba(0,0,0,0.5)", padding: "6px" }}>
-                        {matOptions.map(o => (
-                          <button key={o.num} type="button"
-                            onClick={() => applyMatFromPicker(i, o.num)}
-                            style={{ display: "block", width: "100%", textAlign: "left", padding: "5px 8px", marginBottom: 2, fontSize: 11, borderRadius: 4, cursor: "pointer", border: "none", background: o.num === c.cell.mat ? "rgba(255,255,255,0.12)" : "transparent", color: o.num === c.cell.mat ? "var(--accent)" : "var(--text-primary)" }}>
-                            {o.label}{o.density ? `  ·  ρ=${o.density}` : ""}
-                          </button>
-                        ))}
-                      </div>
+                    {/* 材料下拉用 portal 渲染到 body：逃出 table-wrap 的 overflow 裁剪和 glass-card 的层叠上下文 */}
+                    {matPicker && matPicker.i === i && createPortal(
+                      <>
+                        <div onClick={() => setMatPicker(null)} style={{ position: "fixed", inset: 0, zIndex: 1100, background: "transparent" }} />
+                        <div className="preview-overlay"
+                          style={{ position: "fixed", left: clampDropdownLeft(matPicker.x, window.innerWidth || 0), top: matPicker.y, zIndex: 1200, width: 200, maxHeight: 260, overflow: "auto", background: "rgba(15,15,40,0.97)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 6, boxShadow: "0 8px 24px rgba(0,0,0,0.5)", padding: "6px" }}>
+                          {matOptions.map(o => (
+                            <button key={o.num} type="button"
+                              onClick={() => applyMatFromPicker(i, o.num)}
+                              style={{ display: "block", width: "100%", textAlign: "left", padding: "5px 8px", marginBottom: 2, fontSize: 11, borderRadius: 4, cursor: "pointer", border: "none", background: o.num === c.cell.mat ? "rgba(255,255,255,0.12)" : "transparent", color: o.num === c.cell.mat ? "var(--accent)" : "var(--text-primary)" }}>
+                              {o.label}{o.density ? `  ·  ρ=${o.density}` : ""}
+                            </button>
+                          ))}
+                        </div>
+                      </>,
+                      document.body
                     )}
                   </td>
                   <td>{c.cell.density}</td><td>{c.cell.surfaces}</td><td>{c.cell.impN}</td>
