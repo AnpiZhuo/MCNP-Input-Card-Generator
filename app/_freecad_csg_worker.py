@@ -27,12 +27,9 @@ except ImportError as e:
     print(json.dumps({"status": "error", "message": f"FreeCAD 导入失败: {e}"}))
     sys.exit(1)
 
-# VTK 可选导入（用于 GQ/SQ 曲面）
-try:
-    import vtk
-    _HAVE_VTK = True
-except ImportError:
-    _HAVE_VTK = False
+# VTK 可选（用于 GQ/SQ 曲面）：惰性导入，见 _quadric_to_shape 的 native 回退分支。
+# 模块顶层不 import vtk —— 无 GQ/SQ 的 deck 子进程启动不再白付 ~0.46s（~35% 子进程时长）。
+_HAVE_VTK = False
 
 
 # ============================================================
@@ -669,10 +666,22 @@ def _quadric_ellipsoid(w, center, extra, B):
 
 
 def _quadric_to_shape(qtype: str, coeffs: list[float], B: float, grid_res: int = 40):
-    """从二次曲面系数生成 Part.Shape (正侧 pos = 外部)。先试原生，再回退 marching cubes。"""
+    """从二次曲面系数生成 Part.Shape (正侧 pos = 外部)。先试原生，再回退 marching cubes。
+
+    vtk 惰性导入：仅在 native 回退（marching cubes）分支内按需 `import vtk`，
+    成功置 _HAVE_VTK=True；无 GQ/SQ 的 deck 子进程启动不加载 vtk。import 失败
+    仍抛 RuntimeError("VTK 不可用...")。
+    """
+    global _HAVE_VTK
     native = _quadric_to_native(qtype, coeffs, B)
     if native is not None:
         return native
+    if not _HAVE_VTK:
+        try:
+            import vtk
+            _HAVE_VTK = True
+        except ImportError:
+            _HAVE_VTK = False
     if not _HAVE_VTK:
         raise RuntimeError("VTK 不可用，无法处理 GQ/SQ 曲面")
 
