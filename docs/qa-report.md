@@ -1,7 +1,36 @@
-# QA 报告 — P0 测试防线
+# QA 报告 — P0 测试防线 + P1 终态复核
 
-> 测试工程师产出 | 日期：2026-08-12 | 分支：experiment/geouned
+> 测试工程师产出 | 日期：2026-08-12 | 分支：refactor/generator-tech-debt（P1 终态）→ experiment/geouned（P0）
 > 运行：仓库根 `python -m pytest tests/ -v`
+
+## 〇-2、P1 终态复核结论（全量计划 P0+P1+P2 完成）
+
+**全量终态：251 通过 / 0 失败**（复跑稳定）。P1 技术债清偿 7 项全部 Resolved。
+
+### P1 复核清单（逐 F#）
+| F# | 验证项 | 结果 |
+| :--- | :--- | :--- |
+| F#7 | pymcnp 模块顶部 import（inp_generator.py:8 `from pymcnp import inp as pymcnp_inp`）；test_f7_*×2 绿 | ✅ |
+| F#3 | `import json as` / `E0DBG` / 函数内 `import sys` 全归零（仅文档残留）；test_f3_*×2 绿 | ✅ |
+| F#4 | `_build_sdef_parts(src, include_special)` 合并两分支（247/298）；`test_sdef_single_source_delegates` pin 精确串 `SDEF  ERG=14.0  POS=0 0 0` 不变；test_generator_sdef.py 全绿 | ✅ |
+| F#5+F#6 | kitchen-sink R1/R4 红→绿（g1==g2 字节恒定，len 2099==2099）；样例 prob41c/avr13/inp24 R1 保持绿；test_generator_multi_source.py / test_generator_sdef.py 全绿 | ✅ |
+| F#1 | 8 守卫收敛 `_apply_raw_override`（1149，8 调用点）；1145 tally-key 门控行为一字不动（三例 pin 绿）；raw_overrides 兼容性保留 | ✅ |
+
+### 纪律核对
+- 无断言降级：用例总数 251 不变（0 删除/0 skip/0 xfail/0 pass 骗绿；仅契约闸门防御守卫在非触发路径）。
+- api_server 路由表 / api.yaml 漂移闸门保持绿（test_api_contract.py 7/7）。
+- `_wrap_long_lines` 与 `_generate_structured_distributions` 未进入 P1 diff（git diff -U0 核对 hunk 无两函数定义行）；`'  '.join` 语义仅随 F#5/6 重构在 multi_source 内调整。
+- 无新依赖（requirements.txt / dev-requirements.txt 与 P0 基线无 diff）。
+- `review_findings.json` 7 项全部标 Resolved（F#1=1488aae、F#2=historical、F#3=c774e56、F#4=52ca251、F#5/6=e404172+018ced5、F#7=bf0a2c7）。
+
+### kitchen-sink 实证（5 项残留差异全部消除）
+| 差异项（P0 时） | P1 后 |
+| :--- | :--- |
+| `POS=F D1` → `X=F Y=D1` 退化 | ✅ 保持 `POS=F D1` |
+| `TME=D6` → `TME=0.0` 分布丢失 | ✅ 保持 `TME=D6` |
+| SI1 V 型 → L 型 | ✅ 保持 `SI1  V` |
+| 概率键控注释丢失 | ✅ 保留 `probability keyed to D1` |
+| SI 值空格归一化 | ✅ 字节恒定 |
 
 ## 〇、第二轮复核结论（M1.4 门禁：**通过**）
 
