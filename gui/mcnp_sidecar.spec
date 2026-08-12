@@ -15,7 +15,7 @@ GUI_BACKEND = os.path.join(PROJECT, "gui", "backend")
 
 # ── 只保留后端需要的 app 顶层 .py（排除 Qt 死代码）──
 _keep_py = [
-    "models.py", "freecad_preview.py", "_freecad_csg_worker.py",
+    "models.py", "preview_cache.py", "freecad_preview.py", "_freecad_csg_worker.py",
     "freecad_locator.py", "step_importer_geouned.py", "geouned_worker.py",
     "xsdir_db.py", "step_importer.py",
     "_cross_section_helper.py",
@@ -68,7 +68,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["pyvista", "pyvistaqt", "vtk", "vtkmodules"],
+    excludes=["pyvista", "pyvistaqt", "vtk", "vtkmodules", "PyQt5"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
