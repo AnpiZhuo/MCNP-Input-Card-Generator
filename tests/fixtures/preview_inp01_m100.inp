@@ -1,0 +1,45 @@
+Test problem for draco muon source with transformations
+   1    4 -1.205e-3  110 -120  130  -140  150 -160 10   imp:|=1   $ Air
+   2    0   -10                  imp:|=1
+ 9000   0  #1 #2                 imp:|=0
+
+10  s 21 0 100 20
+110   px   -2000.0
+120   px    2000.0
+130   py   -2000.0
+140   py    2000.0
+150   pz       0.0
+160   pz   10000.0
+
+m4    1001.66c -0.00070
+      6000.66c -0.00015
+      7014.66c -.75778578
+      7015.66c -.00281422
+      8016.66c -0.23860
+mode  |
+sdef erg=100.0 cel=1 bem= 9.776e-1 9.776e-1 10000.0 bap = 100.0 100.0 -1.
+     pos= 0.0 0.0 100.0 axs= 0.0   0.0   1.0  vec= 1.0  0.0 -0.0 tr=d1
+si1 L 1 2
+sp1   1 1
+tr1 0 0 0
+tr2 500 0 10
+nps  500
+prdmp  2j -1 j -1
+print
+tropt  mcscat gaussian
+fc104   muon flux
+f104:|     1
+e104  1.0e-6 1.0e-5 1.0e-4 1.0e-3 1.0e-2 1.0e-1 1.0 1.0e1 1.0e2 1.0e3
+sd104 1
+c
+tmesh
+rmesh11:| flux
+cora11 -1900 9i 1900
+corb11 -1900 9i 1900
+corc11  1 9i 9999
+rmesh2 |
+cora2 -1500  9i 1500
+corb2 -1500  9i 1500
+corc2    1  9i 1500
+endmd
+dbcn  26j  1  j  0

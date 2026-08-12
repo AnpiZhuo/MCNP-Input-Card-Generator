@@ -1,0 +1,179 @@
+quad along arbitrary axis
+c based on work Pete Walstrom did with
+c Marylie Cosy
+c exp 955 test problem.  24" W collimator and object. 
+c image should be the inverse of the object
+c cell cards
+c left void 
+91   0  -50 51 -41 imp:h=1
+c diffuser
+100   2 -16.654 -50  41 -42 imp:h=1
+c beam preconditioner
+31   0 -50 42 -31 imp:h=1 
+32   0 -50 31 -32 imp:h=1 bflcl 1
+33   0 -50 32 -33 imp:h=1 
+34   0 -50 33 -34 imp:h=1 bflcl 1
+35   0 -50 34 -35 imp:h=1 
+36   0 -50 35 -36 imp:h=1 bflcl 2
+37   0 -50 36 -37 imp:h=1 
+38   0 -50 37 -38 imp:h=1 bflcl 2
+39   0 -50 38 -39 63 imp:h=1 
+c
+c object
+40   7 -.00125  -60 -39 imp:h=1
+41   4 -18.54 60 -61 -39 imp:h=1
+42   5 -8.92  61 -62 -39 imp:h=1
+43   6 -.50   62 -63 -39 imp:h=1
+44   6 -.50   62 -63  39 imp:h=1
+45   5 -8.92  61 -62  39 imp:h=1
+46   4 -18.54 60 -61  39 imp:h=1
+47   7 -.00125  -60  39 imp:h=1
+c
+c set 1
+101    0 -50  39 -101 63 imp:h=1 
+102    0 -50   101 -102 imp:h=1 bflcl 3
+103    0 -50   102 -103 imp:h=1 
+104    0 -50   103 -104 imp:h=1 bflcl 3  
+105    0 -50   104 -105 imp:h=1
+106    0 -50   105 -106 imp:h=1 bflcl 4
+107    0 -50   106 -107 imp:h=1
+108    0 -50   107 -108 imp:h=1 bflcl 4
+109    0 -50   108 -109 imp:h=1
+c
+c collimator 1
+110    0 -53   109 -110 imp:h=1  
+1101   8  -18.54 -50 53 109 -110 imp:h=1  
+c
+c rest of set 1
+111    0 -50   110 -111 imp:h=1
+112    0 -50   111 -112 imp:h=1 bflcl 3
+113    0 -50   112 -113 imp:h=1
+114    0 -50   113 -114 imp:h=1 bflcl 3
+115    0 -50   114 -115 imp:h=1
+116    0 -50   115 -116 imp:h=1 bflcl 4
+117    0 -50   116 -117 imp:h=1
+118    0 -50   117 -118 imp:h=1 bflcl 4
+119    0 -50   118 -119 imp:h=1
+c
+c image 1
+151  0 -50  119 -40 imp:h=1 
+c
+c right voids 
+92   0 -50   40 -52 imp:h=1
+c
+c outside world
+99   0  50:-51:52  imp:h=0
+
+c surface cards
+c outside cylinder, left plane, and right plane
+50 1  cx   90
+51 1  px   -2742.77
+52 1  px   2597.5  
+c collimator inner radii
+53   cx 3.4544 
+c object
+60 1  so  1.0000
+61 1  so  4.5000
+62 1  so  6.5000
+63 1  so 22.5000
+c source
+140   px   -2741.77
+c diffuser (between these two surfs)
+41 1  px   -2740.77
+42 1  px   -2739.50
+c beam preconditioner
+31  1 px   -1281.84
+32  1 px   -1187.1
+33  1 px   -1049.0
+34  1 px   -954.26
+35  1 px   -541.6 
+36  1 px   -410.8
+37  1 px   -380.8
+38  1 px   -250.0
+39  1 px   0. $also is object midplane, image 0
+c set 1
+101 1  px   200.0
+102 1  px   330.8
+103 1  px   360.8
+104 1  px   491.6
+105 1  px   556.6
+106 1  px   687.4
+107 1  px   717.4
+108 1  px   848.2
+109 1  px   1017.72 $ upstream surf of col 1
+110 1  px   1078.68 $ downstream surf of col 1
+111 1  px   1248.2
+112 1  px   1379.0
+113 1  px   1409.0
+114 1  px   1539.8
+115 1  px   1604.8
+116 1  px   1735.6
+117 1  px   1765.6
+118 1  px   1896.4
+119 1  px   2096.4
+c imagelocation 1
+40 1  px   2096.400001
+
+mode h
+phys:h 25000
+cut:h j 15000. $ proton energy cutoff is 15 GeV 
+sdef erg=23080. sur=39 pos=0 0 0 vec 1 0 0 
+      tr 1 par = h dir .99995
+m2  73181 1. $ tantalum diffuser
+m3  26056 1. $ iron for collimator
+m4  74184 -.976 28058 -.012 29063 -.012 estep=300 $ tungsten for fto
+m8  74184 -.976 28058 -.012 29063 -.012 estep=20 $ tungsten for col.
+m5  29063 1. estep=700 $ copper for fto
+m6  1001 -.026 6012 -.194 8016 -.78 $ foam for fto
+m7  7014 .78 8016 .22 $ air for fto
+fc91 collimator study
+f91:h 53 109 110 
+c91 0 1
+f191:h 109 110
+fs191 -53 t
+c191 0 1
+fc51 outside cylinder
+f51:h 50
+fc111 end of first drift cell after object:energy
+f111:h 101 
+e111 20000. 23000. 13i 24400.
+fc211 angles for surfs 101, 102, 103
+f211:h 101 102 103
+c211 .99995 20i 1.
+fc21 end of first magnet cell after object
+f21:h 102
+e21 20000. 23000. 13i 24400.
+fc101 back of image 1
+f101:h 40
+e101 20000. 23000. 13i 24400.
+fc421 exit of diffuser
+f421:h 42
+e421 20000. 23000. 13i 24400.
+fc341 beginning of last drift cell before object
+f341:h 38
+e341  20000. 23000. 13i 24400.
+nps 10000
+prdmp 2j -1
+tr1 40 30 100 0.853553391 -0.146446609 -0.5 -0.146446609 0.853553391 -0.5
+      0.5 0.5 0.707106781
+bfld1 quad field  -0.19584316  
+         vec  -.351755 0.462246 .814001
+         axs 0.853553391 -0.146446609 -0.5 refpnt 40 30 100 
+bfld3 quad field  0.11633412  
+         vec  0.5 0.5 0.707106781
+         axs 0.853553391 -0.146446609 -0.5 refpnt 40 30 100 
+         mxdeflc 6000 maxstep=1
+bfld4 quad field -0.11633412  
+         vec  0.5 0.5 0.707106781
+         axs 0.853553391 -0.146446609 -0.5 refpnt 40 30 100 
+         mxdeflc 6000 maxstep=1
+bfld2 quad field 0.07662637  
+         vec  -.351755 0.462246 .814001
+         axs 0.853553391 -0.146446609 -0.5 refpnt 40 30 100 
+fmesh4:h origin=0 -1 -11 kmesh 11 kints 5 tr 1
+         jmesh 1 jints 1 out=ik
+         imesh 2100 iints 20
+fmesh14:h origin 0 -11 -11 imesh 2100 jmesh 11 jints 15
+          kmesh 11 kints 15 out ik tr 1
+dbcn  41j  -1.  5j  0.  21j  -1.   $ DO NOT OVERRIDE THREAD-SAFE CHECKING
+tropt   nreact  remove

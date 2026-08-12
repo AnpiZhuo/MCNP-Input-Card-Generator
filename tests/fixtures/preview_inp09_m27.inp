@@ -1,0 +1,216 @@
+quad fringe field kick test problem -- DBCN 29=1 
+c based on work Pete Walstrom did with
+c Marylie Cosy
+c exp 955 test problem.  24" W collimator and object. 
+c image should be the inverse of the object
+c cell cards
+c left void 
+91   0  -50 51 -41 imp:h=1
+c diffuser
+100   2 -16.654 -50  41 -42 imp:h=1
+c beam preconditioner
+31   0 -50 42 -31 imp:h=1 
+32   0 -50 31 -32 imp:h=1 
+33   0 -50 32 -33 imp:h=1 
+34   0 -50 33 -34 imp:h=1 
+35   0 -50 34 -35 imp:h=1 
+36   0 -50 35 -36 imp:h=1
+37   0 -50 36 -37 imp:h=1 
+38   0 -50 37 -38 imp:h=1 
+39   0 -50 38 -39 63 imp:h=1 
+c
+c object
+40   7 -.00125  -60 -39 imp:h=1
+41   4 -18.54 60 -61 -39 imp:h=1
+42   5 -8.92  61 -62 -39 imp:h=1
+43   6 -.50   62 -63 -39 imp:h=1
+44   6 -.50   62 -63  39 imp:h=1
+45   5 -8.92  61 -62  39 imp:h=1
+46   4 -18.54 60 -61  39 imp:h=1
+47   7 -.00125  -60  39 imp:h=1
+c
+c set 1
+101    0 -50  39 -101 63 imp:h=1 
+102    0 -50   101 -102 imp:h=1 
+103    0 -50   102 -103 imp:h=1 
+104    0 -50   103 -104 imp:h=1  
+105    0 -50   104 -105 imp:h=1
+106    0 -50   105 -106 imp:h=1  
+107    0 -50   106 -107 imp:h=1
+108    0 -50   107 -108 imp:h=1  
+109    0 -50   108 -109 imp:h=1
+c
+c collimator 1
+110    0 -53   109 -110 imp:h=1  
+1101   8  -18.54 -50 53 109 -110 imp:h=1  
+c
+c rest of set 1
+111    0 -50   110 -111 imp:h=1
+112    0 -50   111 -112 imp:h=1  
+113    0 -50   112 -113 imp:h=1
+114    0 -50   113 -114 imp:h=1  
+115    0 -50   114 -115 imp:h=1
+116    0 -50   115 -116 imp:h=1  
+117    0 -50   116 -117 imp:h=1
+118    0 -50   117 -118 imp:h=1  
+119    0 -50   118 -119 imp:h=1
+c
+c image 1
+151  0 -50  119 -40 imp:h=1 
+c
+c right voids 
+92   0 -50   40 -52 imp:h=1
+c
+c outside world
+99   0  50:-51:52  imp:h=0
+
+c surface cards
+c outside cylinder, left plane, and right plane
+50   cz   90
+51   pz   -2742.77
+52   pz   2097.5  
+c collimator inner radii
+53   cz 3.4544 
+c object
+60   so  1.0000
+61   so  4.5000
+62   so  6.5000
+63   so 22.5000
+c source
+140   pz   -2741.77
+c diffuser (between these two surfs)
+41   pz   -2740.77
+42   pz   -2739.50
+c beam preconditioner
+31   pz   -1281.84
+32   pz   -1187.1
+33   pz   -1049.0
+34   pz   -954.26
+35   pz   -541.6 
+36   pz   -410.8
+37   pz   -380.8
+38   pz   -250.0
+39   pz   0. $also is object midplane, image 0
+c set 1
+101   pz   200.0
+102   pz   330.8
+103   pz   360.8
+104   pz   491.6
+105   pz   556.6
+106   pz   687.4
+107   pz   717.4
+108   pz   848.2
+109   pz   1017.72 $ upstream surf of col 1
+110   pz   1078.68 $ downstream surf of col 1
+111   pz   1248.2
+112   pz   1379.0
+113   pz   1409.0
+114   pz   1539.8
+115   pz   1604.8
+116   pz   1735.6
+117   pz   1765.6
+118   pz   1896.4
+119   pz   2096.4
+c image location 1
+40   pz   2096.400001
+
+mode h
+phys:h 25000
+cut:h j 15000. $ proton energy cutoff is 15 GeV 
+sdef erg=23080. sur=39 pos=d1 vec fpos d2 par = h dir .9999875 
+si1 L 0   0   0
+      2   0   0
+      1.414213562   1.414213562   0
+      0   2   0
+     -1.414213562   1.414213562   0
+     -2   0   0
+     -1.414213562   -1.414213562   0
+      0   -2   0
+      1.414213562   -1.414213562   0
+      6   0   0
+      5.196152423   3   0
+      3   5.196152423   0
+      0   6   0
+     -3   5.196152423   0
+     -5.196152423   3   0
+     -6   0   0
+     -5.196152423   -3   0
+     -3   -5.196152423   0
+      0   -6   0
+      3   -5.196152423   0
+      5.196152423   -3   0
+sp1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
+ds2 L 0   0   1
+      0.00350018   0   0.999993874
+      0.002475003   -0.002475003   0.999993874
+      0   -0.00350018   0.999993874
+      -0.002475003   -0.002475003   0.999993874
+      -0.00350018   0   0.999993874
+      -0.002475003   0.002475003   0.999993874
+      0   0.00350018   0.999993874
+      0.002475003   0.002475003   0.999993874
+      0.010500368   0   0.99994487
+      0.009093627   -0.005250256   0.999944869
+      0.005250256   -0.009093627   0.999944869
+      0   -0.010500368   0.99994487
+      -0.005250256   -0.009093627   0.999944869
+      -0.009093627   -0.005250256   0.999944869
+      -0.010500368   0   0.99994487
+      -0.009093627   0.005250256   0.999944869
+      -0.005250256   0.009093627   0.999944869
+      0   0.010500368   0.99994487
+      0.005250256   0.009093627   0.999944869
+      0.009093627   0.005250256   0.999944869 
+m2  73181 1. $ tantalum diffuser
+m3  26056 1. $ iron for collimator
+m4  74184 -.976 28058 -.012 29063 -.012 estep=300 $ tungsten for fto
+m8  74184 -.976 28058 -.012 29063 -.012 estep=20 $ tungsten for col.
+m5  29063 1. estep=700 $ copper for fto
+m6  1001 -.026 6012 -.194 8016 -.78 $ foam for fto
+m7  7014 .78 8016 .22 $ air for fto
+fc91 collimator study
+f91:h 53 109 110 
+c91 0 1
+f191:h 109 110
+fs191 -53 t
+c191 0 1
+fc51 outside cylinder
+f51:h 50
+fc111 end of first drift cell after object:energy
+f111:h 101 
+e111 20000. 23000. 13i 24400.
+fc211 angles for surfs 101, 102, 103
+f211:h 101 102 103
+c211 .99995 20i 1.
+fc21 end of first magnet cell after object
+f21:h 102
+e21 20000. 23000. 13i 24400.
+fc101 back of image 1
+f101:h 40
+e101 20000. 23000. 13i 24400.
+fc421 exit of diffuser
+f421:h 42
+e421 20000. 23000. 13i 24400.
+fc341 beginning of last drift cell before object
+f341:h 38
+e341  20000. 23000. 13i 24400.
+prdmp 2j -1
+nps 5000
+void
+print
+fmesh4:h origin=-.01 -.01 2096.4 imesh .01 iints 10 
+         jmesh .01 jints 10
+         kmesh 2096.5  
+fmesh14:h origin=5.98 -.02 2096.4 imesh 6.02 iints 10 
+         jmesh .01 jints 10
+         kmesh 2096.5  
+bflcl 3j 1 j 1 j 12 j 12 10j 3 j 3 j 14 j 14 4j 3 j 3 j 14 j 14
+bfld1 quadff field  0.19584316   
+        ffedges = 31 2i 34 
+bfld12 quadff field -0.07662637   
+        ffedges = 35 2i 38 
+bfld14 quadff field  -0.11633412   
+        ffedges = 101 2i 104  111 2i 114  maxstep=1
+bfld3 quadff field 0.11633412   
+        ffedges = 105 2i 108  115 2i 118  maxstep=1
+

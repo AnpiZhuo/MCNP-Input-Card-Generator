@@ -203,11 +203,75 @@ def _pymcnp_surf_to_dict(surf):
     return info
 
 
+def _surface_extent_values(surf_type: str, params: list) -> list:
+    """按曲面类型返回 extent 相关数值（位移类：坐标/偏移/半径）。
+
+    方向向量类（RCC/REC/TRC 的 h、BOX 的 a1/a2/a3、WED 的 v1/v2/v3、
+    RHP/HEX 的 r/s/t）**不单独取模**，而与基点合成角点（顶点 = base + Σ向量）
+    后参与 max-abs——否则宏体轴长/方向会被当坐标撑大 bound。
+    GQ/SQ 二次型系数非坐标，由调用方跳过。未知类型保守取全部参数。
+    """
+    try:
+        p = [float(v) for v in params]
+    except (TypeError, ValueError):
+        return []
+    if not p:
+        return []
+    # 位移类：全部参数直接参与
+    if surf_type in ("PX", "PY", "PZ", "SO", "CX", "CY", "CZ",
+                     "SX", "SY", "SZ", "S", "C/X", "C/Y", "C/Z",
+                     "P_1", "RPP", "SPH", "ELL", "X", "Y", "Z"):
+        return p
+    if surf_type in ("KX", "KY", "KZ"):
+        return p[:1]          # 顶点坐标，跳过 t²/sgn
+    if surf_type in ("K/X", "K/Y", "K/Z"):
+        return p[:3]          # 顶点，跳过 t²/sgn
+    if surf_type in ("TX", "TY", "TZ"):
+        return p[:5]          # 中心 + 主/次半径，跳过第三半径占位
+    if surf_type == "P_0":
+        return [p[3]] if len(p) >= 4 else p   # 跳过法向 A/B/C
+    if surf_type == "ARB":
+        return p[:24]         # 8 顶点坐标，跳过面定义
+    # ── Macrobody：方向向量与基点合成角点 ──
+    if surf_type in ("RCC", "TRC"):
+        v, h = p[:3], p[3:6]
+        radii = p[6:]
+        return list(v) + [v[i] + h[i] for i in range(3)] + list(radii)
+    if surf_type == "REC":
+        v, h = p[:3], p[3:6]
+        v1, v2 = p[6:9], p[9:12]
+        return (list(v) + [v[i] + h[i] for i in range(3)]
+                + [v[i] + v1[i] + v2[i] for i in range(3)]
+                + list(v1) + list(v2))
+    if surf_type == "WED":
+        v = p[:3]
+        v1, v2, v3 = p[3:6], p[6:9], p[9:12]
+        return (list(v) + [v[i] + v1[i] + v2[i] for i in range(3)]
+                + [v[i] + v3[i] for i in range(3)]
+                + [v[i] + v1[i] + v2[i] + v3[i] for i in range(3)])
+    if surf_type == "BOX":
+        v = p[:3]
+        a1, a2, a3 = p[3:6], p[6:9], p[9:12]
+        return list(v) + [v[i] + a1[i] + a2[i] + a3[i] for i in range(3)]
+    if surf_type in ("RHP", "HEX"):
+        v, h = p[:3], p[3:6]
+        r, s, t = p[6:9], p[9:12], p[12:15]
+        vals = list(v) + [v[i] + h[i] for i in range(3)]
+        for sx in (-1, 1):
+            for sy in (-1, 1):
+                for sz in (-1, 1):
+                    vals += [v[i] + sx * r[i] + sy * s[i] + sz * t[i] for i in range(3)]
+        return vals
+    return p  # 未知类型保守取全部
+
+
 def _compute_bound_from_surfaces(surf_dicts: list, default: float = 500) -> float:
     """根据曲面参数的最大坐标估算 FreeCAD 包围盒半边长。
 
-    启发式：取所有数值参数绝对值最大值 *1.3 + 100，再与默认值取大。
-    保证用户画的大几何不被 FreeCAD 的 [-B,B]³ 盒子裁剪。
+    只对位移类参数（空间坐标/偏移/半径）取 max-abs；宏体方向向量与基点合成
+    角点后参与，避免把轴长/方向当坐标撑大 bound（shield_20m RCC h=(0,0,4000)
+    是轴长非坐标 → B 从 5300 修正为 2700）。GQ/SQ 参数是二次型系数非坐标，跳过。
+    最终 max*1.3+100 与 default 取大，保证大几何不被 FreeCAD 的 [-B,B]³ 盒子裁剪。
     """
     max_coord = 0.0
     for s in surf_dicts:
@@ -215,7 +279,7 @@ def _compute_bound_from_surfaces(surf_dicts: list, default: float = 500) -> floa
         # 否则会把 bound 撑到上万，导致所有几何用巨大盒子渲染而失真
         if s.get("type") in ("GQ", "SQ"):
             continue
-        for v in s.get("params", []) or []:
+        for v in _surface_extent_values(s.get("type", ""), s.get("params", []) or []):
             try:
                 f = float(v)
             except (TypeError, ValueError):

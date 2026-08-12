@@ -1,0 +1,34 @@
+C ~20m concrete shield reproduction (MCNP cm = ~2000 coordinate units)
+C synthetic control: large RPP + cavity + pipes, matching user-reported size
+C Cell cards
+C 1: concrete shield block (inside outer 2000-unit cube, minus cavity/pipes)
+1    1  -2.30   1 -2 3 -4 5 -6  #2 #3 #4   imp:n=1
+C 2: equipment room cavity (air, RPP)
+2    0        -1007                        imp:n=1
+C 3: vertical service shaft (air, C/Z pipe r=120)
+3    0        -1008                        imp:n=1
+C 4: horizontal cooling duct (air, RCC r=180)
+4    0        -1009                        imp:n=1
+C 5: outside world void
+9000 0        -1:2:-3:4:-5:6               imp:n=0
+
+C Surface cards
+C outer boundary, 2000-unit cube (40m span)
+1  px  -2000.0
+2  px   2000.0
+3  py  -2000.0
+4  py   2000.0
+5  pz  -2000.0
+6  pz   2000.0
+C equipment room RPP
+1007  rpp  -800.0  800.0  -800.0  800.0  -600.0  1200.0
+C vertical shaft: C/Z radius 120
+1008  cz   120.0
+C horizontal duct: RCC base(0,0,-2000) axis z length 4000 radius 180
+1009  rcc  0.0 0.0 -2000.0  0.0 0.0 4000.0  180.0
+
+C Data cards
+mode n
+imp:n 1 1 1 1 0
+nps 1000
+print
