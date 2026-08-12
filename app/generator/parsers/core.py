@@ -123,7 +123,7 @@ def _parse_sisp_structured(sisp_lines: list[str]) -> list[dict]:
         if kind == "SI":
             typ = "L"
             vals = toks
-            if toks and toks[0].upper() in ("L", "H", "A", "S", "Q", "T", "F"):
+            if toks and toks[0].upper() in ("L", "H", "A", "S", "Q", "T", "F", "V"):
                 typ = toks[0].upper(); vals = toks[1:]
             e["si"] = {"type": typ, "values": vals}
         elif kind == "SP":

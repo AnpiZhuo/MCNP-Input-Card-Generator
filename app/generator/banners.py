@@ -81,6 +81,11 @@ def skipped_card_banner(kind: str, content: str) -> str:
     return f"C  SKIPPED (not a valid {kind} card): {content}"
 
 
+def multi_source_comment_banner(n: int) -> str:
+    """C  {n} sources, probability keyed to D1（多源概率键控注释）"""
+    return f"C  {n} sources, probability keyed to D1"
+
+
 # ── 识别：判断一行 C 注释是否为生成器节头 ────────────────────
 # 精确节头集合（大小写不敏感，锚定全行，防误伤用户注释如 "C  Cell Cards are useful"）
 _EXACT_BANNERS = (
@@ -120,6 +125,7 @@ _DYNAMIC_PATTERNS = [
     re.compile(r"^C\s+Time mesh: \d+ \w+ intervals, .+ to .+ shakes$", re.IGNORECASE),
     re.compile(r"^C\s+Time mesh: \d+ user-defined points$", re.IGNORECASE),
     re.compile(r"^C\s+SKIPPED \(not a valid [ET]n card\): .*$", re.IGNORECASE),
+    re.compile(r"^C\s+\d+ sources, probability keyed to D1$", re.IGNORECASE),
 ]
 
 

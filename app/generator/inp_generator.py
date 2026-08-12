@@ -18,7 +18,7 @@ from .banners import (
     TIME_MESH_SKIP_BANNER, TIME_MESH_INVALID_BANNER,
     cell_cards_banner, surface_cards_banner, energy_mesh_banner,
     energy_mesh_custom_banner, time_mesh_banner, time_mesh_custom_banner,
-    skipped_card_banner,
+    skipped_card_banner, multi_source_comment_banner,
 )
 
 
@@ -339,15 +339,21 @@ def _adv_field(adv: AdvancedSettings, spec) -> tuple:
 
 
 def _generate_distribution_sdef(adv: AdvancedSettings) -> list[str]:
-    """分布源模式：从结构化字段生成 SDEF + 反序列化 SI/SP 文本"""
+    """分布源模式：从结构化字段生成 SDEF + 反序列化 SI/SP 文本。
+
+    字段序 = SDEF_FIELD_SPECS 序（POS 首位，与多源一致）；POS 四态含 F-dist 分支
+    （根因 #2：`POS=F D1` → `_px="F" _py="D1"` 原样重建）；D1 键控链存在时重发
+    multi_source_comment_banner（根因 #5）。
+    """
     parts = ["SDEF"]
-    if adv.sdef_par: parts.append(f"PAR={adv.sdef_par}")
-    if adv.sdef_erg: parts.append(f"ERG={adv.sdef_erg}")
-    # 分布引用用 x=/y=/z=，普通数值用 POS=
+    # POS 特殊（先于表驱动，占 SDEF_FIELD_SPECS 首位）
     _px, _py, _pz = adv.sdef_pos_x, adv.sdef_pos_y, adv.sdef_pos_z
     _all_same_d = _px and _py and _pz and _px == _py == _pz and _is_d_ref(_px)
     _pos_ref = any(_is_d_ref(v) for v in [_px, _py, _pz] if v)
-    if _all_same_d:
+    if _px and _py and not _pz and re.match(r'^F\d*$', _px, re.IGNORECASE) and _is_d_ref(_py):
+        # F-dist：POS=F D1（多源 `POS=F D1` 原样回放，逐轴重组漂移消除）
+        parts.append(f"POS={_px} {_py}")
+    elif _all_same_d:
         parts.append(f"POS={_px}")
     elif _pos_ref:
         if _px: parts.append(f"X={_px}")
@@ -357,27 +363,24 @@ def _generate_distribution_sdef(adv: AdvancedSettings) -> list[str]:
         pos_parts = [p for p in [_px, _py, _pz] if p]
         if len(pos_parts) == 3:
             parts.append(f"POS={' '.join(pos_parts)}")
-    if adv.sdef_wgt: parts.append(f"WGT={adv.sdef_wgt}")
-    if adv.sdef_dir: parts.append(f"DIR={adv.sdef_dir}")
-    if adv.sdef_cel: parts.append(f"CEL={adv.sdef_cel}")
-    if adv.sdef_tme: parts.append(f"TME={adv.sdef_tme}")
-    if adv.sdef_vec: parts.append(f"VEC={adv.sdef_vec}")
-    if adv.sdef_axs: parts.append(f"AXS={adv.sdef_axs}")
-    if adv.sdef_rad: parts.append(f"RAD={adv.sdef_rad}")
-    if adv.sdef_ext: parts.append(f"EXT={adv.sdef_ext}")
-    if adv.sdef_sur: parts.append(f"SUR={adv.sdef_sur}")
-    if adv.sdef_nrm: parts.append(f"NRM={adv.sdef_nrm}")
-    if adv.sdef_tr: parts.append(f"TR={adv.sdef_tr}")
-    if adv.sdef_ccc: parts.append(f"CCC={adv.sdef_ccc}")
-    if adv.sdef_ara: parts.append(f"ARA={adv.sdef_ara}")
-    if adv.sdef_rate: parts.append(f"RATE={adv.sdef_rate}")
-    if adv.sdef_extra: parts.append(adv.sdef_extra)
+    # 其余字段按 SDEF_FIELD_SPECS 序发射（值非空才发）
+    for spec in SDEF_FIELD_SPECS:
+        keyword = spec[0]
+        if keyword == "POS":
+            continue
+        value = _adv_field(adv, spec)
+        if value:
+            parts.append(f"{keyword}={value}")
 
     lines = ["  ".join(parts)]
 
     # 结构化分布优先（新），旧 sdef_raw_text 兜底（兼容旧数据）
     if (adv.sdef_distributions or "").strip():
-        lines.extend(_generate_structured_distributions(adv.sdef_distributions))
+        dist_lines = _generate_structured_distributions(adv.sdef_distributions)
+        lines.extend(dist_lines)
+        # 注释重发（根因 #5）：D1 键控链存在（SP 卡为 D1 引用）时发 multi_source_comment_banner。
+        # 保守触发：≥2 条结构化分布且存在 D1 引用 SP 卡才发，单分布/无键控链不发（样例输出不变）。
+        lines.extend(_multi_source_comment_reemit(adv.sdef_distributions))
     elif adv.sdef_raw_text:
         # 反序列化 SI/SP 对，自动加回 SI{n}/SP{n} 前缀
         try:
@@ -398,6 +401,34 @@ def _generate_distribution_sdef(adv: AdvancedSettings) -> list[str]:
             pass
 
     return lines
+
+
+def _multi_source_comment_reemit(dist_json: str) -> list[str]:
+    """分布回放后重发多源概率键控注释（根因 #5）。
+
+    结构化分布 ≥2 条且存在 SP 卡为 D1 引用（`sp.values == ["D1"]` 键控链）时，
+    发 multi_source_comment_banner(n)，n = 首张含数值 SP 卡的 values 长度。
+    保守触发：单分布无 D1 键控链（avr13/prob41c/inp24）不发。
+    """
+    try:
+        entries = json.loads(dist_json)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(entries, list) or len(entries) < 2:
+        return []
+    has_d1_chain = any(
+        (e.get("sp") or {}).get("values") == ["D1"]
+        for e in entries
+    )
+    if not has_d1_chain:
+        return []
+    n = 0
+    for e in entries:
+        sp_vals = (e.get("sp") or {}).get("values") or []
+        if sp_vals and sp_vals != ["D1"]:
+            n = len(sp_vals)
+            break
+    return [multi_source_comment_banner(n)] if n else []
 
 
 def _collect_source_values(sources: list[SourceData]) -> tuple[dict[str, list[str]], list[str], str]:
@@ -478,7 +509,7 @@ def _build_multi_sdef_parts(sources: list[SourceData], field_values: dict[str, l
         else PAR→`PAR={default}`（无条件）、WGT→`WGT={default}`（无条件）、
         ERG/DIR→`{kw}={default}`（default 非空才发）
       - 次组（CEL..RATE）：在 dist_names → `{kw}=D{di}`；else vals[0] 非空 → `{kw}={vals[0]}`
-      - sdef_extra：取 sources[0].sdef_extra 原样追加
+      - sdef_extra：取 sources[0].sdef_extra，剥离已在 dist_names 的 `KEY=` 片段（根因 #3）
     """
     sdef_parts = []
     di = 1
@@ -515,28 +546,52 @@ def _build_multi_sdef_parts(sources: list[SourceData], field_values: dict[str, l
         elif vals[0]:
             sdef_parts.append(f"{pn}={vals[0]}")
 
-    # 多源共用同一份 sdef_extra（取第一个源）
-    if sdef_extra:
-        sdef_parts.append(sdef_extra)
+    # 多源共用同一份 sdef_extra（取第一个源）；剥离已在 dist_names 的 `KEY=` 片段
+    stripped = _strip_sdef_extra_dist_keys(sdef_extra, dist_names)
+    if stripped:
+        sdef_parts.append(stripped)
     return sdef_parts
+
+
+def _strip_sdef_extra_dist_keys(sdef_extra: str, dist_names: set[str]) -> str:
+    """剥离 sdef_extra 中 KEY 属于 dist_names（分布关键字）的 `KEY=` 片段（根因 #3）。
+
+    片段边界 = `KEY=` 起始位置（`\b[A-Za-z]+=`），KEY= 到下一个 KEY= 前为一个片段。
+    标量-标量重复（KEY 非分布）不去——走 sdef_extra 天然 round-trip。
+    """
+    if not sdef_extra:
+        return ""
+    matches = list(re.finditer(r'\b([A-Za-z]+)=', sdef_extra))
+    if not matches:
+        return sdef_extra.strip()
+    segments = []
+    for i, m in enumerate(matches):
+        start = m.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(sdef_extra)
+        segments.append(sdef_extra[start:end].strip())
+    kept = [seg for seg in segments
+            if seg.partition("=")[0].strip().upper() not in dist_names]
+    return " ".join(kept)
 
 
 def _build_multi_sisp_cards(dist_params: list[tuple[str, list[str]]],
                             prob_norm: list[str], n_sources: int) -> list[str]:
-    """(e) SI/SP 构造（等价于结构拆解前 501-517 行）。
+    """(e) SI/SP 构造（等价于结构拆解前 501-517 行 + SI 值扁平化）。
 
     SI 卡序 = dist_params 序；POS_VEC → `SI{di}  V  平坦值`，其余 → `SI{di}  L  平坦值`；
+    每个 value 先 split() 拆 token 再 '  '.join 全部 token（与回放字节一致）；
     首张 SI 的 SP 带 prob_norm（`SP{di}  {prob}`），其余 `SP{di}  D1`；
-    dist_params 非空 → 末尾 `C  {n_sources} sources, probability keyed to D1`。
+    dist_params 非空 → 末尾 multi_source_comment_banner(n_sources)。
     """
     lines = []
     si_di = 1
     first_dist = True
     for param_name, values in dist_params:
+        flat = "  ".join(tok for v in values for tok in v.split())
         if param_name == "POS_VEC":
-            lines.append(f"SI{si_di}  V  {'  '.join(values)}")
+            lines.append(f"SI{si_di}  V  {flat}")
         else:
-            lines.append(f"SI{si_di}  L  {'  '.join(values)}")
+            lines.append(f"SI{si_di}  L  {flat}")
         if first_dist:
             lines.append(f"SP{si_di}  {'  '.join(prob_norm)}")
             first_dist = False
@@ -545,7 +600,7 @@ def _build_multi_sisp_cards(dist_params: list[tuple[str, list[str]]],
         si_di += 1
 
     if dist_params:
-        lines.append(f"C  {n_sources} sources, probability keyed to D1")
+        lines.append(multi_source_comment_banner(n_sources))
 
     return lines
 
