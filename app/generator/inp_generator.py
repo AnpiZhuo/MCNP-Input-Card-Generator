@@ -244,6 +244,50 @@ def _is_d_ref(val: str) -> bool:
     return bool(re.match(r'^D\d+$', val.strip().upper())) if val else False
 
 
+def _build_sdef_parts(src: SourceData, include_special: bool) -> list[str]:
+    """单源 SDEF 字段构造（F#4 seam）。include_special=True 时含 6 扩展字段 + sdef_extra。
+
+    字段顺序/条件与合并前完全一致：PAR ERG [POS 三态] DIR WGT CEL TME VEC AXS RAD EXT
+    [+ SUR NRM TR CCC ARA RATE sdef_extra]。POS 三态：
+      _all_same_d  → POS=Dn（三分量同 D 引用）
+      _pos_ref     → X=/Y=/Z=（逐轴 D 引用或 F-续值）
+      普通          → POS=x y z（仅三分量齐全时）
+    """
+    parts = ["SDEF"]
+    if src.par:   parts.append(f"PAR={src.par}")
+    if src.erg:   parts.append(f"ERG={src.erg}")
+    _all_same_d = (src.pos_x and src.pos_y and src.pos_z
+                   and src.pos_x == src.pos_y == src.pos_z and _is_d_ref(src.pos_x))
+    _pos_ref = any(_is_d_ref(v) for v in (src.pos_x, src.pos_y, src.pos_z) if v)
+    if _all_same_d:
+        parts.append(f"POS={src.pos_x}")
+    elif _pos_ref:
+        if src.pos_x: parts.append(f"X={src.pos_x}")
+        if src.pos_y: parts.append(f"Y={src.pos_y}")
+        if src.pos_z: parts.append(f"Z={src.pos_z}")
+    else:
+        pos_parts = [v for v in (src.pos_x, src.pos_y, src.pos_z) if v]
+        if len(pos_parts) == 3:
+            parts.append(f"POS={' '.join(pos_parts)}")
+    if src.dir_:  parts.append(f"DIR={src.dir_}")
+    if src.wgt:   parts.append(f"WGT={src.wgt}")
+    if src.cel:   parts.append(f"CEL={src.cel}")
+    if src.tme:   parts.append(f"TME={src.tme}")
+    if src.vec:   parts.append(f"VEC={src.vec}")
+    if src.axs:   parts.append(f"AXS={src.axs}")
+    if src.rad:   parts.append(f"RAD={src.rad}")
+    if src.ext:   parts.append(f"EXT={src.ext}")
+    if include_special:
+        if src.sur:  parts.append(f"SUR={src.sur}")
+        if src.nrm:  parts.append(f"NRM={src.nrm}")
+        if src.tr:   parts.append(f"TR={src.tr}")
+        if src.ccc:  parts.append(f"CCC={src.ccc}")
+        if src.ara:  parts.append(f"ARA={src.ara}")
+        if src.rate: parts.append(f"RATE={src.rate}")
+        if src.sdef_extra: parts.append(src.sdef_extra)
+    return parts
+
+
 def _generate_single_source(src: SourceData) -> list[str]:
     """单源：存在 Dn 引用或特殊字段时手写 SDEF，否则也用等号格式"""
     has_d_or_extra = any(
@@ -251,63 +295,7 @@ def _generate_single_source(src: SourceData) -> list[str]:
                                src.cel, src.tme, src.rad, src.ext, src.axs, src.vec,
                                src.pos_x, src.pos_y, src.pos_z]
     ) or any([src.sur, src.nrm, src.tr, src.ccc, src.ara, src.rate, src.sdef_extra])
-    if has_d_or_extra:
-        # ── Dn 引用 → 手写 SDEF 行 ──
-        parts = ["SDEF"]
-        if src.par: parts.append(f"PAR={src.par}")
-        if src.erg: parts.append(f"ERG={src.erg}")
-        # 分布引用用 x=/y=/z=，普通数值用 POS=
-        _all_same_d = src.pos_x and src.pos_y and src.pos_z and src.pos_x == src.pos_y == src.pos_z and _is_d_ref(src.pos_x)
-        _pos_ref = any(_is_d_ref(v) for v in [src.pos_x, src.pos_y, src.pos_z] if v)
-        if _all_same_d:
-            parts.append(f"POS={src.pos_x}")
-        elif _pos_ref:
-            if src.pos_x: parts.append(f"X={src.pos_x}")
-            if src.pos_y: parts.append(f"Y={src.pos_y}")
-            if src.pos_z: parts.append(f"Z={src.pos_z}")
-        else:
-            pos_parts = []
-            if src.pos_x: pos_parts.append(src.pos_x)
-            if src.pos_y: pos_parts.append(src.pos_y)
-            if src.pos_z: pos_parts.append(src.pos_z)
-            if len(pos_parts) == 3:
-                parts.append(f"POS={' '.join(pos_parts)}")
-        if src.dir_: parts.append(f"DIR={src.dir_}")
-        if src.wgt: parts.append(f"WGT={src.wgt}")
-        if src.cel: parts.append(f"CEL={src.cel}")
-        if src.tme: parts.append(f"TME={src.tme}")
-        if src.vec: parts.append(f"VEC={src.vec}")
-        if src.axs: parts.append(f"AXS={src.axs}")
-        if src.rad: parts.append(f"RAD={src.rad}")
-        if src.ext: parts.append(f"EXT={src.ext}")
-        if src.sur: parts.append(f"SUR={src.sur}")
-        if src.nrm: parts.append(f"NRM={src.nrm}")
-        if src.tr: parts.append(f"TR={src.tr}")
-        if src.ccc: parts.append(f"CCC={src.ccc}")
-        if src.ara: parts.append(f"ARA={src.ara}")
-        if src.rate: parts.append(f"RATE={src.rate}")
-        if src.sdef_extra: parts.append(src.sdef_extra)
-        return ["  ".join(parts)]
-
-    # ── 正常数值 → 手写 SDEF（统一使用 var=val 格式，对齐 C810）──
-    parts = ["SDEF"]
-    if src.par: parts.append(f"PAR={src.par}")
-    if src.erg: parts.append(f"ERG={src.erg}")
-    pos_parts = []
-    if src.pos_x: pos_parts.append(src.pos_x)
-    if src.pos_y: pos_parts.append(src.pos_y)
-    if src.pos_z: pos_parts.append(src.pos_z)
-    if len(pos_parts) == 3:
-        parts.append(f"POS={' '.join(pos_parts)}")
-    if src.dir_: parts.append(f"DIR={src.dir_}")
-    if src.wgt: parts.append(f"WGT={src.wgt}")
-    if src.cel: parts.append(f"CEL={src.cel}")
-    if src.tme: parts.append(f"TME={src.tme}")
-    if src.vec: parts.append(f"VEC={src.vec}")
-    if src.axs: parts.append(f"AXS={src.axs}")
-    if src.rad: parts.append(f"RAD={src.rad}")
-    if src.ext: parts.append(f"EXT={src.ext}")
-    return ["  ".join(parts)]
+    return ["  ".join(_build_sdef_parts(src, include_special=has_d_or_extra))]
 
 
 def _generate_distribution_sdef(adv: AdvancedSettings) -> list[str]:
