@@ -1137,6 +1137,29 @@ def _wrap_long_lines(text: str) -> str:
 
 # ===== 主入口 =====
 
+def _raw_override_text(overrides: dict, key: str) -> str:
+    """空串/缺省/纯空白 = 无覆盖（现状语义）。"""
+    return (overrides.get(key) or "").strip()
+
+
+def _has_raw_override(overrides: dict, key: str) -> bool:
+    return bool(_raw_override_text(overrides, key))
+
+
+def _apply_raw_override(lines: list[str], overrides: dict, key: str,
+                        banner: str, generator) -> None:
+    """raw_overrides 守卫（收敛 8 处复制粘贴）。
+    key 有非空覆盖 → 打 RAW_*_BANNER + 追加覆盖文本（split("\\n")）；
+    否则走 generator()（返回待追加行列表），与现状语义逐字一致。
+    banner 是 RAW_*_BANNER 常量；generator 闭包内可含自身节头（如 cells 的 cell_cards_banner）。
+    """
+    if _has_raw_override(overrides, key):
+        lines.append(banner)
+        lines.extend(_raw_override_text(overrides, key).split("\n"))
+    else:
+        lines.extend(generator())
+
+
 def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
     """
     从 DeckData 聚合对象生成完整的 INP 文件内容。
@@ -1165,27 +1188,13 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
     lines.append(title)
 
     # 2. 栅元卡
-    raw = (overrides.get("cells") or "").strip()
-    if raw:
-        lines.append(RAW_CELL_BANNER)
-        lines.extend(raw.split("\n"))
-    else:
-        cell_lines = _generate_cells(cells)
-        if cell_lines:
-            lines.append(cell_cards_banner(len(cells)))
-            lines.extend(cell_lines)
+    _apply_raw_override(lines, overrides, "cells", RAW_CELL_BANNER, lambda: (
+        (lambda cl: ([cell_cards_banner(len(cells))] + cl) if cl else [])(_generate_cells(cells))))
     lines.append("")
 
     # 3. 曲面卡
-    raw = (overrides.get("surfaces") or "").strip()
-    if raw:
-        lines.append(RAW_SURF_BANNER)
-        lines.extend(raw.split("\n"))
-    else:
-        surf_lines = _generate_surfaces(surfaces_text)
-        if surf_lines:
-            lines.append(surface_cards_banner(len(surf_lines)))
-            lines.extend(surf_lines)
+    _apply_raw_override(lines, overrides, "surfaces", RAW_SURF_BANNER, lambda: (
+        (lambda sl: ([surface_cards_banner(len(sl))] + sl) if sl else [])(_generate_surfaces(surfaces_text))))
     lines.append("")
 
     # 4. 数据卡
@@ -1203,74 +1212,45 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
             if tr_line:
                 lines.append(tr_line)
 
-    raw = (overrides.get("materials") or "").strip()
-    if raw:
-        lines.append(RAW_MAT_BANNER)
-        lines.extend(raw.split("\n"))
-    else:
-        mat_lines = _generate_materials(materials)
-        if mat_lines: lines.extend(mat_lines)
+    _apply_raw_override(lines, overrides, "materials", RAW_MAT_BANNER,
+                        lambda: _generate_materials(materials))
 
-    raw = (overrides.get("sdef") or "").strip()
-    if raw:
-        lines.append(RAW_SDEF_BANNER)
-        lines.extend(raw.split("\n"))
-    else:
+    # sdef 分派（distribution/kcode/surface/fixed 四分支，封进闭包）
+    def _sdef_dispatch():
         _has_dist = bool(adv.sdef_raw_text) or bool(_dist_json_nonempty(adv.sdef_distributions))
         if adv.source_mode in ("distribution", "sdef") and _has_dist:
-            sdef_lines = _generate_distribution_sdef(adv)
+            return _generate_distribution_sdef(adv)
         elif adv.source_mode == "kcode" and adv.kcode_nsrc:
-            sdef_lines = _generate_kcode(adv)
+            return _generate_kcode(adv)
         elif adv.source_mode == "surface":
-            sdef_lines = _generate_ssw(adv) + _generate_ssr(adv)
+            return _generate_ssw(adv) + _generate_ssr(adv)
         else:
-            sdef_lines = _generate_sdef(sources)
-        if sdef_lines: lines.extend(sdef_lines)
+            return _generate_sdef(sources)
+    _apply_raw_override(lines, overrides, "sdef", RAW_SDEF_BANNER, _sdef_dispatch)
 
-    raw = (overrides.get("phys") or "").strip()
-    if raw:
-        lines.append(RAW_PHYS_BANNER)
-        lines.extend(raw.split("\n"))
-    else:
-        phys_lines = _generate_phys(adv)
-        if phys_lines: lines.extend(phys_lines)
+    _apply_raw_override(lines, overrides, "phys", RAW_PHYS_BANNER,
+                        lambda: _generate_phys(adv))
 
-    raw = (overrides.get("tally") or "").strip()
-    if raw:
-        lines.append(RAW_TALLY_BANNER)
-        lines.extend(raw.split("\n"))
-    else:
-        tally_lines = _generate_tallies(tally)
-        if tally_lines: lines.extend(tally_lines)
+    _apply_raw_override(lines, overrides, "tally", RAW_TALLY_BANNER,
+                        lambda: _generate_tallies(tally))
 
-    raw = (overrides.get("e0") or "").strip()
-    if raw:
-        lines.append(RAW_E0_BANNER)
-        lines.extend(raw.split("\n"))
-    else:
-        e0_lines = _generate_energy_mesh(tally)
-        if e0_lines: lines.extend(e0_lines)
+    _apply_raw_override(lines, overrides, "e0", RAW_E0_BANNER,
+                        lambda: _generate_energy_mesh(tally))
 
-    # En 分计数能量箱（仅当 tally 无有效原始文本覆盖时自动生成）
-    raw_tally = (overrides.get("tally") or "").strip()
-    if not raw_tally:
+    # En 分计数能量箱（仅当 tally 无有效原始文本覆盖时自动生成）—— 门控看 tally key，非 e0/cut
+    if not _has_raw_override(overrides, "tally"):
         en_lines = _generate_en_cards(tally)
         if en_lines: lines.extend(en_lines)
 
     # T0 全局时间网格 + Tn 分计数时间箱
-    if not raw_tally:
+    if not _has_raw_override(overrides, "tally"):
         t0_lines = _generate_time_mesh(tally)
         if t0_lines: lines.extend(t0_lines)
         tn_lines = _generate_tn_cards(tally)
         if tn_lines: lines.extend(tn_lines)
 
-    raw = (overrides.get("cut") or "").strip()
-    if raw:
-        lines.append(RAW_CUT_BANNER)
-        lines.extend(raw.split("\n"))
-    else:
-        cut_lines = _generate_cut(tally)
-        if cut_lines: lines.extend(cut_lines)
+    _apply_raw_override(lines, overrides, "cut", RAW_CUT_BANNER,
+                        lambda: _generate_cut(tally))
 
     # 其他卡片排在数据卡段最末尾（来自高级选项卡的手动输入）
     other_lines = _generate_other_cards(adv)
