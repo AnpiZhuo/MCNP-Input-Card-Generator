@@ -15,8 +15,10 @@ export interface DeckData {
 }
 
 /** 调用 Python 后端生成 INP */
+import { apiUrl } from "./api";
+
 export async function generateInp(deck: DeckData): Promise<string> {
-  const res = await fetch("http://localhost:5001/api/generate", {
+  const res = await fetch(apiUrl("/api/generate"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(deck),

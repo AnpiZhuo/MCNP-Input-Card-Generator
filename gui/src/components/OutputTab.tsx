@@ -1,6 +1,7 @@
 import React, { useState, useRef } from "react";
 import { parseOutp, type ParsedOutput } from "../utils/outputParser";
 import DocViewer from "./DocViewer";
+import { apiUrl } from "../utils/api";
 
 export default function OutputTab() {
   const [doc, setDoc] = useState<{path:string;title:string}|null>(null);
@@ -21,7 +22,7 @@ export default function OutputTab() {
       const text = await file.text();
       // 先尝试后端 pymcnp 解析
       try {
-        const r = await fetch("http://localhost:5001/api/parse-outp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ outp: text }), signal: AbortSignal.timeout(10000) });
+        const r = await fetch(apiUrl("/api/parse-outp"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ outp: text }), signal: AbortSignal.timeout(10000) });
         const j = await r.json();
         if (j.status === "ok" && j.tallies) { setParsed(j); setSelectedTally(Object.keys(j.tallies)[0]); return; }
       } catch {}

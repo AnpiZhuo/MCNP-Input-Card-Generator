@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
 import FloatingDialog from "./FloatingDialog";
+import { apiUrl } from "../utils/api";
 
 interface Props {
   content: string;
@@ -42,7 +43,7 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
 
   const saveToDir = async () => {
     try {
-      const r = await fetch("http://localhost:5001/api/save-inp", {
+      const r = await fetch(apiUrl("/api/save-inp"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -88,7 +89,7 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
         className: "btn btn-ghost btn-sm",
         onClick: () => {
           try {
-            fetch("http://localhost:5001/api/run-mcnp", {
+            fetch(apiUrl("/api/run-mcnp"), {
               method: "POST", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ inp: content, filename: safeName, outputDir: outputPath || "D:/MCNP/new/claude", mcnpExe: mcnpExe || "" }),
             }).then(r => r.json()).then(j => {

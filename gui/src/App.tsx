@@ -10,6 +10,7 @@ import { currentWindowLabel, clearStlSession } from "./utils/windows";
 import { DeckProvider, useDeck } from "./utils/DeckContext";
 import { buildGridsFromTally, buildTallyFromGrids } from "./utils/gridState";
 import { startPythonBackend, stopPythonBackend } from "./utils/backend";
+import { apiUrl } from "./utils/api";
 
 const TABS = [
   { key: "basic", label: "基本" },
@@ -51,7 +52,7 @@ function AppInner() {
   // MCNP 检测：后端就绪后才查（否则 mount 时 5001 未起 → 图标永远不更新）
   useEffect(() => {
     if (backendState !== "ready") return;
-    fetch("http://localhost:5001/api/mcnp-detect", {method:"POST"})
+    fetch(apiUrl("/api/mcnp-detect"), {method:"POST"})
       .then(r => r.json()).then(j => { if (j.status === "ok") setMcnpInfo(j); })
       .catch(() => {});
   }, [backendState]);
@@ -62,7 +63,7 @@ function AppInner() {
     const poll = async () => {
       for (let i = 0; i < 90 && !stopped; i++) {
         try {
-          const r = await fetch("http://localhost:5001/api/xsdir-check", { signal: AbortSignal.timeout(2000) });
+          const r = await fetch(apiUrl("/api/xsdir-check"), { signal: AbortSignal.timeout(2000) });
           if (r.ok) { setBackendState("ready"); return; }
         } catch { /* 未就绪，继续等 */ }
         await new Promise(res => setTimeout(res, 2000));
@@ -147,10 +148,10 @@ function AppInner() {
   // ── INP 导入：原生文件对话框 + 拖放共用同一解析链 ──
   const importInpText = useCallback(async (text: string) => {
     try {
-      const vr = await fetch('http://localhost:5001/api/validate-inp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ inp: text }) });
+      const vr = await fetch(apiUrl('/api/validate-inp'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ inp: text }) });
       const vj = await vr.json();
       if (vj.status === 'ok' && !vj.valid) { alert('⚠ INP 文件校验未通过:\n\n' + vj.errors.slice(0,5).join('\n')); return; }
-      const r = await fetch('http://localhost:5001/api/parse-inp', {
+      const r = await fetch(apiUrl('/api/parse-inp'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ inp: text }),
       });
@@ -182,7 +183,7 @@ function AppInner() {
   // 导入按钮 → Windows 原生文件选择对话框
   const handleImportNative = useCallback(async () => {
     try {
-      const r = await fetch('http://localhost:5001/api/choose-file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      const r = await fetch(apiUrl('/api/choose-file'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
       const j = await r.json();
       if (j.status !== 'ok') throw new Error(j.message);
       if (j.cancelled || !j.content) return;  // 用户取消
@@ -260,7 +261,7 @@ function AppInner() {
 
   const handleBrowse = async () => {
     try {
-      const r = await fetch("http://localhost:5001/api/choose-dir", {
+      const r = await fetch(apiUrl("/api/choose-dir"), {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ initialDir: outputPath }),
       });

@@ -2,6 +2,12 @@
  * Preview3D — Three.js 3D 预览窗口
  *
  * 优先从后端 FreeCAD STL 加载真实几何，不可用时回退到模拟几何体。
+ *
+ * 性能修复接线（契约 preview3d-performance.md §4/§5）：
+ * - TickGrid     刻度生命周期（dispose 台账 + 步长表扩到 1e6）
+ * - renderGate   dirty 按需渲染（idle 0 渲染）
+ * - cellMaterial 默认 opaque（消除透明 overdraw），面板半透明开关
+ * - computeCameraParams 几何归一化 + far/near ≤1e4（大坐标深度）
  */
 import React, { useRef, useEffect, useState, useCallback } from "react";
 import CrossSectionView from "./CrossSectionView";
@@ -31,6 +37,13 @@ import { getMatColor as getColor } from "../utils/materialColors";
 import { MaterialLegend, CellList } from "./MaterialPanel";
 import { useDeck } from "../utils/DeckContext";
 import { openCrossSection } from "../utils/windows";
+import { apiUrl } from "../utils/api";
+
+/* ---- 深模块（3D 性能修复） ---- */
+import { computeCameraParams } from "../three/cameraParams";
+import { buildCellMaterial, type TransparentMode } from "../three/cellMaterial";
+import { createRenderLoop } from "../three/renderGate";
+import { createTickGrid } from "../three/TickGrid";
 
 /* ---- plane eq formatting/parsing ---- */
 function planeToStr(plane: any): string {
@@ -91,13 +104,14 @@ function initScene(
   /* 场景 */
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x1a1a2e);
-  
-  /* 相机 — 尺寸由 ResizeObserver 驱动，初始用容器实际尺寸 */
+
+  /* 相机 — 初始用默认包围盒参数（realExt=10 → viewDist=35）；STL 加载后按实际几何 reframe */
   const rect = canvas.getBoundingClientRect();
   const w = Math.max(rect.width, 1);
   const h = Math.max(rect.height, 1);
-  const camera = new THREE.PerspectiveCamera(45, w / h, 0.1, viewDist * 100);
-  camera.position.set(viewDist * 0.6, viewDist * 0.6, viewDist * 0.5);
+  const initCam = computeCameraParams([0, 0, 0], [sceneExtent * 2, sceneExtent * 2, sceneExtent * 2]);
+  const camera = new THREE.PerspectiveCamera(45, w / h, initCam.near, initCam.far);
+  camera.position.set(initCam.position[0], initCam.position[1], initCam.position[2]);
   camera.lookAt(0, 0, 0);
   camera.up.set(0, 0, 1); // Z-up
 
@@ -118,8 +132,6 @@ function initScene(
   dirlight2.position.set(-viewDist * 0.5, viewDist * 0.2, -viewDist * 0.8);
   scene.add(dirlight2);
 
-  /* 网格 — 大范围覆盖 */
-  
   /* ---- 动态数轴线（正负双向无限延伸） ---- */
   const AXIS_COLORS = [0xff4444, 0x44ff44, 0x4488ff];
   const AXIS_LABELS = ["X", "Y", "Z"];
@@ -171,75 +183,19 @@ function initScene(
     });
   }
 
-  // 动态刻度标签容器
+  // 动态刻度：TickGrid 深模块（台账 + 完整 dispose，步长表扩到 1e6）
   const tickGroup = new THREE.Group();
   scene.add(tickGroup);
-
-  function makeNumberSprite(text: string, color: number, scale = 0.6): THREE.Sprite | null {
-    try {
-      const c = document.createElement("canvas"); c.width = 128; c.height = 48;
-      const ctx = c.getContext("2d");
-      if (!ctx) return null;
-      ctx.fillStyle = "rgba(0,0,0,0.4)";
-      ctx.fillRect(0, 4, 128, 40);
-      ctx.fillStyle = "#" + color.toString(16).padStart(6, "0");
-      ctx.font = "Bold 28px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.fillText(text, 64, 26);
-      const tex = new THREE.CanvasTexture(c);
-      const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false, sizeAttenuation: true });
-      const sprite = new THREE.Sprite(mat);
-      if (sprite && sprite.scale) sprite.scale.set(scale, scale * 0.35, 1);
-      return sprite;
-    } catch(e) { console.warn("[3D] makeNumberSprite error:", e); return null; }
-  }
+  const tickGrid = createTickGrid(tickGroup);
 
   function rebuildTicks() {
     try {
-    // 清除旧刻度
-    while (tickGroup.children.length) {
-      const child = tickGroup.children[0];
-      if ((child as THREE.Sprite).material) ((child as THREE.Sprite).material as THREE.Material).dispose();
-      tickGroup.remove(child);
-    }
-
-    // 严格步长查表：基于镜头视野可见高度，保证始终约 8~10 个刻度
-    const STEPS = [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 20, 50, 100, 200, 500];
-    const dist = camera.position.length();
-    const rawStep = dist / 10;
-    let step = STEPS[0];
-    for (const s of STEPS) { if (s >= rawStep) { step = s; break; } }
-    const tickDecimals = Math.max(0, Math.ceil(-Math.log10(step)));
-
-    const extent = dist * 2;
-    const tickLen = 0.15 * (dist / 8);
-
-    for (let ai = 0; ai < 3; ai++) {
-      const dir = axisDirs[ai];
-      const color = AXIS_COLORS[ai];
-      const perp1 = new THREE.Vector3();
-      const perp2 = new THREE.Vector3();
-      if (ai === 0) { perp1.set(0, 0, 1); perp2.set(0, 1, 0); }
-      else if (ai === 1) { perp1.set(1, 0, 0); perp2.set(0, 1, 0); }
-      else { perp1.set(1, 0, 0); perp2.set(0, 0, 1); }
-
-      const start = Math.ceil(-extent / step) * step;
-      for (let s = start; s <= extent; s += step) {
-        if (Math.abs(s) < step * 0.01) continue;
-        const pos = dir.clone().multiplyScalar(s);
-        const tA = pos.clone().add(perp1.clone().multiplyScalar(-tickLen));
-        const tB = pos.clone().add(perp1.clone().multiplyScalar(tickLen));
-        const tickGeo = new THREE.BufferGeometry().setFromPoints([tA, tB]);
-        const tickLine = new THREE.Line(tickGeo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.5 }));
-        tickGroup.add(tickLine);
-        const label = s.toFixed(tickDecimals);
-        const sprite = makeNumberSprite(label, color, dist / 12);
-        if (sprite) {
-          sprite.position.copy(pos.clone().add(perp1.clone().multiplyScalar(-tickLen * 2.5)).add(perp2.clone().multiplyScalar(-tickLen * 1.5)));
-          tickGroup.add(sprite);
-        }
-      }
-    }
-    } catch(e) { console.warn("[3D] rebuildTicks error:", e); }
+      const dist = camera.position.length();
+      tickGrid.rebuild({
+        dist,
+        axes: axisDirs.map((d, ai) => ({ dir: [d.x, d.y, d.z], color: AXIS_COLORS[ai] })),
+      });
+    } catch (e) { console.warn("[3D] rebuildTicks error:", e); }
   }
 
   rebuildTicks();
@@ -256,10 +212,9 @@ function initScene(
   controls.enableDamping = true;
   controls.dampingFactor = 0.05;
   controls.rotateSpeed = 0.4;
-  controls.minDistance = sceneExtent * 0.1;
-  controls.maxDistance = sceneExtent * 50;
+  controls.minDistance = initCam.minDistance;
+  controls.maxDistance = initCam.maxDistance;
   controls.target.set(0, 0, 0);
-  controls.addEventListener("change", scheduleRebuild);
 
   /* ---- WASD+Shift+Space 镜头控制 ---- */
   const keys: Record<string, boolean> = {};
@@ -267,6 +222,7 @@ function initScene(
     if (e.code === "KeyW" || e.code === "KeyA" || e.code === "KeyS" || e.code === "KeyD") keys[e.code] = true;
     if (e.code === "ShiftLeft" || e.code === "ShiftRight") keys.shift = true;
     if (e.code === "Space") keys.space = true;
+    markDirty();  // 任一镜头键按下 → 驱动一帧渲染（持续移动由 onRender 内续 dirty）
   }
   function onKeyUp(e: KeyboardEvent) {
     if (e.code === "KeyW" || e.code === "KeyA" || e.code === "KeyS" || e.code === "KeyD") keys[e.code] = false;
@@ -276,11 +232,27 @@ function initScene(
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("keyup", onKeyUp);
 
+  /* ---- 半透明模式（默认 opaque）---- */
+  let transparentMode: TransparentMode = "opaque";
+  function applyMeshMaterial(mesh: THREE.Object3D, color: string) {
+    const spec = buildCellMaterial({ color, transparentMode });
+    const mat = (mesh as THREE.Mesh).material as THREE.MeshStandardMaterial;
+    mat.color.set(spec.color);
+    mat.transparent = spec.transparent;
+    mat.depthWrite = spec.depthWrite;
+    mat.opacity = spec.opacity;
+    mat.needsUpdate = true;
+  }
+  function applyTransparentMode() {
+    for (const mesh of meshes) {
+      applyMeshMaterial(mesh, mesh.userData.color);
+    }
+    markDirty();
+  }
+
   /* 创建栅元几何体（带 LOD 动态细节） */
   // 不创建模拟几何，等 STL 数据到达后由 loadStlMeshes 加载
   var meshes: THREE.Object3D[] = [];
-  var cellColors: string[] = [];
-  var cellNums: string[] = [];
 
   function loadStlMeshes(stlData: any, cellViews: CellView[]) {
     // 清掉旧网格，避免重复加载产生副本（否则 setVisible 只隐藏第一个，副本残留）
@@ -290,11 +262,9 @@ function initScene(
       (m as any).material?.dispose();
     });
     meshes.length = 0;
-    cellColors.length = 0;
-    cellNums.length = 0;
     var loader = new STLLoader();
     var stlCount = 0;
-    var allBounds: THREE.Box3[] = [];
+    var rawBounds: THREE.Box3[] = [];
     // 按栅元号查找 cellViews 中的索引
     function cellIndex(cellNum: string): number {
       for (var ci = 0; ci < cellViews.length; ci++) { if (cellViews[ci].num === cellNum) return ci; }
@@ -308,19 +278,32 @@ function initScene(
         var geo = loader.parse(buf.buffer);
         var idx = cellIndex(key);
         var cv = cellViews[idx] || cellViews[0];
-        var color = new THREE.Color(cv.color === "transparent" ? "#000000" : cv.color);
-        var mat = new THREE.MeshStandardMaterial({ color: color, roughness: 0.3, metalness: 0.0, transparent: true, opacity: cv.color === "transparent" ? 0 : 0.6, depthWrite: false, side: THREE.FrontSide });
+        var spec = buildCellMaterial({ color: cv.color, transparentMode });
+        var mat = new THREE.MeshStandardMaterial({ color: spec.color, roughness: 0.3, metalness: 0.0, transparent: spec.transparent, opacity: spec.opacity, depthWrite: spec.depthWrite, side: THREE.FrontSide });
         var mesh = new THREE.Mesh(geo, mat);
         mesh.userData.index = idx;
+        mesh.userData.color = cv.color;
         scene.add(mesh);
         meshes.push(mesh);
-        cellColors.push(cv.color);
-        cellNums.push(cv.num);
-        geo.computeBoundingBox();
-        if (geo.boundingBox) allBounds.push(geo.boundingBox);
+        geo.computeBoundingBox();   // 归一化前先算原始 bbox（用于求总中心）
+        if (geo.boundingBox) rawBounds.push(geo.boundingBox.clone());
         stlCount++;
       } catch(e) { console.error("STL load error for cell", key, e); }
     }
+
+    /* 几何归一化：先把全部栅元平移到总中心 → 相机靶心在原点、轴线/刻度天然对齐。
+       顺序关键：geometry.translate 必须先于 computeBoundingBox，否则 renderOrder 排序用旧 bbox。 */
+    if (rawBounds.length > 0) {
+      var totalBox = new THREE.Box3();
+      for (var _b of rawBounds) totalBox.union(_b);
+      var c = totalBox.getCenter(new THREE.Vector3());
+      for (var _m of meshes) {
+        // 平移先于 computeBoundingBox（顺序关键：renderOrder 排序用平移后的 bbox）
+        (_m as THREE.Mesh).geometry.translate(-c.x, -c.y, -c.z);
+        (_m as THREE.Mesh).geometry.computeBoundingBox();
+      }
+    }
+
     // 按体积排序：外层（大）先渲染，内层（小）后渲染，嵌套时内层可见
     meshes.sort(function(a: any, b: any) {
       var va = a.geometry?.boundingBox?.getSize(new THREE.Vector3()).length() || 0;
@@ -330,57 +313,71 @@ function initScene(
     for (var mi = 0; mi < meshes.length; mi++) {
       meshes[mi].renderOrder = mi;
     }
-    // 根据实际几何重新定位相机
-    if (allBounds.length > 0) {
-      var totalBox = new THREE.Box3();
-      for (var _b of allBounds) totalBox.union(_b);
-      var _s = totalBox.getSize(new THREE.Vector3());
-      var realExt = Math.max(_s.x, _s.y, _s.z, 1) * 0.5;
-      var realVD = realExt * 3.5;
-      camera.position.set(realVD * 0.6, realVD * 0.6, realVD * 0.5);
-      controls.target.set(0, 0, 0);
-      controls.minDistance = realExt * 0.1;
-      controls.maxDistance = realExt * 50;
-      camera.far = realVD * 100;
+
+    // 根据归一化后的实际几何重新定位相机（far/near 收紧，target=center≈原点）
+    if (meshes.length > 0) {
+      var normBox = new THREE.Box3();
+      for (var _m3 of meshes) {
+        var bb = (_m3 as THREE.Mesh).geometry?.boundingBox;
+        if (bb) normBox.union(bb);
+      }
+      var nC = normBox.getCenter(new THREE.Vector3());
+      var nS = normBox.getSize(new THREE.Vector3());
+      var cp = computeCameraParams([nC.x, nC.y, nC.z], [nS.x, nS.y, nS.z]);
+      camera.near = cp.near;
+      camera.far = cp.far;
+      camera.position.set(cp.position[0], cp.position[1], cp.position[2]);
+      controls.target.set(cp.target[0], cp.target[1], cp.target[2]);
+      controls.minDistance = cp.minDistance;
+      controls.maxDistance = cp.maxDistance;
       camera.updateProjectionMatrix();
-      updateAxes(realExt);  // 轴线随实际几何范围伸缩，呈现"无限长"效果
+      controls.update();
+      updateAxes(Math.max(nS.x, nS.y, nS.z, 1) * 0.5);  // 轴线随实际几何范围伸缩，呈现"无限长"效果
     }
+    markDirty();
     return stlCount;
   }
 
+  /* ---- 按需渲染门（renderGate）---- */
+  var markDirty: () => void = () => {};
+  const renderLoop = createRenderLoop({
+    onRender: () => {
+      // WASD 镜头移动
+      var moved = false;
+      const moveSpeed = camera.position.length() * 0.015;
+      if (keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD || keys.shift || keys.space) {
+        const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+        const up = new THREE.Vector3(0, 1, 0);
+        const delta = new THREE.Vector3(0, 0, 0);
+        if (keys.KeyW) delta.add(fwd);
+        if (keys.KeyS) delta.sub(fwd);
+        if (keys.KeyA) delta.sub(right);
+        if (keys.KeyD) delta.add(right);
+        if (keys.space) delta.add(up);
+        if (keys.shift) delta.sub(up);
+        delta.normalize().multiplyScalar(moveSpeed);
+        camera.position.add(delta);
+        // 移动后：目标点固定在相机正前方当前距离处，旋转不漂移
+        const fwd2 = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+        const pivotDist = camera.position.length();
+        controls.target.copy(camera.position).add(fwd2.multiplyScalar(pivotDist));
+        moved = true;
+      }
+      controls.update();
+      for (const obj of meshes) {
+        if (obj instanceof THREE.LOD) obj.update(camera);
+      }
+      renderer.render(scene, camera);
+      // 按键仍按住 → 续 dirty，保持连续移动
+      if (moved) markDirty();
+    },
+  });
+  markDirty = renderLoop.markDirty;
 
-  /* 动画循环 */
-  let running = true;
-  function animate() {
-    if (!running) return;
-    requestAnimationFrame(animate);
-    // WASD 镜头移动
-    const moveSpeed = camera.position.length() * 0.015;
-    if (keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD || keys.shift || keys.space) {
-      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
-      const up = new THREE.Vector3(0, 1, 0);
-      const delta = new THREE.Vector3(0, 0, 0);
-      if (keys.KeyW) delta.add(fwd);
-      if (keys.KeyS) delta.sub(fwd);
-      if (keys.KeyA) delta.sub(right);
-      if (keys.KeyD) delta.add(right);
-      if (keys.space) delta.add(up);
-      if (keys.shift) delta.sub(up);
-      delta.normalize().multiplyScalar(moveSpeed);
-      camera.position.add(delta);
-      // 移动后：目标点固定在相机正前方当前距离处，旋转不漂移
-      const fwd2 = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-      const pivotDist = camera.position.length();
-      controls.target.copy(camera.position).add(fwd2.multiplyScalar(pivotDist));
-    }
-    controls.update();
-    for (const obj of meshes) {
-      if (obj instanceof THREE.LOD) obj.update(camera);
-    }
-    renderer.render(scene, camera);
-  }
-  animate();
+  /* 控件变化（旋转/缩放/平移）→ 置 dirty 渲染 + 防抖重建刻度 */
+  controls.addEventListener("change", () => { markDirty(); scheduleRebuild(); });
+  markDirty();  // 初始渲染一帧基座（轴线/刻度）
 
   /* 大小自适应 — 用 ResizeObserver 确保 canvas 始终有尺寸 */
   function resizeRenderer() {
@@ -391,6 +388,7 @@ function initScene(
     camera.aspect = w2 / h2;
     camera.updateProjectionMatrix();
     renderer.setSize(w2, h2, false);
+    markDirty();
   }
   var ro = new ResizeObserver(function() { resizeRenderer(); });
   if (canvas.parentElement) ro.observe(canvas.parentElement);
@@ -402,33 +400,34 @@ function initScene(
     updateAxes: updateAxes,
     setVisible(index: number, vis: boolean) {
       for (var _mi = 0; _mi < meshes.length; _mi++) {
-        if (meshes[_mi].userData.index === index) { meshes[_mi].visible = vis; return; }
+        if (meshes[_mi].userData.index === index) { meshes[_mi].visible = vis; markDirty(); return; }
       }
     },
     setColor(index: number, color: string) {
       for (var _mi = 0; _mi < meshes.length; _mi++) {
         if (meshes[_mi].userData.index === index) {
-          var _mat = (meshes[_mi] as THREE.Mesh).material as THREE.MeshStandardMaterial;
-          if (color === "transparent") {
-            _mat.color.set("#000000");
-            _mat.opacity = 0;   // M0 真空 → 全透明
-          } else {
-            _mat.color.set(color);
-            _mat.opacity = 0.6; // 实体材料 → 恢复半透明
-          }
+          meshes[_mi].userData.color = color;
+          applyMeshMaterial(meshes[_mi], color);
+          markDirty();
           return;
         }
       }
     },
     selectAll(vis: boolean) {
       meshes.forEach((m) => { m.visible = vis; });
+      markDirty();
+    },
+    setTransparentMode(mode: TransparentMode) {
+      transparentMode = mode;
+      applyTransparentMode();
     },
     dispose() {
-      running = false;
       ro.disconnect();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       controls.dispose();
+      tickGrid.dispose();
+      renderLoop.dispose();
       renderer.dispose();
       meshes.forEach((m) => {
         if (m instanceof THREE.LOD) {
@@ -471,6 +470,8 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   // 尝试从后端获取真实 STL 数据
   const [freecadStatus, setFreecadStatus] = useState("");
   const [stlData, setStlData] = useState<Record<string, string> | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [seeThrough, setSeeThrough] = useState(false);  // 半透明查看（默认关 → opaque）
   const [csPlane, setCsPlane] = useState({A:0,B:0,C:1,D:0});
   const [dbgLog, setDbgLog] = useState<string[]>([]);
   const log = (msg: string) => { console.log('[3Ddbg]', msg); setDbgLog(p => [...p, msg]); };
@@ -486,7 +487,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       .filter(function(_: any, i: number) { return cellViews[i]?.visible !== false; })
       .filter(function(c: any) { return String(c.mat).split(" ")[0] !== "0"; })  // 排除真空
       .map(function(c: any) { return parseInt(c.num) || 0; });
-    fetch("http://localhost:5001/api/cross-section", {
+    fetch(apiUrl("/api/cross-section"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -517,11 +518,12 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   useEffect(function() { setEqInput(planeToStr(csPlane)); }, [csPlane]);
 
   useEffect(() => {
-    // 用实际曲面和栅元数据调用后端生成 STL
+    // 用实际曲面和栅元数据调用后端生成 STL；fetch 期间显示加载遮罩
+    setLoading(true);
     var cellsForBackend = rawCells.map(function(c) {
       return { number: parseInt(c.num) || 0, material: c.mat, density: (c as any).density || "", surface_expr: (c as any).surfaces || (c as any).surface_expr || "" };
     });
-    fetch("http://localhost:5001/api/preview-3d", {
+    fetch(apiUrl("/api/preview-3d"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -538,7 +540,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       } else {
         setFreecadStatus("  ");
       }
-    }).catch(function() { setFreecadStatus("  "); });
+    }).catch(function() { setFreecadStatus("  "); }).finally(function() { setLoading(false); });
   }, []);
 
   // 初始化 Three.js 场景
@@ -569,6 +571,14 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       ctrlRef.current.selectAll(true);
     }
   }, [stlData]);
+
+  // 半透明查看开关：切换全栅元 opaque / see-through
+  const toggleSeeThrough = useCallback(() => {
+    setSeeThrough(prev => {
+      ctrlRef.current?.setTransparentMode(prev ? "opaque" : "see-through");
+      return !prev;
+    });
+  }, []);
 
   // 切换单个可见性（真空栅元不可切换）
   const toggleCell = useCallback((index: number) => {
@@ -676,6 +686,10 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
           position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
           background: "rgba(0,0,0,0.7)", color: "#e53935", fontSize: 14,
         } as React.CSSProperties }, initErr),
+        loading && React.createElement("div", { style: {
+          position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+          background: "rgba(0,0,0,0.7)", color: "rgba(241,241,249,0.9)", fontSize: 14, letterSpacing: 1,
+        } as React.CSSProperties }, "正在生成 3D 几何…"),
       ),
       /* 右侧 — 渲染控制面板（参考版 render_ctrl.py 排布） */
       React.createElement("div", {
@@ -727,6 +741,28 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
             onClick: () => setAllVisible(false),
             style: { flex: 1, fontSize: 11 },
           }, "全部取消"),
+        ),
+        /* 半透明查看开关（默认关 → opaque；开启 see-through 可看穿外壳） */
+        React.createElement("div", {
+          style: {
+            padding: "8px 14px", borderBottom: "1px solid rgba(255,255,255,0.04)",
+            display: "flex", alignItems: "center", gap: 8,
+          } as React.CSSProperties,
+        },
+          React.createElement("input", {
+            type: "checkbox",
+            id: "see-through-toggle",
+            checked: seeThrough,
+            onChange: toggleSeeThrough,
+            style: { accentColor: "var(--accent)" } as React.CSSProperties,
+          }),
+          React.createElement("label", {
+            htmlFor: "see-through-toggle",
+            style: { fontSize: 11, color: "var(--text-secondary)", cursor: "pointer", display: "flex", flexDirection: "column", gap: 2 } as React.CSSProperties,
+          },
+            React.createElement("span", null, "半透明查看"),
+            React.createElement("span", { style: { fontSize: 10, color: "var(--text-tertiary)" } }, "默认不透明渲染（性能最佳）；开启可看穿外壳"),
+          ),
         ),
         /* 截面控制 */
         React.createElement("div", {

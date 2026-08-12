@@ -1,6 +1,23 @@
 # 项目记忆文档（AI 速查手册）
 > 最后更新时间：2026-08-12
 
+> **当前执行计划：3D 预览卡顿修复（新任务，2026-08-12 上级转来）**：用户报告 ~20m 混凝土屏蔽（MCNP cm 单位 = 2000 坐标单位）3D 预览卡顿。**修复契约已锁定（docs/contracts/preview3d-performance.md，2026-08-12 复现实测修订版）**：repro 实测反驳原诊断 4 项（前端同步解析大 STL 54ms 非主因 / 120s 超时不触发 / OCC 大坐标无崩溃 / 20m bound 布尔不慢），确认真凶 P0a 打开卡（无缓存全量重建 3.30s×3+无加载态）、P0b 交互卡（rebuildTicks 每帧 ~160 对象/81 纹理不 dispose + 无条件渲染 + 全栅元透明 overdraw）、P0c 大坐标深度（far/near 7M~17.5M 超 2^24 + target 恒原点），并新增高收益项 P0d（IPv6 绑定 300-500ms/请求 / vtk 惰性 0.46s/次 / bound 过撑 shield 5300→2700）。**以下旧诊断部分已被 repro 反驳，以契约为准**：
+> - **管线**：Preview3D.tsx → POST /api/preview-3d → api_server(_handle_preview_3d, :1001) → FreeCADEngine.build_geometry(freecad_preview.py:243) → 子进程 _freecad_csg_worker.py（逐曲面布尔裁剪 + 逐栅元 AST 布尔级联）→ tessellate(1.0) → 每栅元 STL → base64 进单 JSON → 前端 atob+STLLoader.parse 全量加载
+> - **三因**：① 打开卡/黑屏（主因）：无缓存每次全量重建；base64 单 JSON 可达几十 MB（api_server.py:1058）；前端 JSON.parse+atob+STLLoader.parse 主线程同步无 Web Worker（Preview3D.tsx:305-308）；后端 120s 硬超时（freecad_preview.py:339）。② 交互低帧率：相机 change 每帧 rebuildTicks 新建数百 Line/Sprite/CanvasTexture 不 dispose（Preview3D.tsx:196-252）；渲染循环无条件每帧跑（354-383）；全栅元 transparent+depthWrite:false overdraw（312）。③ 闪烁/错乱：near=0.1/far≈35万（99,344）；无几何居中/归一化 target 恒原点（341）；大坐标 OCC 浮点容差。
+> - **20m 放大器**：bound 自适应 `_compute_bound_from_surfaces`（freecad_preview.py:206-225）：2000 单位→B≈2700 布尔裁剪更贵；预览无单位缩放/无归一化（仅 STEP 导出有 SCALE=10）；前端深度精度失衡。
+> - **执行流程**：复现验证已由 `repro` 完成 → **架构师契约已锁定并经 PM 裁决生效（docs/contracts/preview3d-performance.md）** → **后端/前端施工并行派发中** → 测试复核（补大尺寸预览测试 + 全量 251 绿不破）。**性能任务与 P0/P1/P2 正交，施工不得破坏现有测试（每步全量 pytest）。** 契约要点：P0a 打开卡（后端 preview_cache 深模块 + 前端加载态，缓存命中打开 ≤1s）、P0b 交互卡（TickGrid/renderGate/cellMaterial 拆深模块 + vitest）、P0c 深度（computeCameraParams 几何归一化 + far/near ≤1e4）、P0d 新发现三项（IPv6 前端改 127.0.0.1 / vtk 惰性 / bound 位移参数修正）。
+> - **PM 三项裁决（2026-08-12，已闭合生效）**：① 半透明默认 opaque + "半透明查看"开关默认关（附非阻断引导提示可选）；② vitest 批准为 gui/ devDependency（测试目录 gui/test/ 独立，不并入 pytest 门禁）；③ 冷启动 ≤3.0s 批准（核心指标 = 缓存命中 ≤1.0s）。
+> - **施工派发（2026-08-12）**：分支 perf/preview3d（基于 refactor/generator-tech-debt，保证 251/0 测试基线）。**后端（backend-perf a2a2f2c4786230bcf）**：步 1 bound 修正 + app/preview_cache.py + 后端单测 → 步 2 vtk 惰性 → 步 3 handler 缓存接线 + _clear_stl_session 联动。**前端（frontend-perf a2b6642aaf0b9b4c2）**：步 3 前端 api.ts（127.0.0.1，grep 归零）+ 步 4 抽 4 深模块（TickGrid/renderGate/cellMaterial/cameraParams + vitest 4 测试文件）+ 步 5 加载态 + 半透明开关。文件零重叠。
+> - **前端施工完成（2026-08-12，frontend-perf a2b6642aaf0b9b4c2）**：步 3 `gui/src/utils/api.ts`（127.0.0.1 单一常量）14 文件 ~25 处 localhost:5001 归零；步 4 `gui/src/three/` 4 深模块（TickGrid 台账+完整 dispose+步长表 1e6 / renderGate dirty 按需渲染 / cellMaterial 默认 opaque / cameraParams farNear≤1e4）+ Preview3D.tsx 接线 + 几何归一化（translate 先于 computeBoundingBox）；步 5 加载态遮罩 + 半透明查看开关（默认关，M0 真空 opacity 0 不变）；vitest 4 文件 13 用例全绿（`cd gui && npx vitest run`），tsc/build 通过。改动清单 docs/frontend-changes.md。
+> - **复现实测结论（repro，2026-08-12，部分反驳原诊断）**：
+>   - **被反驳**：前端同步解析 16MB=54ms（非主因）；子进程最大 2.38s（无 120s 超时风险）；±2742/±10000 布尔 <0.6s（无 OCC 崩溃）；bound 放大布尔不慢。
+>   - **真凶**：① 打开卡（每次无缓存全量重建 3.30s + 无加载态 + handler 1.3~2.7s → 1.5~3s 白屏）；② 交互卡（rebuildTicks 每帧 ~160 对象/81 GPU 纹理 + 全栅元透明 overdraw + 无条件渲染循环，与几何大小无关）；③ 大坐标闪烁（far/near 失衡，±10000 时 17.5M 超 2^24 深度极限，target 恒原点）。
+  >   - **新发现 3 项**：IPv6 HTTP 惩罚（server 绑 0.0.0.0:5001 + 前端 localhost，Chrome Happy Eyeballs 每请求 300-500ms，影响全部 25 端点，修法绑 [::]:5001 或改 127.0.0.1）；vtk 惰性化（worker 每次 import vtk 白付 0.46s 占子进程 ~35%）；bound 过撑 bug（把宏体方向向量/轴长当坐标，shield_20m 轴长 4000→B=5300 vs 真实 2000，只对位移参数取 max）。
+> - **大尺寸预览 fixture 已 vendor 7 个**（tests/fixtures/）：preview_inp09_m27.inp / preview_inp01_m100.inp / preview_duct_conc.inp / preview_inp96.inp / preview_inp08_m27.inp / preview_shield_20m.inp / preview_stress_bunker.inp。复现脚本在仓库外 D:\code\preview_measure\（不污染生产）。
+> - **命名冲突教训（2026-08-12）**：曾以 `backend` 命名派发复现 agent 导致名称解析冲突，`repro` 正确执行后也被停（用户主动）。**后续新增 agent 用唯一名（如 arch-perf/repro）**，避免与在途 agent 重名。
+>
+> 上一计划（P0 测试防线 + P1 技术债清偿 + P2 文档补齐）**已完成并验收**：全量 251 绿/0 红。
+
 > **当前执行计划**：测试补防 + 技术债清偿 + 文档补齐（P0 测试 → P1 重构依赖 P0 → P2 文档并行）。
 > 定稿计划文件：`C:\Users\13789\.claude\plans\tranquil-greeting-biscuit.md`（优先级由上级拍板并授权自动执行）。
 > - **P0 测试防线**：派「测试」（**第一轮完成，2026-08-12**）：234 通过 / 17 失败。M1.1/M1.2/M1.3/M1.5 通过，**M1.4 未全绿——门禁拦截**。17 失败全部为"按设计先红"的缺陷/技术债 pin：F-A~F-E 是引擎真实缺陷（测试网捕获），F#3/F#7 是技术债（P1 处理）。
@@ -122,6 +139,9 @@
 | **P1 多源/分布 SDEF 表示统一**（`SDEF_FIELD_SPECS` 表驱动 + 字段序统一为 POS 首位 + D-index 由 `dist_params` 位置决定、与发射序解耦） | kitchen-sink R1/R4 字节不动点要求多源生成与分布回放产出逐字节一致；消除 §0.5.5 复合根因 #2-#5 + SI 值空格归一化 | 2026-08-12 |
 | **P1 分布注释作为生成器横幅词汇**（`multi_source_comment_banner(n)` 进 `is_generator_banner`，parse 拦截丢弃、回放重发） | 复用 F-A 方案 C 的词汇冻结机制，注释不漂移不重复 | 2026-08-12 |
 | **P1 raw_overrides 收敛为 `_apply_raw_override` 助手**（1145 raw_tally 门控保留"判 tally key"语义） | 消除 8 处复制粘贴；门控判 tally key 是既有行为，非 bug | 2026-08-12 |
+| **3D 预览 deck 指纹缓存**（`app/preview_cache.py`，LRU 上限 3，命中跳过 FreeCAD 子进程） | 打开卡真凶=每次全量重建 3.30s；同 deck 二次打开缓存命中 ≤1s，对 API 契约透明 | 2026-08-12 |
+| **前端 3D 拆深模块**：`TickGrid`（刻度生命周期+dispose 台账）/`renderGate`（dirty 按需渲染）/`cellMaterial`（默认 opaque）/`computeCameraParams`（几何归一化 + far/near ≤1e4） | 交互卡真凶=每帧 160 对象/81 纹理泄漏+无条件渲染+透明 overdraw；大坐标深度 17.5M 超 2^24；深模块接口小实现深，vitest 可测 | 2026-08-12 |
+| **前端后端地址收敛 `127.0.0.1:5001`**（`gui/src/utils/api.ts` 单一常量），后端绑定 `0.0.0.0` 不动 | server 只绑 IPv4 + 前端 localhost → Chrome Happy Eyeballs 每请求 300-500ms，影响全部 25 端点；127.0.0.1 直连命中 IPv4，CORS `*` 已覆盖 | 2026-08-12 |
 
 
 ## 5. 核心业务规则（必读）
@@ -171,6 +191,8 @@
 
 | 日期 | 变更类型 | 改动描述 | 涉及 Agent |
 | :--- | :--- | :--- | :--- |
+| 2026-08-12 | 修复/重构 | **3D 预览性能修复·前端施工完成**（perf/preview3d）：步 3 IPv6 修复（`gui/src/utils/api.ts` 127.0.0.1 单一常量，14 文件 ~25 处 `localhost:5001` → `apiUrl`，grep 归零）；步 4 抽 4 深模块 `gui/src/three/`（TickGrid 台账+完整 dispose+步长表扩 1e6 / renderGate dirty 按需渲染 / cellMaterial 默认 opaque / cameraParams farNear≤1e4）+ Preview3D.tsx 接线 + 几何归一化（translate 先于 computeBoundingBox，相机 reframe）；步 5 加载态遮罩"正在生成 3D 几何…" + 半透明查看开关（默认关，M0 真空 opacity 0 不变）；vitest 基建（`gui/test/` 4 文件 13 用例全绿，devDependency，独立于 pytest 门禁）。tsc/build 通过。改动清单 docs/frontend-changes.md | 前端 |
+| 2026-08-12 | 文档 | **3D 预览卡顿修复契约已锁定**：`docs/contracts/preview3d-performance.md`（复现实测修订版，repro 数据回填）。反驳原诊断 4 项（前端 STL 解析 54ms 非主因 / 120s 超时不触发 / OCC 无崩溃 / bound 布尔不慢）；确认真凶 P0a 打开卡（preview_cache 缓存 + 加载态，命中 ≤1s）、P0b 交互卡（TickGrid/renderGate/cellMaterial 深模块 + 默认 opaque + dirty 渲染）、P0c 深度（computeCameraParams 归一化 + far/near ≤1e4）；P0d 新发现（IPv6 前端 127.0.0.1 / vtk 惰性 / bound 位移参数 shield 5300→2700）。含 7 fixture 测试映射 + 后端 pytest 新增 3 文件 + 前端 vitest 4 文件 + 施工 6 步分工 + 3 项 PM 开放决策（半透明默认/vitest devDep/冷启动目标）。ADR 已补 3 条 | 架构师 |
 | 2026-08-12 | 测试 | P1 终态复核（refactor/generator-tech-debt，基 996d11f）：全量 **251 绿 / 0 红** 确认（复跑稳定）。逐 F# 通过（F#7 模块顶 import / F#3 grep 归零 / F#4 `_build_sdef_parts` 合并且 pin 精确串不变 / F#5+F#6 kitchen-sink R1/R4 红→绿 g1==g2 字节恒定 len 2099==2099，5 项残留差异全消除 / F#1 `_apply_raw_override` 收敛 + 1145 门控 pin 绿）；纪律无降级（251 用例不变）、无新依赖、漂移闸门绿、`_wrap_long_lines`/`_generate_structured_distributions` 未入 diff、review_findings 7 项全 Resolved。`docs/qa-report.md` 标注 P1 终态。**全量计划（P0+P1+P2）完成** | 测试 |
 | 2026-08-12 | 修复/重构 | **P1 技术债重构完成**（refactor/generator-tech-debt 分支，自 experiment/geouned 建）：全量 pytest **251 绿 / 0 红**（复跑 ×2 稳定），6 红全部转绿。F#7 bf0a2c7（pymcnp 提到模块顶部，test_f7_*×2 转绿）→ F#3 c774e56（函数内 import json/sys + E0DBG 清理，grep 归零，test_f3_*×2 转绿）→ F#4 52ca251（`_build_sdef_parts` 合并两分支，字节不变）→ F#5/F#6 4a e404172（`_generate_multi_source` 拆 5 函数 + SDEF_FIELD_SPECS 表驱动，字符化门 test_generator_multi_source.py 全绿）→ 4b/4c 018ced5（kitchen-sink R1/R4 红→绿：POS F-dist 重建 / sdef_extra 分布关键字去重 / SI V 型 / banners 注释 + 回放重发 / SI 值扁平化 / 字段序统一）→ F#1 1488aae（raw_overrides 收敛 `_apply_raw_override`，tally-key 门控保留，test_generator_overrides.py 28/28 绿）。重锚定：review_findings.json 7 项全 resolved + commit 索引；UI_ARCHITECTURE.md §5.2/§5.3/§6.4/§7/§7.1 更新；test_tech_debt.py 注释行号更新；PROJECT_MEMORY.md 本行 + §6。边界遵守：未碰 api.yaml / api_server 路由 / _wrap_long_lines / `_generate_structured_distributions` join。待 tester 复核 | 后端 |
 | 2026-08-12 | 文档 | **P1 重构契约已锁定**：`docs/contracts/p1-refactor.md`（目标 251 绿/0 红，顺序 F#7→F#3→F#4→F#5+F#6→F#1）。F#5+F#6 拆 5 函数 + `SDEF_FIELD_SPECS` 表驱动，按 §0.5.5 复合根因清单逐项消除漂移（POS F-dist 分支重建 `POS=F D1` / sdef_extra 分布关键字去重 / `_parse_sisp_structured` SI 类型表加 V / 分布注释进 banners 词汇 + 回放重发 / SI 值扁平化 / 字段序统一）；`_generate_distribution_sdef` 一并改序。F#1 收敛为 `_apply_raw_override`（保留 1145 raw_tally 门控）。含施工顺序/每步验收/重锚定清单/风险预警。记忆文档 ADR 已补 3 条 | 架构师 |

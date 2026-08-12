@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "test": "vitest run",
     "tauri": "tauri",
     "electron:dev": "vite build && electron .",
     "electron:build": "vite build && electron-builder"
@@ -26,7 +27,8 @@
     "@vitejs/plugin-react": "^4.2.1",
     "electron": "^28.0.0",
     "typescript": "^5.2.2",
-    "vite": "^5.0.8"
+    "vite": "^5.0.8",
+    "vitest": "^1.6.0"
   },
   "main": "electron/main.cjs"
 }

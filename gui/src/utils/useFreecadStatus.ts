@@ -12,8 +12,9 @@
  *   closeDialog() 关闭对话框
  */
 import { useCallback, useEffect, useState } from "react";
+import { apiUrl } from "./api";
 
-const API = "http://localhost:5001/api";
+const API = apiUrl("/api");
 
 export type FreecadStatus = "checking" | "ok" | "missing";
 

@@ -10,6 +10,7 @@ import { useDeck } from "../utils/DeckContext";
 import { useFreecadStatus } from "../utils/useFreecadStatus";
 import { useRowDrag } from "../utils/useRowDrag";
 import { openPreview3D, onMaterialChange } from "../utils/windows";
+import { apiUrl } from "../utils/api";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
 import { textToSection } from "../utils/sectionConvert";
 
@@ -87,7 +88,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     if (!fc.require()) { setShowStepDlg(false); return; }
     try {
       const text = await file.text();
-      const r = await fetch("http://localhost:5001/api/import-step", {
+      const r = await fetch(apiUrl("/api/import-step"), {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename: file.name, data: text, settings }),
       });
@@ -142,7 +143,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const handleExportSTEP = async () => {
     if (!fc.require()) return;
     try {
-      const r = await fetch("http://localhost:5001/api/export-step",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({surfaces:surfText,cells:cells,tr_cards:trText})});
+      const r = await fetch(apiUrl("/api/export-step"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({surfaces:surfText,cells:cells,tr_cards:trText})});
       const j = await r.json();
       if (j.status !== "ok") { alert(j.message || "导出失败"); return; }
       // 获取文件内容（支持新旧格式）
@@ -151,7 +152,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
         content = atob(j.data);
       } else {
         // 旧格式：通过 serve-file 端点获取
-        const fr = await fetch("http://localhost:5001/api/serve-file?path=" + encodeURIComponent(j.file));
+        const fr = await fetch(apiUrl("/api/serve-file?path=" + encodeURIComponent(j.file)));
         content = await fr.text();
       }
       const buf = new Uint8Array(content.length);

@@ -7,6 +7,7 @@
  * 用途：3D 预览 / 截面 独立窗口，主窗口可同时编辑。
  */
 import type { DeckData } from "./dataCollector";
+import { apiUrl } from "./api";
 
 const KEY_PREVIEW3D = "mcnp_win_preview3d";
 const KEY_CROSS = "mcnp_win_cross";
@@ -141,7 +142,7 @@ export async function closeCurrentWindow(): Promise<boolean> {
 
 /** 通知后端删除 STL 会话目录（关 3D 预览窗口 / 主界面清空时调用） */
 export function clearStlSession(): void {
-  fetch("http://localhost:5001/api/clear-stl", {
+  fetch(apiUrl("/api/clear-stl"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({}),

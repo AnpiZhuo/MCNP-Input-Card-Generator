@@ -1,5 +1,6 @@
 // Python backend bridge via Tauri or HTTP
 import type { DeckData } from "./dataCollector";
+import { apiUrl } from "./api";
 
 let pythonProcess: any = null;
 let closeUnlisten: (() => void) | null = null;
@@ -10,7 +11,7 @@ export async function startPythonBackend(): Promise<void> {
   try {
     // 5001 已有后端在跑则不再拉起（避免双实例 / 重复绑定）
     try {
-      const r = await fetch("http://localhost:5001/api/xsdir-check", { signal: AbortSignal.timeout(2000) });
+      const r = await fetch(apiUrl("/api/xsdir-check"), { signal: AbortSignal.timeout(2000) });
       if (r.ok) { console.log("Backend already running on 5001, skip spawn"); return; }
     } catch { /* 5001 无响应 → 需要拉起 */ }
     const { Command } = await import("@tauri-apps/api/shell");
@@ -57,7 +58,7 @@ export async function stopPythonBackend(): Promise<void> {
 export async function generateInp(data: DeckData): Promise<string> {
   // Try HTTP bridge first (api_server.py on port 5001)
   try {
-    const r = await fetch("http://localhost:5001/api/generate", {
+    const r = await fetch(apiUrl("/api/generate"), {
       method: "POST", headers: {"Content-Type":"application/json"},
       body: JSON.stringify(data),
       signal: AbortSignal.timeout(10000),

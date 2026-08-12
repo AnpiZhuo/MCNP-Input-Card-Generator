@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import DocViewer from "./DocViewer";
 import { useDeck } from "../utils/DeckContext";
+import { apiUrl } from "../utils/api";
 
 /** PHYS 字段受控输入：id "phys_n-emax" ↔ deck.adv["phys_n_emax"] */
 function AdvField({ id, className, placeholder, title }: { id: string; className?: string; placeholder?: string; title?: string }) {
@@ -31,7 +32,7 @@ export default function AdvancedTab() {
   const { deck, patch } = useDeck();
 
   useEffect(() => {
-    fetch("http://localhost:5001/api/xsdir-check", { method: "POST" })
+    fetch(apiUrl("/api/xsdir-check"), { method: "POST" })
       .then(r => r.json())
       .then(j => {
         if (j.loaded) {
@@ -298,7 +299,7 @@ export default function AdvancedTab() {
           </div>
           <div className="form-group" style={{ maxWidth: 80, justifyContent: "center" }}>
             <label className="form-label">&nbsp;</label>
-            <button className="btn btn-ghost btn-sm" onClick={() => { fetch("http://localhost:5001/api/xsdir-check",{method:"POST"}).then(r=>r.json()).then(j=>{alert(j.loaded?"✅ xsdir已加载 "+j.count+" 条":"⚠ "+(j.error||"未加载"))}).catch(()=>alert("需要后端服务支持")) }}>浏览</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => { fetch(apiUrl("/api/xsdir-check"),{method:"POST"}).then(r=>r.json()).then(j=>{alert(j.loaded?"✅ xsdir已加载 "+j.count+" 条":"⚠ "+(j.error||"未加载"))}).catch(()=>alert("需要后端服务支持")) }}>浏览</button>
           </div>
           <div className="form-group" style={{ justifyContent: "center" }}>
             <label className="form-label">&nbsp;</label>

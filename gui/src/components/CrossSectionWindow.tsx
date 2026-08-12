@@ -7,6 +7,7 @@
 import React, { useState } from "react";
 import CrossSectionView from "./CrossSectionView";
 import { readCrossSectionData, closeCurrentWindow } from "../utils/windows";
+import { apiUrl } from "../utils/api";
 
 export default function CrossSectionWindow() {
   const [init] = useState(() => readCrossSectionData());
@@ -22,7 +23,7 @@ export default function CrossSectionWindow() {
       : (init.cells || [])
           .filter((c: any) => String(c.mat).split(" ")[0] !== "0")
           .map((c: any) => parseInt(c.num) || 0);
-    fetch("http://localhost:5001/api/cross-section", {
+    fetch(apiUrl("/api/cross-section"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cellNums: cellNums, plane: newPlane }),

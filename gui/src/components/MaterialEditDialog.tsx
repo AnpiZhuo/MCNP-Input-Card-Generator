@@ -8,6 +8,7 @@ interface Props { matNum: string; name: string; nuclides: MaterialRow[]; density
 import { PRESET_CATEGORIES, type PresetItem } from "./MaterialPresets";
 import type { MaterialRow } from "../utils/DeckContext";
 import { useRowDrag } from "../utils/useRowDrag";
+import { apiUrl } from "../utils/api";
 
 // 元素→质子数映射
 const Z_EL: Record<string, string> = {};
@@ -53,7 +54,7 @@ const s: Record<string, React.CSSProperties> = {
 };
 
 async function expandFormula(formula: string): Promise<Nuclide[]> {
-  const r = await fetch("http://localhost:5001/api/expand-formula", {
+  const r = await fetch(apiUrl("/api/expand-formula"), {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ formula }),
   });
@@ -98,7 +99,7 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
         var zaidNum = n.zaid.replace(/\..*$/, "").replace(/^0+/, "");
         if (zaidNum) {
           var idx = result.indexOf(n);
-          fetch("http://localhost:5001/api/validate-zaid?zaid=" + encodeURIComponent(zaidNum))
+          fetch(apiUrl("/api/validate-zaid?zaid=" + encodeURIComponent(zaidNum)))
             .then(function(r){return r.json();})
             .then(function(j){ setZaidValid(function(p){var m={...p}; m[idx]=j.in_db; return m;}); })
             .catch(function(){});
@@ -260,7 +261,7 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
                         var el = e.target.value.trim(); var mass = (old[1] || "");
                         if (!el || !mass) { setZaidValid(function(p){var n={...p}; n[i]=null; return n;}); return; }
                         var z = elToZaid(el, mass); var idx = i;
-                        fetch("http://localhost:5001/api/validate-zaid?zaid=" + encodeURIComponent(z)).then(function(r){return r.json();}).then(function(j){ setZaidValid(function(p){var n={...p}; n[idx]=j.in_db; return n;}); }).catch(function(){});
+                        fetch(apiUrl("/api/validate-zaid?zaid=" + encodeURIComponent(z))).then(function(r){return r.json();}).then(function(j){ setZaidValid(function(p){var n={...p}; n[idx]=j.in_db; return n;}); }).catch(function(){});
                       },
                     }),
                     React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 11 } }, "-"),
@@ -270,7 +271,7 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
                         var mass = e.target.value.trim();
                         if (!el || !mass) { setZaidValid(function(p){var n={...p}; n[i]=null; return n;}); return; }
                         var z = elToZaid(el, mass); var idx = i;
-                        fetch("http://localhost:5001/api/validate-zaid?zaid=" + encodeURIComponent(z)).then(function(r){return r.json();}).then(function(j){ setZaidValid(function(p){var n={...p}; n[idx]=j.in_db; return n;}); }).catch(function(){});
+                        fetch(apiUrl("/api/validate-zaid?zaid=" + encodeURIComponent(z))).then(function(r){return r.json();}).then(function(j){ setZaidValid(function(p){var n={...p}; n[idx]=j.in_db; return n;}); }).catch(function(){});
                       },
                     }),
                     React.createElement("input", { style: { ...s.inp, maxWidth: 90 } as React.CSSProperties, placeholder: "份额", value: nu.fraction, onChange: (e: React.ChangeEvent<HTMLInputElement>) => { const c = [...nucs]; c[i] = { kind: "nuclide", zaid: nu.zaid, fraction: e.target.value }; setNucs(c); } }),
