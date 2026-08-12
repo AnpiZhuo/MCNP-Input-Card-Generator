@@ -1,7 +1,32 @@
-# QA 报告 — P0 测试防线 + P1 终态复核
+# QA 报告 — P0 测试防线 + P1 终态复核 + 3D 预览性能修复
 
-> 测试工程师产出 | 日期：2026-08-12 | 分支：refactor/generator-tech-debt（P1 终态）→ experiment/geouned（P0）
-> 运行：仓库根 `python -m pytest tests/ -v`
+> 测试工程师产出 | 日期：2026-08-12 | 分支：perf/preview3d（步 6）→ refactor/generator-tech-debt（P1）→ experiment/geouned（P0）
+> 运行：仓库根 `python -m pytest tests/ -v`；前端 `cd gui && npx vitest run`
+
+## 〇-3、3D 预览性能修复复核结论（步 6：**通过**）
+
+**后端全量 271 通过 / 0 失败**（251 基线零回归 + 新增 20）；**前端 vitest 4 文件 13 用例全绿**。
+
+### 复核清单
+| 项 | 结果 |
+| :--- | :--- |
+| 后端全量 | ✅ 271 绿 / 0 红（test_preview_bound 8 + test_preview_cache 8 + test_preview3d_worker 4） |
+| 前端 vitest | ✅ 4 文件 13 用例（cameraParams 4 / tickGrid 4 / renderGate 2 / cellMaterial 3） |
+| 契约验收 bound | ✅ shield_20m≈2700、stress_bunker≈2050、inp01≈13100、inp09≈3665（区间断言）+ RCC/WED/BOX 轴长定点 + GQ/SQ 跳过 |
+| 契约验收 cache | ✅ fingerprint 稳定、put_get_hit、evict_lru/evict_dir、命中跳过 builder |
+| 契约验收 worker | ✅ 顶层无 import vtk、惰性 import 在 `_quadric_to_shape` 内且位于 native 回退后、`_HAVE_VTK` 初值 False |
+| 契约验收前端 | ✅ cameraParams farNear≤1e4、tickGrid dispose==created + 对象≤60/纹理≤30、renderGate idle 0 渲染、cellMaterial 默认 opaque |
+| 联调点（真实 FreeCAD） | ✅ /api/preview-3d 四字段 miss/hit 一致；命中后 cross-section 复用正常（shield_20m fixture → STL 1040 tri → slices=1、polygons=2） |
+
+### 纪律核对
+- 无断言降级：既有 251 用例零改动（git diff 仅新增 3 preview 测试文件 + 7 fixtures）；总用例 271 不变。
+- 未触碰 `app/generator/` 与 `parsers/`（git diff 确认）。
+- api_server 路由表零变更（handlers dict 0 增删行）；漂移闸门 test_api_contract.py 7/7 绿。
+- 新测试不 import `gui.backend.api_server` / FreeCAD：`app/freecad_preview.py` 与 `app/preview_cache.py` 顶层仅 stdlib，worker 以子进程隔离；test_preview3d_worker.py 走 AST。
+- 无新增运行时依赖：vitest 仅 devDependencies；requirements.txt / dev-requirements.txt 零变更。
+
+### 联调观察（非阻塞）
+最小测试几何（圆柱 + pz 顶盖）经 worker 产出空 STL（0 三角形），但真实 fixture（preview_shield_20m）产出有效 STL（1040 tri）且 cross-section 正常。空 STL 属 worker 对退化输入的曲面细分特性，与本分支性能改动（bound 修正 / vtk 惰性 / 缓存）无关，非回归。
 
 ## 〇-2、P1 终态复核结论（全量计划 P0+P1+P2 完成）
 
