@@ -59,8 +59,8 @@ def module_level_pymcnp_import(file_path: Path) -> list[int]:
 def test_f3_no_function_level_import_json_in_inp_generator():
     """inp_generator.py 函数内不得 import json（模块级已有）。
 
-    当前 RED：`_generate_kcode`(622)、`_generate_structured_distributions`(660)
-    有 `import json as _json` 遮蔽。
+    P1 F#3（commit c774e56）已清偿：`_generate_kcode`、`_generate_structured_distributions`
+    的 `import json as _json` 已删除，改用模块级 json。当前应为 GREEN。
     """
     hits = function_level_imports(INP_GEN, "json")
     assert hits == [], f"inp_generator.py 函数内 import json: {hits}"
@@ -69,8 +69,9 @@ def test_f3_no_function_level_import_json_in_inp_generator():
 def test_f3_no_function_level_import_sys_in_parsers():
     """parsers/core.py 与 __init__.py 函数内不得 import sys。
 
-    当前 RED：core.py `_parse_card_with_continuation`(821)、`parse_data_cards`(1013)，
-    __init__.py `parse_inp_text`(138) 有函数内 import sys。
+    P1 F#3（commit c774e56）已清偿：core.py `_parse_card_with_continuation`、
+    `parse_data_cards` 与 __init__.py `parse_inp_text` 的函数内 import sys 已删除
+    （连带 [E0DBG] 调试 print）。当前应为 GREEN。
     """
     core_hits = function_level_imports(PARSERS_CORE, "sys")
     init_hits = function_level_imports(PARSERS_INIT, "sys")
@@ -88,8 +89,8 @@ def test_f3_no_function_level_import_re_in_inp_generator():
 def test_f7_pymcnp_imported_at_module_level():
     """inp_generator.py 的 pymcnp 导入必须在模块顶层（导入期 fail-fast）。
 
-    当前 RED：`from pymcnp import inp` 在 `_generate_basic` 函数内(98)，
-    模块导入时不会立即检测到 pymcnp 缺失。
+    P1 F#7（commit bf0a2c7）已清偿：`from pymcnp import inp as pymcnp_inp` 已在模块顶部
+    （banners import 之后），导入期即检测 pymcnp 缺失。当前应为 GREEN。
     """
     module_lines = module_level_pymcnp_import(INP_GEN)
     assert module_lines, (
@@ -98,7 +99,7 @@ def test_f7_pymcnp_imported_at_module_level():
 
 
 def test_f7_pymcnp_function_level_import_absent():
-    """inp_generator.py 函数内不得 import pymcnp。当前 RED。"""
+    """inp_generator.py 函数内不得 import pymcnp。P1 F#7 已清偿，当前 GREEN。"""
     hits = function_level_imports(INP_GEN, "pymcnp")
     assert hits == [], f"inp_generator.py 函数内 pymcnp import: {hits}"
 

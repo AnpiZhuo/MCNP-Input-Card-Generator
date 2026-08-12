@@ -20,7 +20,7 @@
 >     - **P1 放行条件已达成**（上级裁决：本轮 245/6 即可放行 P1，P1 目标 = 6 红全部转绿）。**待上级确认后启动 P1**：架构师出重构契约 → 后端在 refactor/generator-tech-debt 分支按 F#7→F#3→F#4→F#5+F#6→F#1 顺序重构。
 >   - **⚠️ PM 失误记录（2026-08-12，已修复）**：此前为回滚引擎代码执行 `git checkout -- app/` 时，误将架构师 P2 补全但**未 commit** 的 `app/UI_ARCHITECTURE.md` 还原成 git 空版本。docs/ 契约文件（api.yaml、bugfix-f1-f5.md）未受影响。**已由架构师（ae059169a61adc2ad）重建完成（2026-08-12，7 节非空，行号全 Grep 实测）**。关键重锚定行号：raw_overrides 守卫 1069(cells)/1081(surfaces)/1107(materials)/1115(sdef)/1131(phys)/1139(tally)/1147(e0)/1168(cut)、raw_tally 变体 1156、门控 1157/1162、_wrap_long_lines 1010、**F#3 import json 631/671（注意 673 是 `_json.loads` 调用行，非 import；PM 原记录 631/673 有误，已修正）**、F#4 247（Dn 254-290/普通 292-310）、F#5 375、F#6 384-403/434-449/486-489、F#7 110、E0DBG（core.py 826-827/1018-1021、__init__.py 138-140、api_server.py 608-610）。文档已含缺陷修复行为变化（banners.py/normalize_lines 剥 &/多粒子正则/小写 m/解包 CellRow/options 上移）。
 > - **P0 复核口径（2026-08-12 上级裁决后，后端施工时须满足）**：终态预期 **245 绿 / 6 红**。本轮 11 例红转绿 = F-A 样例 R1 6（minimal/prob41c/avr13/inp24 R1 归零：prob41c ~1097、avr13 ~644 稳定）+ F-B 3 + F-C 1 + F-D 1；6 红 = 4 技术债（F#3/F#7）+ 2 kitchen-sink（R1/R4，复合根因移入 P1 F#5/F#6 验收，清单见契约 §0.5.5）。误判断言走 tester→PM 仲裁通道，绝不自行改断言。
-> - **P1 技术债清偿（施工中，2026-08-12）**：上级确认 P1 启动（放行条件 245/6 已达成）。**架构师 P1 重构契约已锁定（docs/contracts/p1-refactor.md）**：重构顺序 F#7→F#3→F#4→F#5+F#6（4a 字符化门→4b 漂移修复→4c 全量回归）→F#1，终态 251 绿/0 红；验收重点 F#5+F#6 = kitchen-sink R1/R4 转绿（漂移 6 因子全部定位到落点：POS F-dist 分支重建/sdef_extra 分布关键字去重/SI V 型加表/分布注释 banners 词汇+回放重发/SI 值扁平化/字段序统一 POS 首位）、F#1 = raw_overrides 行为一字不动（1145 门控判 tally key 是特性非 bug）、F#3 连带清函数内 import sys + [E0DBG] print。**后端已派发施工（backend a7bff3c393fb83008，进行中）**：先 commit P0 修复轮基线到 experiment/geouned，再建 refactor/generator-tech-debt 分支按序重构。纪律：每 commit 前 grep 重锚定、commit 后模式归零、每步全量+R1、禁改断言、不碰 api_server 路由/api.yaml/_wrap_long_lines。完成后 review_findings.json 逐项标 resolved + commit 索引、重锚定 UI_ARCHITECTURE.md（§5/§7）+ test_tech_debt.py 注释 + PROJECT_MEMORY.md。
+> - **P1 技术债清偿（已完成，2026-08-12）**：上级确认 P1 启动（放行条件 245/6 已达成）。**架构师 P1 重构契约已锁定（docs/contracts/p1-refactor.md）**。**后端施工完成**：全量 pytest = **251 绿 / 0 红**（复跑 ×2 稳定），6 红全部转绿。commit 索引：F#7 bf0a2c7（pymcnp 模块级 import，test_f7_*×2 转绿）→ F#3 c774e56（函数内 import json/sys + E0DBG 清理，grep 归零，test_f3_*×2 转绿）→ F#4 52ca251（_build_sdef_parts 合并，字节不变）→ F#5/F#6 4a e404172（拆 5 函数，test_generator_multi_source.py 全绿字符化门）→ 4b/4c 018ced5（kitchen-sink R1/R4 红→绿，全量 251/0）→ F#1 1488aae（_apply_raw_override 收敛，raw_tally 门控判 tally key 保留，test_generator_overrides.py 28/28 绿）。重锚定完成：review_findings.json 7 项全标 resolved + commit 索引；UI_ARCHITECTURE.md §5.2/§5.3/§6.4/§7/§7.1 更新；test_tech_debt.py 注释行号更新；PROJECT_MEMORY.md §6/§8 更新。纪律全程遵守（每 commit grep 重锚定 + 模式归零、每步全量 + R1、禁改断言、未碰 api_server 路由/api.yaml/_wrap_long_lines）。**待 tester 复核。**
 > - **P2 补文档**：派「架构师」（**已完成，2026-08-12**）：app/UI_ARCHITECTURE.md 7 节齐全 + docs/contracts/api.yaml（OpenAPI 3.0，25/25 端点，每 path 带 operationId，已验收）。
 > - **关键红线**：测试不得 import gui.backend.api_server（模块级 pyvista/FreeCAD 探测污染）；raw_overrides 行为兼容前端只写 4 key + 空串=无覆盖 + 1145 门控，禁止凭直觉改；往返断言用 R1 不动点而非文本相等；样例 inp24 已 vendor 进仓库副本（上级提供的官方测试库 D:\MCNP\MCNP6\MCNP_CODE\MCNP6\Testing）。
 > - **契约要点（架构师已核）**：run-mcnp 响应 status 字面量是 "started" 非 "ok"；import-step/export-step/set-freecad-path 守卫分支 HTTP 200 下返回 status:"error"；validate-zaid/xsdir-search/serve-file 从 query 读参（GET），其余 22 端点为 POST body；do_GET/do_POST 同路由。闸门 HTTP 往返断言勿按统一信封假设。
@@ -137,14 +137,14 @@
 
 ## 6. 踩坑与排雷指南
 
-- **已知技术债（来自 `app/generator/review_findings.json`，7 项，全部在 inp_generator.py）**：
-  1. `raw_overrides` 覆盖守卫模式复制粘贴 7~8 次，且 line 837 一处判错 key（查 `raw_tally` 而非当前 override key）→ 覆盖不组合；raw 绕过所有格式/校验，坏串静默失败
-  2. `_generate_en_cards`（line 567）函数内重复 `import re`（模块级已有）
-  3. `_generate_kcode`（line 535）函数内 `import json as _json` 遮蔽模块级 import
-  4. `_generate_single_source`（line 182）两段几乎相同的 SDEF 构造（DRY 违规，新增字段要改两处）
-  5. `_generate_multi_source`（line 288）145 行混杂 5 个子关注点（概率归一/方差检测/SDEF 构造/SI-SP 构造），无法单测
-  6. `_generate_multi_source` 源字段名在 3 处分别枚举（新增字段漏一处即静默缺失分布）
-  7. `_generate_basic`（line 78）函数内 `from pymcnp import inp`（pymcnp 是硬依赖，应在模块顶部）
+- **已知技术债（来自 `app/generator/review_findings.json`，7 项，全部在 inp_generator.py）——P1 已全部清偿（2026-08-12）**：
+  1. ✅ `raw_overrides` 覆盖守卫 8 处复制粘贴 → 收敛为 `_apply_raw_override`（commit 1488aae），raw_tally 门控判 tally key 语义保留
+  2. ✅ `_generate_en_cards` 函数内重复 `import re`（P0 期间已 Resolved）
+  3. ✅ 函数内 `import json as _json` + `import sys` + `[E0DBG]` 调试 print → 清理（commit c774e56），grep 归零
+  4. ✅ `_generate_single_source` 两段相同 SDEF 构造 → 合并 `_build_sdef_parts`（commit 52ca251），字节不变
+  5. ✅ `_generate_multi_source` 145 行 5 子关注点 → 拆 5 函数（commit e404172），概率归一可单测
+  6. ✅ 多源源字段名 3 处枚举 → `SDEF_FIELD_SPECS` 表驱动（commit e404172 + 018ced5）
+  7. ✅ 函数内 `from pymcnp import inp` → 提到模块顶部（commit bf0a2c7），导入期 fail-fast
 - **测试缺口**：全仓库无 test/ 目录、无 pytest/unittest 用例。对生成器/解析器这种核心引擎是高风险。
 - **P0 测试防线（2026-08-12 建立）**：`tests/` 目录，`python -m pytest tests/ -v`。总体 234 通过 / 17 失败（17 个全为技术债/往返缺陷的"按设计先红" pin，红=标记缺陷存在，见 `docs/qa-report.md`）。
 - **R1 不动点（正确性红线）不成立 — 阻塞 M1.4**：`generate(parse(generate(d))) != generate(d)`。根因是生成器 C 注释头泄漏（`C  Cell Cards: N cells defined` → 变成栅元 `$` 注释；`C  Surface Cards: N surfaces defined` → 计入曲面文本；`C  ===== Data Cards ====="` → 捕获进 other_cards），输出逐代膨胀。P1 动引擎代码前必须先修。
@@ -170,6 +170,7 @@
 
 | 日期 | 变更类型 | 改动描述 | 涉及 Agent |
 | :--- | :--- | :--- | :--- |
+| 2026-08-12 | 修复/重构 | **P1 技术债重构完成**（refactor/generator-tech-debt 分支，自 experiment/geouned 建）：全量 pytest **251 绿 / 0 红**（复跑 ×2 稳定），6 红全部转绿。F#7 bf0a2c7（pymcnp 提到模块顶部，test_f7_*×2 转绿）→ F#3 c774e56（函数内 import json/sys + E0DBG 清理，grep 归零，test_f3_*×2 转绿）→ F#4 52ca251（`_build_sdef_parts` 合并两分支，字节不变）→ F#5/F#6 4a e404172（`_generate_multi_source` 拆 5 函数 + SDEF_FIELD_SPECS 表驱动，字符化门 test_generator_multi_source.py 全绿）→ 4b/4c 018ced5（kitchen-sink R1/R4 红→绿：POS F-dist 重建 / sdef_extra 分布关键字去重 / SI V 型 / banners 注释 + 回放重发 / SI 值扁平化 / 字段序统一）→ F#1 1488aae（raw_overrides 收敛 `_apply_raw_override`，tally-key 门控保留，test_generator_overrides.py 28/28 绿）。重锚定：review_findings.json 7 项全 resolved + commit 索引；UI_ARCHITECTURE.md §5.2/§5.3/§6.4/§7/§7.1 更新；test_tech_debt.py 注释行号更新；PROJECT_MEMORY.md 本行 + §6。边界遵守：未碰 api.yaml / api_server 路由 / _wrap_long_lines / `_generate_structured_distributions` join。待 tester 复核 | 后端 |
 | 2026-08-12 | 文档 | **P1 重构契约已锁定**：`docs/contracts/p1-refactor.md`（目标 251 绿/0 红，顺序 F#7→F#3→F#4→F#5+F#6→F#1）。F#5+F#6 拆 5 函数 + `SDEF_FIELD_SPECS` 表驱动，按 §0.5.5 复合根因清单逐项消除漂移（POS F-dist 分支重建 `POS=F D1` / sdef_extra 分布关键字去重 / `_parse_sisp_structured` SI 类型表加 V / 分布注释进 banners 词汇 + 回放重发 / SI 值扁平化 / 字段序统一）；`_generate_distribution_sdef` 一并改序。F#1 收敛为 `_apply_raw_override`（保留 1145 raw_tally 门控）。含施工顺序/每步验收/重锚定清单/风险预警。记忆文档 ADR 已补 3 条 | 架构师 |
 | 2026-08-12 | 测试 | P0 第二轮复核（M1.4 门禁）：全量 **245 绿 / 6 红** 复核确认通过，放行 P1。minimal+3 样例 R1 全绿、F-B/C/D 转绿、129+73+7 零回归、无断言降级、P1 范围未触碰；6 红 = 4 技术债 F#3/F#7 + 2 kitchen-sink R1/R4（归 P1，残留差异纯化为多源 SDEF 漂移）。`docs/qa-report.md` 已更新 | 测试 |
 | 2026-08-12 | 文档 | 重建 `app/UI_ARCHITECTURE.md`（7 节：边界图/启动链路/import-root/deck JSON 契约/raw_overrides/往返保真/技术债地图）。原 P2 产出因未 commit 被 `git checkout -- app/` 误清空（PM 回滚失误，非内容问题）；本次按 7 节结构复原，**全部行号已 Grep 重锚定到 F-A~F-E 修复后工作树**：raw_overrides 守卫 1069/1081/1107/1115/1131/1139/1147/1168 + 不一致变体 1156；`_wrap_long_lines` 1010；F#3 import json 631/671（原 622/660）；F#4 `_generate_single_source` 247；F#5 `_generate_multi_source` 375；F#6 源字段枚举 384-403/434-449/486-489；F#7 pymcnp import 110；E0DBG core.py 826-827/1018-1021、__init__.py 138-140、api_server.py 608-610。如实反映缺陷修复后行为（banners.py 新增、normalize_lines 剥 &、parse_f_tally 多粒子、_is_cell_line 大小写、validate_deck 解包、options 上移 M 头行）。 | 架构师 |

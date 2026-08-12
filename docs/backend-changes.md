@@ -72,3 +72,51 @@ python -m pytest tests/ -v          # 期望 245 绿 / 6 红（4 红=F#3/F#7 技
 ```
 
 （引擎纯函数，无 HTTP 端点变更，无需起 5001。）
+
+---
+
+# 附录 A：P1 技术债重构（2026-08-12，分支 refactor/generator-tech-debt）
+
+> 契约：`docs/contracts/p1-refactor.md`（已锁定）。施工顺序 F#7→F#3→F#4→F#5+F#6→F#1。
+> **终态：全量 pytest = 251 绿 / 0 红（复跑 ×2 稳定）**，6 红全部转绿。
+
+## A.1 每个 F# 的重构结果 + commit 索引
+
+| F# | 重构 | 断言红→绿 | commit |
+| :--- | :--- | :--- | :--- |
+| F#7 | `from pymcnp import inp` 从 `_generate_basic` 函数内提到模块顶部（导入期 fail-fast） | `test_f7_pymcnp_imported_at_module_level` / `test_f7_pymcnp_function_level_import_absent` ×2 转绿 | `bf0a2c7` |
+| F#3 | 删函数内 `import json as _json`（改 `json.loads`）+ `import sys` + `[E0DBG]` print（inp_generator/core.py/__init__.py/api_server.py 4 文件）；连带 api_server 两处捆绑 `import sys, os, json...` 收敛（模块级已有） | `test_f3_no_function_level_import_json_in_inp_generator` / `test_f3_no_function_level_import_sys_in_parsers` ×2 转绿；grep `import json as`/`E0DBG`/函数内 `import sys` 归零 | `c774e56` |
+| F#4 | `_generate_single_source` 两分支（Dn/普通）合并为 `_build_sdef_parts(src, include_special)` | `test_f4_*`×2 保持绿；`test_generator_sdef.py` 全绿（字节不变）；`test_sdef_single_source_delegates` pin `SDEF  ERG=14.0  POS=0 0 0` 保持 | `52ca251` |
+| F#5+F#6 4a | 拆 `_collect_source_values`/`_normalize_probabilities`/`_varying_dist_params`/`_build_multi_sdef_parts`/`_build_multi_sisp_cards` 五函数 + `SDEF_FIELD_SPECS` 表 | `test_generator_multi_source.py` 14/14 全绿（行为 pin，输出逐字节一致）；kitchen-sink R1/R4 仍红（结构未改漂移） | `e404172` |
+| F#5+F#6 4b | 漂移修复：sdef_extra 分布关键字去重 / SI 类型表加 V / banners 注释 + `_DYNAMIC_PATTERNS` / 多源 SI 值扁平化 / `_generate_distribution_sdef` 改字段序 + POS F-dist 分支 + 注释重发 | `test_r1_fixed_point_kitchen_sink` + `test_r4_kitchen_sink_full_roundtrip` **红→绿**；样例 R1（prob41c/avr13/inp24/minimal）保持绿 | `018ced5` |
+| F#5+F#6 4c | 全量回归 | **251 绿 / 0 红**（复跑 ×2 稳定） | （含于 018ced5） |
+| F#1 | 8 处 raw_overrides 守卫收敛为 `_apply_raw_override(...)` 一行调用；1145 门控保留（判 tally key） | `test_generator_overrides.py` 28/28 全绿（含 raw_tally 门控三例 pin）；grep `overrides.get` 仅 `_raw_override_text` 一处 | `1488aae` |
+
+## A.2 F#5+F#6 子步验收
+
+- **4a 字符化门**：五函数拆出后 `test_generator_multi_source.py` 全绿（行为 pin），证明重构未改字节；此步 kitchen-sink R1/R4 允许仍红。
+- **4b 漂移修复**：§0.5.5 根因 #2（POS F-dist 分支重建 `POS=F D1`）+ #3（sdef_extra 分布关键字去重）+ #4（SI 类型表加 V）+ #5（分布注释 banners 词汇 + 回放重发）+ SI 值扁平化 + 字段序统一；kitchen-sink R1/R4 红→绿，样例 R1 保持绿。
+- **4c 全量回归**：251 绿 / 0 红，R1/R4 kitchen-sink 稳定。
+
+## A.3 文件改动明细（P1 重锚定后行号）
+
+| 文件 | 改动 |
+| :--- | :--- |
+| `app/generator/inp_generator.py` | pymcnp 顶部 import（8）；`_build_sdef_parts`（247）；`SDEF_FIELD_SPECS`（306）；`_generate_distribution_sdef`（341，字段序 + POS 四态 + 注释重发）；`_multi_source_comment_reemit`（406）；多源 5 函数（434/454/473/500/556/577/608）；`_strip_sdef_extra_dist_keys`（556）；raw_overrides 助手 `_raw_override_text`/`_has_raw_override`/`_apply_raw_override`（1140/1145/1149）+ 8 调用点（1191/1196/1215/1229/1231/1234/1237/1252）+ tally-key 门控（1241/1246） |
+| `app/generator/parsers/core.py` | SI 类型表加 "V"（126）；删函数内 import sys + [E0DBG] print |
+| `app/generator/parsers/__init__.py` | 删函数内 import sys + [E0DBG] print（138-140） |
+| `app/generator/banners.py` | 新增 `multi_source_comment_banner`（84）；`_DYNAMIC_PATTERNS` 加 `^C\s+\d+ sources, probability keyed to D1$` |
+| `gui/backend/api_server.py` | 删 [E0DBG] print + 函数内 import sys（608-610、1004、1097）；**路由表 25 端点未触碰** |
+
+## A.4 新增环境变量
+
+无（P1 纯结构重构 + 漂移修复，不引入新依赖、无新增环境变量）。
+
+## A.5 本地启动验证步骤
+
+```bash
+cd "d:/MCNP/输入卡生成器源码"
+python -m pytest tests/ -v          # 期望 251 绿 / 0 红（复跑 ×2 稳定）
+```
+
+（引擎纯函数，无 HTTP 端点变更，无需起 5001。）

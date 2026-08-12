@@ -136,41 +136,36 @@ api_server 生成路径单独传参（api_server.py:550-551）。
 
 **空串 = 无覆盖**：守卫用 `(overrides.get(key) or "").strip()`，空/缺省 key 走正常 `_generate_*` 分支。
 
-### 5.2 守卫行号表（重锚定后）
+### 5.2 守卫行号表（P1 F#1 收敛后）
 
-全部守卫在 `generate_inp_from_deck`（inp_generator.py:1041）内，模式统一：
+P1 F#1（commit 1488aae）将 8 处复制粘贴守卫收敛为 `_apply_raw_override` 一行调用（inp_generator.py:1149-1161），
+判空统一走 `_has_raw_override`（1145）→ `_raw_override_text`（1140，`(overrides.get(key) or "").strip()`，空串=无覆盖语义保留）。
+调用点全部在 `generate_inp_from_deck`（inp_generator.py:1163）：
 
-```python
-raw = (overrides.get("<key>") or "").strip()
-if raw:
-    lines.append(RAW_<KEY>_BANNER)      # banners.py 冻结词汇
-    lines.extend(raw.split("\n"))
-else:
-    ...正常 _generate_* 分支...
-```
+| 调用点行号 | key | banner 常量 | generator 闭包 |
+| :--- | :--- | :--- | :--- |
+| 1191 | `cells` | RAW_CELL_BANNER | `_generate_cells` + `cell_cards_banner` 节头 |
+| 1196 | `surfaces` | RAW_SURF_BANNER | `_generate_surfaces` + `surface_cards_banner` 节头 |
+| 1215 | `materials` | RAW_MAT_BANNER | `_generate_materials` |
+| 1229 | `sdef` | RAW_SDEF_BANNER | `_sdef_dispatch`（distribution/kcode/surface/fixed 四分支闭包） |
+| 1231 | `phys` | RAW_PHYS_BANNER | `_generate_phys` |
+| 1234 | `tally` | RAW_TALLY_BANNER | `_generate_tallies` |
+| 1237 | `e0` | RAW_E0_BANNER | `_generate_energy_mesh` |
+| 1252 | `cut` | RAW_CUT_BANNER | `_generate_cut` |
 
-| 守卫行号 | key | banner 常量 |
-| :--- | :--- | :--- |
-| 1069 | `cells` | RAW_CELL_BANNER |
-| 1081 | `surfaces` | RAW_SURF_BANNER |
-| 1107 | `materials` | RAW_MAT_BANNER |
-| 1115 | `sdef` | RAW_SDEF_BANNER |
-| 1131 | `phys` | RAW_PHYS_BANNER |
-| 1139 | `tally` | RAW_TALLY_BANNER |
-| 1147 | `e0` | RAW_E0_BANNER |
-| 1168 | `cut` | RAW_CUT_BANNER |
+grep 归零检查：`grep -n "overrides.get" inp_generator.py` 仅命中 `_raw_override_text`（1142 行）。
 
-### 5.3 raw_tally 门控语义（不一致变体，P1 须保留）
+### 5.3 raw_tally 门控语义（不一致变体，P1 保留为特性）
 
-inp_generator.py:1156 是第 9 处守卫，但**判的是 `raw_tally`（tally override）而非当前 override key**，
-且语义不同于其它守卫：
+P1 F#1 收敛后，En/T0/Tn 门控不再有第 9 处守卫的"判 raw_tally 而非当前 key"形态，统一为
+`_has_raw_override(overrides, "tally")`（inp_generator.py:1145）——**判的仍是 tally key，非当前 override key**：
 
-- `raw_tally = (overrides.get("tally") or "").strip()`（1156）在 tally 守卫（1139）之后**重复读取** tally override。
-- 当 tally 有覆盖时，**抑制 En 分计数能量箱（1157 `if not raw_tally:`）与 T0/Tn 时间网格（1162 `if not raw_tally:`）的自动生成**——
+- tally 有覆盖时（`_has_raw_override(overrides, "tally")` 为真），**抑制 En 分计数能量箱（1241 `if not _has_raw_override(overrides, "tally"):`）与 T0/Tn 时间网格（1246）的自动生成**——
   即"手写 tally 文本时，不要自动补 En/T0/Tn 卡，让用户文本说了算"。
+- e0 / cut / 其它 override 不触发该门控（test_e0_override_does_NOT_suppress_en_t0_tn / test_cut_override_does_not_affect_en_t0_tn pin）。
 
-该变体是 `review_findings.json` F#1 指出的"不一致/不组合"技术债根源（P1 收敛为 `_apply_raw_override(...)` 时，
-**此门控语义必须保留**，契约 bugfix-f1-f5.md §7 明确禁止凭直觉改）。**P1 之前禁止动 raw_overrides 行为。**
+该门控是 `review_findings.json` F#1 记载的历史"不一致变体"，P1 收敛时**语义一字未动**（判 tally key 是特性不是 bug，
+契约 bugfix-f1-f5.md §7 / p1-refactor.md §5 明确禁止凭直觉"修正"为判当前 key）。
 
 ### 5.4 覆盖行为的注意点
 
@@ -188,16 +183,16 @@ inp_generator.py:1156 是第 9 处守卫，但**判的是 `raw_tally`（tally ov
 **定义**（tests/integration/test_roundtrip.py:30-35）：`g2 = generate(parse(generate(d)))`，
 断言 `g2 == generate(d)` **字节相等**（从第二代起稳定；不要求 parse(手写 INP) 原样 == INP）。
 
-| 测试 | 本轮状态（F-A~F-E 修复后） | 说明 |
+| 测试 | 状态（P1 F#5/F#6 后） | 说明 |
 | :--- | :--- | :--- |
 | `test_r1_fixed_point_minimal_deck` | 绿 | 最小 deck 第二代起稳定 |
 | `test_r1_fixed_point_sample_prob41c` / `avr13` | 绿 | vendor 样例第二代起稳定 |
 | `test_smoke_r1_fixed_point[*]`（3 参） | 绿 | 冒烟 |
 | `test_r1_output_does_not_grow_unboundedly` | 绿 | kitchen-sink 增长探针（不膨胀） |
-| `test_r1_fixed_point_kitchen_sink` | **红（P1）** | 表示漂移非膨胀：多源 SDEF 字段重组（F#5/F#6） |
-| `test_r4_kitchen_sink_full_roundtrip` | **红（P1）** | 同根因，见 bugfix-f1-f5.md §0.5.5 |
+| `test_r1_fixed_point_kitchen_sink` | **绿（P1 已修）** | 多源 SDEF 漂移已消除（F#5/F#6），见 §6.4 |
+| `test_r4_kitchen_sink_full_roundtrip` | **绿（P1 已修）** | 同根因已消除 |
 
-R1 成立的机制（F-A 方案 C 修复，2026-08-12）：
+R1 成立的机制（F-A 方案 C 修复，2026-08-12；P1 F#5/F#6 补多源漂移）：
 - 生成器节头词汇冻结在 `banners.py`（单一事实来源），生成器禁止内联节头字符串；
 - 解析器 `split_sections` 的 C 注释分支（sections.py:210-216）用 `is_generator_banner` **精确拦截**生成器节头，
   节头不进 cell_lines/surf_lines/data_lines——不污染 cell.comment、不进 deck.surfaces、不进 other_cards，逐代膨胀停止；
@@ -228,30 +223,48 @@ R1 成立的机制（F-A 方案 C 修复，2026-08-12）：
 | F-E 剥 `&` | lines.py `normalize_lines` | 续行合并/flush 前剥离尾 `&`，surface_expr/vec 等字段不再带续行符污染（先 strip_comment 再剥，不误伤 `$` 注释内字面 `&`） |
 | F-H 小写 m | sections.py:79-81 `_is_cell_line` | `3 m1 -1.0 -3` 大小写不敏感识别为栅元行 |
 
+### 6.4 多源 ↔ 分布表示字节稳定（P1 F#5/F#6 新增）
+
+P1 F#5/F#6（commits e404172 + 018ced5）使多源生成与分布回放两种表示**逐字节一致**（g1 == g2 恒定），
+消除 bugfix-f1-f5.md §0.5.5 复合根因 #2-#5 + SI 值空格归一化：
+
+| 根因 | 消除方案 | 落点（重锚定后） |
+| :--- | :--- | :--- |
+| #2 `POS=F D1`→`X=F Y=D1` 逐轴重组 | 分布回放 POS 四态加 F-dist 分支：`_px` 匹配 `^F\d*$` 且 `_py` 为 D 引用且 `_pz` 空 → 原样 `POS={_px} {_py}` | `_generate_distribution_sdef`（inp_generator.py:341-363） |
+| #3 `TME=D6`→`TME=0.0` 退标量 | 多源 sdef_extra 去重：`_strip_sdef_extra_dist_keys` 剥离 sdef_extra 中 KEY 属于 dist_names 的 `KEY=` 片段（标量-标量重复不去） | `_build_multi_sdef_parts` + `_strip_sdef_extra_dist_keys`（556） |
+| #4 `SI1 V`→`SI1 L` 变型 | `_parse_sisp_structured` SI 类型表加 `"V"` | parsers/core.py:126 |
+| #5 分布注释丢失/移位 | `multi_source_comment_banner(n)` 进 banners.py（84）+ `_DYNAMIC_PATTERNS` 加 `^C\s+\d+ sources, probability keyed to D1$`；分布回放 `_multi_source_comment_reemit` 在 D1 键控链存在时重发（保守触发） | banners.py + `_generate_distribution_sdef` |
+| SI 值空格归一化 | 多源 SI 卡值全扁平化：每个 value `split()` 拆 token 再 `'  '.join` 全部 token（VEC/AXS/V-向量 `0 0 1` 等与回放字节一致） | `_build_multi_sisp_cards`（577） |
+| 字段序不一致 | 统一为 `SDEF_FIELD_SPECS` 序（POS, PAR, ERG, DIR, WGT, CEL, TME, VEC, AXS, RAD, EXT, SUR, NRM, TR, CCC, ARA, RATE），分布回放与多源共用 | `SDEF_FIELD_SPECS`（306）+ `_generate_distribution_sdef` |
+
+关键不变式：**多源 D-index 由 `dist_params` 位置决定**（POS_VEC 恒占 D1），与 SDEF 字段发射序解耦；
+`_generate_structured_distributions` 的 `'  '.join`（SI/SP 值双空格）作为回放基准**一字未动**（test_structured_distributions_full pin）。
+
 ---
 
 ## §7 技术债地图
 
-数据源：`app/generator/review_findings.json`（7 项，全部在 `inp_generator.py`；行号已重锚定到修复后工作树）。
-P1 清偿顺序：F#7 → F#3 → F#4 → F#5+F#6 → F#1。
+数据源：`app/generator/review_findings.json`（7 项，全部在 `inp_generator.py`）。**P1 已全部清偿（2026-08-12）**。
 
-| # | 技术债 | 锚点（重锚定后） | pin 状态 | 说明 |
+| # | 技术债 | 锚点（P1 重锚定后） | pin 状态 | 清偿 commit / 说明 |
 | :--- | :--- | :--- | :--- | :--- |
-| F#1 | raw_overrides 守卫复制粘贴 8 次 + 不一致变体 | 守卫 1069/1081/1107/1115/1131/1139/1147/1168；不一致变体 **1156**（判 raw_tally 而非当前 key） | **绿** | raw 绕过格式/校验，坏串静默失败；收敛为 `_apply_raw_override(...)`，**保留 1156-1166 门控语义** |
-| F#2 | `_generate_en_cards` 函数内重复 `import re` | 820 | **已解决**（review_findings 标记 Resolved） | 原 567 行局部 import 已移除，仅历史记录 |
-| F#3 | 函数内 `import json as _json` 遮蔽模块级 import | **631**（`_generate_kcode`）、**671**（`_generate_structured_distributions`） | **红（P1）** | 模块级已 import json（inp_generator.py:5）；F#3 共 2 红测试（json in inp_generator + sys in parsers） |
-| F#4 | `_generate_single_source` 两段几乎相同 SDEF 构造 | 247（Dn 分支 254-290 vs 普通分支 292-310） | **绿** | DRY 违规，新增字段要改两处；P1 合并为表驱动 |
-| F#5 | `_generate_multi_source` 145 行混杂 5 个子关注点 | 375（值收集 384-403 / 概率归一 405-417 / 方差检测 419-425 / SDEF 构造 451-499 / SI-SP 501-517；add_dist 430） | **绿** | 无法单测概率归一；P1 拆 3-4 个小函数 |
-| F#6 | 多源源字段名 3 处枚举 | 384-403（值列表）/ 434-449（add_dist）/ 486-489（SI-SP dict） | **绿** | 新增字段漏一处即静默缺失分布；P1 用 `SDEF_FIELD_SPECS` 表 |
-| F#7 | `_generate_basic` 函数内 `from pymcnp import inp` | 110 | **红（P1）** | pymcnp 是硬依赖（requirements.txt），应模块顶层 import（导入期 fail-fast）；F#7 共 2 红测试 |
+| F#1 | raw_overrides 守卫复制粘贴 8 次 + 不一致变体 | `_apply_raw_override` 调用点 1191/1196/1215/1229/1231/1234/1237/1252；门控 `_has_raw_override(overrides, "tally")` 1241/1246 | **已清偿** | commit 1488aae；收敛为 `_apply_raw_override` 一行调用，tally-key 门控语义保留（test_generator_overrides.py 28/28 绿） |
+| F#2 | `_generate_en_cards` 函数内重复 `import re` | — | **已清偿**（P0 期间 Resolved） | 原 567 行局部 import 已移除，仅历史记录 |
+| F#3 | 函数内 `import json as _json` + `import sys` + `[E0DBG]` | `_generate_kcode`/`_generate_structured_distributions` 现用模块级 `json` | **已清偿** | commit c774e56；grep `import json as`/`E0DBG`/函数内 `import sys` 全归零；test_f3_* ×2 转绿 |
+| F#4 | `_generate_single_source` 两段几乎相同 SDEF 构造 | `_build_sdef_parts(src, include_special)`（247） | **已清偿** | commit 52ca251；输出字节不变（test_generator_sdef.py 全绿 + `test_sdef_single_source_delegates` pin） |
+| F#5 | `_generate_multi_source` 145 行混杂 5 个子关注点 | `_collect_source_values`(434) / `_normalize_probabilities`(454) / `_varying_dist_params`(473) / `_build_multi_sdef_parts`(500) / `_build_multi_sisp_cards`(577) | **已清偿** | commits e404172（4a 拆函数）+ 018ced5（4b 漂移）；概率归一早成独立纯函数，kitchen-sink R1/R4 转绿 |
+| F#6 | 多源源字段名 3 处枚举 | `SDEF_FIELD_SPECS` 表（306）单源驱动值收集/方差/SI-SP 三处 | **已清偿** | commits e404172 + 018ced5；新增字段 = 表加一行三处自动生效 |
+| F#7 | `_generate_basic` 函数内 `from pymcnp import inp` | 模块顶部 8 行 `from pymcnp import inp as pymcnp_inp` | **已清偿** | commit bf0a2c7；导入期 fail-fast，test_f7_* ×2 转绿 |
 
-**终态口径（2026-08-12 上级裁决）**：全量 pytest = **245 绿 / 6 红**。6 红 = 4 技术债（F#3 两测 + F#7 两测）+ 2 kitchen-sink（R1/R4）。F#1/F#2/F#4/F#5/F#6 的 pin 为绿（行为正确性断言，标记缺陷存在）。P1 放行条件 = 本轮达成 245/6。
+**终态口径（P1 完成后 2026-08-12）**：全量 pytest = **251 绿 / 0 红**（复跑 ×2 稳定）。
+6 红全部转绿 = F#3×2 + F#7×2（技术债）+ kitchen-sink R1/R4×2（漂移）。无断言降级（用例总数 251 不变），无 skip/pass 骗绿。
 
-### 7.1 E0DBG 调试残留位置（重锚定后）
+### 7.1 E0DBG 调试残留（P1 F#3 已清除）
 
-`[E0DBG]` 是残留的 stderr 调试 print（`file=sys.stderr`），与 F#3 的 `import sys` 绑定，P1 一并清除：
+`[E0DBG]` stderr 调试 print（`file=sys.stderr`）与函数内 `import sys` 已在 F#3（commit c774e56）全部删除，
+grep `E0DBG` 归零。历史位置（已清除）：
 
-| 文件 | 行号 | 内容 |
+| 文件 | 旧行号 | 内容 |
 | :--- | :--- | :--- |
 | `parsers/core.py` | 826-827 | `_parse_card_with_continuation` 残留 |
 | `parsers/core.py` | 1018-1021 | `parse_data_cards` 的 E0 行调试 |
@@ -261,13 +274,12 @@ P1 清偿顺序：F#7 → F#3 → F#4 → F#5+F#6 → F#1。
 ### 7.2 相关辅助注意点
 
 - **AST pin 测试行号不敏感**：tests/integration/test_tech_debt.py 的 F#3/F#7 用 `ast` 扫描"函数内 import"，
-  逻辑与行号无关；文件内注释仍写旧行号（如 622/660/821/1013/138/98），仅为备忘，不影响断言结果。
-- **kitchen-sink R1/R4 红是预期的**：复合根因清单（bugfix-f1-f5.md §0.5.5）7 项中 F-A/F-E/F-C 本轮已修，
-  剩余第 2-5 项（多源 SDEF 字段重组漂移 + 分布注释丢失）归 P1 F#5/F#6。P1 重构 `_generate_multi_source`
-  时必须逐项对照消除，使表示字节稳定。
-- **P1 边界红线**（bugfix-f1-f5.md §7）：本轮/任何后续施工**不得**触碰 §7 清单函数体结构——
-  含 `import json as _json`、`import sys`、`[E0DBG]` print、pymcnp import 提升、raw_overrides 守卫收敛、
-  `_generate_multi_source` 366-510 结构重构（本轮不碰）。
+  逻辑与行号无关；文件内注释行号已更新为 P1 后现状（见 test_tech_debt.py 文件头）。
+- **kitchen-sink R1/R4 已转绿**：复合根因清单（bugfix-f1-f5.md §0.5.5）第 2-5 项 + SI 值空格归一化已在 P1 F#5/F#6 逐项消除，
+  多源生成与分布回放表示字节稳定（见 §6.4）。
+- **P1 边界红线遵守情况**：`api.yaml` 漂移闸门保持绿；`gui/backend/api_server.py` 路由表（25 端点）未触碰
+  （仅删 F#3 的 `[E0DBG]` print + 函数内 `import sys`）；`_wrap_long_lines` 未动；
+  `_generate_structured_distributions` 的 `'  '.join` 未动（test_structured_distributions_full pin 保持）。
 
 ---
 
