@@ -120,3 +120,73 @@ python -m pytest tests/ -v          # 期望 251 绿 / 0 红（复跑 ×2 稳定
 ```
 
 （引擎纯函数，无 HTTP 端点变更，无需起 5001。）
+
+## B. 3D 预览性能修复后端（preview3d-performance 契约，分支 perf/preview3d）
+
+> 契约：`docs/contracts/preview3d-performance.md`（2026-08-12 复现实测修订版）。
+> 范围：步 1 bound 修正 + preview_cache + 步 2 vtk 惰性 + 步 3 handler 接线。前端（gui/src/）由前端 agent 负责，后端零重叠。
+
+### B.1 改动清单（文件/函数/行号，重锚定 2026-08-12）
+
+| 文件 | 函数 | 改动 |
+| :--- | :--- | :--- |
+| `app/freecad_preview.py` | `_surface_extent_values`（新增，:206） | 类型→extent 规则表：位移类直接取 max；宏体方向向量（RCC/REC/TRC h、BOX a1/a2/a3、WED v1/v2/v3、RHP/HEX r/s/t）与基点合成角点；未知类型保守全取 |
+| `app/freecad_preview.py` | `_compute_bound_from_surfaces`（重写，:268） | 按 extent 表取 max，GQ/SQ 跳过，`max*1.3+100` 与 default 兜底。接口 `(surf_dicts, default)->float` 不变，:335 调用点不变 |
+| `app/preview_cache.py` | `PreviewCache`（新增） | 深模块：`fingerprint`（canonical json→sha256）/`get`（isdir 兜底 miss）/`put`（STL 拷贝进缓存自有目录 `base_dir/<fp>/`）/`evict_dir`/`evict_lru`（LRU 上限 3，删目录）/`get_or_build`（builder seam）。纯 stdlib |
+| `app/_freecad_csg_worker.py` | 顶层（:30） | 删顶层 `import vtk`，`_HAVE_VTK = False` |
+| `app/_freecad_csg_worker.py` | `_quadric_to_shape`（:671） | native 回退分支内按需 `import vtk`（try/except，成功置 `_HAVE_VTK=True`） |
+| `gui/backend/api_server.py` | `_PREVIEW_CACHE`（:35） | 模块级 PreviewCache 单例 |
+| `gui/backend/api_server.py` | `_clear_stl_session`（:44） | 与缓存联动：`_PREVIEW_CACHE.evict_dir(d)` |
+| `gui/backend/api_server.py` | `_handle_preview_3d`（:1001） | 接线：fp=fingerprint → get 命中则免 FreeCAD（_STL_SESSION=缓存目录、读 STL→base64、freecad 用缓存值）→ 未命中走现状 + cache.put。响应结构逐字段不变 |
+
+### B.2 新增测试
+
+| 文件 | 测什么 |
+| :--- | :--- |
+| `tests/unit/test_preview_bound.py` | 7 fixture 区间断言（shield_20m∈[2600,2800]、stress_bunker∈[2000,2100]、inp01≈13100、inp09≈3665）+ RCC 轴长不当坐标（5300→2700）+ WED/BOX 角点合成 + GQ/SQ 跳过 |
+| `tests/unit/test_preview_cache.py` | fingerprint 稳定、put/get 命中、evict_lru 删最旧、evict_dir 联动、命中跳过 builder seam |
+| `tests/integration/test_preview3d_worker.py` | AST：worker 顶层无 import vtk、惰性 import 在 _quadric_to_shape 内且位于 native 回退后、_HAVE_VTK 初值 False |
+
+### B.3 全量 pytest（每步验收）
+
+| 步 | 验收 | 结果 |
+| :--- | :--- | :--- |
+| 步 1 | 251 + test_preview_bound + test_preview_cache 全绿 | **267 passed / 0 failed**（commit 97de569） |
+| 步 2 | test_preview3d_worker 绿；grep worker 顶层无 vtk | **271 passed / 0 failed**（commit e65d423） |
+| 步 3 | 全量绿 + 联调点 1/2 | **271 passed / 0 failed**（commit dbab84e） |
+
+### B.4 联调验证（真实 FreeCAD，本机 D:\FreeCAD\...\bin）
+
+- **联调点 1（响应结构不变）**：miss/hit 响应均含 `stl_files`/`stl_data`/`freecad`/`count` 四业务字段（`status` 为 `_ok` 信封），逐字段一致，`stl_data` 字节级一致。
+- **联调点 2（_STL_SESSION 指向缓存目录后 cross-section 复用）**：命中后 `/api/cross-section` 从缓存目录 STL 切片正常（count=1, polygons=1）。
+- **KPI**：未命中 0.68s（FreeCAD 重建）→ clear-stl（缓存存活）→ 命中 0.02s（缓存目录），≤1.0s 达成。重复命中 guard 生效；clear-stl 驱逐命中中的缓存目录（无悬挂）。
+- 验证脚本：仓库外临时脚本（手动运行，非 pytest——铁律禁测试 import api_server）。
+
+### B.5 bound 修正对 4 fixture 实际输出
+
+| fixture | 旧 bound | 新 bound | 契约期望 |
+| :--- | :--- | :--- | :--- |
+| preview_shield_20m.inp | 5300 | **2700** | [2600, 2800] |
+| preview_stress_bunker.inp | 2050 | **2050** | [2000, 2100] |
+| preview_inp01_m100.inp | 13100 | **13100** | ≈13100 ±5% |
+| preview_inp09_m27.inp | 3665.6 | **3665.6** | ≈3665 ±5% |
+
+### B.6 新增环境变量
+
+无（preview_cache 纯 stdlib，无新增运行时依赖）。缓存根目录默认系统临时目录 `mcnp_preview_cache_*`，LRU 上限 3。
+
+### B.7 本地启动验证步骤
+
+```bash
+cd "d:/MCNP/输入卡生成器源码"
+python -m pytest tests/ -v          # 期望 271 绿 / 0 红
+python gui/backend/api_server.py    # 起 5001，post /api/preview-3d 同一 deck 两次：第一次 FreeCAD 重建，第二次命中缓存
+```
+
+### B.8 遇到的坑
+
+1. **分支已由前端先建**：`perf/preview3d` 已存在（前端 gui/src 改动未提交）。直接切过去；提交时只暂存后端文件，避免 `git add -A` 扫走前端工作树。
+2. **缓存设计需"缓存自有拷贝"**：前端关预览窗口即调 `/api/clear-stl`。若缓存只引用会话目录，clear 即驱逐 → 关窗后重开同一 deck 必 miss，KPI 失效。`put` 把 STL 拷入 `base_dir/<fp>/` 缓存目录，会话目录被清不影响缓存。
+3. **命中路径 clear 需 guard**：命中若无条件 `_clear_stl_session()`，重复命中（prev==cached dir）会自我删除缓存目录。guard：仅当 `prev_dir != cached["dir"]` 才 clear。
+4. **`_ok()` 信封含 `status`**：响应 = `{status, stl_files, stl_data, freecad, count}`，四业务字段逐字段不变，`status` 是既有信封。
+5. **commit message 反引号**：git-bash 中 commit message 内反引号会被命令替换，`import vtk` 文本被吞。后续避免。
