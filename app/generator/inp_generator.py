@@ -298,6 +298,46 @@ def _generate_single_source(src: SourceData) -> list[str]:
     return ["  ".join(_build_sdef_parts(src, include_special=has_d_or_extra))]
 
 
+# ── SDEF 字段表（F#5/F#6 单一事实来源）──
+# 字段序 = 多源现状发射序（POS 首位）。值收集/方差标注/SI-SP 三处枚举全部改读本表。
+# source_attr/adv_attr 分别供多源与分布回放取字段；special=="pos" 走三分量/F-分布特判。
+_FieldSpec = tuple  # (keyword, source_attr, adv_attr, si_type, special)
+
+SDEF_FIELD_SPECS = (
+    ("POS",  None,   None,       "V", "pos"),    # 特殊：三分量 + F-分布
+    ("PAR",  "par",  "sdef_par",  "L", None),
+    ("ERG",  "erg",  "sdef_erg",  "L", None),
+    ("DIR",  "dir_", "sdef_dir",  "L", None),
+    ("WGT",  "wgt",  "sdef_wgt",  "L", None),
+    ("CEL",  "cel",  "sdef_cel",  "L", None),
+    ("TME",  "tme",  "sdef_tme",  "L", None),
+    ("VEC",  "vec",  "sdef_vec",  "L", None),
+    ("AXS",  "axs",  "sdef_axs",  "L", None),
+    ("RAD",  "rad",  "sdef_rad",  "L", None),
+    ("EXT",  "ext",  "sdef_ext",  "L", None),
+    ("SUR",  "sur",  "sdef_sur",  "L", None),
+    ("NRM",  "nrm",  "sdef_nrm",  "L", None),
+    ("TR",   "tr",   "sdef_tr",   "L", None),
+    ("CCC",  "ccc",  "sdef_ccc",  "L", None),
+    ("ARA",  "ara",  "sdef_ara",  "L", None),
+    ("RATE", "rate", "sdef_rate", "L", None),
+)
+
+
+def _src_field(src: SourceData, spec) -> tuple:
+    """spec.special=="pos" → (pos_x,pos_y,pos_z)；else getattr(src, source_attr)"""
+    if spec[4] == "pos":
+        return (src.pos_x, src.pos_y, src.pos_z)
+    return getattr(src, spec[1])
+
+
+def _adv_field(adv: AdvancedSettings, spec) -> tuple:
+    """spec.special=="pos" → (sdef_pos_x,sdef_pos_y,sdef_pos_z)；else getattr(adv, adv_attr)"""
+    if spec[4] == "pos":
+        return (adv.sdef_pos_x, adv.sdef_pos_y, adv.sdef_pos_z)
+    return getattr(adv, spec[2])
+
+
 def _generate_distribution_sdef(adv: AdvancedSettings) -> list[str]:
     """分布源模式：从结构化字段生成 SDEF + 反序列化 SI/SP 文本"""
     parts = ["SDEF"]
@@ -360,37 +400,32 @@ def _generate_distribution_sdef(adv: AdvancedSettings) -> list[str]:
     return lines
 
 
-def _generate_multi_source(sources: list[SourceData]) -> list[str]:
-    """
-    多源：手动生成 SDEF + SI/SP 分布卡。
-    保留此逻辑是因为 pymcnp 的 SI/SP 机制需要逐卡构造，
-    且多源之间的 Dn 键控关联由我们精确控制更可靠。
-    """
-    lines = []
-    n_sources = len(sources)
+def _collect_source_values(sources: list[SourceData]) -> tuple[dict[str, list[str]], list[str], str]:
+    """(a) 值收集：SDEF_FIELD_SPECS 驱动，返回 (field_values, prob_list, first_sdef_extra)。
 
-    par_list = [src.par for src in sources]
-    erg_list = [src.erg for src in sources]
-    pos_x_list = [src.pos_x for src in sources]
-    pos_y_list = [src.pos_y for src in sources]
-    pos_z_list = [src.pos_z for src in sources]
-    dir_list = [src.dir_ for src in sources]
-    wgt_list = [src.wgt for src in sources]
-    cel_list = [src.cel for src in sources]
-    tme_list = [src.tme for src in sources]
-    vec_list = [src.vec for src in sources]
-    axs_list = [src.axs for src in sources]
-    rad_list = [src.rad for src in sources]
-    ext_list = [src.ext for src in sources]
-    sur_list = [src.sur for src in sources]
-    nrm_list = [src.nrm for src in sources]
-    tr_list = [src.tr for src in sources]
-    ccc_list = [src.ccc for src in sources]
-    ara_list = [src.ara for src in sources]
-    rate_list = [src.rate for src in sources]
+    field_values 键 = 各 spec.keyword（POS 特殊拆三键：POS_X/POS_Y/POS_Z 三个 list）；
+    prob_list = [src.probability or '1' ...]；first_sdef_extra = sources[0].sdef_extra。
+    """
+    field_values = {}
+    for spec in SDEF_FIELD_SPECS:
+        keyword = spec[0]
+        if keyword == "POS":
+            field_values["POS_X"] = [src.pos_x for src in sources]
+            field_values["POS_Y"] = [src.pos_y for src in sources]
+            field_values["POS_Z"] = [src.pos_z for src in sources]
+        else:
+            field_values[keyword] = [getattr(src, spec[1]) for src in sources]
     prob_list = [src.probability if src.probability else '1' for src in sources]
+    first_sdef_extra = sources[0].sdef_extra if sources else ""
+    return field_values, prob_list, first_sdef_extra
 
-    # 归一化概率
+
+def _normalize_probabilities(prob_list: list[str], n_sources: int) -> list[str]:
+    """(b) 概率归一（含 NaN/inf 校验，可独立单测——F#5 的核心收益）。
+
+    float 化 → NaN/inf 抛 ValueError → 求和；total<=0（含 NaN）回退等概率 1/n；
+    否则 p/total 格式化为 f"{:.6f}"。等价于现状（结构拆解前）405-417 行。
+    """
     try:
         prob_floats = [float(p) for p in prob_list]
         for p in prob_floats:
@@ -400,63 +435,66 @@ def _generate_multi_source(sources: list[SourceData]) -> list[str]:
         raise ValueError(f"多源概率格式错误：{e}") from e
     total_prob = sum(prob_floats)
     if not (total_prob > 0):  # handles NaN correctly: NaN > 0 is False, so not False → fallback
-        prob_norm = [f"{1.0 / n_sources:.6f}" for _ in sources]
-    else:
-        prob_norm = [f"{p / total_prob:.6f}" for p in prob_floats]
+        return [f"{1.0 / n_sources:.6f}" for _ in range(n_sources)]
+    return [f"{p / total_prob:.6f}" for p in prob_floats]
 
-    # POS 跨源是否不同
+
+def _varying_dist_params(field_values: dict[str, list[str]]) -> list[tuple[str, list[str]]]:
+    """(c) 方差检测 + add_dist 纯函数化（等价于结构拆解前 419-449 行）。
+
+    按 SDEF_FIELD_SPECS 序收集 len(set(values))>1 的 (keyword, values)；
+    POS_X/POS_Y/POS_Z 三键跨源任一分量不同 → 首插 ("POS_VEC", ["x y z", ...])。
+    """
+    dist_params = []
+    for spec in SDEF_FIELD_SPECS:
+        keyword = spec[0]
+        if keyword == "POS":
+            continue
+        values = field_values[keyword]
+        if len(set(values)) > 1:
+            dist_params.append((keyword, values))
+    # POS 跨源是否不同（POS_VEC 恒占 D1）
+    px, py, pz = field_values["POS_X"], field_values["POS_Y"], field_values["POS_Z"]
+    n_sources = len(px)
     pos_differ = any(
-        (pos_x_list[i] != pos_x_list[0] or
-         pos_y_list[i] != pos_y_list[0] or
-         pos_z_list[i] != pos_z_list[0])
+        (px[i] != px[0] or py[i] != py[0] or pz[i] != pz[0])
         for i in range(1, n_sources)
     )
+    if pos_differ:
+        vec_entries = [f"{px[i]} {py[i]} {pz[i]}" for i in range(n_sources)]
+        dist_params.insert(0, ("POS_VEC", vec_entries))
+    return dist_params
 
-    # 收集需要分布的参数
-    dist_params = []
 
-    def add_dist(param_name, values):
-        if len(set(values)) > 1:
-            dist_params.append((param_name, values))
+def _build_multi_sdef_parts(sources: list[SourceData], field_values: dict[str, list[str]],
+                            dist_params: list[tuple[str, list[str]]],
+                            sdef_extra: str) -> list[str]:
+    """(d) SDEF 行构造（等价于结构拆解前 451-499 行，含 sdef_extra 去重）。
 
-    add_dist("PAR", par_list)
-    add_dist("ERG", erg_list)
-    add_dist("DIR", dir_list)
-    add_dist("WGT", wgt_list)
-    add_dist("CEL", cel_list)
-    add_dist("TME", tme_list)
-    add_dist("VEC", vec_list)
-    add_dist("AXS", axs_list)
-    add_dist("RAD", rad_list)
-    add_dist("EXT", ext_list)
-    add_dist("SUR", sur_list)
-    add_dist("NRM", nrm_list)
-    add_dist("TR", tr_list)
-    add_dist("CCC", ccc_list)
-    add_dist("ARA", ara_list)
-    add_dist("RATE", rate_list)
-
-    # SDEF 行
+    按 SDEF_FIELD_SPECS 序发射字段；D-index = dist_params.index(keyword) + 1
+    （POS_VEC 恒占 D1）。发射规则：
+      - POS：pos_differ → `POS=F D{1}`；else 三分量齐全 → `POS=x y z`
+      - 首组（PAR/ERG/DIR/WGT）：在 dist_names → `{kw}=D{di}`；
+        else PAR→`PAR={default}`（无条件）、WGT→`WGT={default}`（无条件）、
+        ERG/DIR→`{kw}={default}`（default 非空才发）
+      - 次组（CEL..RATE）：在 dist_names → `{kw}=D{di}`；else vals[0] 非空 → `{kw}={vals[0]}`
+      - sdef_extra：取 sources[0].sdef_extra 原样追加
+    """
     sdef_parts = []
     di = 1
     dist_names = {d[0] for d in dist_params}
-
+    px, py, pz = field_values["POS_X"], field_values["POS_Y"], field_values["POS_Z"]
+    pos_differ = bool(dist_params) and dist_params[0][0] == "POS_VEC"
     if pos_differ:
-        vec_entries = [
-            f"{pos_x_list[i]} {pos_y_list[i]} {pos_z_list[i]}"
-            for i in range(n_sources)
-        ]
-        sdef_parts.append(f"POS=F D{di}")
-        dist_params.insert(0, ("POS_VEC", vec_entries))
-        di += 1
-    elif any([pos_x_list[0], pos_y_list[0], pos_z_list[0]]):
-        sdef_parts.append(f"POS={pos_x_list[0]} {pos_y_list[0]} {pos_z_list[0]}")
+        sdef_parts.append(f"POS=F D{di}"); di += 1
+    elif any([px[0], py[0], pz[0]]):
+        sdef_parts.append(f"POS={px[0]} {py[0]} {pz[0]}")
 
-    for pn, default, vals in [
-        ("PAR", par_list[0], par_list),
-        ("ERG", erg_list[0], erg_list),
-        ("DIR", dir_list[0], dir_list),
-        ("WGT", wgt_list[0], wgt_list),
+    for pn, default in [
+        ("PAR", field_values["PAR"][0]),
+        ("ERG", field_values["ERG"][0]),
+        ("DIR", field_values["DIR"][0]),
+        ("WGT", field_values["WGT"][0]),
     ]:
         if pn in dist_names:
             sdef_parts.append(f"{pn}=D{di}"); di += 1
@@ -471,22 +509,27 @@ def _generate_multi_source(sources: list[SourceData]) -> list[str]:
 
     for pn in ("CEL", "TME", "VEC", "AXS", "RAD", "EXT",
                "SUR", "NRM", "TR", "CCC", "ARA", "RATE"):
-        vals = {"CEL": cel_list, "TME": tme_list, "VEC": vec_list,
-                "AXS": axs_list, "RAD": rad_list, "EXT": ext_list,
-                "SUR": sur_list, "NRM": nrm_list, "TR": tr_list,
-                "CCC": ccc_list, "ARA": ara_list, "RATE": rate_list}[pn]
+        vals = field_values[pn]
         if pn in dist_names:
             sdef_parts.append(f"{pn}=D{di}"); di += 1
         elif vals[0]:
             sdef_parts.append(f"{pn}={vals[0]}")
 
     # 多源共用同一份 sdef_extra（取第一个源）
-    if sources and sources[0].sdef_extra:
-        sdef_parts.append(sources[0].sdef_extra)
+    if sdef_extra:
+        sdef_parts.append(sdef_extra)
+    return sdef_parts
 
-    lines.append("SDEF  " + "  ".join(sdef_parts))
 
-    # SI/SP 卡
+def _build_multi_sisp_cards(dist_params: list[tuple[str, list[str]]],
+                            prob_norm: list[str], n_sources: int) -> list[str]:
+    """(e) SI/SP 构造（等价于结构拆解前 501-517 行）。
+
+    SI 卡序 = dist_params 序；POS_VEC → `SI{di}  V  平坦值`，其余 → `SI{di}  L  平坦值`；
+    首张 SI 的 SP 带 prob_norm（`SP{di}  {prob}`），其余 `SP{di}  D1`；
+    dist_params 非空 → 末尾 `C  {n_sources} sources, probability keyed to D1`。
+    """
+    lines = []
     si_di = 1
     first_dist = True
     for param_name, values in dist_params:
@@ -504,6 +547,21 @@ def _generate_multi_source(sources: list[SourceData]) -> list[str]:
     if dist_params:
         lines.append(f"C  {n_sources} sources, probability keyed to D1")
 
+    return lines
+
+
+def _generate_multi_source(sources: list[SourceData]) -> list[str]:
+    """
+    多源：手动生成 SDEF + SI/SP 分布卡。
+    保留此逻辑是因为 pymcnp 的 SI/SP 机制需要逐卡构造，
+    且多源之间的 Dn 键控关联由我们精确控制更可靠。
+    """
+    field_values, prob_list, sdef_extra = _collect_source_values(sources)
+    prob_norm = _normalize_probabilities(prob_list, len(sources))
+    dist_params = _varying_dist_params(field_values)
+    sdef_parts = _build_multi_sdef_parts(sources, field_values, dist_params, sdef_extra)
+    lines = ["SDEF  " + "  ".join(sdef_parts)]
+    lines += _build_multi_sisp_cards(dist_params, prob_norm, len(sources))
     return lines
 
 
