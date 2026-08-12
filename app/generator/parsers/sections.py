@@ -7,6 +7,7 @@ surface cards, blank line, data cards. This module detects section boundaries by
 examining each line's content and classifying it as a cell, surface, or data card.
 """
 import re
+from ..banners import is_generator_banner
 from .lines import _SURFACE_TYPES
 
 
@@ -75,7 +76,8 @@ def _is_cell_line(line: str) -> bool:
     # Cell line second token is a material number (0 or integer) or an Mn reference
     if second == "0" or second.lstrip('-').isdigit():
         return True
-    if second.startswith("M") and len(second) > 1 and second[1:].isdigit():
+    # 大小写不敏感（F-H）：MCNP 材料引用不区分大小写，小写 m1 应与 M1 同样识别
+    if second[0] in "Mm" and len(second) > 1 and second[1:].isdigit():
         return True
     return False
 
@@ -206,6 +208,12 @@ def split_sections(lines: list[str]) -> tuple[str, list[str], list[str], list[st
 
         # C-comment cards go to the current section (cell/surface/data) without changing phase
         if re.match(r'^C\s', line, re.IGNORECASE):
+            # 生成器节头（F-A）：不吸收进任何 phase 的原始收集，防止逐代膨胀。
+            # 单一拦截点 —— 节头不进 cell_lines（→ 不污染 cell.comment）、
+            # 不进 surf_lines（→ 不进 deck.surfaces）、不进 data_lines（→ 不进 other_cards）。
+            if is_generator_banner(line):
+                i += 1
+                continue
             if phase == "cell":
                 cell_lines.append(line)
             elif phase == "surface":

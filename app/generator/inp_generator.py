@@ -7,6 +7,18 @@ import math
 import re
 from app.models import (BasicSettings, CellData, CellRow, MaterialData, MaterialRow,
                         SourceData, AdvancedSettings, DeckData, TallySettings)
+from .banners import (
+    DATA_CARDS_BANNER, TALLIES_BANNER, TR_BANNER, KSRC_BANNER, HSRC_BANNER,
+    KCODE_BANNER, KCODE_SKIPPED_BANNER, KSRC_FAILED_BANNER, FISSION_OFF_BANNER,
+    RAW_CELL_BANNER, RAW_SURF_BANNER, RAW_MAT_BANNER, RAW_SDEF_BANNER,
+    RAW_PHYS_BANNER, RAW_TALLY_BANNER, RAW_E0_BANNER, RAW_CUT_BANNER,
+    ADDITIONAL_CARDS_BANNER, PER_TALLY_EN_BANNER, PER_TALLY_TN_BANNER,
+    ENERGY_MESH_SKIP_BANNER, ENERGY_MESH_INVALID_BANNER,
+    TIME_MESH_SKIP_BANNER, TIME_MESH_INVALID_BANNER,
+    cell_cards_banner, surface_cards_banner, energy_mesh_banner,
+    energy_mesh_custom_banner, time_mesh_banner, time_mesh_custom_banner,
+    skipped_card_banner,
+)
 
 
 # ===== Cells & Surfaces: 保留原始文本 pass-through =====
@@ -135,7 +147,7 @@ def _generate_basic(basic: BasicSettings) -> list[str]:
 
     if not basic.phys_fis:
         lines.append(str(pymcnp_inp.Nonu()).upper())
-        lines.append("C  Fission turned off via NONU card")
+        lines.append(FISSION_OFF_BANNER)
 
     return lines
 
@@ -190,8 +202,11 @@ def _generate_materials(materials: list[MaterialData]) -> list[str]:
         if mat.comment:
             lines.append(f"C  {mat.comment}")
 
-        # 首行: M{n}
+        # 首行: M{n}，材料选项（nlib= 等）与 M 头同行（MCNP 规范）
         card = f"M{mat.number}"
+        _opts = (getattr(mat, 'options', '') or '').strip()
+        if _opts:
+            card += "  " + _opts
         # 续行: 每个 ZAID/fraction 一行；raw 条件行原样独立成行（#ifdef/#else/#endif…）
         for row in mat.rows:
             if getattr(row, 'kind', 'nuclide') == "raw":
@@ -200,12 +215,6 @@ def _generate_materials(materials: list[MaterialData]) -> list[str]:
             zaid = _normalize_zaid(row.zaid)
             frac = row.fraction
             card += f"\n     {zaid}  {frac}"
-
-        # 材料选项附在最后一行尾
-        opts = getattr(mat, 'options', '') or ''
-        if opts.strip():
-            # 添加到最后一行的末尾
-            card += "  " + opts.strip()
 
         lines.append(card)
 
@@ -519,7 +528,7 @@ def _generate_tallies(tally: TallySettings) -> list[str]:
     if not tally.tallies:
         return []
 
-    lines = ["C  Tallies"]
+    lines = [TALLIES_BANNER]
 
     for td in tally.tallies:
         params = td.params if td.params else ""
@@ -598,9 +607,9 @@ def _generate_kcode(adv: AdvancedSettings) -> list[str]:
     KSRC   x1 y1 z1 [x2 y2 z2 ...]
     HSRC   nx xmin xmax ny ymin ymax nz zmin zmax
     """
-    lines = ["C  KCODE Criticality Source Parameters"]
+    lines = [KCODE_BANNER]
     if not adv.kcode_nsrc:
-        return lines + ["C  KCODE skipped — NSRC not set"]
+        return lines + [KCODE_SKIPPED_BANNER]
 
     # 8 参数：NSRC RKK IKZ KCT MSRK KNRM MRKP KC8（空值用 j-skip 压缩省略）
     kcode_parts = [
@@ -625,22 +634,24 @@ def _generate_kcode(adv: AdvancedSettings) -> list[str]:
             if points:
                 coords = []
                 for pt in points:
-                    x = (pt.get("x") or "").strip()
-                    y = (pt.get("y") or "").strip()
-                    z = (pt.get("z") or "").strip()
+                    # F-F：坐标可能是数值类型（json.loads 保持 int/float）→ 显式 str 强转；
+                    # 0 是 falsy，`0 or ""` 会吞掉合法坐标 0 → None 感知 + 显式强转
+                    _v = pt.get("x"); x = "" if _v is None else str(_v).strip()
+                    _v = pt.get("y"); y = "" if _v is None else str(_v).strip()
+                    _v = pt.get("z"); z = "" if _v is None else str(_v).strip()
                     if x and y and z:
                         coords.append(f"{x}  {y}  {z}")
                 if coords:
-                    lines.append("C  KSRC Initial Fission Points")
+                    lines.append(KSRC_BANNER)
                     lines.append("KSRC  " + coords[0])   # 首行 1 点
                     for c in coords[1:]:                 # 续行每行 1 点，方便阅读
                         lines.append("     " + c)
         except (_json.JSONDecodeError, TypeError):
-            lines.append("C  KSRC points: failed to parse")
+            lines.append(KSRC_FAILED_BANNER)
 
     # HSRC 香农熵网格（评估裂变源收敛）
     if getattr(adv, "hsrc_enabled", False) and (adv.hsrc_text or "").strip():
-        lines.append("C  HSRC Shannon Entropy Mesh")
+        lines.append(HSRC_BANNER)
         lines.append(f"HSRC  {adv.hsrc_text.strip()}")
     return lines
 
@@ -814,10 +825,10 @@ def _generate_en_cards(tally: TallySettings) -> list[str]:
     enabled = {td.number for td in tally.tallies
                if getattr(td, 'generate_en', False)}
 
-    lines = ["C  Per-tally energy grids (En cards)"]
+    lines = [PER_TALLY_EN_BANNER]
     for num, plines in _parse_numeric_cards(tally.e_cards_text, "E"):
         if num is None:
-            lines.append(f"C  SKIPPED (not a valid En card): {plines[0] if plines else ''}")
+            lines.append(skipped_card_banner("En", plines[0] if plines else ""))
         elif num in enabled:
             _emit_numeric_card(lines, "E", num, plines)
     return lines
@@ -846,9 +857,9 @@ def _generate_time_mesh(tally: TallySettings) -> list[str]:
         if len(custom_values) >= 2:
             parts = "\n".join(f"     {_fmt(v)}" for v in custom_values)
             lines.append(f"T0\n{parts}")
-            lines.append(f"C  Time mesh: {len(custom_values)} user-defined points")
+            lines.append(time_mesh_custom_banner(len(custom_values)))
         else:
-            lines.append("C  Time mesh: custom grid skipped — need at least 2 time values")
+            lines.append(TIME_MESH_SKIP_BANNER)
     else:
         if not tally.t0_min or not tally.t0_max or not tally.t0_bins:
             return lines  # 空值 → 不生成 T0
@@ -860,9 +871,9 @@ def _generate_time_mesh(tally: TallySettings) -> list[str]:
                 grid_syntax = "log" if tally.t0_log else "i"
                 type_label = "LOG" if tally.t0_log else "LINEAR"
                 lines.append(f"T0\n     {_fmt(tmin)} {n_bins}{grid_syntax} {_fmt(tmax)}")
-                lines.append(f"C  Time mesh: {n_bins} {type_label} intervals, {_fmt(tmin)} to {_fmt(tmax)} shakes")
+                lines.append(time_mesh_banner(n_bins, type_label, _fmt(tmin), _fmt(tmax)))
         except (ValueError, ZeroDivisionError):
-            lines.append("C  Time mesh: invalid parameters, skipped")
+            lines.append(TIME_MESH_INVALID_BANNER)
     return lines
 
 
@@ -874,10 +885,10 @@ def _generate_tn_cards(tally: TallySettings) -> list[str]:
     enabled = {td.number for td in tally.tallies
                if getattr(td, 'generate_tn', False)}
 
-    lines = ["C  Per-tally time grids (Tn cards)"]
+    lines = [PER_TALLY_TN_BANNER]
     for num, plines in _parse_numeric_cards(tally.t_cards_text, "T"):
         if num is None:
-            lines.append(f"C  SKIPPED (not a valid Tn card): {plines[0] if plines else ''}")
+            lines.append(skipped_card_banner("Tn", plines[0] if plines else ""))
         elif num in enabled:
             _emit_numeric_card(lines, "T", num, plines)
     return lines
@@ -912,9 +923,9 @@ def _generate_energy_mesh(tally: TallySettings) -> list[str]:
             # 手写 E0 + 每值一行续行
             parts = "\n".join(f"     {_fmt(v)}" for v in custom_values)
             lines.append(f"E0\n{parts}")
-            lines.append(f"C  Energy mesh: {len(custom_values)} user-defined points")
+            lines.append(energy_mesh_custom_banner(len(custom_values)))
         else:
-            lines.append("C  Energy mesh: custom grid skipped — need at least 2 energy values")
+            lines.append(ENERGY_MESH_SKIP_BANNER)
     else:
         if not tally.e_min or not tally.e_max or not tally.e_bins:
             return lines  # 空值 → 不生成 E0
@@ -930,10 +941,10 @@ def _generate_energy_mesh(tally: TallySettings) -> list[str]:
                 lines.append(
                     f"E0\n     {_fmt(e_min)} {n_bins}{grid_syntax} {_fmt(e_max)}"
                 )
-                lines.append(f"C  Energy mesh: {n_bins} {type_label} intervals, {_fmt(e_min)} to {_fmt(e_max)} MeV")
+                lines.append(energy_mesh_banner(n_bins, type_label, _fmt(e_min), _fmt(e_max)))
 
         except (ValueError, ZeroDivisionError):
-            lines.append("C  Energy mesh: invalid parameters, skipped")
+            lines.append(ENERGY_MESH_INVALID_BANNER)
 
     return lines
 
@@ -986,7 +997,7 @@ def _generate_other_cards(adv: AdvancedSettings) -> list[str]:
     """生成其他卡片（来自高级选项卡的手动输入），在数据卡段最末尾生成"""
     lines = []
     if adv.other_cards:
-        lines.append("C  ===== Additional Cards (from Advanced tab) =====")
+        lines.append(ADDITIONAL_CARDS_BANNER)
         for card in adv.other_cards.split("\n"):
             stripped = card.rstrip()
             if stripped:
@@ -1057,29 +1068,29 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
     # 2. 栅元卡
     raw = (overrides.get("cells") or "").strip()
     if raw:
-        lines.append("C  Cell Cards (raw text mode)")
+        lines.append(RAW_CELL_BANNER)
         lines.extend(raw.split("\n"))
     else:
         cell_lines = _generate_cells(cells)
         if cell_lines:
-            lines.append(f"C  Cell Cards: {len(cells)} cells defined")
+            lines.append(cell_cards_banner(len(cells)))
             lines.extend(cell_lines)
     lines.append("")
 
     # 3. 曲面卡
     raw = (overrides.get("surfaces") or "").strip()
     if raw:
-        lines.append("C  Surface Cards (raw text mode)")
+        lines.append(RAW_SURF_BANNER)
         lines.extend(raw.split("\n"))
     else:
         surf_lines = _generate_surfaces(surfaces_text)
         if surf_lines:
-            lines.append(f"C  Surface Cards: {len(surf_lines)} surfaces defined")
+            lines.append(surface_cards_banner(len(surf_lines)))
             lines.extend(surf_lines)
     lines.append("")
 
     # 4. 数据卡
-    lines.append("C  ===== Data Cards =====")
+    lines.append(DATA_CARDS_BANNER)
 
     basic_lines = _generate_basic(basic)
     if basic_lines: lines.extend(basic_lines)
@@ -1087,7 +1098,7 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
     # TRn 变换卡（来自右侧 TR 文本框，放入数据卡段）
     tr_text = deck.tr_cards.strip()
     if tr_text:
-        lines.append("C  TR Transformations")
+        lines.append(TR_BANNER)
         for tr_line in tr_text.split("\n"):
             tr_line = tr_line.strip()
             if tr_line:
@@ -1095,7 +1106,7 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
 
     raw = (overrides.get("materials") or "").strip()
     if raw:
-        lines.append("C  Materials (raw text mode)")
+        lines.append(RAW_MAT_BANNER)
         lines.extend(raw.split("\n"))
     else:
         mat_lines = _generate_materials(materials)
@@ -1103,7 +1114,7 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
 
     raw = (overrides.get("sdef") or "").strip()
     if raw:
-        lines.append("C  Source Definition (raw text mode)")
+        lines.append(RAW_SDEF_BANNER)
         lines.extend(raw.split("\n"))
     else:
         _has_dist = bool(adv.sdef_raw_text) or bool(_dist_json_nonempty(adv.sdef_distributions))
@@ -1119,7 +1130,7 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
 
     raw = (overrides.get("phys") or "").strip()
     if raw:
-        lines.append("C  PHYS Cards (raw text mode)")
+        lines.append(RAW_PHYS_BANNER)
         lines.extend(raw.split("\n"))
     else:
         phys_lines = _generate_phys(adv)
@@ -1127,7 +1138,7 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
 
     raw = (overrides.get("tally") or "").strip()
     if raw:
-        lines.append("C  Tally Cards (raw text mode)")
+        lines.append(RAW_TALLY_BANNER)
         lines.extend(raw.split("\n"))
     else:
         tally_lines = _generate_tallies(tally)
@@ -1135,7 +1146,7 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
 
     raw = (overrides.get("e0") or "").strip()
     if raw:
-        lines.append("C  Energy mesh (raw text mode)")
+        lines.append(RAW_E0_BANNER)
         lines.extend(raw.split("\n"))
     else:
         e0_lines = _generate_energy_mesh(tally)
@@ -1156,7 +1167,7 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
 
     raw = (overrides.get("cut") or "").strip()
     if raw:
-        lines.append("C  Particle Cutoffs (raw text mode)")
+        lines.append(RAW_CUT_BANNER)
         lines.extend(raw.split("\n"))
     else:
         cut_lines = _generate_cut(tally)

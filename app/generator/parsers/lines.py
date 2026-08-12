@@ -53,6 +53,22 @@ def extract_comment(line: str) -> str:
     return ""
 
 
+def _rstrip_amp(cur: str) -> str:
+    """剥离行尾 MCNP 续行符 &（先剥 $ 注释，避免误伤注释内字面 &）。
+
+    F-E：_wrap_long_lines 拆分超长行时附加的尾 & 是续行标记，不属字段内容。
+    段末无续行的尾 &（行尾落在空行/节边界前）在 flush 时原样保留会污染
+    surface_expr / vec 等字段，此处统一剥掉。
+    """
+    comment = extract_comment(cur)
+    body = strip_comment(cur).rstrip()
+    if body.endswith("&"):
+        body = body[:-1].rstrip()
+    if comment:
+        return body + " $ " + comment
+    return body
+
+
 def normalize_lines(raw_text: str) -> list[str]:
     """
     将原始 INP 文本标准化为独立行列表：
@@ -63,6 +79,7 @@ def normalize_lines(raw_text: str) -> list[str]:
        Preserve inline $ comments for later extraction (e.g., cell comments).
     2. 合并续行（以 & 结尾，或下一行以 5+ 空格开头）
        Merge continuation lines (lines ending with &, or next line indented by 5+ spaces).
+       & 续行标记合并后不残留（F-E）。
     3. C 注释行保留，并作为续行断点
        Preserve C comment lines; they act as continuation breakpoints.
     4. 保留空行用于分节
@@ -91,7 +108,7 @@ def normalize_lines(raw_text: str) -> list[str]:
         # Empty line: flush current buffer and preserve the blank line
         if not line.strip():
             if current.strip():
-                merged.append(current.strip())
+                merged.append(_rstrip_amp(current))
                 current = ""
             merged.append("")
             continue
@@ -99,7 +116,7 @@ def normalize_lines(raw_text: str) -> list[str]:
         # C comment line: flush current buffer, then keep the comment as a standalone entry
         if is_c_comment:
             if current.strip():
-                merged.append(current.strip())
+                merged.append(_rstrip_amp(current))
                 current = ""
             merged.append(line)
             continue
@@ -108,7 +125,7 @@ def normalize_lines(raw_text: str) -> list[str]:
         # 否则 #ifdef 之后的缩进核素行会被错误并入 #ifdef 行。
         if stripped.startswith("#"):
             if current.strip():
-                merged.append(current.strip())
+                merged.append(_rstrip_amp(current))
                 current = ""
             merged.append(line.rstrip())
             continue
@@ -121,11 +138,16 @@ def normalize_lines(raw_text: str) -> list[str]:
             # Continuation by indentation: next line starts with 5+ spaces
             if len(line) - len(line.lstrip()) >= 5:
                 cur_comment = extract_comment(current)
-                if cur_comment:
-                    current = (cur_no_dollar.strip() + " "
-                               + line_no_dollar.strip() + " $ " + cur_comment)
-                else:
-                    current += " " + line_no_dollar.strip()
+                line_comment = extract_comment(line)
+                # F-E：合并前剥离当前行尾 &（MCNP 续行符），避免 & 残留在字段中段
+                cur_body = cur_no_dollar.rstrip()
+                if cur_body.endswith("&"):
+                    cur_body = cur_body[:-1].rstrip()
+                current = cur_body + " " + line_no_dollar.strip()
+                # 保留 $ 注释：当前行无注释时取续行注释（_generate_cells 拆分长行时
+                # 注释可能落在续行上，不可丢）
+                if cur_comment or line_comment:
+                    current += " $ " + (cur_comment or line_comment)
                 continue
             # Continuation by ampersand: current line ends with &
             if cur_no_dollar.rstrip().endswith("&"):
@@ -139,7 +161,7 @@ def normalize_lines(raw_text: str) -> list[str]:
                     current += " $ " + line_dollar
                 continue
             # No continuation: flush current and start a new one
-            merged.append(current.strip())
+            merged.append(_rstrip_amp(current))
             current = line
         else:
             # Start a new line buffer
@@ -147,6 +169,6 @@ def normalize_lines(raw_text: str) -> list[str]:
 
     # Flush any remaining buffered line
     if current.strip():
-        merged.append(current.strip())
+        merged.append(_rstrip_amp(current))
 
     return merged

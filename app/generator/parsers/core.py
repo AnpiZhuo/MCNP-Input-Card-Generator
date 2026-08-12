@@ -421,6 +421,7 @@ def _apply_sdef_param(src: SourceData, key: str, val: str):
     elif key == "CCC":    src.ccc = val
     elif key == "ARA":    src.ara = val
     elif key == "RATE":   src.rate = val
+    elif key == "EFF":    src.sdef_extra = (src.sdef_extra + " EFF=" + val).strip()
 
 
 def _collect_multi_val(tokens: list[str], start: int) -> list[str]:
@@ -717,23 +718,24 @@ def parse_f_tally(parts: list[str], tally_defs: list) -> bool | None:
     if pre_m:
         fn_prefix = pre_m.group(1)
         first = pre_m.group(2)  # "F4:N" 去掉前缀后重新匹配
-    # 通量成像 FIPn / FIRn / FICn
-    img_m = re.match(r'^(FIP|FIR|FIC)(\d+):([NPEHAS])$', first)
+    # 通量成像 FIPn / FIRn / FICn（设计符支持多粒子逗号列表，如 F4:N,P）
+    _PARTICLE_RE = r'([NPEHAS](?:,[NPEHAS])*)'
+    img_m = re.match(r'^(FIP|FIR|FIC)(\d+):' + _PARTICLE_RE + r'$', first)
     if not img_m:
-        img_m = re.match(r'^(FIP|FIR|FIC)(\d+)([NPEHAS])$', first)
+        img_m = re.match(r'^(FIP|FIR|FIC)(\d+)' + _PARTICLE_RE + r'$', first)
     if img_m:
         fn_prefix = img_m.group(1)          # "FIP", "FIR", "FIC"
         suffix = int(img_m.group(2))
         designator = img_m.group(3).upper()
         number_suffix = ""
     else:
-        m = re.match(r'^F(\d+):([NPEHAS])$', first)
+        m = re.match(r'^F(\d+):' + _PARTICLE_RE + r'$', first)
         if not m:
-            m = re.match(r'^F(\d+)([NPEHAS])$', first)
+            m = re.match(r'^F(\d+)' + _PARTICLE_RE + r'$', first)
         if not m:
-            m = re.match(r'^F(\d+)([XYZ]):([NPEHAS])$', first)   # F5X:N 环探测器
+            m = re.match(r'^F(\d+)([XYZ]):' + _PARTICLE_RE + r'$', first)   # F5X:N 环探测器
         if not m:
-            m = re.match(r'^F(\d+)([XYZ])([NPEHAS])$', first)    # F5XN（无冒号）
+            m = re.match(r'^F(\d+)([XYZ])' + _PARTICLE_RE + r'$', first)    # F5XN（无冒号）
         if not m:
             return None
 
@@ -756,6 +758,9 @@ def parse_f_tally(parts: list[str], tally_defs: list) -> bool | None:
     tally_type = type_map[base]
     params = " ".join(parts[1:]) if len(parts) > 1 else ""
 
+    # 多粒子设计符（F4:N,P）按逗号展开为粒子列表（去空、小写）
+    particles_to_add = [p.strip().lower() for p in designator.split(",") if p.strip()]
+
     # 查找同 type+number 的已有定义，合并粒子
     existing = None
     for td in tally_defs:
@@ -764,15 +769,15 @@ def parse_f_tally(parts: list[str], tally_defs: list) -> bool | None:
             break
 
     if existing:
-        p_lower = designator.lower()
-        if p_lower not in [p.lower() for p in existing.particles]:
-            existing.particles.append(p_lower)
+        for p_lower in particles_to_add:
+            if p_lower not in [p.lower() for p in existing.particles]:
+                existing.particles.append(p_lower)
         if fn_prefix and not existing.fn_prefix:
             existing.fn_prefix = fn_prefix
     else:
         tally_defs.append(TallyDefinition(
             type=tally_type, number=suffix,
-            particles=[designator.lower()],
+            particles=particles_to_add,
             params=params,
             fn_prefix=fn_prefix,
             number_suffix=number_suffix,

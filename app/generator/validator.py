@@ -246,12 +246,17 @@ def validate_all(
     return errors
 
 
+def _unwrap_cells(cells):
+    """CellRow 判别联合 → 仅保留 kind=='cell' 的 CellData；raw 条件行不参与校验。"""
+    return [row.cell for row in cells if getattr(row, "kind", "cell") == "cell"]
+
+
 def validate_deck(deck: DeckData) -> list[str]:
     """从 DeckData 聚合对象校验必填项。"""
     return validate_all(
         basic=deck.basic,
         surfaces=deck.surfaces,
-        cells=deck.cells,
+        cells=_unwrap_cells(deck.cells),
         materials=deck.materials,
         sources=deck.sources,
         tally=deck.tally or TallySettings(),

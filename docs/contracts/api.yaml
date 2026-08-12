@@ -1,0 +1,1168 @@
+openapi: 3.0.3
+info:
+  title: MCNP 输入卡生成器 HTTP API
+  version: 1.6.3
+  description: |
+    gui/backend/api_server.py 暴露的 25 个端点契约（端口 5001）。
+    契约漂移闸门（tests/integration/test_api_contract.py）会以 AST 读取
+    api_server.py handlers 字典，断言本文件中每个 path 都有 operationId。
+
+    统一响应信封（_ok/_err，api_server.py:524-538）：
+      成功: {"status":"ok", ...handler 附加字段}          HTTP 200
+      失败: {"status":"error","message":str,"traceback":str} HTTP 500
+    个别 handler 会在 HTTP 200 下返回 {"status":"error","message":…}
+    （如 import-step / export-step / set-freecad-path 的守卫分支），已在各 path 注明。
+
+    方法约定：do_GET 与 do_POST 同路由（浏览器友好）；validate-zaid /
+    xsdir-search / serve-file 从 query 读参，其余从 JSON body 读参。
+servers:
+  - url: http://localhost:5001
+    description: 本地 Python 后端（sidecar 常驻）
+tags:
+  - name: deck
+    description: 生成 / 解析 / 校验 INP 与 deck
+  - name: source
+    description: 源 / 材料辅助（公式展开、ZAID 校验、xsdir）
+  - name: geometry
+    description: 3D 预览 / STEP / 截面
+  - name: io
+    description: 文件 / 目录选择、保存、运行 MCNP
+  - name: system
+    description: 环境检测（MCNP/FreeCAD）、文本↔表单互转
+
+paths:
+  /api/generate:
+    post:
+      operationId: generateInp
+      tags: [deck]
+      summary: 由 deck 生成完整 INP 文本
+      description: |
+        入参为前端 deck JSON（DeckData 各 section，见 app/models.py）+ 可选
+        raw_overrides。后端 deck_from_json() 后调用 generate_inp_from_deck()
+        （api_server.py:546-554）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                basic: { $ref: '#/components/schemas/BasicSettings' }
+                surfaces: { type: string, description: 曲面卡原始文本 }
+                tr_cards: { type: string, description: TR 变换卡原始文本 }
+                cells: { type: array, items: { $ref: '#/components/schemas/CellRow' } }
+                materials: { type: array, items: { $ref: '#/components/schemas/MaterialData' } }
+                sources: { type: array, items: { $ref: '#/components/schemas/SourceItem' } }
+                tallies: { type: array, items: { $ref: '#/components/schemas/TallyDef' } }
+                tally: { type: object, description: TallySettings 的 En/T0/Tn/CUT 网格字段 }
+                adv: { $ref: '#/components/schemas/AdvancedSettings' }
+                raw_overrides:
+                  type: object
+                  description: |
+                    前端只写 cells/materials/tally/sdef 4 key；空串=无覆盖。
+                    （后端另支持 surfaces/phys/e0/cut，UI 类型遗留）
+                  additionalProperties: { type: string }
+      responses:
+        '200':
+          description: 生成成功（_ok({"inp": …})）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      inp: { type: string, description: 完整 INP 文本（已过 80 列换行 _wrap_long_lines） }
+        '500':
+          description: 生成失败（_err(str(e))）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/expand-formula:
+    post:
+      operationId: expandFormula
+      tags: [source]
+      summary: 化学式 → 核素列表（pymcnp M_0.from_formula）
+      description: 入参 data.get("formula")，返回核素 ZAID+份额（api_server.py:557-593）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                formula: { type: string, description: 化学式文本（空则 500） }
+      responses:
+        '200':
+          description: 展开成功（_ok({"nuclides": …})）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      nuclides:
+                        type: array
+                        description: 份额已归一化（sum=1），fraction 为 6 位小数串
+                        items:
+                          type: object
+                          properties:
+                            zaid: { type: string }
+                            fraction: { type: string }
+        '500':
+          description: 化学式为空或解析失败
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/parse-inp:
+    post:
+      operationId: parseInp
+      tags: [deck]
+      summary: INP 文本 → 前端 deck 结构化数据
+      description: |
+        入参 data.get("inp")。返回 deck（含前端字段映射：nuclides、num、
+        impN/impP/impE、sourceMode、sdefFields、kcodeFields、ksrcPoints、
+        sdefRawText、distributions、sswFields、ssrFields、tallies、_warnings）。
+        解析时残留 [E0DBG] 调试 print（api_server.py:609-610，技术债，见 UI_ARCHITECTURE.md §7.2）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                inp: { type: string, description: INP 文本（空则 500） }
+      responses:
+        '200':
+          description: 解析成功（_ok({"deck": …})）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      deck:
+                        type: object
+                        description: 前端 deck（DeckContext.tsx 类型），含 _warnings 键
+                        properties:
+                          basic: { $ref: '#/components/schemas/BasicSettings' }
+                          surfaces: { type: string }
+                          tr_cards: { type: string }
+                          cells: { type: array, items: { $ref: '#/components/schemas/CellRow' } }
+                          materials:
+                            type: array
+                            description: 后端 rows → 前端 nuclides 已映射
+                            items: { $ref: '#/components/schemas/MaterialData' }
+                          sources: { type: array, items: { $ref: '#/components/schemas/SourceItem' } }
+                          sourceMode: { type: string, enum: [fixed, sdef, kcode, surface] }
+                          tallies: { type: array, items: { $ref: '#/components/schemas/TallyDef' } }
+                          distributions: { type: array, items: { $ref: '#/components/schemas/DistEntry' } }
+                          sdefFields: { type: object, additionalProperties: { type: string } }
+                          kcodeFields: { type: object, additionalProperties: { type: string } }
+                          ksrcPoints: { type: string }
+                          sdefRawText: { type: string }
+                          sswFields: { $ref: '#/components/schemas/SswFields' }
+                          ssrFields: { $ref: '#/components/schemas/SsrFields' }
+                          _warnings: { type: array, items: { type: string } }
+        '500':
+          description: INP 为空或解析异常
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/save-inp:
+    post:
+      operationId: saveInp
+      tags: [io]
+      summary: 保存 INP（可选 run.bat）到输出目录并打开资源管理器
+      description: 入参键 inp/filename/outputDir/runBat（api_server.py:720-739）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                inp: { type: string }
+                filename: { type: string, default: output.inp }
+                outputDir: { type: string, default: 'D:/MCNP/new/claude' }
+                runBat: { type: string, description: 可选，写入同名 .bat }
+      responses:
+        '200':
+          description: 保存成功（_ok({"path": …})）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      path: { type: string, description: 写入的 inp 完整路径 }
+        '500':
+          description: 写盘异常
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/choose-dir:
+    post:
+      operationId: chooseDir
+      tags: [io]
+      summary: 原生目录选择窗口
+      description: 入参可选 initialDir（api_server.py:742-758）。
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                initialDir: { type: string }
+      responses:
+        '200':
+          description: 返回选中路径；取消时 path 为空串且 cancelled=true
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      path: { type: string }
+                      cancelled: { type: boolean }
+        '500':
+          description: 无法打开系统目录选择器
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/choose-file:
+    post:
+      operationId: chooseFile
+      tags: [io]
+      summary: 原生文件选择窗口（返回路径 + 文件内容）
+      description: 无 body 键；取消返回 {path:"", cancelled:true}，选中返回
+        {path, content, cancelled:false}（api_server.py:761-783）。
+      responses:
+        '200':
+          description: 选择结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      path: { type: string }
+                      content: { type: string, description: 选中时才有（UTF-8，errors=replace） }
+                      cancelled: { type: boolean }
+        '500':
+          description: 无法打开系统文件选择器
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/run-mcnp:
+    post:
+      operationId: runMcnp
+      tags: [io]
+      summary: 后台新控制台运行 MCNP（跑完自动清理临时 inp/bat）
+      description: |
+        入参键 inp/filename/outputDir/mcnpExe。注意响应 status 字面量为
+        "started"（内层覆盖 _ok 外层 "ok"）：实际返回
+        {"status":"started","path":…,"exe":…}（api_server.py:786-842）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                inp: { type: string, description: 空则 500 }
+                filename: { type: string, default: output.inp }
+                outputDir: { type: string, default: 'D:/MCNP/new/claude' }
+                mcnpExe: { type: string, description: 未传或不存在则自动 _find_mcnp_exe() }
+      responses:
+        '200':
+          description: 已在后台线程拉起（_ok({"status":"started",…})）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [started] }
+                  path: { type: string }
+                  exe: { type: string }
+        '500':
+          description: INP 为空 / 未找到 mcnp.exe
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/xsdir-check:
+    post:
+      operationId: xsdirCheck
+      tags: [source]
+      summary: xsdir 截面数据库加载状态
+      description: |
+        无 body 键。成功 _ok({"loaded",count,path})；异常回退
+        _ok({"loaded":false,"count":0,"error"})（HTTP 200，api_server.py:845-869）。
+      responses:
+        '200':
+          description: 状态（异常分支也在 200 返回 loaded:false+error）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      loaded: { type: boolean }
+                      count: { type: integer }
+                      path: { type: string, nullable: true }
+                      error: { type: string, description: 仅加载失败分支出现 }
+
+  /api/import-step:
+    post:
+      operationId: importStep
+      tags: [geometry]
+      summary: STEP 文件导入（GEOUNED 通道）→ 几何 deck
+      description: |
+        入参键 data（STEP 文本）/ path / settings{materialName,density}。
+        守卫失败在 HTTP 200 下返回 {"status":"error","message"}（api_server.py:872-924）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                data: { type: string, description: STEP 文本（非空则落盘临时文件） }
+                path: { type: string, description: STEP 文件路径 }
+                settings:
+                  type: object
+                  properties:
+                    materialName: { type: string, default: MAT }
+                    density: { type: string, default: '-1.0' }
+      responses:
+        '200':
+          description: |
+            成功: {"status":"ok","deck":{surfaces,tr_cards,cells}}；
+            失败守卫/无 FreeCAD/不可解析: {"status":"error","message":…}
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - { $ref: '#/components/schemas/OkEnvelope' }
+                      - type: object
+                        properties:
+                          deck:
+                            type: object
+                            properties:
+                              surfaces: { type: string }
+                              tr_cards: { type: string }
+                              cells:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    number: { type: integer }
+                                    material: { type: string }
+                                    density: { type: string }
+                                    surface_expr: { type: string }
+                                    comment: { type: string }
+                  - type: object
+                    properties:
+                      status: { type: string, enum: [error] }
+                      message: { type: string }
+        '500':
+          description: 未捕获异常（附 traceback）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/mcnp-detect:
+    post:
+      operationId: mcnpDetect
+      tags: [system]
+      summary: 检测 MCNP 可执行文件
+      description: 无 body 键；异常回退 {found:false,…} 于 200（api_server.py:1142-1149）。
+      responses:
+        '200':
+          description: 检测结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      found: { type: boolean }
+                      exe: { type: string }
+                      label: { type: string, description: 'MCNP6 / MCNP5 / MCNP?' }
+                      error: { type: string, description: 异常分支出现 }
+
+  /api/check-freecad:
+    post:
+      operationId: checkFreecad
+      tags: [system]
+      summary: 重新定位 FreeCAD（清缓存后完整搜索）
+      description: 无 body 键（api_server.py:1192-1200）。
+      responses:
+        '200':
+          description: 定位结果（异常回退 {found:false,path:"",error}）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      found: { type: boolean }
+                      path: { type: string }
+                      error: { type: string, description: 异常分支出现 }
+
+  /api/set-freecad-path:
+    post:
+      operationId: setFreecadPath
+      tags: [system]
+      summary: 保存用户手动指定的 FreeCAD 路径
+      description: |
+        入参 data.get("path")。守卫失败（不存在/非 freecad.exe）在 HTTP 200 下
+        返回 {"status":"error","message"}（api_server.py:1153-1168）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                path: { type: string }
+      responses:
+        '200':
+          description: |
+            成功: {"status":"ok","path"}；
+            失败守卫/异常: {"status":"error","message"}（HTTP 200）
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - { $ref: '#/components/schemas/OkEnvelope' }
+                      - type: object
+                        properties:
+                          path: { type: string }
+                  - type: object
+                    properties:
+                      status: { type: string, enum: [error] }
+                      message: { type: string }
+
+  /api/choose-freecad-path:
+    post:
+      operationId: chooseFreecadPath
+      tags: [system]
+      summary: 原生文件选择窗口选 FreeCAD.exe
+      description: 无 body 键；取消 {path:"",cancelled:true}（api_server.py:1170-1190）。
+      responses:
+        '200':
+          description: 选择结果（异常时附带 error 键）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      path: { type: string }
+                      cancelled: { type: boolean }
+                      error: { type: string, description: 异常分支出现 }
+
+  /api/validate-inp:
+    post:
+      operationId: validateInp
+      tags: [deck]
+      summary: INP 预校验（parsers.validator）
+      description: 入参 data.get("inp")（api_server.py:1203-1210）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                inp: { type: string }
+      responses:
+        '200':
+          description: 校验结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      valid: { type: boolean }
+                      errors: { type: array, items: { type: string } }
+        '500':
+          description: 校验异常
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/validate-zaid:
+    get:
+      operationId: validateZaid
+      tags: [source]
+      summary: ZAID 是否在 xsdir 数据库（query 参数）
+      description: |
+        query 读 zaid；无需 body。in_db 在未加载 xsdir 时为 null
+        （api_server.py:1213-1231）。do_GET 与 do_POST 同路由，前端以 GET ?zaid= 调用。
+      parameters:
+        - name: zaid
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: 校验结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      zaid: { type: string }
+                      in_db: { type: boolean, nullable: true, description: xsdir 未加载时为 null }
+                      loaded: { type: boolean }
+        '500':
+          description: 校验异常
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/parse-outp:
+    post:
+      operationId: parseOutp
+      tags: [deck]
+      summary: 解析 MCNP OUTP 输出 → 计数表格
+      description: |
+        入参 data.get("outp")。tallies 形如 {tnum: {type, rows, total}}。
+        pymcnp 未安装时在 HTTP 200 返回 {"status":"ok","error":true,"message"}
+        （api_server.py:1234-1250）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                outp: { type: string }
+      responses:
+        '200':
+          description: 解析结果
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - { $ref: '#/components/schemas/OkEnvelope' }
+                      - type: object
+                        properties:
+                          nps: { type: integer, nullable: true }
+                          tallies:
+                            type: object
+                            additionalProperties:
+                              type: object
+                              properties:
+                                type: { type: string }
+                                rows:
+                                  type: array
+                                  items:
+                                    type: object
+                                    properties:
+                                      energy: { type: string }
+                                      flux: { type: string }
+                                      error: { type: string }
+                                total:
+                                  type: object
+                                  properties:
+                                    energy: { type: string }
+                                    flux: { type: string }
+                                    error: { type: string }
+                          warnings: { type: array, items: { type: string } }
+                  - allOf:
+                      - { $ref: '#/components/schemas/OkEnvelope' }
+                      - type: object
+                        properties:
+                          error: { type: boolean, const: true }
+                          message: { type: string, description: pymcnp not installed }
+        '500':
+          description: 解析异常
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/xsdir-search:
+    get:
+      operationId: xsdirSearch
+      tags: [source]
+      summary: 在 xsdir 数据库搜索 ZAID（query 参数）
+      description: |
+        query 读 q；无需 body。未加载时 {"loaded":false,"results":[]}；
+        异常回退同形 + error 键（api_server.py:1253-1277）。
+      parameters:
+        - name: q
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: 搜索结果（最多 50 条）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      loaded: { type: boolean }
+                      results:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            zaid: { type: string }
+                      error: { type: string, description: 异常分支出现 }
+
+  /api/generate-step:
+    post:
+      operationId: generateStep
+      tags: [geometry]
+      summary: 由曲面文本生成 STEP（3D 预览用，generate_step 备用通道）
+      description: 入参 data.get("surfaces")（api_server.py:927-949）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                surfaces: { type: string }
+      responses:
+        '200':
+          description: 生成成功（_ok({"step_file","message"})）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      step_file: { type: string }
+                      message: { type: string, const: 'STEP 文件已生成' }
+        '500':
+          description: 生成异常
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/export-step:
+    post:
+      operationId: exportStep
+      tags: [geometry]
+      summary: 导出 STEP（FreeCAD CSG 真实几何，base64）
+      description: |
+        入参键 surfaces/cells/tr_cards。守卫失败在 HTTP 200 下返回
+        {"status":"error","message"}（api_server.py:952-1001）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                surfaces: { type: string }
+                cells: { type: array, items: { $ref: '#/components/schemas/CellRow' } }
+                tr_cards: { type: string }
+      responses:
+        '200':
+          description: |
+            成功: {"status":"ok","file":"mcnp_export.step","data":base64,"message"}；
+            无 FreeCAD/无可导出栅元/生成失败: {"status":"error","message"}（HTTP 200）
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - { $ref: '#/components/schemas/OkEnvelope' }
+                      - type: object
+                        properties:
+                          file: { type: string, const: mcnp_export.step }
+                          data: { type: string, format: byte, description: STEP 文件 base64 }
+                          message: { type: string, const: 'STEP 文件已导出' }
+                  - type: object
+                    properties:
+                      status: { type: string, enum: [error] }
+                      message: { type: string }
+        '500':
+          description: 未捕获异常（附 traceback）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/preview-3d:
+    post:
+      operationId: preview3d
+      tags: [geometry]
+      summary: 3D 预览（解析曲面/栅元/TR → FreeCAD CSG → STL）
+      description: |
+        入参键 surfaces/cells/tr_cards。成功
+        {"status":"ok","stl_files","stl_data","freecad","count"}；各类守卫
+        （无 FreeCAD/无曲面/无非 void 栅元）在 HTTP 200 下返回
+        {"status":"ok","stl_files":{},"message":…}（api_server.py:1004-1073）。
+        生成结果同时存 _STL_SESSION，供 cross-section 复用。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                surfaces: { type: string }
+                cells: { type: array, items: { $ref: '#/components/schemas/CellRow' } }
+                tr_cards: { type: string }
+      responses:
+        '200':
+          description: 预览结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      stl_files:
+                        type: object
+                        description: {cellNumber: 会话 STL 路径}
+                        additionalProperties: { type: string }
+                      stl_data:
+                        type: object
+                        description: {cellNumber: STL base64}
+                        additionalProperties: { type: string }
+                      freecad: { type: string, description: 成功分支才有 }
+                      count: { type: integer, description: 成功分支才有 }
+                      message: { type: string, description: 守卫分支才有 }
+        '500':
+          description: 未捕获异常（附 traceback）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/serve-file:
+    get:
+      operationId: serveFile
+      tags: [geometry]
+      summary: 服务会话文件（STL 等，二进制流，非 JSON）
+      description: |
+        query 读 path；成功返回 200 application/octet-stream 文件字节；
+        文件缺失/未传 path 返回 404（api_server.py:1075-1091）。
+      parameters:
+        - name: path
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: 文件字节流（Content-Type: application/octet-stream）
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '404':
+          description: path 缺失或文件不存在
+
+  /api/cross-section:
+    post:
+      operationId: crossSection
+      tags: [geometry]
+      summary: 平面截面（numpy 切 3D 预览保留的 STL 会话）
+      description: |
+        入参键 cellNums（勾选且非真空栅元号数组）/ plane{A,B,C,D}。
+        无 STL 会话时 {"status":"ok","slices":[],"message":"请先生成 3D 预览…"}
+        （api_server.py:1093-1132）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cellNums: { type: array, items: { type: integer } }
+                plane:
+                  type: object
+                  properties:
+                    A: { type: number, default: 0 }
+                    B: { type: number, default: 0 }
+                    C: { type: number, default: 1 }
+                    D: { type: number, default: 0 }
+      responses:
+        '200':
+          description: 截面多边形
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      slices:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            number: { type: integer }
+                            material: { type: string }
+                            polygons: { type: array }
+                      count: { type: integer }
+                      message: { type: string, description: 无会话分支才有 }
+        '500':
+          description: 未捕获异常（附 traceback）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/clear-stl:
+    post:
+      operationId: clearStl
+      tags: [geometry]
+      summary: 清除 3D 预览 STL 会话目录
+      description: 无 body 键；返回 {"status":"ok"}（api_server.py:1134-1140）。
+      responses:
+        '200':
+          description: 清理完成
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OkEnvelope' }
+        '500':
+          description: 清理异常
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/section-to-text:
+    post:
+      operationId: sectionToText
+      tags: [deck]
+      summary: 片段表单 → INP 文本（切文本模式预填）
+      description: |
+        入参键 section("materials"|"cells"|"tally") / deck（前端 deck）。
+        返回 {"status":"ok","text"}（api_server.py:660-685）。
+        前端契约层 sectionConvert.ts 只在 status=="ok" 时取 j.text。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                section: { type: string, enum: [materials, cells, tally] }
+                deck: { type: object, description: 前端 deck（含该 section 表单数据） }
+      responses:
+        '200':
+          description: 生成文本成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      text: { type: string }
+        '500':
+          description: 不支持的 section 或生成异常
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/text-to-section:
+    post:
+      operationId: textToSection
+      tags: [deck]
+      summary: 片段文本 → 结构化数据（切回表单回填）
+      description: |
+        入参键 section("materials"|"cells"|"tally") / text。
+        返回 {"status":"ok","data":{materials|cells|tallies}}（api_server.py:688-717）。
+        前端契约层只在 status=="ok" 时取 j.data。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                section: { type: string, enum: [materials, cells, tally] }
+                text: { type: string, description: 空文本则 500 }
+      responses:
+        '200':
+          description: 解析成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: 按 section 对应 {materials:[…]} / {cells:[…]} / {tallies:[…]}
+                        properties:
+                          materials: { type: array, items: { $ref: '#/components/schemas/MaterialData' } }
+                          cells: { type: array, items: { $ref: '#/components/schemas/CellRow' } }
+                          tallies: { type: array, items: { $ref: '#/components/schemas/TallyDef' } }
+        '500':
+          description: 文本为空 / 不支持 section / 解析异常
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+components:
+  schemas:
+    OkEnvelope:
+      type: object
+      properties:
+        status: { type: string, enum: [ok], description: 成功信封（个别 handler 用内层 status 覆盖，见各 path） }
+    ErrorResponse:
+      type: object
+      properties:
+        status: { type: string, enum: [error] }
+        message: { type: string }
+        traceback: { type: string, description: 异常堆栈（_err 附带） }
+    BasicSettings:
+      type: object
+      description: app/models.py:147 BasicSettings（title/mode_*/nps/ctme/act/print_pr/phys_fis）
+      properties:
+        title: { type: string }
+        mode_n: { type: boolean }
+        mode_p: { type: boolean }
+        mode_e: { type: boolean }
+        mode_h: { type: boolean }
+        mode_he: { type: boolean }
+        mode_d: { type: boolean }
+        mode_t: { type: boolean }
+        mode_a: { type: boolean }
+        nps: { type: string }
+        ctme: { type: string }
+        act: { type: string }
+        print_pr: { type: string }
+        phys_fis: { type: boolean, description: True=开裂变, False=输出 NONU 卡 }
+    CellRow:
+      type: object
+      description: |
+        判别联合（app/models.py:59 CellRow）：kind=="cell" 嵌 CellData，
+        kind=="raw" 用 text（#ifdef/#else/#endif 原样行）。
+      oneOf:
+        - type: object
+          required: [kind, cell]
+          properties:
+            kind: { type: string, const: cell }
+            cell: { $ref: '#/components/schemas/CellData' }
+        - type: object
+          required: [kind, text]
+          properties:
+            kind: { type: string, const: raw }
+            text: { type: string }
+    CellData:
+      type: object
+      description: app/models.py:22 CellData
+      properties:
+        number: { type: integer }
+        material: { type: string, description: 材料号（"M1" 或 "0"=void） }
+        density: { type: string }
+        surface_expr: { type: string, description: 曲面布尔表达式 }
+        imp_n: { type: string }
+        imp_p: { type: string }
+        imp_e: { type: string }
+        vol: { type: string }
+        pwt: { type: string }
+        ext: { type: string }
+        fcl: { type: string }
+        u: { type: string }
+        fill: { type: string }
+        lat: { type: string }
+        trcl: { type: string }
+        tmp: { type: string }
+        other_params: { type: string }
+        render: { type: boolean, description: 3D 预览是否渲染 }
+        comment: { type: string }
+    MaterialRow:
+      type: object
+      description: 判别联合（app/models.py:73）；kind=="nuclide" 用 zaid+fraction
+      oneOf:
+        - type: object
+          required: [kind, zaid, fraction]
+          properties:
+            kind: { type: string, const: nuclide }
+            zaid: { type: string }
+            fraction: { type: string }
+        - type: object
+          required: [kind, text]
+          properties:
+            kind: { type: string, const: raw }
+            text: { type: string }
+    MaterialData:
+      type: object
+      description: |
+        app/models.py:88 MaterialData。前端字段名 nuclides ↔ 后端 rows
+        （api_server.py 双向映射）；材料卡不含密度（密度在栅元卡）。
+      properties:
+        number: { type: integer }
+        comment: { type: string }
+        nuclides: { type: array, description: 前端字段名；后端用 rows, items: { $ref: '#/components/schemas/MaterialRow' } }
+        options: { type: string, description: 额外 MCNP 选项（nlib=.66c 等） }
+        mt_card: { type: string, description: 热中子 MT 卡（lwtr.10t） }
+        formula: { type: string, description: 化学式原文（公式输入模式回填用） }
+    SourceItem:
+      type: object
+      description: |
+        app/models.py:108 SourceData 的前端形态。前端 prob ↔ 后端 probability。
+      properties:
+        number: { type: integer }
+        par: { type: string }
+        erg: { type: string }
+        pos_x: { type: string }
+        pos_y: { type: string }
+        pos_z: { type: string }
+        wgt: { type: string }
+        dir_: { type: string }
+        cel: { type: string }
+        tme: { type: string }
+        vec: { type: string }
+        axs: { type: string }
+        rad: { type: string }
+        ext: { type: string }
+        sur: { type: string }
+        nrm: { type: string }
+        tr: { type: string }
+        ccc: { type: string }
+        ara: { type: string }
+        rate: { type: string }
+        prob: { type: string, description: 概率份额（对应 SP 卡） }
+    TallyDef:
+      type: object
+      description: |
+        app/models.py:174 TallyDefinition 的前端形态（particle 空格串 ↔ particles list；
+        enableEn ↔ generate_en；enableTn ↔ generate_tn）。
+      properties:
+        type: { type: string, enum: [F1, F2, F4, F5, F6, F7, F8] }
+        number: { type: integer, description: 1/2/4/5/15/25… }
+        particle: { type: string, description: 空格分隔，如 "n p e" }
+        params: { type: string, description: F5 多点或曲面/栅元号参数串 }
+        enableEn: { type: boolean }
+        enableTn: { type: boolean }
+    DistEntry:
+      type: object
+      description: 结构化 SI/SP/SB/DS 分布（adv.sdef_distributions，非空时优先于 sdef_raw_text）
+      properties:
+        id: { type: integer }
+        paramRef: { type: string, description: 引用的 SDEF 变量（ERG/POS/PAR…） }
+        si: { type: object, properties: { type: { type: string, enum: [L, H, A, S, Q, T, F] }, values: { type: array, items: { type: string } } } }
+        sp: { type: object, properties: { type: { type: string, enum: [D, C, V, ''] }, values: { type: array, items: { type: string } }, fnCode: { type: string }, fnParams: { type: array, items: { type: string } } } }
+        sb: { type: object, nullable: true }
+        ds: { type: object, nullable: true }
+        auto: { type: boolean }
+    SswFields:
+      type: object
+      properties:
+        surf: { type: string }
+        sym: { type: string }
+        pty: { type: string }
+        cel: { type: string }
+    SsrFields:
+      type: object
+      properties:
+        surf: { type: string }
+        mode: { type: string }
+        cel: { type: string }
+        pty: { type: string }
+        col: { type: string }
+        wgt: { type: string }
+        tr: { type: string }
+        psc: { type: string }
+    AdvancedSettings:
+      type: object
+      description: |
+        app/models.py:297 AdvancedSettings 的前端形态（adv section）。
+        other_cards 为原始文本；sdef_raw_text 为 SI/SP 回退路径；
+        sdef_distributions 结构化 JSON 非空时优先。
+      properties:
+        other_cards: { type: string, description: 用户手动其他 MCNP 卡（原样输出） }
+        source_mode: { type: string, enum: [fixed, distribution, kcode, surface] }
+        phys_n_emax: { type: string }
+        phys_n_emcnf: { type: string }
+        phys_n_iunr: { type: string }
+        phys_n_dnb: { type: string }
+        phys_n_fisnu: { type: string }
+        phys_p_emcpf: { type: string }
+        phys_p_ides: { type: string }
+        phys_p_nocoh: { type: string }
+        phys_p_ispn: { type: string }
+        phys_p_nodop: { type: string }
+        phys_e_emax: { type: string }
+        phys_e_ides: { type: string }
+        phys_e_iphoto: { type: string }
+        phys_e_ibad: { type: string }
+        phys_e_istrg: { type: string }
+        phys_e_bnum: { type: string }
+        phys_e_xnum: { type: string }
+        phys_e_rnok: { type: string }
+        phys_e_enum: { type: string }
+        phys_e_numb: { type: string }
+        sdef_par: { type: string }
+        sdef_erg: { type: string }
+        sdef_pos_x: { type: string }
+        sdef_pos_y: { type: string }
+        sdef_pos_z: { type: string }
+        sdef_wgt: { type: string }
+        sdef_dir: { type: string }
+        sdef_cel: { type: string }
+        sdef_tme: { type: string }
+        sdef_vec: { type: string }
+        sdef_axs: { type: string }
+        sdef_rad: { type: string }
+        sdef_ext: { type: string }
+        sdef_sur: { type: string }
+        sdef_nrm: { type: string }
+        sdef_tr: { type: string }
+        sdef_ccc: { type: string }
+        sdef_ara: { type: string }
+        sdef_rate: { type: string }
+        sdef_extra: { type: string, description: SDEF 额外参数（原样保留） }
+        sdef_raw_text: { type: string, description: SI/SP 序列化文本（回退路径） }
+        sdef_distributions: { type: string, description: 结构化 SI/SP/SB/DS JSON 串 }
+        kcode_nsrc: { type: string }
+        kcode_rkk: { type: string }
+        kcode_ikz: { type: string }
+        kcode_kct: { type: string }
+        kcode_knrm: { type: string }
+        kcode_msrk: { type: string }
+        kcode_mrkp: { type: string }
+        kcode_kc8: { type: string }
+        ksrc_points: { type: string, description: KSRC 坐标点 JSON 串 }
+        hsrc_enabled: { type: boolean }
+        hsrc_text: { type: string }
+        ssw_surf: { type: string }
+        ssw_sym: { type: string }
+        ssw_pty: { type: string }
+        ssw_cel: { type: string }
+        ssr_surf: { type: string }
+        ssr_mode: { type: string }
+        ssr_cel: { type: string }
+        ssr_pty: { type: string }
+        ssr_col: { type: string }
+        ssr_wgt: { type: string }
+        ssr_tr: { type: string }
+        ssr_psc: { type: string }
