@@ -823,8 +823,6 @@ def _parse_card_with_continuation(data: list[str], i: int, first: str, parts: li
     """通用续行卡片解析：解析 E0/En/Tn 的 nlog/nlin 语法 + 续行值收集
     返回 (values, new_i)，new_i 指向最后一个续行
     """
-    import sys
-    print(f"[E0DBG] _parse_card_with_continuation: first={first}, parts={parts}", file=sys.stderr)
     vals: list[float] = []
     ti = 1
     while ti < len(parts):
@@ -1015,10 +1013,7 @@ def parse_data_cards(data_lines: list[str]) -> dict:
             i += 1
 
         elif re.match(r'^E0?$', first, re.IGNORECASE):
-            import sys
-            print(f"[E0DBG] E0 line: {line[:80]}", file=sys.stderr)
             vals, i = _parse_card_with_continuation(data, i, first, parts)
-            print(f"[E0DBG] E0 vals: {len(vals)} -> {vals[:5]}", file=sys.stderr)
             if len(vals) >= 2:
                 raw = " ".join(parts[1:])
                 pm = re.search(r'(\d+)(LOG|LIN|I)\s+([\d.eE+\-]+)$', raw.upper())

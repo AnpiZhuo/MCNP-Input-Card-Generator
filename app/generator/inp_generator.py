@@ -628,9 +628,8 @@ def _generate_kcode(adv: AdvancedSettings) -> list[str]:
     # KSRC coordinate points — 合并成单张 KSRC 卡（MCNP 只允许一张 KSRC 卡，
     # 多张卡会报错；多个点用 5 空格续行）
     if adv.ksrc_points:
-        import json as _json
         try:
-            points = _json.loads(adv.ksrc_points)
+            points = json.loads(adv.ksrc_points)
             if points:
                 coords = []
                 for pt in points:
@@ -646,7 +645,7 @@ def _generate_kcode(adv: AdvancedSettings) -> list[str]:
                     lines.append("KSRC  " + coords[0])   # 首行 1 点
                     for c in coords[1:]:                 # 续行每行 1 点，方便阅读
                         lines.append("     " + c)
-        except (_json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError):
             lines.append(KSRC_FAILED_BANNER)
 
     # HSRC 香农熵网格（评估裂变源收敛）
@@ -668,10 +667,9 @@ def _generate_structured_distributions(dist_json: str) -> list[str]:
     """
     if not dist_json:
         return []
-    import json as _json
     try:
-        entries = _json.loads(dist_json)
-    except (_json.JSONDecodeError, TypeError):
+        entries = json.loads(dist_json)
+    except (json.JSONDecodeError, TypeError):
         return []
     lines = []
     for entry in entries:

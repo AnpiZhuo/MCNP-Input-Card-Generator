@@ -605,9 +605,6 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 if isinstance(obj, list): return [to_dict(x) for x in obj]
                 return obj
             deck_dict = to_dict(deck)
-            import sys as _s
-            print(f"[E0DBG] api tally: e_custom_enabled={deck_dict.get('tally', {}).get('e_custom_enabled')}", file=_s.stderr)
-            print(f"[E0DBG] api tally: e_custom_text[:50]={str(deck_dict.get('tally', {}).get('e_custom_text'))[:50]}", file=_s.stderr)
             # 后端用 rows，前端用 nuclides → 加入映射（行含 kind 判别）
             for m in deck_dict.get("materials", []):
                 if "rows" in m and "nuclides" not in m:
@@ -1004,7 +1001,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
     def _handle_preview_3d(self):
         """3D 预览：解析曲面/栅元/TR → FreeCAD CSG → STL"""
         try:
-            import sys, os, json, tempfile, re
+            import tempfile, re
             data = self._read_body()
             surf_text = data.get("surfaces", "")
             cell_list = data.get("cells", [])
@@ -1097,7 +1094,6 @@ class MCNPHandler(BaseHTTPRequestHandler):
         STL 不参与。无会话时提示先做 3D 预览。
         """
         try:
-            import sys, os, json
             _app_dir = os.path.join(os.path.dirname(__file__), "..", "..", "app")
             if _app_dir not in sys.path: sys.path.insert(0, _app_dir)
             from stl_cross_section import cross_section_from_stl

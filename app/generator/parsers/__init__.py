@@ -135,9 +135,6 @@ def parse_inp_text(text: str) -> tuple[DeckData, list[str]]:
         t0_data = {"t0_min": str(data.get("t0_min", "")), "t0_max": str(data.get("t0_max", "")),
                    "t0_bins": int(data.get("t0_bins", 0)), "t0_log": bool(data.get("t0_log", False))}
 
-    import sys
-    print(f"[E0DBG] __init__: e0_parametric={data.get('e0_parametric')}, e0_vals={len(data.get('e0_values', []))}, e0_data={e0_data}", file=sys.stderr)
-    print(f"[E0DBG] __init__: t0_data={t0_data}, t_cards_lines={len(data.get('t_cards_lines', []))}", file=sys.stderr)
     # CUT fields still come from data["tallies"] dict
     tally_raw = data["tallies"]
 
