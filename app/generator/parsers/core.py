@@ -155,6 +155,29 @@ def _parse_sisp_structured(sisp_lines: list[str]) -> list[dict]:
     return [entries[n] for n in order]
 
 
+def _merge_sisp_entry(existing_json: str, new_entry: dict) -> str:
+    """把单个结构化分布条目并入已有 sdef_distributions JSON（按 id 合并 SI/SP/SB/DS 子字段）。
+
+    D-01 增强：面源（SSW/SSR）后跟的独立 SIn/SPn 逐行解析后并入结构化分布，
+    与 SDEF 分支的收集结果同构（来源分布卡说明.md 三节）。
+    """
+    acc = {}
+    if existing_json:
+        try:
+            for e in json.loads(existing_json):
+                acc[e["id"]] = e
+        except Exception:
+            acc = {}
+    eid = new_entry.get("id")
+    if eid in acc:
+        for k in ("si", "sp", "sb", "ds"):
+            if new_entry.get(k) is not None:
+                acc[eid][k] = new_entry[k]
+    else:
+        acc[eid] = new_entry
+    return json.dumps(list(acc.values()), ensure_ascii=False)
+
+
 def parse_cells(cell_lines: list[str]) -> list[CellRow]:
     """解析栅元卡行 → CellRow 列表（cell | raw；C 注释关联下一个栅元，$ 注释优先）"""
     cells = []
@@ -459,6 +482,13 @@ def parse_sdef_simple(parts: list[str]) -> list[SourceData]:
                 # POS/VEC/AXS 有特殊拆分逻辑
                 if key in ("POS", "VEC", "AXS"):
                     if cont:
+                        # D-07：遇已知 SDEF key 停止消耗（防止 POS=0 0 0 ERG 14 WGT 1 把裸 ERG/WGT 吞进续值）
+                        real_cont = []
+                        for c in cont:
+                            if c.upper() in _KNOWN_KEYS:
+                                break
+                            real_cont.append(c)
+                        cont = real_cont
                         if key == "POS":
                             all_vals = [val] + cont
                             if len(all_vals) >= 1: src.pos_x = all_vals[0]
@@ -560,7 +590,26 @@ def parse_sdef_simple(parts: list[str]) -> list[SourceData]:
                 if len(vals) >= 3: src.pos_z = vals[2]
                 ti += len(vals)
                 continue
-            elif upper in ("PAR", "SUR", "NRM", "TR", "CCC", "ARA", "RATE"):
+            elif upper in ("AXS", "VEC"):
+                # 多值裸参数（AXS 0 0 1 / VEC 1 -1 0），遇已知 SDEF key 停止消耗（防止吃后续裸参数）
+                ti += 1
+                vals = _collect_multi_val(tokens, ti)
+                real_vals = []
+                for c in vals:
+                    if c.upper() in _KNOWN_KEYS:
+                        break
+                    real_vals.append(c)
+                vals = real_vals
+                if upper == "AXS":
+                    src.axs = " ".join(vals)
+                else:
+                    src.vec = " ".join(vals)
+                ti += len(vals)
+                continue
+            elif upper in ("PAR", "SUR", "NRM", "TR", "CCC", "ARA", "RATE",
+                           "ERG", "WGT", "CEL", "TME", "EFF", "RAD", "EXT",
+                           "DIR", "X", "Y", "Z"):
+                # D-07：裸参数白名单补全（无 = 号写法，复用 _apply_sdef_param；EFF 进 sdef_extra）
                 ti += 1
                 if ti < len(tokens):
                     _apply_sdef_param(src, upper, tokens[ti])
@@ -718,6 +767,25 @@ def parse_f_tally(parts: list[str], tally_defs: list) -> bool | None:
     if pre_m:
         fn_prefix = pre_m.group(1)
         first = pre_m.group(2)  # "F4:N" 去掉前缀后重新匹配
+    # FMn 计数乘子卡（无粒子设计符，格式 "FMn C m r1 r2 ..."，FMn 乘在 Fn 计数上）。
+    # multiplier = 该卡全部 token（如 "8.65061E10 1 -5 -6"）。
+    fm_m = re.match(r'^FM(\d+)$', first)
+    if fm_m:
+        suffix = int(fm_m.group(1))
+        multiplier = " ".join(parts[1:]) if len(parts) > 1 else ""
+        # 附加到同 number 的已有 TallyDefinition；若 Fn 未先行出现则建占位（type=""，保证不丢）
+        existing = next((td for td in tally_defs if td.number == suffix), None)
+        if existing is not None:
+            if existing.multiplier:
+                existing.multiplier = (existing.multiplier + " " + multiplier).strip()
+            else:
+                existing.multiplier = multiplier
+        else:
+            tally_defs.append(TallyDefinition(
+                type="", number=suffix, particles=["n"],
+                params="", multiplier=multiplier,
+            ))
+        return True
     # 通量成像 FIPn / FIRn / FICn（设计符支持多粒子逗号列表，如 F4:N,P）
     _PARTICLE_RE = r'([NPEHAS](?:,[NPEHAS])*)'
     img_m = re.match(r'^(FIP|FIR|FIC)(\d+):' + _PARTICLE_RE + r'$', first)
@@ -768,12 +836,18 @@ def parse_f_tally(parts: list[str], tally_defs: list) -> bool | None:
             existing = td
             break
 
+    # FMn 先于 Fn 出现 → 吸收占位（type=="" 且同 number）的乘子并入真实 F 卡
+    placeholder = next((td for td in tally_defs if td.type == "" and td.number == suffix), None)
+
     if existing:
         for p_lower in particles_to_add:
             if p_lower not in [p.lower() for p in existing.particles]:
                 existing.particles.append(p_lower)
         if fn_prefix and not existing.fn_prefix:
             existing.fn_prefix = fn_prefix
+        if placeholder and placeholder.multiplier:
+            existing.multiplier = ((existing.multiplier + " " + placeholder.multiplier).strip()
+                                   if existing.multiplier else placeholder.multiplier)
     else:
         tally_defs.append(TallyDefinition(
             type=tally_type, number=suffix,
@@ -781,7 +855,10 @@ def parse_f_tally(parts: list[str], tally_defs: list) -> bool | None:
             params=params,
             fn_prefix=fn_prefix,
             number_suffix=number_suffix,
+            multiplier=placeholder.multiplier if placeholder else "",
         ))
+    if placeholder:
+        tally_defs.remove(placeholder)
 
     return True
 
@@ -964,7 +1041,7 @@ def parse_data_cards(data_lines: list[str]) -> dict:
                     found = True
                     break
             if not found:
-                result["other_cards"].append(line)
+                result["other_cards"].append(raw_line)
             i += 1
         elif first == "SDEF":
             result["sources"] = parse_sdef_simple(parts)
@@ -999,17 +1076,18 @@ def parse_data_cards(data_lines: list[str]) -> dict:
                             pairs.append({"si": "", "sp": line.strip()})
                 result["sdef_raw_text"] = json.dumps(pairs, ensure_ascii=False)
         elif (re.match(r'^[*+]?F\d+:', first) or re.match(r'^[*+]?F\d+$', first)
+              or re.match(r'^[*+]?FM\d+$', first)
               or re.match(r'^[*+]?F(?:IP|IR|IC)\d+:', first) or re.match(r'^[*+]?F(?:IP|IR|IC)\d+$', first)
               or re.match(r'^[*+]?F\d+[XYZ]:', first) or re.match(r'^[*+]?F\d+[XYZ][NPEHAS]$', first)):
             handled = parse_f_tally(parts, result["tally_defs"])
             if handled is False:
                 # 计数卡编号超出 F1-F8 支持范围 → 保留原样
-                result["other_cards"].append(line)
+                result["other_cards"].append(raw_line)
             elif handled is True:
                 pass  # 已处理
             elif handled is None:
                 # 裸 Fn 无粒子标识符（如 F1）→ 保留原样
-                result["other_cards"].append(line)
+                result["other_cards"].append(raw_line)
             i += 1
 
         elif re.match(r'^E0?$', first, re.IGNORECASE):
@@ -1070,6 +1148,15 @@ def parse_data_cards(data_lines: list[str]) -> dict:
             result["phys_he_ecut"] = expanded[5]
             i += 1
         elif first.startswith("SI") or first.startswith("SP"):
+            # D-01：独立 SIn/SPn 卡不再静默丢弃——保底进 other_cards（round-trip 保真）。
+            # 面源（SSW/SSR，source_mode=surface）后跟的 SI/SP 是源分布，增强并入结构化
+            # 分布（复用 _parse_sisp_structured，与 SDEF 分支一致）；source_mode 保持 surface。
+            result["other_cards"].append(raw_line)
+            if result.get("source_mode") == "surface":
+                _parsed = _parse_sisp_structured([line])
+                if _parsed:
+                    result["sdef_distributions"] = _merge_sisp_entry(
+                        result.get("sdef_distributions", ""), _parsed[0])
             i += 1
         elif first.startswith("KCODE"):
             # KCODE  NSRC RKK IKZ KCT [MSRK KNRM MRKP KC8]
@@ -1196,7 +1283,7 @@ def parse_data_cards(data_lines: list[str]) -> dict:
             i += 1
         elif first in _KNOWN_OTHER_CARDS or _TALLY_MODIFIER_RE.match(first):
             # 标准 MCNP 卡片但无对应 UI，保留原样到 other_cards
-            result["other_cards"].append(line)
+            result["other_cards"].append(raw_line)
             i += 1
         elif line.startswith("#"):
             # MCNP 预处理器/条件行：#ifdef/#else/#endif/#define 等。
@@ -1227,7 +1314,7 @@ def parse_data_cards(data_lines: list[str]) -> dict:
                         MaterialRow(kind="nuclide", zaid=parts[j], fraction=parts[j + 1]))
                     j += 2
             else:
-                result["other_cards"].append(line)
+                result["other_cards"].append(raw_line)
             i += 1
 
     return result

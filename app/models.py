@@ -197,6 +197,7 @@ class TallyDefinition:
     generate_tn: bool = False  # 是否自动生成该计数对应的 Tn 时间卡（默认不勾选）
     fn_prefix: str = ""        # "" / "*" / "+" — 计数卡前缀修饰
     number_suffix: str = ""    # F5 环探测器轴字母: "X" / "Y" / "Z"，其他类型为空
+    multiplier: str = ""       # FMn 计数乘子参数串（"C m r1 r2 ..."，如 "8.65061E10 1 -5 -6"），"" = 无乘子卡
 
 
 @dataclass

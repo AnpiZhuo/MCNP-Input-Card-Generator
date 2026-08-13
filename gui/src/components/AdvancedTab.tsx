@@ -282,7 +282,7 @@ export default function AdvancedTab() {
               value={(deck.adv?.other_cards || "")}
               onChange={e => patch({ adv: { ...(deck.adv || {}), other_cards: e.target.value } })}
               style={{
-                minHeight: 100,
+                minHeight: 240,
                 fontFamily: "Consolas,monospace",
                 fontSize: 12,
                 lineHeight: 1.6,

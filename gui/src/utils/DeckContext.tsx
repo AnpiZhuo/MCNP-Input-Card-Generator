@@ -22,7 +22,7 @@ export interface SourceItem {
   ccc: string; ara: string; rate: string;
   prob: string;
 }
-export interface TallyDef { type: string; number: number; particle: string; params: string; enableEn: boolean; enableTn: boolean }
+export interface TallyDef { type: string; number: number; particle: string; params: string; multiplier?: string; enableEn: boolean; enableTn: boolean }
 
 /* ── 源项结构化分布（对齐 MCNP 源分布卡说明.md）── */
 export interface SiEntry { type: "L" | "H" | "A" | "S" | "Q" | "T" | "F"; values: string[] }

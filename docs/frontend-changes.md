@@ -70,3 +70,69 @@
 ## 不做（后端范围）
 
 `app/preview_cache.py`、`freecad_preview.py` bound、`_freecad_csg_worker.py` vtk、`api_server.py` handler 接线、`gui/backend/` 一切文件 —— 由后端并行施工，前端零触碰。
+---
+# 前端改动清单 — 用户反馈 #3/#4/#5（2026-08-13，实验分支 experiment/geouned）
+
+> 施工方：前端 | 指令：PM 批复排查结论后直接落地 | 范围：仅 `gui/src/components/` 3 个文件
+
+## #3 F 卡输入数字光标消失
+
+**根因**：`TallyTab.tsx` 行 `key={t.id}`（143 行）依赖由 `number` 推导的 id（原 93 行），输入数字改变 number → id 变化 → `<tr>` 重挂载 → 焦点/光标丢失。
+
+**修改 `gui/src/components/TallyTab.tsx`**：
+- 新增 `idsRef = useRef<number[]>([])`（按位置缓存上次 id）。
+- deck→local pull effect：id 优先复用 `idsRef.current[i]`（number 变化不再改变 key，行不重挂载）；新行回退到 `number*10+typeCode+particleCode` 种子并用 `Set` 去重防冲突。
+- 未改 push 的 `parseInt||0` 归一化（清空弹回 0 为既有次要行为，PM 指示本次不动）。
+
+## #4 高级"其他卡"输入空间太窄
+
+**修改 `gui/src/components/AdvancedTab.tsx`**："其他卡片" textarea（约 285 行）`minHeight: 100 → 240`，保留 `resize:"vertical"` 可拖拽。
+
+## #5 材料 options 框改名"其他" + 放大换行
+
+**修改 `gui/src/components/MaterialEditDialog.tsx`**（289-294 行）：
+- label `"nlib= / gas= / plib="` → `"其他"`。
+- 单行 `<input>` → `<textarea>`（`minHeight:60`、`fontFamily:"Consolas,monospace"`、`fontSize:12`、`resize:"vertical"`），`value`/`onChange` 保持绑定 `options` 字符串。
+- `options` 为纯字符串，`\n` 经 JSON 直传后端（`app/models.py:104 options:str`）透传成立。
+
+**后端联动点（不在本次前端范围，需后端配合）**：
+- `app/generator/inp_generator.py:205-209`：options 含 `\n` 时需按行拆分，首段内联 `M{n}  ` 后、其余段作 M 卡续行（5 空格缩进），否则第 1 列输出会被 MCNP 当独立新卡。
+- `app/generator/parsers/core.py:397`：`" ".join(options_parts)` 会拍平换行，多行 options 导入后换行丢失（语义保留，增强项）。
+- `_wrap_long_lines`（inp_generator.py ~1010）与 options 内嵌 `\n` 的交互需验证。
+
+## 验证结果
+
+| 项 | 结果 |
+| :--- | :--- |
+| `cd gui && npx vitest run` | 5 文件 / 19 用例全绿 |
+| `cd gui && npx tsc --noEmit` | EXIT 0 |
+| `cd gui && npm run build` | EXIT 0（仅既有 chunk 体积/动态导入警告） |
+---
+# 前端改动清单 — 用户反馈 #1 配套：FM 计数乘子编辑 UI（2026-08-13，实验分支 experiment/geouned）
+
+> 施工方：前端 | 指令：PM 派发（D-05 高价值卡结构化配套）| 后端全链已修（pytest 297 绿），前端零后端改动
+> 范围：仅 `gui/src/components/TallyTab.tsx`、`gui/src/utils/DeckContext.tsx`
+
+## 改动点
+
+**`gui/src/components/TallyTab.tsx`**：
+- 本地 `Tally` 接口新增 `multiplier: string`（第 18 行）。
+- local→deck push effect（第 82 行）mapped 对象新增 `multiplier: t.multiplier`。
+- deck→local pull effect（第 105 行）回填 `multiplier: t.multiplier || ""`（导入/文本模式解析出的 multiplier 透传回表单）。
+- `addTally`（第 122 行）新行初始化 `multiplier: ""`。
+- 表格 thead 新增「乘子」列头（参数与 En 之间）。
+- tbody 新增乘子输入框（第 180 行）：单行 `<input>`，`value={t.multiplier}`、`onChange=updateTally(id,"multiplier",...)`，width 150，placeholder "如 8.65E10 1 -5 -6"，空值 = 不生成 FM 卡。
+
+**`gui/src/utils/DeckContext.tsx`**：
+- `TallyDef` 新增 `multiplier?: string`（第 25 行）——与后端 `TallyDefinition.multiplier`（app/models.py:200）字段名对齐，api_server 358/480/665 读写同一 key，生成器 inp_generator.py:648/671 空值不发 FM 卡。
+
+## 说明（与 PM 指令的一处偏差）
+- PM 指令写「contract.ts 加 multiplier 字段」：实际前端 tally 类型定义在 `gui/src/utils/DeckContext.tsx` 的 `TallyDef`（contract.ts 仅含 source/SSW/KCODE 契约，无 tally 类型），已落在 DeckContext.tsx。
+
+## 验证结果
+
+| 项 | 结果 |
+| :--- | :--- |
+| `cd gui && npx vitest run` | 5 文件 / 19 用例全绿 |
+| `cd gui && npx tsc --noEmit` | EXIT 0 |
+| `cd gui && npm run build` | EXIT 0（仅既有 chunk 体积警告） |

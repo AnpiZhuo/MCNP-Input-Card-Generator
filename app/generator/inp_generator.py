@@ -202,11 +202,21 @@ def _generate_materials(materials: list[MaterialData]) -> list[str]:
         if mat.comment:
             lines.append(f"C  {mat.comment}")
 
-        # 首行: M{n}，材料选项（nlib= 等）与 M 头同行（MCNP 规范）
+        # 首行: M{n}，材料选项（nlib= 等）与 M 头同行（MCNP 规范）。
+        # options 可含换行（前端"其他"框为 textarea）：按 \n 拆分——首段仍内联 M{n} 后
+        # （无换行时字节不变，F-D pin 不回归），其余段作为 M 卡续行（行首 5 空格缩进），
+        # 否则 MCNP 会把 gas=/plib= 当新卡解析。
         card = f"M{mat.number}"
-        _opts = (getattr(mat, 'options', '') or '').strip()
+        _opts = (getattr(mat, 'options', '') or '').replace("\r\n", "\n").replace("\r", "\n").strip()
         if _opts:
-            card += "  " + _opts
+            _opt_lines = _opts.split("\n")
+            _first_opt = _opt_lines[0].strip()
+            if _first_opt:
+                card += "  " + _first_opt
+            for _extra_opt in _opt_lines[1:]:
+                _extra_opt = _extra_opt.strip()
+                if _extra_opt:
+                    card += f"\n     {_extra_opt}"
         # 续行: 每个 ZAID/fraction 一行；raw 条件行原样独立成行（#ifdef/#else/#endif…）
         for row in mat.rows:
             if getattr(row, 'kind', 'nuclide') == "raw":
@@ -635,24 +645,30 @@ def _generate_tallies(tally: TallySettings) -> list[str]:
         params = td.params if td.params else ""
         pre = td.fn_prefix if td.fn_prefix and td.fn_prefix.strip() else ""
         suffix = getattr(td, 'number_suffix', '') or ''
-        particles_str = ",".join(p.strip().upper() for p in td.particles if p.strip()) or "N"
-        if pre in ("FIP", "FIR", "FIC"):
-            card = f"{pre}{td.number}{suffix}:{particles_str}  {params}"
-        else:
-            card = f"{pre}F{td.number}{suffix}:{particles_str}  {params}"
-        # 简要描述
-        desc = {
-            "F1": "Surface current",
-            "F2": "Surface flux",
-            "F4": "Cell flux",
-            "F5": "Point detector",
-            "F6": "Energy deposition",
-            "F7": "Fission energy deposition",
-            "F8": "Pulse height",
-        }.get(td.type, "")
-        if desc:
-            card += f"   $ {desc} (particles/cm2)"
-        lines.append(card)
+        multiplier = getattr(td, 'multiplier', '') or ''
+        # 仅 FM 乘子占位（type==""，无对应 Fn 卡）→ 不生成 F 卡，只回放 FM 乘子
+        if td.type:
+            particles_str = ",".join(p.strip().upper() for p in td.particles if p.strip()) or "N"
+            if pre in ("FIP", "FIR", "FIC"):
+                card = f"{pre}{td.number}{suffix}:{particles_str}  {params}"
+            else:
+                card = f"{pre}F{td.number}{suffix}:{particles_str}  {params}"
+            # 简要描述
+            desc = {
+                "F1": "Surface current",
+                "F2": "Surface flux",
+                "F4": "Cell flux",
+                "F5": "Point detector",
+                "F6": "Energy deposition",
+                "F7": "Fission energy deposition",
+                "F8": "Pulse height",
+            }.get(td.type, "")
+            if desc:
+                card += f"   $ {desc} (particles/cm2)"
+            lines.append(card)
+        # FM 计数乘子卡：紧跟在对应 F 卡之后（FMn 乘在 Fn 计数上）
+        if multiplier:
+            lines.append(f"FM{td.number}  {multiplier}")
 
     # E0 和 En 由 generate_inp_from_deck 中单独的 e0/cut 处理调用，不在此处重复生成
     return lines

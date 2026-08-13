@@ -355,6 +355,7 @@ def _tally_from_dict(d: dict) -> TallySettings:
             type=t.get("type", "F4"), number=t.get("number", 4),
             particles=t.get("particles") if isinstance(t.get("particles"), list) else [p.lower().strip() for p in t.get("particle", "n").replace(",", " ").split() if p.strip()], params=t.get("params", ""),
             generate_en=t.get("generate_en", t.get("enableEn", False)), generate_tn=t.get("generate_tn", t.get("enableTn", False)),
+            multiplier=t.get("multiplier", ""),
         ))
     return TallySettings(tallies=tallies,
         e_min=d.get("e_min", ""), e_max=d.get("e_max", ""), e_bins=d.get("e_bins", 0),
@@ -476,6 +477,7 @@ def _deck_to_frontend_dict(deck: DeckData) -> dict:
         "params": td.get("params", ""),
         "enableEn": td.get("generate_en", False),
         "enableTn": td.get("generate_tn", False),
+        "multiplier": td.get("multiplier", ""),
     } for td in tally_raw.get("tallies", [])]
     return deck_dict
 
@@ -660,6 +662,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 "params": td.get("params", ""),
                 "enableEn": td.get("generate_en", False),
                 "enableTn": td.get("generate_tn", False),
+                "multiplier": td.get("multiplier", ""),
             } for td in raw_tallies]
             deck_dict["_warnings"] = warnings
             self._ok({"deck": deck_dict})
@@ -711,7 +714,11 @@ class MCNPHandler(BaseHTTPRequestHandler):
             if not text.strip():
                 raise ValueError("文本为空")
             # 包最小假 INP 壳：标题 + 空栅元 + 空曲面 + 数据卡段 = 该模块文本
-            shell = f"C  shell\n1 0 -1\n\nC  surf\n1 pz -1e9\n\n{text}\n"
+            # cells 的文本必须放入【栅元段】（否则落入数据段被 other_cards 兜底，用户栅元字段全丢）
+            if section == "cells":
+                shell = f"{text}\n\nC  surf\n1 pz -1e9\n\nMODE N\n"
+            else:
+                shell = f"C  shell\n1 0 -1\n\nC  surf\n1 pz -1e9\n\n{text}\n"
             deck, _warnings = parse_inp_text(shell)
             d = _deck_to_frontend_dict(deck)
             if section == "materials":

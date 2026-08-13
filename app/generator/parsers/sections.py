@@ -141,14 +141,43 @@ def split_sections(lines: list[str]) -> tuple[str, list[str], list[str], list[st
         re.compile(r'^M\d+$', re.IGNORECASE),
         re.compile(r'^SI\d*$', re.IGNORECASE),
         re.compile(r'^SP\d*$', re.IGNORECASE),
-        re.compile(r'^F\d+:', re.IGNORECASE),
-        re.compile(r'^F\d+$', re.IGNORECASE),
-        re.compile(r'^FC\d+$', re.IGNORECASE),
         re.compile(r'^E\d*$', re.IGNORECASE),
         re.compile(r'^CUT:', re.IGNORECASE),
         re.compile(r'^MT\d+$', re.IGNORECASE),
         re.compile(r'^\*?TR\d+$', re.IGNORECASE),
-        re.compile(r'^(FU|FT|FQ|T)\d+$', re.IGNORECASE),
+        # D-03：F 家族计数卡（含 */+ 前缀与 F5X 环探测器形态，对齐 parse_data_cards 入口门）
+        re.compile(r'^[*+]?F\d+:', re.IGNORECASE),
+        re.compile(r'^[*+]?F\d+$', re.IGNORECASE),
+        re.compile(r'^[*+]?F\d+[XYZ]:?', re.IGNORECASE),
+        re.compile(r'^[*+]?F(?:IP|IR|IC)\d+', re.IGNORECASE),
+        re.compile(r'^[*+]?FM\d+', re.IGNORECASE),
+        re.compile(r'^[*+]?FC\d+', re.IGNORECASE),
+        # D-03：计数/源分布辅助卡缺口词条（节首直出时也必须识别为数据卡 → data_lines → other_cards 兜底）
+        re.compile(r'^C\d+$', re.IGNORECASE),      # Cn 余弦分箱
+        re.compile(r'^DE\d+$', re.IGNORECASE),     # DEn 剂量能量
+        re.compile(r'^DF\d+$', re.IGNORECASE),     # DFn 剂量函数
+        re.compile(r'^FS\d+$', re.IGNORECASE),     # FSn 面源
+        re.compile(r'^SD\d+$', re.IGNORECASE),     # SDn 源分布
+        re.compile(r'^CF\d+$', re.IGNORECASE),     # CFn
+        re.compile(r'^SF\d+$', re.IGNORECASE),     # SFn
+        re.compile(r'^EM\d+$', re.IGNORECASE),     # EMn
+        re.compile(r'^TM\d+$', re.IGNORECASE),     # TMn
+        re.compile(r'^CM\d+$', re.IGNORECASE),     # CMn
+        re.compile(r'^TF\d+$', re.IGNORECASE),     # TFn
+        re.compile(r'^DD\d+$', re.IGNORECASE),     # DDn
+        re.compile(r'^DXT$', re.IGNORECASE),       # DXT
+        re.compile(r'^SB\d+$', re.IGNORECASE),     # SBn
+        re.compile(r'^DS\d+$', re.IGNORECASE),     # DSn
+        re.compile(r'^SC\d+$', re.IGNORECASE),     # SCn
+        re.compile(r'^ELPT', re.IGNORECASE),       # ELPT:n
+        re.compile(r'^NOTRN$', re.IGNORECASE),     # NOTRN
+        re.compile(r'^TALNP$', re.IGNORECASE),     # TALNP
+        re.compile(r'^MPLOT$', re.IGNORECASE),     # MPLOT
+        re.compile(r'^RAND$', re.IGNORECASE),      # RAND
+        re.compile(r'^FILES$', re.IGNORECASE),     # FILES
+        re.compile(r'^IDUM$', re.IGNORECASE),      # IDUM
+        re.compile(r'^RDUM$', re.IGNORECASE),      # RDUM
+        re.compile(r'^FMESH', re.IGNORECASE),      # FMESHn（带编号）
     ]
 
     # Phase-based section classification: start in "cell", transition on blank line or data patterns

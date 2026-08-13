@@ -15,6 +15,7 @@ interface Tally {
   number: string;
   particle: string;
   params: string;
+  multiplier: string;
   enableEn: boolean;
   enableTn: boolean;
 }
@@ -76,9 +77,10 @@ export default function TallyTab() {
   const { rawMode: tallyRawMode, rawText: tallyRawText, busy: tallyBusy, setRawText: setTallyRawText, toggleRawMode: toggleTallyRawMode, onDiscard: discardTallyRaw } = tallyText;
   const lastPushRef = useRef("[]");       // 初始为 []：挂载时空 tallies 不把导入的 deck.tallies 冲成 []
   const lastPullRef = useRef<string|null>(null);  // 只在 deck 数据确实变了才拉
+  const idsRef = useRef<number[]>([]);    // 按位置缓存上次的 tally id：number 变化不复位 key，避免输入光标丢失
   // local → deck
   useEffect(() => {
-    const mapped = tallies.map(t => ({ type: t.type, number: parseInt(t.number)||0, particle: t.particle || "n", params: t.params, enableEn: t.enableEn, enableTn: t.enableTn }));
+    const mapped = tallies.map(t => ({ type: t.type, number: parseInt(t.number)||0, particle: t.particle || "n", params: t.params, multiplier: t.multiplier, enableEn: t.enableEn, enableTn: t.enableTn }));
     const json = JSON.stringify(mapped);
     if (json !== lastPushRef.current) { lastPushRef.current = json; patch({ tallies: mapped }); }
   }, [tallies]);
@@ -88,17 +90,29 @@ export default function TallyTab() {
     const json = JSON.stringify(deck.tallies);
     if (json === lastPullRef.current) return;
     lastPullRef.current = json;
-    // 给每个 tally 分配稳定 id（用 number+type+particle+params 做种子）
-    const next = deck.tallies.map((t, i) => ({
-      id: (t.number && t.type) ? (t.number * 10 + (t.type.charCodeAt(1)-48) + (t.particle?.charCodeAt(0)||0)) : (i + 1),
-      prefix: "" as const,
-      type: t.type as any,
-      number: String(t.number),
-      particle: t.particle,
-      params: t.params,
-      enableEn: t.enableEn || false,
-      enableTn: t.enableTn || false,
-    }));
+    // 给每个 tally 分配稳定 id：优先按位置复用上次的 id（number 变化不改变 key，行不重挂载，输入光标不丢失）；
+    // 新行回退到 number+type+particle 种子，且保证不重复。
+    const used = new Set<number>();
+    const next = deck.tallies.map((t, i) => {
+      let id = idsRef.current[i];
+      if (id === undefined || used.has(id)) {
+        id = (t.number && t.type) ? (t.number * 10 + (t.type.charCodeAt(1)-48) + (t.particle?.charCodeAt(0)||0)) : (i + 1);
+        while (used.has(id)) id++;
+      }
+      used.add(id);
+      return {
+        id,
+        prefix: "" as const,
+        type: t.type as any,
+        number: String(t.number),
+        particle: t.particle,
+        params: t.params,
+        multiplier: t.multiplier || "",
+        enableEn: t.enableEn || false,
+        enableTn: t.enableTn || false,
+      };
+    });
+    idsRef.current = next.map(t => t.id);
     setTallies(next);
   }, [deck.tallies]);
   const addTally = () => {
@@ -107,7 +121,7 @@ export default function TallyTab() {
     const newNum = Math.max(maxNum + 10, 10);
     const digit = newNum % 10;
     const newType = TYPE_BY_DIGIT[digit] || "F4";
-    setTallies([...tallies, { id: Date.now(), prefix: "", type: newType, number: String(newNum), particle: "n", params: "", enableEn: false, enableTn: false }]);
+    setTallies([...tallies, { id: Date.now(), prefix: "", type: newType, number: String(newNum), particle: "n", params: "", multiplier: "", enableEn: false, enableTn: false }]);
   };
   const delTally = (id: number) => setTallies(tallies.filter((t) => t.id !== id));
   const updateTally = (id: number, field: keyof Tally, value: any) => setTallies(tallies.map((t) => (t.id === id ? { ...t, [field]: value } : t)));
@@ -138,7 +152,7 @@ export default function TallyTab() {
             <button className="btn btn-success btn-sm" onClick={addTally}>+ 添加计数</button></div>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>前缀</th><th>类型</th><th>编号</th><th>粒子</th><th>参数</th><th>En</th><th>Tn</th><th>操作</th></tr></thead>
+            <thead><tr><th>前缀</th><th>类型</th><th>编号</th><th>粒子</th><th>参数</th><th>乘子</th><th>En</th><th>Tn</th><th>操作</th></tr></thead>
             <tbody>{tallies.map((t) => (
               <tr key={t.id}>
                 <td><select className="form-select" value={t.prefix} onChange={e => updateTally(t.id,"prefix",e.target.value)} style={{height:30,fontSize:12,width:56}} title="*Fn=能量通量 +F8=电荷沉积"><option value="">无</option><option value="*">*</option><option value="+">+</option></select></td>
@@ -163,6 +177,7 @@ export default function TallyTab() {
                   updateTally(t.id, "particle", [...new Set(parts.filter(p => valid.includes(p) && (!perType || perType.includes(p))))].join(",") || (type === "F7" ? "N" : type === "F8" ? "P" : "N"));
                 }} style={{height:28,fontSize:12,width:100}} placeholder="如 N,P,E" /></td>
                 <td><input className="form-input" value={t.params} onChange={e => updateTally(t.id,"params",e.target.value)} style={{height:28,fontSize:12,width:180}} placeholder={TYPE_PARAM_PLACEHOLDER[t.type]} title={TYPE_TOOLTIP[t.type]} /></td>
+                <td><input className="form-input" value={t.multiplier} onChange={e => updateTally(t.id,"multiplier",e.target.value)} style={{height:28,fontSize:12,width:150}} placeholder="如 8.65E10 1 -5 -6" title="FM 响应乘子：C m r1 r2 ...（空 = 不生成 FM 卡）" /></td>
                 <td style={{textAlign:"center"}}><input type="checkbox" checked={t.enableEn} onChange={e => updateTally(t.id,"enableEn",e.target.checked)} style={{accentColor:"var(--accent)"}} title="生成 En 能量卡" /></td>
                 <td style={{textAlign:"center"}}><input type="checkbox" checked={t.enableTn} onChange={e => updateTally(t.id,"enableTn",e.target.checked)} style={{accentColor:"var(--accent)"}} title="生成 Tn 时间卡" /></td>
                 <td><button className="btn btn-danger btn-xs" onClick={() => delTally(t.id)}>x</button></td>

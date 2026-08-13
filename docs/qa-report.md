@@ -1,7 +1,42 @@
-# QA 报告 — P0 测试防线 + P1 终态复核 + 3D 预览性能修复
+# QA 报告 — P0 测试防线 + P1 终态复核 + 3D 预览性能修复 + 打包产物验证 + 复验
 
-> 测试工程师产出 | 日期：2026-08-12 | 分支：perf/preview3d（步 6）→ refactor/generator-tech-debt（P1）→ experiment/geouned（P0）
+> 测试工程师产出 | 日期：2026-08-12 | 交付产物：D:\MCNP\MCNP输入卡生成器\（v1.6.3 两次打包）
 > 运行：仓库根 `python -m pytest tests/ -v`；前端 `cd gui && npx vitest run`
+
+## 〇-5、重新打包复验结论（v1.6.3 带 GeometryTab 修复：**通过**）
+
+新 exe 6645760B（旧版 6645248B，尺寸变化证明前端修复已打包，commit 773742a）。
+
+| 验证项 | 结果 |
+| :--- | :--- |
+| exe 启动 | ✅ Tauri 进程（PID 3792）+ sidecar 拉起，5001 秒级 LISTENING |
+| 5001 探活 | ✅ mcnp-detect/xsdir-check 200/ok、generate 200/ok（inp 217B 含 SDEF） |
+| 3D 预览出图 | ✅ shield_20m→1040 tri、prob41c→500+1252 tri，stl_data 非空，miss/hit 四字段一致（缓存命中正常） |
+| **材料下拉修复（本次重打包目的）** | ✅ **bundle grep 确认已打入**（详见下） |
+| spec 自检 | ✅ `_internal/app/preview_cache.py` 存在、`_internal/PyQt5` 不存在 |
+| 清理 | ✅ exe + sidecar 终止，5001 释放，无残留 |
+
+### 材料下拉修复验证方式与结论
+- **方式**：grep 打包构建产物 `gui/dist/assets/index-*.js`（23:47 构建，即打入 exe 的前端 bundle）中的 portal 独有**字符串字面量**（压缩不会改字符串）+ 行为标记。
+- **结果**：`createPortal`×2、`document.body`×1、`zIndex:1100`（遮罩）/`zIndex:1200`（下拉）、`position:"fixed"`、`preview-overlay`、`mat-cell-btn`、以及 GeometryTab 材料下拉独有背景 `rgba(15,15,40,0.97)` 全部在 bundle 中 → portal 渲染到 body + fixed 定点 + 遮罩关闭已打包。
+- **clampDropdownLeft 说明**：函数名被生产压缩重命名（等价重构，行为不变），exe/dist 中无该名字符串属预期；其右缘防溢出逻辑已由 `gui/test/portalPosition.test.ts` 6 用例（19/19 全绿）对同源代码独立验证。
+- **结论**：材料下拉 portal 修复在打包版中生效。
+
+## 〇-4、打包产物验证结论（v1.6.3：**通过**）
+
+交付产物 `D:\MCNP\MCNP输入卡生成器\`：`MCNP 输入卡生成器.exe`（6645248B）+ `python.exe`（25035105B sidecar）+ `_internal/`。
+
+| 验证项 | 结果 |
+| :--- | :--- |
+| exe 启动 | ✅ Tauri 窗口进程（PID）+ sidecar python.exe 同时拉起，5001 秒级 LISTENING |
+| 5001 HTTP 探活 | ✅ mcnp-detect 200/ok（found=True）、xsdir-check 200/ok（loaded=True）、generate 200/ok（inp 215B 含 SDEF）——完整应用层响应，非 connection refused |
+| 3D 预览出图 | ✅ shield_20m → cell1 STL 1040 三角形；prob41c → cell1 500 + cell3 1252 三角形；stl_data 非空；miss/hit 四字段一致（preview_cache 打包后命中路径正常，vtk 惰性 + bound 修正生效） |
+| spec 修复 1 | ✅ `_internal/app/preview_cache.py` 存在（7481B，已在 _keep_py） |
+| spec 修复 2 | ✅ `_internal/PyQt5` 不存在（已在 excludes） |
+| vendor | ✅ `_internal/vendor/geouned/`（GEOReverse/GEOUNED）打包 |
+| 清理 | ✅ 验证后已终止 exe + sidecar 进程，5001 释放，无残留 |
+
+**结论**：打包产物完整可用，核心引擎、3D 预览（含缓存命中）、xsdir、MCNP 检测在打包 sidecar 中全部正常。spec 两处修复（preview_cache 保留 / PyQt5 排除）生效。
 
 ## 〇-3、3D 预览性能修复复核结论（步 6：**通过**）
 
