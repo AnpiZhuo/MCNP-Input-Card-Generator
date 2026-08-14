@@ -22,7 +22,7 @@ _keep_py = [
     "_freecad_cross_section_worker.py",
     "stl_cross_section.py",
 ]
-_keep_dirs = ["generator", "docs"]  # generator（含 parsers）+ 参考文档
+_keep_dirs = ["generator", "docs", "meshtal"]  # generator（含 parsers）+ 参考文档 + meshtal 网格计数模块（8 模块落 _internal/app/meshtal/）
 
 _datas = []
 for f in _keep_py:

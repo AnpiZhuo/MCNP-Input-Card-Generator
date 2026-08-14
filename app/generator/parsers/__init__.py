@@ -141,6 +141,7 @@ def parse_inp_text(text: str) -> tuple[DeckData, list[str]]:
     # Build TallySettings: TallyDefinition list + CUT parameters
     tally = TallySettings(
         tallies=tally_defs,
+        fmesh_defs=data.get("fmesh_defs", []),
         e_cards_text=e_cards_text,
         t_cards_text="\n".join(t_cards_lines),
         cut_n_t=tally_raw.get("cut_n_t", ""), cut_n_e=tally_raw.get("cut_n_e", ""),

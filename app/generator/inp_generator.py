@@ -631,12 +631,14 @@ def _generate_multi_source(sources: list[SourceData]) -> list[str]:
 
 
 def _generate_tallies(tally: TallySettings) -> list[str]:
-    """计数卡 — 遍历 tally.tallies 列表生成 Fn 卡
+    """计数卡 — 遍历 tally.tallies 列表生成 Fn 卡 + FMESH/TMESH 网格计数回放
 
     每张 TallyDefinition 遍历其 particles 列表，为每个粒子输出一行 Fn 卡。
     不再依赖 MODE 卡决定粒子——每行计数自带粒子选择。
+    FMESH/TMESH（fmesh_defs）紧随 F 卡段后回放（契约 §6 步 4，照 FM 回放模式）。
     """
-    if not tally.tallies:
+    fmesh_defs = getattr(tally, "fmesh_defs", None) or []
+    if not tally.tallies and not fmesh_defs:
         return []
 
     lines = [TALLIES_BANNER]
@@ -669,6 +671,11 @@ def _generate_tallies(tally: TallySettings) -> list[str]:
         # FM 计数乘子卡：紧跟在对应 F 卡之后（FMn 乘在 Fn 计数上）
         if multiplier:
             lines.append(f"FM{td.number}  {multiplier}")
+
+    # FMESH/TMESH 网格计数回放（结构化字段齐全走结构化，否则回放 raw——round-trip 兜底）
+    if fmesh_defs:
+        from app.meshtal.fmesh_parser import fmesh_defs_to_lines
+        lines.extend(fmesh_defs_to_lines(fmesh_defs))
 
     # E0 和 En 由 generate_inp_from_deck 中单独的 e0/cut 处理调用，不在此处重复生成
     return lines

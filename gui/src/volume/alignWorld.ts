@@ -1,0 +1,71 @@
+/**
+ * alignWorld — 几何外壳与体积盒世界坐标对齐核心（契约 meshtal-visualization.md §7）
+ *
+ * 坐标事实（§7.1）：外壳 STL（preview-3d 产自 deck 曲面/栅元全局坐标）与
+ * 体积盒（meshtal bin 边界，MCNP 结果即全局坐标）天然同坐标系，只需「统一归一化」。
+ *
+ * 机制（§7.2）：单一归一化偏移 offset = -unionBox.center，外壳与体积盒共用同一
+ * offset → 世界坐标相对几何逐点保留，两者在场景坐标中与在世界坐标中重合关系一致。
+ *
+ * 验收（§7.3 四断言）：
+ *  1. shared_offset_invariant：SminScene == Smin + offset、VminScene == Vmin + offset
+ *  2. world_box_from_edges：每轴 min=edge[0]、max=edge[-1]
+ *  3. volume_inside_shell：归一化后体积盒场景包围盒 ⊆ 外壳场景包围盒
+ *  4. 尺寸保持 / 相对位移保持
+ */
+export type Vec3 = [number, number, number];
+
+export interface AABB {
+  min: Vec3;
+  max: Vec3;
+}
+
+/** 体积盒：由 meshtal bin 边界边数组构建全局包围盒（每轴 min=edge[0]、max=edge[-1]） */
+export function worldBoxFromEdges(edges: { x: number[]; y: number[]; z: number[] }): AABB {
+  return {
+    min: [edges.x[0], edges.y[0], edges.z[0]],
+    max: [edges.x[edges.x.length - 1], edges.y[edges.y.length - 1], edges.z[edges.z.length - 1]],
+  };
+}
+
+export function boxCenter(box: AABB): Vec3 {
+  return [(box.min[0] + box.max[0]) / 2, (box.min[1] + box.max[1]) / 2, (box.min[2] + box.max[2]) / 2];
+}
+
+export function boxSize(box: AABB): Vec3 {
+  return [box.max[0] - box.min[0], box.max[1] - box.min[1], box.max[2] - box.min[2]];
+}
+
+/** 多个包围盒的并集（体积盒 ⊆ 外壳时 union = 外壳） */
+export function unionBoxes(boxes: AABB[]): AABB {
+  const min: Vec3 = [Infinity, Infinity, Infinity];
+  const max: Vec3 = [-Infinity, -Infinity, -Infinity];
+  for (const b of boxes) {
+    for (let i = 0; i < 3; i++) {
+      if (b.min[i] < min[i]) min[i] = b.min[i];
+      if (b.max[i] > max[i]) max[i] = b.max[i];
+    }
+  }
+  return { min, max };
+}
+
+/** 平移接口：THREE.BufferGeometry.translate 满足（保持模块无 THREE 依赖，可测） */
+export interface Translatable {
+  translate(x: number, y: number, z: number): void;
+}
+
+/**
+ * 单一归一化偏移：把给定几何逐个平移到 box 中心，返回 offset = -center。
+ * 外壳 STL 与体积盒必须共用此 offset（§7.2 关键不变量）。
+ */
+export function translateToCenter(geometries: Translatable[], box: AABB): Vec3 {
+  const c = boxCenter(box);
+  const offset: Vec3 = [-c[0], -c[1], -c[2]];
+  for (const g of geometries) g.translate(offset[0], offset[1], offset[2]);
+  return offset;
+}
+
+/** 向量 + offset（用于把全局包围盒角点换算到场景坐标） */
+export function applyOffset(vec: Vec3, offset: Vec3): Vec3 {
+  return [vec[0] + offset[0], vec[1] + offset[1], vec[2] + offset[2]];
+}

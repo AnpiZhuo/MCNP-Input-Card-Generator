@@ -1,0 +1,74 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`RAY_MARCH_FRAGMENT > 快照：片段着色器字符串稳定 1`] = `
+"#version 300 es
+precision highp float;
+precision highp sampler3D;
+in vec3 vWorldPos;
+uniform sampler3D uTex;
+uniform vec3 uBoxMin;
+uniform vec3 uBoxMax;
+uniform vec3 uCameraPos;
+uniform float uOpacity;
+uniform int uSteps;
+out vec4 fragColor;
+
+vec2 rayBox(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
+  vec3 inv = 1.0 / rd;
+  vec3 t0 = (bmin - ro) * inv;
+  vec3 t1 = (bmax - ro) * inv;
+  vec3 tmin = min(t0, t1);
+  vec3 tmax = max(t0, t1);
+  float tNear = max(max(tmin.x, tmin.y), tmin.z);
+  float tFar = min(min(tmax.x, tmax.y), tmax.z);
+  return vec2(tNear, tFar);
+}
+
+void main() {
+  vec3 ro = uCameraPos;
+  vec3 rd = normalize(vWorldPos - ro);
+  vec2 t = rayBox(ro, rd, uBoxMin, uBoxMax);
+  if (t.y < t.x || t.y < 0.0) {
+    fragColor = vec4(0.0);
+    return;
+  }
+  float t0 = max(t.x, 0.0);
+  float t1 = t.y;
+  int steps = max(1, uSteps);
+  float d = (t1 - t0) / float(steps);
+  vec3 span = max(uBoxMax - uBoxMin, vec3(1e-9));
+  vec4 acc = vec4(0.0);
+  for (int i = 0; i < 256; i++) {
+    if (i >= steps) break;
+    float s = t0 + (float(i) + 0.5) * d;
+    vec3 pos = ro + rd * s;
+    vec3 n = (pos - uBoxMin) / span;
+    // 数据布局：numpy (x,y,z) 扁平（z 最快），DataTexture3D dims=(nk,nj,ni)
+    // → 纹理坐标 = (z, y, x)，采样 uv 需 swizzle
+    vec3 uvw = clamp(vec3(n.z, n.y, n.x), 0.0, 1.0);
+    vec4 col = texture(uTex, uvw);
+    float a = col.a * uOpacity;
+    acc.rgb += (1.0 - acc.a) * col.rgb * a;
+    acc.a += (1.0 - acc.a) * a;
+    if (acc.a > 0.98) break;
+  }
+  fragColor = acc;
+}
+"
+`;
+
+exports[`RAY_MARCH_VERTEX > 透传世界坐标（vWorldPos 供片段射线方向） 1`] = `
+"#version 300 es
+precision highp float;
+in vec3 position;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform mat4 modelMatrix;
+out vec3 vWorldPos;
+void main() {
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  vWorldPos = wp.xyz;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+"
+`;

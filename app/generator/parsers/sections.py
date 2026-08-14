@@ -178,6 +178,10 @@ def split_sections(lines: list[str]) -> tuple[str, list[str], list[str], list[st
         re.compile(r'^IDUM$', re.IGNORECASE),      # IDUM
         re.compile(r'^RDUM$', re.IGNORECASE),      # RDUM
         re.compile(r'^FMESH', re.IGNORECASE),      # FMESHn（带编号）
+        # 网格计数（契约 meshtal-visualization.md §6）：TMESHn 标题 + RMESHn/CMESHn 子卡
+        re.compile(r'^TMESH', re.IGNORECASE),      # TMESHn（节首直出不误分曲面/栅元段）
+        re.compile(r'^RMESH\d*', re.IGNORECASE),   # RMESHn（TMESH rect 子卡）
+        re.compile(r'^CMESH\d*', re.IGNORECASE),   # CMESHn（TMESH cyl 子卡）
     ]
 
     # Phase-based section classification: start in "cell", transition on blank line or data patterns

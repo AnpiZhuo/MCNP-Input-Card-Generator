@@ -4,11 +4,13 @@ import TabPanels from "./components/TabPanels";
 import PreviewDialog from "./components/PreviewDialog";
 import Preview3DWindow from "./components/Preview3DWindow";
 import CrossSectionWindow from "./components/CrossSectionWindow";
+import ResultWindow from "./volume/ResultWindow";
 import { generateInp } from "./utils/dataCollector";
 import { currentWindowLabel, clearStlSession } from "./utils/windows";
 
 import { DeckProvider, useDeck } from "./utils/DeckContext";
 import { buildGridsFromTally, buildTallyFromGrids } from "./utils/gridState";
+import { buildFmeshPayload, fmeshDefsToRows } from "./volume/fmeshState";
 import { startPythonBackend, stopPythonBackend } from "./utils/backend";
 import { apiUrl } from "./utils/api";
 
@@ -162,7 +164,11 @@ function AppInner() {
         basic: d.basic || {}, surfaces: d.surfaces || '', tr_cards: d.tr_cards || '',
         cells: d.cells || [], materials: d.materials || [],
         sources: d.sources || [], tallies: d.tallies || [],
-        tally: d.tally || {},
+        tally: {
+          ...(d.tally || {}),
+          // 后端返回 fmesh_defs → 前端 deck.tally.fmesh（fmeshState FmeshRow[]）
+          fmesh: fmeshDefsToRows((d.tally?.fmesh_defs || [])),
+        },
         grids: buildGridsFromTally(d.tally || {}),
         adv: d.adv || {},
         sourceMode: d.sourceMode || 'fixed', sdefFields: d.sdefFields || {},
@@ -304,7 +310,13 @@ function AppInner() {
         },
         surfaces: deck.surfaces || "", tr_cards: deck.tr_cards || "",
         cells: deck.cells, materials: deck.materials, sources: deck.sources,
-        tally: { tallies: deck.tallies, ...gridPayload, ...cutFields },
+        tally: {
+          tallies: deck.tallies,
+          ...gridPayload,
+          ...cutFields,
+          // FMESH/TMESH 结构化卡（fmeshState 双向转换，后端 key=fmesh_defs）
+          fmesh_defs: buildFmeshPayload((deck.tally as any)?.fmesh || []),
+        },
         adv: {
           ...(deck.adv || {}),
           // 前端用 "sdef"，后端模型用 "distribution"（parse 返回也是 distribution），边界映射
@@ -418,17 +430,18 @@ function AppInner() {
   );
 }
 
-/** 独立窗口路由：按当前窗口 label 分派渲染（主界面 / 3D 预览 / 截面） */
+/** 独立窗口路由：按当前窗口 label 分派渲染（主界面 / 3D 预览 / 截面 / 3D 结果） */
 function WindowRouter() {
   const [label, setLabel] = useState<string>("main");
   useEffect(() => {
-    // 调试入口：URL hash #/preview3d 或 #/cross_section 可强制窗口类型（浏览器模式测试用）
+    // 调试入口：URL hash #/preview3d / #/cross_section / #/volume 可强制窗口类型（浏览器模式测试用）
     const h = window.location.hash.replace(/^#\/?/, "");
-    if (h === "preview3d" || h === "cross_section") { setLabel(h); return; }
+    if (h === "preview3d" || h === "cross_section" || h === "volume") { setLabel(h); return; }
     currentWindowLabel().then(setLabel).catch(() => setLabel("main"));
   }, []);
   if (label === "preview3d") return <Preview3DWindow />;
   if (label === "cross_section") return <CrossSectionWindow />;
+  if (label === "volume") return <ResultWindow />;
   return <DeckProvider><AppInner /></DeckProvider>;
 }
 

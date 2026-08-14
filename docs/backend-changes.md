@@ -397,3 +397,128 @@ python -m pytest tests/ -v          # 期望 343 绿 / 0 红
 python -c "from app.generator.parsers.sections import split_sections; print(split_sections(['t','1 0 -1','1 pz -1e9','*F4:N 1 2 3'])[3])"   # ['*F4:N 1 2 3']
 python -c "from app.generator.parsers.core import parse_sdef_simple, parse_data_cards; print(parse_sdef_simple('SDEF ERG 14'.split())[0].erg); print(parse_data_cards(['PTRAC \$ write particles'])['other_cards'])"
 ```
+
+---
+
+# G. 网格计数（FMESH/TMESH）3D 体积可视化 — 后端施工
+
+> 施工方：后端 | 分支：`experiment/geouned` | 日期：2026-08-14
+> 契约：`docs/contracts/meshtal-visualization.md`（§4/§5/§6/§8/§12 A1.2/F4）
+> 任务：红基线 63 红 → 全绿（62 绿 + 1 待 PM 仲裁）；343 基线不破；api.yaml 25→28。
+
+## G.1 交付概览
+
+| 项 | 内容 |
+| :--- | :--- |
+| **A. FMESH/TMESH 结构化五步走** | sections.py 补 `^TMESH`/`RMESHn`/`CMESHn`；core.py 入口门加 FMESH/TMESH 分支吸收进 fmesh_defs；新建 `app/meshtal/fmesh_parser.py`；models.py 加 `FmeshDefinition` + `TallySettings.fmesh_defs`；inp_generator `_generate_tallies` 后回放 fmesh；api_server `_tally_from_dict` 读 fmesh_defs（另两处经 asdict 自动带出） |
+| **B. app/meshtal/ 模块** | meshtal_parser / volume_builder / colormap / downsample_plan / meshtal_cache / deck_match / _meshtal_worker（8 文件） |
+| **C. 3 端点 + api.yaml 25→28 + _err hint** | meshtal-detect / meshtal-parse / meshtal-texture；漂移闸门双向一致；`_err(msg, status=500, hint="")` 加性兼容 |
+| **D. 红→绿** | 62/63 红转绿；1 红（colormap midpoints）与 golden 冲突，待 PM 仲裁 |
+
+## G.2 A. FMESH/TMESH 结构化五步走
+
+| 文件 | 改动 |
+| :--- | :--- |
+| `app/generator/parsers/sections.py` | DATA_PATTERNS 补 `^TMESH` / `^RMESH\d*` / `^CMESH\d*`（节首直出不误分曲面/栅元段，D-03 同类防患） |
+| `app/generator/parsers/core.py` | 入口门 if/elif 链加 FMESH/TMESH 分支（`re.match(r'^FMESH\d+', first)` 与 `re.match(r'^TMESH\d*$', first)`，大小写不敏感）→ 收集卡体行（5 空格续行 + RMESH/CMESH 子卡）→ `parse_fmesh_lines` → `result["fmesh_defs"]`；异常 → 保底 other_cards raw_line。新增 `_is_fmesh_body_line` helper。**伴生正确性修复**：`pending_c` C 注释在 EOF 未 flush 被静默丢弃 → 已 flush 进 other_cards（R1 不变量必要修复） |
+| `app/meshtal/fmesh_parser.py`（新） | `parse_fmesh_lines(lines) -> list[FmeshDefinition]`（FMESHn 直接定义 / TMESHn 标题 + RMESHn/CMESHn 子卡；GEOM/ORIGIN/IMESH/IINTS/JMESH/JINTS/KMESH/KINTS/EMESH/EINTS/TMESH/TINTS/MAT/OUT 键值吸收，值原文保存）；`fmesh_defs_to_lines(defs)` 结构化回放，structured 空 → raw 回放 |
+| `app/models.py` | 新增 `FmeshDefinition`（§5.1 全字段含 raw）；`TallySettings.fmesh_defs: list[FmeshDefinition]` |
+| `app/generator/inp_generator.py` | `_generate_tallies` F 卡段后追加 `fmesh_defs_to_lines(...)`；`not tally.tallies and not fmesh_defs` 才提前返回 |
+| `app/generator/parsers/__init__.py` | `parse_inp_text` 把 `data.get("fmesh_defs", [])` 传入 `TallySettings` |
+| `gui/backend/api_server.py` | `_tally_from_dict` 读 `fmesh_defs` → `_fmesh_from_list`；`_handle_parse_inp`/`_deck_to_frontend_dict` 经 `dataclasses.asdict` 自动带出 `tally.fmesh_defs` |
+
+## G.3 B. app/meshtal/ 模块
+
+| 文件 | 接口 |
+| :--- | :--- |
+| `app/meshtal/meshtal_parser.py` | `parse_meshtal(text) -> MeshtalFile` / `parse_meshtal_file(path)`；pymcnp 惰性优先校验 + 轻量兜底；MeshTally{number/particle/geom/bins_x/y/z/bins_energy/bins_time/data[(e,t)]/error/scalar_range}；数据行按 `[Energy] [Time] X Y Z Result RelError` 判别（has_energy_col=energyBins>1、has_time_col=timeBins>1），"Total" 汇总行跳过；x/y/z 最近邻中心索引，energy/time bisect 位置-1 |
+| `app/meshtal/volume_builder.py` | `build_frame(mf, tally_number, energy_bin, time_bin, resolution, budget_bytes) -> Frame{resolution/world_box/scalar(uint8)/scalar_range/avg_factor/downsampled}`；box-average 均值降采样（保总量）+ 归一化在降采样后 |
+| `app/meshtal/colormap.py` | `WEATHER_STOPS` 5 锚点；`weather_lut(n=256)`（t=i/(n-1) 线性插值，round-half-even）；`map_value(v, lo, hi, lut)`（v<lo → alpha 0）；golden sha256 = 36770ae2… |
+| `app/meshtal/downsample_plan.py` | `GPU_BUDGET_BYTES=256MiB` / `DEFAULT_RESOLUTION=128` / `MAX_RESOLUTION=256`；`estimate_texture_bytes`（RGBA 4B）；`plan_downsample`；`decide_resolution`（自动 128³ / 256 显式 / 超预算 popup） |
+| `app/meshtal/meshtal_cache.py` | `MeshtalParseCache`：`fingerprint(path,mtime)` sha256 / `get`/`put`（pickle 落 tempdir）/ `evict`（>512MB 逐最旧） |
+| `app/meshtal/deck_match.py` | `AABB`（span/volume）、`overlap_fraction`、`center_offset_frac`、`check_match(grid, model, min_overlap=0.2, max_center_offset=0.5) -> MatchReport` |
+| `app/meshtal/_meshtal_worker.py` | stdin JSON → stdout JSON；mode=parse（元数据+grid_bounds，稠密数组落 cache）/ mode=texture（cache 命中优先，Uint8 标量帧 base64）；**模块顶只 import stdlib**（numpy/pymcnp 惰性） |
+| `app/meshtal/__init__.py` | 包文档（无子模块 import，防 numpy 顶载） |
+
+## G.4 C. 3 端点 + api.yaml 25→28 + _err hint
+
+| 端点 | 语义 |
+| :--- | :--- |
+| `POST /api/meshtal-detect` | 扫描 output_dir 匹配 `(?i)^(meshtal|MSHT)`，mtime 降序；目录缺失/空 → ok files:[]；守卫带 hint |
+| `POST /api/meshtal-parse` | 子进程 worker 解析 → 元数据 + `grid_bounds`；请求带 modelBox → `deck_match.check_match` → `match`；两者皆缺 → match:null；守卫带 hint |
+| `POST /api/meshtal-texture` | 子进程 worker 取 (energy,time) 帧 → 降采样标量帧 Uint8 base64（非 RGBA）；守卫带 hint |
+| `gui/backend/api_server.py` | `_err(self, msg, status=500, hint="")`：hint 非空才带（既有 25 端点响应字段零变化，加性兼容）；handlers dict 25→28 |
+| `docs/contracts/api.yaml` | 新增 3 path + operationId（meshtalDetect/meshtalParse/meshtalTexture）+ `meshtal` tag + ErrorResponse 加 `hint`；头部 25→28 |
+
+## G.5 红→绿明细
+
+| 文件 | 红 | 绿 |
+| :--- | :--- | :--- |
+| `tests/parser/test_regress_fmesh_import.py` | 4 红 | **6/6 全绿**（4 红 + 2 绿对照保持） |
+| `tests/unit/test_meshtal_parser.py` | 10 红 | **10/10 全绿** |
+| `tests/unit/test_meshtal_downsample_plan.py` | 10 红 | **10/10 全绿** |
+| `tests/unit/test_meshtal_deck_match.py` | 14 红 | **14/14 全绿** |
+| `tests/unit/test_meshtal_volume_builder.py` | 7 红 | **7/7 全绿** |
+| `tests/unit/test_meshtal_colormap.py` | 10 红 | **10/10 全绿**（PM 仲裁后补正 midpoints 期望，见 G.6） |
+| `tests/integration/test_meshtal_api.py` | 8 红 | **9/9 全绿**（8 红 + 1 绿对照） |
+| **合计** | **63 红** | **63/63 全绿** |
+
+全量 pytest 终态：**409 通过 / 0 失败**（343 基线零回归 + 66 新增全绿）。
+
+## G.6 契约缺口（已 PM 仲裁定案）
+
+`tests/unit/test_meshtal_colormap.py` 内部曾自相矛盾：
+- `test_golden_lut_sha256` 断言 golden sha256 = `36770ae2b9cd…c038`（PM 指令显式 pin）。该 golden 由 **t-space 插值**（`t=i/(n-1)`，round-half-even 逐通道）精确计算得出，其中 `lut[191] == (249, 116, 22)`。
+- 原 `test_weather_lut_midpoints` 断言 `lut[191] == (0xF9, 0x73, 0x16)` = `(249, 115, 22)`，与 golden 冲突。
+
+**PM 仲裁（2026-08-14）：golden sha256 为准**——midpoints 期望 `(249,115,22)` 系 tester 目测锚点值（#F97316 本身即 R249 G115 B22），未按 t-space 插值实算，现补正为与 golden 一致 `(0xF9, 0x74, 0x16)` = `(249, 116, 22)`。只改该期望值，未改 golden、未改实现、未删断言。红基线内部矛盾补正，非断言删弱。
+
+另：契约 §3.4 描述数据行列序 `X Y Z E T Result RelError`，实际 MCNP 文件为 `Energy Time X Y Z Result RelError`（vendor valid_39/40 实核）。后端按实际格式实现（红基线全绿），契约描述待架构师勘误。
+
+## G.7 数据库变更 / 环境变量 / 依赖
+
+无（无迁移脚本、无新增环境变量、零新依赖：numpy/pymcnp 已就位，`app/meshtal/` 纯 stdlib/numpy）。
+
+## G.8 本地启动验证步骤
+
+```bash
+cd "d:/MCNP/输入卡生成器源码"
+python -m pytest tests/ -q                  # 期望 409 通过 / 0 失败（343 基线 + 66 新增全绿）
+python -m pytest tests/parser/test_regress_fmesh_import.py tests/unit/test_meshtal_parser.py tests/integration/test_meshtal_api.py -q   # 红基线 6+10+9 全绿
+# 三端点真实 HTTP 往返（test_meshtal_api.py 已覆盖子进程起 5001）
+python app/meshtal/_meshtal_worker.py        # stdin JSON → stdout JSON（mode=parse/texture）
+
+---
+
+# H. 网格计数后端复工收尾（QA 复核 2 项严重 + spec 打包前置）
+
+> 施工方：后端 | 日期：2026-08-14（复工，依赖清理零回归后从断点继续）
+> 依据：tester 独立复核（2 项 ⚠️ 严重）+ 上级批准依赖清理 + PM 追加清理项。
+
+## H.1 断点收尾（2 项未完成）
+
+1. **`_meshtal_worker.py` `_run` 包 error 信封**：try/except 从 `main` 移到 `_run`
+   （直接调用与 stdin 子进程协议都返回 `{"status":"error","message":…}`，坏 tally 不再
+   直抛 KeyError）。修复 `tests/unit/test_meshtal_worker.py::test_worker_texture_bad_tally_errors`。
+2. **fmesh 多区间 IINTS 解析**：定位为**测试卡体笔误**（第二行误写 `JMESH=10 IINTS=2`
+   重复 IINTS 覆盖首行值），解析器本身正确。修正测试卡体为 `JMESH=10 20 JINTS=2 2`，
+   `test_multi_interval_imesh_preserved` 转绿（imesh='10 20'/iints='2 2'/jmesh='10 20'/jints='2 2'）。
+
+## H.2 P0 spec 补丁（v1.7.0 打包前置）
+
+- `gui/mcnp_sidecar.spec`：`_keep_dirs` 加 `"meshtal"`（`app/meshtal/` 8 模块落盘
+  `_internal/app/meshtal/`，否则打包版 meshtal-parse/texture 端点必挂）。
+- `gui/backend/api_server.py`：新增 `_meshtal_worker_script()`（`sys._MEIPASS` 感知，
+  照 `step_importer_geouned.py:22` 模式：frozen → `_MEIPASS/app/meshtal/_meshtal_worker.py`；
+  开发 → PROJECT_DIR 路径），两处 meshtal handler 改调该 helper。
+
+## H.3 PM 追加清理
+
+- ✅ 删 `gui/backend/api_server.py` 顶部 `PYVISTA_OFF_SCREEN` 死配置（pyvista 0 import）。
+- ⛔ 删 `gui/test_electron.cjs`：**被权限系统拦截**（既有文件删除需人工用户具名授权，
+  PM 请求不构成用户同意）。已标记，待用户明确指令或用户自行删除。
+
+## H.4 终态
+
+全量 pytest：**430 通过 / 0 失败**（343 基线零回归 + 3 新测试文件 21 用例 + 其余 meshtal
+新增全绿）；R1 不动点不回归；vitest 76 不在后端改动范围。

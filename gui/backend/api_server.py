@@ -7,8 +7,6 @@ MCNP 生成器 API 服务 — 桥接 React 前端与 Python 后端
 """
 
 import json
-import os as _pv_os
-_pv_os.environ["PYVISTA_OFF_SCREEN"] = "true"  # 供后续 handler 里懒加载的 pyvista 使用
 import os
 import sys
 from http.server import ThreadingHTTPServer as HTTPServer, BaseHTTPRequestHandler
@@ -23,7 +21,7 @@ if PROJECT_DIR not in sys.path:
     sys.path.insert(0, PROJECT_DIR)
 
 from models import (
-    BasicSettings, CellData, CellRow, MaterialData, MaterialRow,
+    BasicSettings, CellData, CellRow, FmeshDefinition, MaterialData, MaterialRow,
     SourceData, TallySettings, TallyDefinition, AdvancedSettings, DeckData
 )
 from generator.inp_generator import generate_inp_from_deck
@@ -31,6 +29,18 @@ from generator.parsers import parse_inp_text
 from xsdir_db import DB as xsdir_db
 
 PORT = 5001
+
+
+def _meshtal_worker_script() -> str:
+    """定位 app/meshtal/_meshtal_worker.py（打包环境 sys._MEIPASS 感知）。
+
+    照 step_importer_geouned.py:22 模式：打包后 worker 脚本落盘
+    _internal/app/meshtal/_meshtal_worker.py，用 sidecar python.exe spawn。
+    """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, "app", "meshtal", "_meshtal_worker.py")
+    return os.path.join(PROJECT_DIR, "app", "meshtal", "_meshtal_worker.py")
+
 
 # ── preview-3d deck 指纹缓存（P0a：同 deck 二次打开免 FreeCAD 子进程）──
 # 深模块见 app/preview_cache.py：put 把会话 STL 拷进缓存自有目录，clear-stl 删除
@@ -348,6 +358,18 @@ def _sources_from_list(arr: list) -> list[SourceData]:
         ccc=s.get("ccc", ""), ara=s.get("ara", ""), rate=s.get("rate", ""),
     ) for s in arr]
 
+def _fmesh_from_list(arr: list) -> list[FmeshDefinition]:
+    """前端 fmesh_defs 列表 → FmeshDefinition（缺 key 容忍，照 FM multiplier 先例）。"""
+    return [FmeshDefinition(
+        number=f.get("number", 0), kind=f.get("kind", "FMESH"),
+        particle=f.get("particle", ""), geom=f.get("geom", "xyz"),
+        origin=f.get("origin", ""), imesh=f.get("imesh", ""), iints=f.get("iints", ""),
+        jmesh=f.get("jmesh", ""), jints=f.get("jints", ""), kmesh=f.get("kmesh", ""),
+        kints=f.get("kints", ""), emesh=f.get("emesh", ""), eints=f.get("eints", ""),
+        tmesh=f.get("tmesh", ""), t_ints=f.get("t_ints", ""), mat=f.get("mat", ""),
+        out=f.get("out", ""), raw=f.get("raw", ""),
+    ) for f in arr]
+
 def _tally_from_dict(d: dict) -> TallySettings:
     tallies = []
     for t in d.get("tallies", []):
@@ -358,6 +380,7 @@ def _tally_from_dict(d: dict) -> TallySettings:
             multiplier=t.get("multiplier", ""),
         ))
     return TallySettings(tallies=tallies,
+        fmesh_defs=_fmesh_from_list(d.get("fmesh_defs", [])),
         e_min=d.get("e_min", ""), e_max=d.get("e_max", ""), e_bins=d.get("e_bins", 0),
         e_log=d.get("e_log", False), e_custom_enabled=d.get("e_custom_enabled", False),
         e_custom_text=d.get("e_custom_text", ""),
@@ -524,6 +547,9 @@ class MCNPHandler(BaseHTTPRequestHandler):
             "/api/clear-stl": self._handle_clear_stl,
             "/api/section-to-text": self._handle_section_to_text,
             "/api/text-to-section": self._handle_text_to_section,
+            "/api/meshtal-detect": self._handle_meshtal_detect,
+            "/api/meshtal-parse": self._handle_meshtal_parse,
+            "/api/meshtal-texture": self._handle_meshtal_texture,
         }
         handler = handlers.get(parsed.path)
         if handler:
@@ -543,14 +569,18 @@ class MCNPHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps({"status": "ok", **data}, ensure_ascii=False).encode("utf-8"))
 
-    def _err(self, msg: str, status=500):
+    def _err(self, msg: str, status=500, hint=""):
         import traceback
         tb = traceback.format_exc()
         self.send_response(status)
         self._cors()
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps({"status": "error", "message": msg, "traceback": tb}, ensure_ascii=False).encode("utf-8"))
+        payload = {"status": "error", "message": msg, "traceback": tb}
+        # F4：hint 非空才带（对既有 25 端点加性兼容，响应字段零变化）
+        if hint:
+            payload["hint"] = hint
+        self.wfile.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
     def _cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -732,6 +762,151 @@ class MCNPHandler(BaseHTTPRequestHandler):
         except Exception as e:
             import traceback
             self._err(str(e) + " | " + traceback.format_exc())
+
+    # ── MESHTAL：自动探测 ──
+    def _handle_meshtal_detect(self):
+        """扫描 output_dir 找 meshtal* / MSHT* 文件（大小写不敏感，按 mtime 降序）。"""
+        import datetime, re as _re
+        try:
+            data = self._read_body()
+            output_dir = data.get("outputDir", "D:/MCNP/new/claude")
+            if not isinstance(output_dir, str) or not output_dir.strip():
+                self._err("输出目录非法", hint="请确认输出目录路径正确")
+                return
+            files = []
+            if os.path.isdir(output_dir):
+                entries = []
+                try:
+                    with os.scandir(output_dir) as it:
+                        for e in it:
+                            if e.is_file() and _re.match(r'(?i)^(meshtal|MSHT)', e.name):
+                                st = e.stat()
+                                entries.append((st.st_mtime, {
+                                    "path": e.path, "name": e.name, "size": st.st_size,
+                                    "mtime": datetime.datetime.fromtimestamp(
+                                        st.st_mtime, tz=datetime.timezone.utc
+                                    ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                }))
+                except OSError:
+                    entries = []
+                entries.sort(key=lambda x: x[0], reverse=True)
+                files = [x[1] for x in entries]
+            self._ok({"files": files, "outputDir": output_dir})
+        except Exception as e:
+            self._err(str(e), hint="扫描 meshtal 文件失败，请确认输出目录存在")
+
+    # ── MESHTAL：解析（子进程 worker，元数据 + grid_bounds + match）──
+    def _handle_meshtal_parse(self):
+        """子进程 worker 解析 meshtal → 元数据；比对 deck↔meshtal（A1.2）。"""
+        try:
+            import subprocess
+            data = self._read_body()
+            path = data.get("path", "")
+            if not path or not os.path.isfile(path):
+                self._err("不是有效的 meshtal 文件",
+                          hint="请确认是 MCNP 生成的 meshtal 文件，文件格式不对或版本不兼容")
+                return
+            worker = _meshtal_worker_script()
+            proc = subprocess.run(
+                [sys.executable, worker],
+                input=json.dumps({"mode": "parse", "path": path}),
+                capture_output=True, text=True, timeout=120,
+            )
+            if proc.returncode != 0:
+                self._err(f"meshtal 解析失败: {proc.stderr[-300:]}",
+                          hint="请确认是 MCNP 生成的 meshtal 文件，文件格式不对或版本不兼容")
+                return
+            try:
+                result = json.loads(proc.stdout)
+            except json.JSONDecodeError as e:
+                self._err(f"解析 worker 输出失败: {e}",
+                          hint="请确认是 MCNP 生成的 meshtal 文件，文件格式不对或版本不兼容")
+                return
+            if result.get("status") != "ok":
+                self._err(result.get("message", "meshtal 解析失败"),
+                          hint="请确认是 MCNP 生成的 meshtal 文件，文件格式不对或版本不兼容")
+                return
+
+            # A1.2：deck↔meshtal 比对（纯函数，不阻塞）；两者皆缺 → match:null
+            from meshtal.deck_match import AABB, check_match
+            grid_box = None
+            gb = result.get("grid_bounds")
+            if gb:
+                grid_box = AABB(tuple(gb["min"]), tuple(gb["max"]))
+            model_box = None
+            mb = data.get("modelBox")
+            if mb is not None and mb.get("min") is not None and mb.get("max") is not None:
+                model_box = AABB(tuple(mb["min"]), tuple(mb["max"]))
+            match = None
+            if grid_box is not None and model_box is not None:
+                rep = check_match(grid_box, model_box)
+                match = {
+                    "matched": rep.matched,
+                    "overlapFraction": rep.overlap_fraction,
+                    "centerOffsetFrac": rep.center_offset_frac,
+                    "reason": rep.reason,
+                    "message": rep.message,
+                }
+
+            import datetime
+            size = os.path.getsize(path)
+            mtime = os.path.getmtime(path)
+            self._ok({
+                "file": {"path": path, "size": size,
+                         "mtime": datetime.datetime.fromtimestamp(
+                             mtime, tz=datetime.timezone.utc
+                         ).strftime("%Y-%m-%dT%H:%M:%SZ")},
+                "header": {"code": result.get("code"), "version": result.get("version"),
+                           "histories": result.get("histories")},
+                "grid_bounds": gb,
+                "match": match,
+                "tallies": result.get("tallies", []),
+                "warnings": result.get("warnings", []),
+            })
+        except Exception as e:
+            self._err(str(e), hint="解析 meshtal 文件失败，请确认是 MCNP 生成的 meshtal 文件")
+
+    # ── MESHTAL：标量帧纹理（子进程 worker，Uint8 base64）──
+    def _handle_meshtal_texture(self):
+        """子进程 worker 取 (energy,time) 帧 → 降采样标量帧 Uint8 base64（非 RGBA）。"""
+        try:
+            import subprocess
+            data = self._read_body()
+            path = data.get("path", "")
+            if not path or not os.path.isfile(path):
+                self._err("不是有效的 meshtal 文件",
+                          hint="请确认是 MCNP 生成的 meshtal 文件，文件格式不对或版本不兼容")
+                return
+            worker = _meshtal_worker_script()
+            proc = subprocess.run(
+                [sys.executable, worker],
+                input=json.dumps({
+                    "mode": "texture", "path": path,
+                    "tallyNumber": data.get("tallyNumber"),
+                    "energyBin": data.get("energyBin", 0),
+                    "timeBin": data.get("timeBin", 0),
+                    "resolution": data.get("resolution", 128),
+                    "normalize": data.get("normalize", "adaptive"),
+                }),
+                capture_output=True, text=True, timeout=120,
+            )
+            if proc.returncode != 0:
+                self._err(f"meshtal 纹理提取失败: {proc.stderr[-300:]}",
+                          hint="请重新选择计数与能量/时间范围")
+                return
+            try:
+                result = json.loads(proc.stdout)
+            except json.JSONDecodeError as e:
+                self._err(f"解析 worker 输出失败: {e}",
+                          hint="请重新选择计数与能量/时间范围")
+                return
+            if result.get("status") != "ok":
+                self._err(result.get("message", "meshtal 纹理提取失败"),
+                          hint="请重新选择计数与能量/时间范围")
+                return
+            self._ok({"frame": result["frame"]})
+        except Exception as e:
+            self._err(str(e), hint="提取体积纹理失败，请重新选择计数与能量/时间范围")
 
     # ── 保存 INP 到目录 ──
     def _handle_save_inp(self):

@@ -1,0 +1,103 @@
+import { describe, it, expect } from "vitest";
+import { createHash } from "node:crypto";
+import {
+  weatherLut, colorizeScalar, WEATHER_STOPS, roundHalfEven,
+} from "../../src/volume/colorize";
+
+/**
+ * 色阶映射（契约 meshtal-visualization.md §4.3 / §4.3.1 / §12 A2.2）
+ *
+ * golden sha256 跨语言防漂移：TS `weatherLut()` 256 项 RGBA 拼连的 sha256
+ * **必须等于** `36770ae2b9cd2a2ac3b6e6a08de45d522261dfced960c0c1db49bc515358c038`
+ * （与后端 `app/meshtal/colormap.py::weather_lut()` 逐字节一致）。
+ */
+
+describe("weatherLut golden（跨语言防漂移）", () => {
+  it("sha256 == golden 36770ae2…（与后端 colormap 逐字节一致）", () => {
+    const lut = weatherLut(256);
+    expect(lut.length).toBe(256 * 4);
+    const digest = createHash("sha256").update(lut).digest("hex");
+    expect(digest).toBe("36770ae2b9cd2a2ac3b6e6a08de45d522261dfced960c0c1db49bc515358c038");
+  });
+
+  it("锚点：lut[0]=蓝 #3B4CC0、lut[-1]=红 #DC2626（§4.3.1）", () => {
+    const lut = weatherLut(256);
+    expect([lut[0], lut[1], lut[2], lut[3]]).toEqual([0x3b, 0x4c, 0xc0, 255]);
+    const last = (lut.length / 4) - 1;
+    expect([lut[last * 4], lut[last * 4 + 1], lut[last * 4 + 2]]).toEqual([0xdc, 0x26, 0x26]);
+  });
+
+  it("锚点区间插值：i=84 青 #00E5FF、i=191 橙 (249,116,22)（PM 仲裁 t-space）", () => {
+    const lut = weatherLut(256);
+    expect([lut[84 * 4], lut[84 * 4 + 1], lut[84 * 4 + 2]]).toEqual([0x00, 0xe5, 0xff]);
+    expect([lut[191 * 4], lut[191 * 4 + 1], lut[191 * 4 + 2]]).toEqual([249, 116, 22]);
+  });
+
+  it("roundHalfEven：Python round 语义（half-to-even）", () => {
+    expect(roundHalfEven(2.5)).toBe(2);
+    expect(roundHalfEven(3.5)).toBe(4);
+    expect(roundHalfEven(2.4)).toBe(2);
+    expect(roundHalfEven(112.5)).toBe(112);
+  });
+
+  it("WEATHER_STOPS 锚点位置/颜色单一事实来源", () => {
+    const positions = WEATHER_STOPS.map(([p]) => p);
+    expect(positions).toEqual([0.0, 0.33, 0.55, 0.75, 1.0]);
+    expect(WEATHER_STOPS[0][1][0]).toBe(0x3b); // 蓝
+    expect(WEATHER_STOPS[WEATHER_STOPS.length - 1][1][0]).toBe(0xdc); // 红
+  });
+});
+
+describe("colorizeScalar", () => {
+  const lut = weatherLut(256);
+
+  it("threshold→alpha0：v 对应 float 值 < displayMin（显示阈值=色阶下限）→ alpha 0", () => {
+    // scalar u8 [0,255]，scalarRange 缺省 = {0,255} → float = v
+    const scalar = new Uint8Array([0, 50, 100, 150, 200, 255]);
+    const out = colorizeScalar(scalar, lut, { min: 0, max: 255 }, /* displayMin */ 100);
+    expect(out[0 * 4 + 3]).toBe(0); // v=0 < 100 → alpha 0
+    expect(out[1 * 4 + 3]).toBe(0); // v=50 < 100 → alpha 0
+    expect(out[2 * 4 + 3]).toBe(255); // v=100 == displayMin → alpha 255（后端 map_value: v<lo 才 0）
+    expect(out[3 * 4 + 3]).toBe(255); // v=150 ≥ 100 → alpha 255
+    expect(out[5 * 4 + 3]).toBe(255); // v=255
+  });
+
+  it("默认 range=scalarRange（A2.2）：全 [0,255] 归一化映射正确渐变", () => {
+    // 默认自适应：scalarRange={0,255} 全量，v 直接映射 LUT
+    const scalar = new Uint8Array([0, 127, 255]);
+    const out = colorizeScalar(scalar, lut, { min: 0, max: 255 }, 0);
+    expect([out[0], out[1], out[2], out[3]]).toEqual([lut[0], lut[1], lut[2], lut[3]]);
+    expect([out[4], out[5], out[6]]).toEqual([lut[127 * 4], lut[127 * 4 + 1], lut[127 * 4 + 2]]);
+    expect([out[8], out[9], out[10]]).toEqual([lut[255 * 4], lut[255 * 4 + 1], lut[255 * 4 + 2]]);
+  });
+
+  it("range 重映射：用户手改上下限 → 重新线性映射", () => {
+    const scalar = new Uint8Array([64, 128, 192]);
+    const out = colorizeScalar(scalar, lut, { min: 64, max: 192 }, 0);
+    // v=64 → t=0 → lut[0]；v=128 → t=0.5 → lut[127]；v=192 → t=1 → lut[255]
+    expect([out[0], out[1], out[2]]).toEqual([lut[0], lut[1], lut[2]]);
+    expect([out[4], out[5], out[6]]).toEqual([lut[127 * 4], lut[127 * 4 + 1], lut[127 * 4 + 2]]);
+    expect([out[8], out[9], out[10]]).toEqual([lut[255 * 4], lut[255 * 4 + 1], lut[255 * 4 + 2]]);
+  });
+
+  it("scalarRange 重建：u8 → float 再阈值/映射（真实 frame 语义）", () => {
+    // 后端 frame.scalarRange 是 float（如 0~3.5e7），u8 是归一化值
+    const scalarRange = { min: 0, max: 3.5e7 };
+    const scalar = new Uint8Array([0, 128, 255]); // 0, 1.75e7, 3.5e7
+    const out = colorizeScalar(scalar, lut, { min: 0, max: 3.5e7 }, 1e7, scalarRange);
+    expect(out[3]).toBe(0); // float 0 < 1e7 → 不显示
+    expect(out[7]).toBe(255); // float 1.75e7 ≥ 1e7
+    expect(out[11]).toBe(255);
+  });
+
+  it("128³ 计时 < 50ms（契约 §8 时间轴切帧 KPI 代理）", () => {
+    const n = 128 * 128 * 128;
+    const scalar = new Uint8Array(n);
+    for (let i = 0; i < n; i++) scalar[i] = (i * 7919) % 256;
+    const t0 = performance.now();
+    const out = colorizeScalar(scalar, lut, { min: 0, max: 255 }, 0);
+    const dt = performance.now() - t0;
+    expect(out.length).toBe(n * 4);
+    expect(dt).toBeLessThan(50);
+  });
+});

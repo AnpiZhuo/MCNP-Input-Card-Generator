@@ -201,6 +201,36 @@ class TallyDefinition:
 
 
 @dataclass
+class FmeshDefinition:
+    """
+    网格计数（FMESH/TMESH）卡结构化定义（契约 meshtal-visualization.md §5.1）。
+
+    边界值以原文字符串保存（不数值化），生成回放逐字（保 R1 不动点）。
+    structured 字段为空时回放 `raw`（round-trip 兜底）。
+
+    网格计数定义
+    """
+    number: int = 0          # FMESHn/TMESHn 卡号
+    kind: str = "FMESH"      # "FMESH" | "TMESH"（TMESH 内部 RMESH/CMESH 子卡统一 kind="TMESH"）
+    particle: str = ""       # "N"/"P"/"E"（卡头设计符）
+    geom: str = "xyz"        # GEOM=xyz（v1 渲染仅此）；CMESH(cyl) → geom="cyl"（unsupported）
+    origin: str = ""         # ORIGIN x y z
+    imesh: str = ""          # IMESH 边界（原文，多值/续行）
+    iints: str = ""          # IINTS 区间数
+    jmesh: str = ""          # JMESH
+    jints: str = ""
+    kmesh: str = ""          # KMESH
+    kints: str = ""
+    emesh: str = ""          # EMESH（可选）
+    eints: str = ""
+    tmesh: str = ""          # TMESH 时间（可选；注意与 TMESH 卡种类别区分字段名）
+    t_ints: str = ""         # TINTS
+    mat: str = ""            # MAT（可选）
+    out: str = ""            # OUT（可选）
+    raw: str = ""            # 原文卡体（round-trip 保真兜底）
+
+
+@dataclass
 class TallySettings:
     """
     Tally card settings.
@@ -224,6 +254,9 @@ class TallySettings:
     e_custom_enabled: bool = False    # Enable custom energy grid text / 自定义网格开关
     e_custom_text: str = ""           # Custom energy grid text / 自定义网格文本
     e_cards_text: str = ""            # En energy cards text (one card per line) / En 能量卡文本（每行一条）
+
+    # 网格计数（FMESH/TMESH）结构化定义（契约 §5.1；默认 []）
+    fmesh_defs: list[FmeshDefinition] = field(default_factory=list)
 
     # T0 — 时间网格 / Time bins (C810: T0 t1 t2 ... tn)
     t0_min: str = ""

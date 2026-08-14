@@ -3,13 +3,14 @@ info:
   title: MCNP 输入卡生成器 HTTP API
   version: 1.6.3
   description: |
-    gui/backend/api_server.py 暴露的 25 个端点契约（端口 5001）。
+    gui/backend/api_server.py 暴露的 28 个端点契约（端口 5001）。
     契约漂移闸门（tests/integration/test_api_contract.py）会以 AST 读取
     api_server.py handlers 字典，断言本文件中每个 path 都有 operationId。
 
     统一响应信封（_ok/_err，api_server.py:524-538）：
       成功: {"status":"ok", ...handler 附加字段}          HTTP 200
-      失败: {"status":"error","message":str,"traceback":str} HTTP 500
+      失败: {"status":"error","message":str,"traceback":str,"hint":str?} HTTP 500
+    _err 可选 hint（友好中文提示，F4）：hint 非空才带，空则省略（对既有端点加性兼容）。
     个别 handler 会在 HTTP 200 下返回 {"status":"error","message":…}
     （如 import-step / export-step / set-freecad-path 的守卫分支），已在各 path 注明。
 
@@ -29,6 +30,8 @@ tags:
     description: 文件 / 目录选择、保存、运行 MCNP
   - name: system
     description: 环境检测（MCNP/FreeCAD）、文本↔表单互转
+  - name: meshtal
+    description: 网格计数（FMESH/TMESH）MESHTAL 探测/解析/纹理（契约 meshtal-visualization.md）
 
 paths:
   /api/generate:
@@ -929,6 +932,161 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
+  /api/meshtal-detect:
+    post:
+      operationId: meshtalDetect
+      tags: [meshtal]
+      summary: 扫描 output_dir 自动探测 meshtal* / MSHT* 文件（A1.1）
+      description: |
+        大小写不敏感匹配 `^(meshtal|MSHT)`，按 mtime 降序。目录缺失/空 → ok files:[]。
+        入参 outputDir 缺省回退 D:/MCNP/new/claude。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                outputDir: { type: string, description: 运行输出目录（run-mcnp 落盘目录） }
+      responses:
+        '200':
+          description: 扫描成功（_ok({"files":[…],"outputDir":…})）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      files:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            path: { type: string }
+                            name: { type: string }
+                            size: { type: integer }
+                            mtime: { type: string, description: ISO8601 UTC }
+                      outputDir: { type: string }
+        '500':
+          description: outputDir 非法
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/meshtal-parse:
+    post:
+      operationId: meshtalParse
+      tags: [meshtal]
+      summary: 解析 meshtal 元数据（子进程 worker）+ deck↔meshtal 匹配检测（A1.2）
+      description: |
+        大文件解析走子进程 worker（_meshtal_worker.py）+ meshtal_cache，不阻塞 5001。
+        响应带 grid_bounds（bin 边界世界包围盒）+ match（请求带 modelBox 时比对，
+        两者皆缺 → match:null）。只回元数据，不传稠密数组。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                path: { type: string, description: meshtal 文件路径 }
+                modelBox:
+                  type: object
+                  description: 可选：deck 几何包围盒（A1.2 比对用）
+                  properties:
+                    min: { type: array, items: { type: number }, description: [x,y,z] }
+                    max: { type: array, items: { type: number }, description: [x,y,z] }
+      responses:
+        '200':
+          description: 解析成功（_ok({file, header, grid_bounds, match, tallies, warnings})）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      file: { type: object, description: path/size/mtime }
+                      header: { type: object, description: code/version/histories }
+                      grid_bounds:
+                        type: object
+                        description: bin 边界算出的网格世界包围盒（A1.2）
+                        properties:
+                          min: { type: array, items: { type: number } }
+                          max: { type: array, items: { type: number } }
+                      match:
+                        type: object
+                        nullable: true
+                        description: deck↔meshtal 比对结果（缺 modelBox → null）
+                        properties:
+                          matched: { type: boolean }
+                          overlapFraction: { type: number }
+                          centerOffsetFrac: { type: number }
+                          reason: { type: string, enum: [ok, overlap_too_small, offset_too_large] }
+                          message: { type: string }
+                      tallies: { type: array, description: tally 元数据（dims/binEdges/range） }
+                      warnings: { type: array, items: { type: string } }
+        '500':
+          description: 路径不存在 / 非 meshtal 文件（带 hint，F4）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/meshtal-texture:
+    post:
+      operationId: meshtalTexture
+      tags: [meshtal]
+      summary: 提取 (energy,time) 帧标量体积（子进程 worker，Uint8 base64）
+      description: |
+        返回当前帧标量（非 RGBA，前端 colorize CPU 上色）。resolution 为每轴上限，
+        native 更小保 native（avgFactor=1）；box-average 均值降采样保总量。
+        worker 解析/降采样/归一化全在子进程，只回传 ≤(256³=16MiB) 标量帧。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                path: { type: string, description: meshtal 文件路径 }
+                tallyNumber: { type: integer }
+                energyBin: { type: integer, description: 默认 0 }
+                timeBin: { type: integer, description: 默认 0 }
+                resolution: { type: integer, description: 128 默认 / 256 显式 }
+                normalize: { type: string, enum: [adaptive], description: 默认 adaptive }
+      responses:
+        '200':
+          description: 提取成功（_ok({frame})）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      frame:
+                        type: object
+                        properties:
+                          resolution: { type: array, items: { type: integer }, description: [x,y,z] }
+                          worldBox: { type: object, description: bin 边界世界包围盒 }
+                          binIndices: { type: object, description: energy/time 索引 }
+                          scalarRange: { type: object, description: min/max }
+                          dataBase64: { type: string, description: Uint8 标量帧 base64 }
+                          bytes: { type: integer }
+                          nVoxels: { type: integer }
+                          downsampled: { type: boolean }
+                          avgFactor: { type: array, items: { type: integer } }
+                          particle: { type: string }
+                          tallyNumber: { type: integer }
+                          scalarMin: { type: number }
+                          scalarMax: { type: number }
+        '500':
+          description: tally/能量/时间越界或网格过密（带 hint，F4）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
 components:
   schemas:
     OkEnvelope:
@@ -941,6 +1099,7 @@ components:
         status: { type: string, enum: [error] }
         message: { type: string }
         traceback: { type: string, description: 异常堆栈（_err 附带） }
+        hint: { type: string, description: 友好中文提示（F4，非空才带，空则省略） }
     BasicSettings:
       type: object
       description: app/models.py:147 BasicSettings（title/mode_*/nps/ctme/act/print_pr/phys_fis）

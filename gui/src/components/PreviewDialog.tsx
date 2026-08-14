@@ -1,6 +1,6 @@
 import React, { useEffect } from "react";
 import FloatingDialog from "./FloatingDialog";
-import { apiUrl } from "../utils/api";
+import { apiUrl, meshtalDetect } from "../utils/api";
 
 interface Props {
   content: string;
@@ -89,11 +89,22 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
         className: "btn btn-ghost btn-sm",
         onClick: () => {
           try {
+            const dir = outputPath || "D:/MCNP/new/claude";
             fetch(apiUrl("/api/run-mcnp"), {
               method: "POST", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ inp: content, filename: safeName, outputDir: outputPath || "D:/MCNP/new/claude", mcnpExe: mcnpExe || "" }),
+              body: JSON.stringify({ inp: content, filename: safeName, outputDir: dir, mcnpExe: mcnpExe || "" }),
             }).then(r => r.json()).then(j => {
-              alert(j.status === "ok" || j.status === "started" ? "🚀 MCNP 已启动" : "启动失败: " + (j.message || "未知错误"));
+              if (j.status === "ok" || j.status === "started") {
+                alert("🚀 MCNP 已启动");
+                // A1.1：run-mcnp 完成后前端自动调 meshtal-detect 扫描 meshtal*/MSHT*
+                meshtalDetect(dir).then(det => {
+                  if (det.status === "ok" && det.files && det.files.length > 0) {
+                    alert("发现 " + det.files.length + " 个 MESHTAL 文件，可到「计数」标签页的「网格计数 3D 体积可视化」点解析查看结果");
+                  }
+                }).catch(() => {});
+              } else {
+                alert("启动失败: " + (j.message || "未知错误"));
+              }
             }).catch(() => alert("需要后端支持运行 MCNP"));
           } catch {}
         },

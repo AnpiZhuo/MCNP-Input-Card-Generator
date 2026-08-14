@@ -16,6 +16,7 @@ import json
 import math
 import re
 from app.models import CellData, CellRow, MaterialData, MaterialRow, SourceData, TallyDefinition
+from app.meshtal.fmesh_parser import parse_fmesh_lines
 from .lines import _SURFACE_TYPES, extract_comment, strip_comment
 
 
@@ -896,6 +897,22 @@ _TALLY_MODIFIER_RE = re.compile(
 )
 
 
+def _is_fmesh_body_line(raw: str, nf: str) -> bool:
+    """判断一行是否 FMESH/TMESH 卡体续行（契约 §6 步 1）。
+
+    - 新的 FMESH/TMESH 卡首行 → False（不吸收进上一张卡体）
+    - RMESHn/CMESHn 子卡（TMESH 下）→ True
+    - 5+ 空格缩进续行 → True
+    """
+    if re.match(r'^(FMESH|TMESH)\d*:?', nf, re.IGNORECASE):
+        return False
+    if re.match(r'^(RMESH|CMESH)\d*', nf, re.IGNORECASE):
+        return True
+    if len(raw) - len(raw.lstrip()) >= 5:
+        return True
+    return False
+
+
 def _parse_card_with_continuation(data: list[str], i: int, first: str, parts: list[str]) -> tuple[list[float], int]:
     """通用续行卡片解析：解析 E0/En/Tn 的 nlog/nlin 语法 + 续行值收集
     返回 (values, new_i)，new_i 指向最后一个续行
@@ -953,6 +970,7 @@ def parse_data_cards(data_lines: list[str]) -> dict:
         "source_mode": "fixed",
         "other_cards": [], "e0_values": [], "warnings": [],
         "tr_cards": [], "t_cards_lines": [],
+        "fmesh_defs": [],  # FMESH/TMESH 网格计数结构化（契约 meshtal-visualization.md §6）
     }
 
     data = [l for l in data_lines
@@ -1281,6 +1299,30 @@ def parse_data_cards(data_lines: list[str]) -> dict:
                 if p in ("n", "p", "e"):
                     result.setdefault(f"imp_{p}_values", []).extend(vals)
             i += 1
+        elif re.match(r'^FMESH\d+', first) or re.match(r'^TMESH\d*$', first):
+            # FMESH/TMESH 网格计数卡结构化吸收（契约 §6）：收集卡体行（含 5 空格
+            # 续行与 TMESH 下的 RMESHn/CMESHn 子卡）→ parse_fmesh_lines →
+            # result["fmesh_defs"]；异常/无法识别 → 保底 other_cards（raw_line）。
+            body_lines = [raw_line]
+            j = i + 1
+            while j < len(data):
+                nr = data[j]
+                nf = nr.strip().split()[0].upper() if nr.strip().split() else ""
+                if _is_fmesh_body_line(nr, nf):
+                    body_lines.append(data[j])
+                    j += 1
+                    continue
+                break
+            try:
+                defs = parse_fmesh_lines(body_lines)
+                if defs:
+                    result["fmesh_defs"].extend(defs)
+                else:
+                    result["other_cards"].extend(body_lines)
+            except Exception:
+                # 结构化失败 → raw 兜底，round-trip 不丢
+                result["other_cards"].extend(body_lines)
+            i = j
         elif first in _KNOWN_OTHER_CARDS or _TALLY_MODIFIER_RE.match(first):
             # 标准 MCNP 卡片但无对应 UI，保留原样到 other_cards
             result["other_cards"].append(raw_line)
@@ -1316,5 +1358,9 @@ def parse_data_cards(data_lines: list[str]) -> dict:
             else:
                 result["other_cards"].append(raw_line)
             i += 1
+
+    # EOF 时未消费的 C 注释回落 other_cards（不静默丢弃；round-trip 保真）
+    if pending_c:
+        result["other_cards"].append(pending_c)
 
     return result

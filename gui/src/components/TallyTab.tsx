@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from "react";
 import GridEditor from "./GridEditor";
 import TextModeSection from "./TextModeSection";
 import DocViewer from "./DocViewer";
+import FMeshForm from "../volume/FMeshForm";
+import { fmeshDefsToRows } from "../volume/fmeshState";
 import { useDeck } from "../utils/DeckContext";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
 
@@ -61,6 +63,10 @@ export default function TallyTab() {
     deck, patch, overrideKey: "tally",
     onBackToForm: (data) => {
       if (data.tallies?.length) setTallies(data.tallies);
+      // FMESH/TMESH 卡：后端 fmesh_defs → deck.tally.fmesh
+      if (data.tally?.fmesh_defs) {
+        patch({ tally: { ...(deck.tally || {}), fmesh: fmeshDefsToRows(data.tally.fmesh_defs) } });
+      }
       // Fn 卡带其它字段（如 ft14=1）：弹窗提示并填入高级「其他卡片」
       const others = (data.tallies || [])
         .map((t: any) => String(t.params || ""))
@@ -222,6 +228,26 @@ export default function TallyTab() {
           </table>
         </div>
       </details>
+
+      {/* 网格计数（FMESH/TMESH）：结构化表单 + 3D 体积可视化启动器（契约 meshtal-visualization.md §4.7.1） */}
+      <FMeshForm
+        value={(deck.tally as any)?.fmesh || []}
+        onChange={(rows) => patch({ tally: { ...(deck.tally || {}), fmesh: rows } })}
+        cells={deck.cells
+          .filter((c) => c.kind === "cell")
+          .map((c) => {
+            const cell = (c as any).cell || {};
+            return {
+              num: String(cell.number),
+              mat: cell.material,
+              comment: cell.comment,
+              density: cell.density,
+              surface_expr: cell.surface_expr,
+            };
+          })}
+        surfaces={deck.surfaces}
+        trCards={deck.tr_cards}
+      />
       {doc && <DocViewer path={doc.path} title={doc.title} onClose={() => setDoc(null)} />}
     </>
   );

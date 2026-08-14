@@ -11,6 +11,7 @@ import { apiUrl } from "./api";
 
 const KEY_PREVIEW3D = "mcnp_win_preview3d";
 const KEY_CROSS = "mcnp_win_cross";
+const KEY_VOLUME3D = "mcnp_win_volume3d";
 const KEY_MAT_CHANGE = "mcnp_win_material_change";
 
 /** 当前是否运行在 Tauri 环境（浏览器模式回退主窗口覆盖层） */
@@ -90,6 +91,29 @@ export function readPreview3DData(): {
     if (!raw) return null;
     const j = JSON.parse(raw);
     localStorage.removeItem(KEY_PREVIEW3D);
+    return j;
+  } catch {
+    return null;
+  }
+}
+
+/** 主窗口：打开「3D 结果」（体积可视化）独立窗口（先写数据桥再开窗） */
+export async function openVolume3D(data: Record<string, any>): Promise<boolean> {
+  try {
+    localStorage.setItem(KEY_VOLUME3D, JSON.stringify(data));
+  } catch (e) {
+    console.warn("volume3d bridge write failed", e);
+  }
+  return invoke("open_volume3d_window");
+}
+
+/** 读取「3D 结果」桥数据（新窗口一次性消费） */
+export function readVolumeData(): Record<string, any> | null {
+  try {
+    const raw = localStorage.getItem(KEY_VOLUME3D);
+    if (!raw) return null;
+    const j = JSON.parse(raw);
+    localStorage.removeItem(KEY_VOLUME3D);
     return j;
   } catch {
     return null;

@@ -1,6 +1,5 @@
 pymcnp>=0.9.0
 pyinstaller>=5.0
 matplotlib
-pyvista
-markdown
+numpy
 # geouned — STEP→MCNP 转换引擎（自动装到 FreeCAD 的 Python 中）
