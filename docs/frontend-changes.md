@@ -374,3 +374,134 @@
 
 - 环形后缀输入 `25X` 现在编号框回填 "25"（旧行为保留 "25X"）：下游 deck push 本就 `parseInt(t.number)` 剥掉 X（deck 恒存整数），生成端只发 `F{number}`，行为等价；且 `F25X` 此前存成 "F25X"→parseInt→0（deck 编号丢失 bug）本次一并修复。
 - `parseTallyTypeNumber`/`parseF5Variant` 已导出（测试可 pin），不改变组件对外行为。
+---
+# 前端改动清单 — UI 隐藏 TMESH 计数卡入口（2026-08-14，feat/meshtal-volume）
+
+> 施工方：前端 | 指令：PM 直接派发（用户决定：TMESH 以后再更新加入）| 范围：仅 `gui/src/volume/fmeshState.ts` + `gui/src/volume/FMeshForm.tsx` + 2 个测试文件 + 本文档
+> 纪律：只隐藏"创建/选择 TMESH"入口，不删 TMESH 代码路径；不碰后端/解析核心；零新依赖；未 commit。
+
+## 任务 — UI 层隐藏 TMESH 计数卡，代码路径保留
+
+### ① UI 点（FMeshForm.tsx）
+
+| UI 点 | 位置 | 改动 |
+| :--- | :--- | :--- |
+| 表单标题 | :131 | `网格计数（FMESH/TMESH）` → `网格计数（FMESH）` |
+| 文件头注释 | :2-5 | 同步改为「网格计数（FMESH）」，注明 TMESH 入口 UI 隐藏、代码路径保留待后续启用 |
+| 空态文案 | :138 | 「创建 FMESH/TMESH 卡」 → 「创建 FMESH 卡」 |
+| kind 下拉 | :154-161 | **移除 `<option value="TMESH">`**，只留 FMESH（用户不能选/建 TMESH 卡） |
+| tmesh 字段标注 | :31 | label `"TMESH"` → `"时间分箱（TMESH 关键字）"` + 新增 hint 小字「这是 FMESH 卡的时间边界分箱关键字，不是 TMESH 计数卡」；字段/placeholder/值不变，时间轴动画依赖不变 |
+| t_ints 字段标注 | :32 | label `"TINTS"` → `"TINTS（时间区间数）"`（与 tmesh 呼应）；字段/placeholder/值不变 |
+
+### ② 导入 TMESH 行处理（选方案 a：只读徽标）
+
+- 新增导出纯函数 `fmeshKindControl(kind, geom)`（:44-57）：kind=FMESH → `select`；kind=TMESH → `badge`（只读徽标 + note）。
+- 表单行 :148-162：`kind === "TMESH"` 时**渲染只读徽标"TMESH"**（不可编辑/不可切，title 带说明），不再渲染下拉 → 无空白 option 问题；:186-190 在行头下渲染说明小字。
+- 说明文案按 geom 区分：`cyl` → 「…cyl 网格不进入体积可视化」；`xyz`（RMESH 子卡）→ 「…数据原样保留」。
+- **为什么选 a 不选 b（raw 兜底到其他卡）**：方案 a 保持行仍在 `deck.tally.fmesh` 受控列表内，`fmeshToCardText` 的 TMESH 序列化分支原样回放，round-trip 保真、零数据丢失；方案 b 需把行搬出 fmesh 列表，会破坏受控表单契约、引入跨区搬移的丢数据/报错面，且与"保留 TMESH 代码路径"目标冲突。TMESH 行其余字段（编号/粒子/网格边界等）保持可编辑，仅 kind 锁只读。
+
+### ③ fmeshState.ts（仅注释/标注，未动逻辑）
+
+- 文件头注释 :2-6：追加「UI 现状」说明——TMESH 入口 UI 隐藏，但 `FmeshKind` 联合类型、`FAMILY_RE`、TMESH/RMESH/CMESH 解析吸收、emit、序列化路径**全部保留**，未来启用直接放开 UI 即可。
+- `tmesh` 字段注释 :28：`TMESH 时间（与 TMESH 卡种类别区分）` → `FMESH 卡时间分箱关键字（TMESH=时间边界；与 TMESH 计数卡种类别区分）`。
+- **解析逻辑零改动**（cardTextToFmesh / fmeshToCardText / buildFmeshPayload / fmeshDefsToRows / FAMILY_RE 全部原样）。
+
+## 测试
+
+- 无既有测试断言 kind 下拉含 TMESH option（grep `gui/test` 仅 fmeshState.test.ts 命中 kind，均为纯模块解析/序列化断言，不受 UI 改动影响）。
+- **新增** `gui/test/volume/fmeshKind.test.ts`（3 用例）：pin `fmeshKindControl`——FMESH→select / TMESH→badge+数据保留 / TMESH+cyl→badge+cyl 不进入体积可视化。
+- **新增** `fmeshState.test.ts` +1 用例：后端 parse 返回 kind=TMESH 行 → `fmeshDefsToRows` 保留 kind/geom/number/origin，`fmeshToCardText` 仍走 TMESH 结构化分支（TMESH3 + RMESH3…）round-trip 不丢。
+
+## 验证结果
+
+| 项 | 结果 |
+| :--- | :--- |
+| `cd gui && npx vitest run` | 17 文件 / **118 用例全绿**（114 基线不破 + 新增 4） |
+| `cd gui && npx tsc --noEmit` | EXIT 0 |
+| `cd gui && npm run build` | EXIT 0（仅既有 chunk 体积警告） |
+
+## 回归风险
+
+1. **导入含 TMESH 行的 INP**：行显示只读徽标 + 说明，数据原样保留，round-trip 保真；kind 不可切为 FMESH（预期行为，方案 a 语义）。
+2. **`tmesh`/`t_ints` 字段**：仅改 UI label/hint，字段名、placeholder、值、`buildFmeshPayload`/`fmeshDefsToRows` key（`tmesh`/`t_ints`）零变动，时间轴动画与后端载荷不受影响。
+3. **TallyTab / OutputTab / openVolume3DWindow**：未触碰；FMeshForm props（value/onChange）未变，调用点无需改动。
+
+---
+# 前端改动清单 — FMESH 表单改进 · 字段对齐 MCNP6（2026-08-14，feat/meshtal-volume）
+
+> 施工方：前端 | 指令：PM 直接派发（对照 C810 + 网源验证的 MCNP6 规范；字段契约以指令为准，后端已先落地 pytest 445/0）
+> 范围：仅 `gui/src/volume/fmeshState.ts` + `gui/src/volume/FMeshForm.tsx` + `gui/test/volume/fmeshState.test.ts` + 新增 `gui/test/volume/fmeshValidation.test.ts` + 本文档
+> 纪律：零新依赖；不改后端/其它无关文件；测试先行（先红后绿）。
+
+## 任务 — FMESH 表单字段对齐 + 校验（7 项 + 校验规则）
+
+### ① 字段改名对齐（eints→emints / t_ints→tmints）
+
+| 位置 | 改动 |
+| :--- | :--- |
+| `fmeshState.ts` FmeshRow/emptyFmeshRow | `eints`→`emints`、`t_ints`→`tmints`（:25/:47-49） |
+| `KEY_TO_FIELD`（:91-98） | `EMINTS→emints`、`EINTS→emints`、`TMINTS→tmints`、`TINTS→tmints`（导入容错两种拼写，镜像后端 `_KEYS`） |
+| `fmeshToCardText` cardLines（:196-205） | 生成发 `EMINTS=`/`TMINTS=`（非 EINTS/TINTS），顺序 IMESH/IINTS/JMESH/JINTS/KMESH/KINTS/EMESH/EMINTS/TMESH/TMINTS/MAT/OUT/AXS/VEC/TR |
+| `buildFmeshPayload`（:228-250） | JSON key 用 `emints`/`tmints`（对齐后端 `_fmesh_from_list`） |
+| `fmeshDefsToRows`（:253-276） | 读 `emints`/`tmints`（向后兼容旧 `eints`/`t_ints`） |
+
+### ② 新增字段 axs / vec / tr
+
+- FmeshRow + emptyFmeshRow 加 `axs`/`vec`/`tr`（空串）；KEY_TO_FIELD 加 `AXS→axs`/`VEC→vec`/`TR→tr`；cardLines 回放 `AXS=`/`VEC=`/`TR=`；buildFmeshPayload / fmeshDefsToRows 透传。
+
+### ③ GEOM 下拉（四选，value 存单 token 连写）
+
+- 新增导出 `FMESH_GEOM_OPTIONS`（XYZ 默认 / REC 直角、CYL / RZT 圆柱）+ `normalizeGeom`（大写单 token，空值默认 XYZ）+ `isCylGeom`。
+- `cardTextToFmesh` 对 GEOM 只取首 token 归一化（防 `GEOM=X Y Z`）；`fmeshToCardText` 头行 `GEOM=XYZ` 连写（镜像后端 `_card_lines`）。
+
+### ④ AXS/VEC 条件显示 + 平行校验
+
+- FMeshForm：`isCylGeom(r.geom)` 时才渲染 AXS/VEC 两输入。
+- 校验：`vectorsParallel`（归一化叉积 |sinθ| < 1e-6；零向量/非法输入不误判），cyl 系两向量平行 → error「AXS 与 VEC 不能平行」。
+
+### ⑤ TR 字段
+
+- 可选变换编号输入；校验非空时须正整数。
+
+### ⑥ OUT 改下拉（九选 + 说明）
+
+- 新增导出 `FMESH_OUT_OPTIONS`：COL（默认）/ CF / COLSC / CFSC / IJ / IK / JK / NONE / XDMF，各带 hint（CF 额外输出体积 + 结果×体积；NONE 不打印 meshtal；XDMF 供 ParaView）。
+
+### ⑦ MAT 帮助文案
+
+- placeholder/hint：「0=粒子所在格材料（默认）；非 0=指定材料号」。
+
+### ⑧ 校验规则（抽为纯函数，表单行内友好提示）
+
+- 新增 `validateFmeshRow(r)` / `vectorsParallel` / `parseNumberList` / `parseVector` / `gridCellCount` / `normalizeGeom` / `isCylGeom`（fmeshState.ts 导出，可测）。
+- 规则：① `iints/jints/kints/emints/tmints` 每 token 须正整数；② 各 `*ints` 条目数与对应 `*mesh` 条目数匹配（缺一侧报错，数量不等报「不匹配」）；③ mesh 列表值单调递增（含科学计数法能量）；直角系另校验 mesh 首值 > ORIGIN 对应轴坐标；④ 圆柱系（CYL/RZT）kmesh 末值须 = 1（θ 转数）；⑤ cyl 系 AXS∥VEC 报错；⑥ TR 正整数；⑦ 三方向区间总数乘积 > 128³（2,097,152，即 `FMESH_MEMORY_WARNING_THRESHOLD`，对标契约 128³ 默认渲染预算）→ warning 内存/性能提示。
+- 表单：每行渲染校验横幅（红=error / 黄=warning，标字段名）；TMESH 只读导入行跳过校验（数据原样保留）。
+- 另修：`fmeshKindControl` 判 cyl 从 `geom==="cyl"` 改为 `isCylGeom(geom)`（geom 现为大写单 token，避免 TMESH cyl 行提示失效）。
+
+## 测试（测试先行：先写红，后实现转绿）
+
+| 文件 | 用例 | 覆盖 |
+| :--- | :--- | :--- |
+| `gui/test/volume/fmeshValidation.test.ts`（新增 24） | normalizeGeom/isCylGeom / 正整数 / 条目数匹配 / 单调递增+ORIGIN / cyl kmesh 末值=1 / vectorsParallel+AXS 平行 / TR / gridCellCount+内存警告 / parseNumberList | 校验纯函数全套 |
+| `gui/test/volume/fmeshState.test.ts`（迁移 +3） | 字段改名引用迁移；新增：EMINTS/TMINTS 新拼写导入、新字段 AXS/VEC/TR/OUT round-trip、旧拼写导入→新关键字回放、fmeshDefsToRows 向后兼容旧 eints/t_ints、GEOM=XYZ 连写 | 卡体生成关键字 + round-trip |
+
+## 验证结果
+
+| 项 | 结果 |
+| :--- | :--- |
+| `cd gui && npx vitest run` | 18 文件 / **145 用例全绿**（118 基线不破 + 新增 27） |
+| `cd gui && npx tsc --noEmit` | EXIT 0 |
+| `cd gui && npm run build` | EXIT 0（仅既有 chunk 体积警告） |
+
+## 与后端契约一致性
+
+- 生成关键字：前端 `EMINTS=`/`TMINTS=`/`AXS=`/`VEC=`/`TR=`/`OUT=`、GEOM 连写 = 后端 `fmesh_parser._card_lines`（逐字一致）。
+- 解析容错：`EINTS/EMINTS`→emints、`TINTS/TMINTS`→tmints = 后端 `_KEYS`（一致）。
+- 载荷 JSON key：`emints`/`tmints`/`axs`/`vec`/`tr` = 后端 `api_server._fmesh_from_list`（一致；后端另有旧 key 回退，前端 fmeshDefsToRows 亦兼容旧 key）。
+- **无与后端不一致项，无需 PM 仲裁。**
+
+## 回归风险
+
+1. **导入含 GEOM=xyz（小写）的 INP**：前端解析归一化为 `XYZ`，生成 `GEOM=XYZ`（大小写变化，MCNP 大小写不敏感，语义等价；进入前端后 round-trip 稳定）。
+2. **OUT 旧值（如 `f`）**：下拉显示空白并回退说明文案，值仍原样保留回放，不丢数据。
+3. **TMESH 导入行**：仍只读徽标 + 数据原样保留；校验跳过；`fmeshKindControl` 改用 `isCylGeom` 后 cyl 行提示保持正确。

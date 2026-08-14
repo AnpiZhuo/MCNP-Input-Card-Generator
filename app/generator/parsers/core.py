@@ -904,9 +904,12 @@ def _is_fmesh_body_line(raw: str, nf: str) -> bool:
     - RMESHn/CMESHn 子卡（TMESH 下）→ True
     - 5+ 空格缩进续行 → True
     """
-    if re.match(r'^(FMESH|TMESH)\d*:?', nf, re.IGNORECASE):
+    # FMESH/TMESH 卡头：`FMESHn`/`TMESHn`（可选 :N 粒子设计符）。负向前瞻排除 `=`，
+    # 否则 5 空格缩进的 `TMESH=`（FMESH 时间关键字，配对 TMINTS）会被误判为新的
+    # TMESH 卡头 → 卡体收集中断，tmesh/tmints 丢失。
+    if re.match(r'^(FMESH|TMESH)\d*(?![A-Za-z0-9=])', nf, re.IGNORECASE):
         return False
-    if re.match(r'^(RMESH|CMESH)\d*', nf, re.IGNORECASE):
+    if re.match(r'^(RMESH|CMESH)\d*(?![A-Za-z0-9=])', nf, re.IGNORECASE):
         return True
     if len(raw) - len(raw.lstrip()) >= 5:
         return True

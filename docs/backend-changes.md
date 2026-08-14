@@ -616,3 +616,67 @@ api_server/FreeCAD（subprocess spawn 不受红线限制）。
 ## J.5 数据库 / 环境变量
 
 无数据库变更；无新增环境变量。
+
+---
+
+# K. FMESH 表单改进 · 字段对齐 MCNP6（emints/tmints + AXS/VEC/TR + GEOM 连写）
+
+> 施工方：后端 | 日期：2026-08-14 | 分支：`feat/meshtal-volume`
+> 任务：对照 C810 + 网源验证的 MCNP6 规范改进 FMESH 表单后端（字段契约以本次为准，PM 转前端对齐）。
+> 测试先行：先补 5 个新测试（红）→ 实现 → 全绿。
+
+## K.1 字段契约最终清单（供 PM 转前端对齐）
+
+`FmeshDefinition` 全部字段名 + JSON key（api 序列化经 `dataclasses.asdict` 自动带出）：
+
+| 字段名 | JSON key | 卡体关键字 | 说明 |
+| :--- | :--- | :--- | :--- |
+| number | number | `FMESHn` 卡号 | int |
+| kind | kind | — | "FMESH" \| "TMESH" |
+| particle | particle | 卡头 `:N/P/E` | — |
+| geom | geom | `GEOM=` | **连写单 token**（XYZ/CYL） |
+| origin | origin | `ORIGIN=` | 原文 |
+| imesh / iints | imesh / iints | `IMESH=` / `IINTS=` | 原文，多值 |
+| jmesh / jints | jmesh / jints | `JMESH=` / `JINTS=` | — |
+| kmesh / kints | kmesh / kints | `KMESH=` / `KINTS=` | — |
+| emesh | emesh | `EMESH=` | — |
+| **emints** | **emints** | **`EMINTS=`** | **MCNP6 关键字（旧 `eints` 已更名）** |
+| tmesh | tmesh | `TMESH=` | FMESH 时间关键字 |
+| **tmints** | **tmints** | **`TMINTS=`** | **MCNP6 关键字（旧 `t_ints` 已更名）** |
+| mat | mat | `MAT=` | 可选 |
+| out | out | `OUT=` | 可选（已有，确认支持并回放） |
+| **axs** | **axs** | **`AXS=`** | 新增，cyl 网格轴向量 |
+| **vec** | **vec** | **`VEC=`** | 新增，cyl 网格方向向量 |
+| **tr** | **tr** | **`TR=`** | 新增，可选变换编号 |
+| raw | raw | — | round-trip 兜底 |
+
+## K.2 改动文件
+
+| 文件 | 改动 |
+| :--- | :--- |
+| `app/models.py` | `FmeshDefinition`：`eints → emints`、`t_ints → tmints`；新增 `axs`/`vec`/`tr`；`out` 保持 |
+| `app/meshtal/fmesh_parser.py` | `_KEYS` 关键字表改 `EMINTS→emints`/`TMINTS→tmints` + **容错** `EINTS→emints`/`TINTS→tmints`；新增 `AXS`/`VEC`/`TR` 吸收；GEOM 值解析**只取首 token**（防 `GEOM=X Y Z`）；`_card_lines` 回放发 `EMINTS=`/`TMINTS=` + `AXS=`/`VEC=`/`TR=`/`OUT=`，GEOM 连写（`(fd.geom or "").strip().split()[0]`）；`_has_structured`/CMESH 清空循环同步新字段 |
+| `app/generator/parsers/core.py` | `_is_fmesh_body_line` 卡头正则加负向前瞻 `(?![A-Za-z0-9=])`——**修复既有缺陷**：5 空格缩进的 `TMESH=`（FMESH 时间关键字）曾被误判为新的 TMESH 卡头 → body 收集中断、tmesh/tmints 丢失 |
+| `gui/backend/api_server.py` | `_fmesh_from_list` 读 `emints`/`tmints`（**向后兼容**回退旧 `eints`/`t_ints`）+ `axs`/`vec`/`tr`；序列化经 asdict 自动带新字段名 |
+| `app/generator/inp_generator.py` | **未动**（`_generate_tallies` 委托 `fmesh_defs_to_lines`） |
+
+## K.3 新增/更新测试（测试先行）
+
+| 文件 | 用例 | 覆盖 |
+| :--- | :--- | :--- |
+| `tests/parser/test_fmesh_parser.py` | `test_eints_emints_tints_tmints_tolerance` | 解析容错：`EINTS=`/`EMINTS=`、`TINTS=`/`TMINTS=` 两种拼写导入都映射到 emints/tmints |
+| 同上 | `test_generation_uses_emints_tmints_and_geom_connected` | 生成卡体含 `EMINTS`/`TMINTS`（非 EINTS/TINTS）+ `GEOM=XYZ`/`GEOM=CYL` 连写（无 `GEOM=X Y Z`） |
+| 同上 | `test_axs_vec_tr_out_roundtrip` | 新字段 round-trip：`AXS=`/`VEC=`/`TR=`/`OUT=` 卡体 → 解析 → 再生成 → 字段保留 |
+| 同上 | `test_old_spelling_import_emits_new_keywords_roundtrip` | 旧拼写导入 → 新关键字回放 → 再解析字段保留 |
+| `tests/parser/test_regress_fmesh_import.py` | `test_fmesh_time_energy_new_fields_deck_roundtrip` | deck 级全链：parse_data_cards 吸收 → generate 回放 → 再导入字段保留 + R1（回归 `_is_fmesh_body_line` `TMESH=` 误判） |
+
+未改任何既有测试断言。
+
+## K.4 终态
+
+全量 pytest：**445 通过 / 0 失败**（440 基线零回归 + 新增 5 用例全绿）；
+R1 不动点不回归；api.yaml **无 fmesh_defs schema → 无变更**（漂移闸门不受影响）。
+
+## K.5 数据库 / 环境变量
+
+无数据库变更；无新增环境变量。

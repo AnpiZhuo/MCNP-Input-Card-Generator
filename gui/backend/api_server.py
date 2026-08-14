@@ -369,9 +369,13 @@ def _fmesh_from_list(arr: list) -> list[FmeshDefinition]:
         particle=f.get("particle", ""), geom=f.get("geom", "xyz"),
         origin=f.get("origin", ""), imesh=f.get("imesh", ""), iints=f.get("iints", ""),
         jmesh=f.get("jmesh", ""), jints=f.get("jints", ""), kmesh=f.get("kmesh", ""),
-        kints=f.get("kints", ""), emesh=f.get("emesh", ""), eints=f.get("eints", ""),
-        tmesh=f.get("tmesh", ""), t_ints=f.get("t_ints", ""), mat=f.get("mat", ""),
-        out=f.get("out", ""), raw=f.get("raw", ""),
+        kints=f.get("kints", ""), emesh=f.get("emesh", ""),
+        emints=f.get("emints", f.get("eints", "")),
+        tmesh=f.get("tmesh", ""),
+        tmints=f.get("tmints", f.get("t_ints", "")),
+        mat=f.get("mat", ""), out=f.get("out", ""),
+        axs=f.get("axs", ""), vec=f.get("vec", ""), tr=f.get("tr", ""),
+        raw=f.get("raw", ""),
     ) for f in arr]
 
 def _tally_from_dict(d: dict) -> TallySettings:

@@ -19,7 +19,9 @@ _KEY_RE = re.compile(r'^([A-Za-z]+)=(.*)$')
 _KEYS = {
     "GEOM": "geom", "ORIGIN": "origin", "IMESH": "imesh", "IINTS": "iints",
     "JMESH": "jmesh", "JINTS": "jints", "KMESH": "kmesh", "KINTS": "kints",
-    "EMESH": "emesh", "EINTS": "eints", "TMESH": "tmesh", "TINTS": "t_ints",
+    "EMESH": "emesh", "EMINTS": "emints", "EINTS": "emints",  # EINTS/EMINTS 容错
+    "TMESH": "tmesh", "TMINTS": "tmints", "TINTS": "tmints",  # TINTS/TMINTS 容错
+    "AXS": "axs", "VEC": "vec", "TR": "tr",
     "MAT": "mat", "OUT": "out",
 }
 
@@ -27,7 +29,8 @@ _KEYS = {
 def _has_structured(fd: FmeshDefinition) -> bool:
     """是否有可回放的结构化字段（否则回放 raw）。"""
     for attr in ("origin", "imesh", "iints", "jmesh", "jints", "kmesh", "kints",
-                 "emesh", "eints", "tmesh", "t_ints", "mat", "out"):
+                 "emesh", "emints", "tmesh", "tmints", "mat", "out",
+                 "axs", "vec", "tr"):
         if getattr(fd, attr):
             return True
     return False
@@ -83,7 +86,13 @@ def parse_fmesh_lines(lines) -> list:
                     break
                 vals.append(nt)
                 j += 1
-            setattr(current, attr, " ".join(v for v in vals if v))
+            if attr == "geom":
+                # GEOM 值必须单 token（`GEOM=X Y Z` 非法，MCNP 只认 GEOM=XYZ/CYL）；
+                # 只取首值，防御空格拆开。
+                value = vals[0] if vals else ""
+            else:
+                value = " ".join(v for v in vals if v)
+            setattr(current, attr, value)
             i = j
             continue
         i += 1
@@ -101,8 +110,9 @@ def parse_fmesh_lines(lines) -> list:
         if fd.kind == "TMESH" and (fd.geom or "").lower() != "xyz":
             fd.raw = _extract_subcard_raw(cleaned, "CMESH", fd.number) or fd.raw
             fd.origin = fd.imesh = fd.iints = fd.jmesh = fd.jints = ""
-            fd.kmesh = fd.kints = fd.emesh = fd.eints = fd.tmesh = ""
-            fd.t_ints = fd.mat = fd.out = ""
+            fd.kmesh = fd.kints = fd.emesh = fd.emints = fd.tmesh = ""
+            fd.tmints = fd.mat = fd.out = ""
+            fd.axs = fd.vec = fd.tr = ""
 
     if not defs and pending_tmesh_number is None and tokens:
         # 无法识别为结构化 → 兜底 raw 单条
@@ -166,14 +176,18 @@ def _extract_subcard_raw(cleaned: list, prefix: str, number: int) -> str:
 
 def _card_lines(fd: FmeshDefinition, sub: str) -> list:
     particle = f":{fd.particle}" if fd.particle else ""
-    head = f"{sub}{fd.number}{particle} GEOM={fd.geom or 'xyz'}"
+    # GEOM 值连写：只取首 token（`GEOM=XYZ`/`GEOM=CYL`），避免 `GEOM=X Y Z` 非法输出。
+    geom_raw = (fd.geom or "").strip()
+    geom_token = geom_raw.split()[0] if geom_raw else "xyz"
+    head = f"{sub}{fd.number}{particle} GEOM={geom_token}"
     if fd.origin:
         head += f" ORIGIN={fd.origin}"
     lines = [head]
     for k, v in (("IMESH", fd.imesh), ("IINTS", fd.iints), ("JMESH", fd.jmesh),
                  ("JINTS", fd.jints), ("KMESH", fd.kmesh), ("KINTS", fd.kints),
-                 ("EMESH", fd.emesh), ("EINTS", fd.eints), ("TMESH", fd.tmesh),
-                 ("TINTS", fd.t_ints), ("MAT", fd.mat), ("OUT", fd.out)):
+                 ("EMESH", fd.emesh), ("EMINTS", fd.emints), ("TMESH", fd.tmesh),
+                 ("TMINTS", fd.tmints), ("MAT", fd.mat), ("OUT", fd.out),
+                 ("AXS", fd.axs), ("VEC", fd.vec), ("TR", fd.tr)):
         if v:
             lines.append(f"     {k}={v}")
     return lines

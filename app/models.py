@@ -222,11 +222,14 @@ class FmeshDefinition:
     kmesh: str = ""          # KMESH
     kints: str = ""
     emesh: str = ""          # EMESH（可选）
-    eints: str = ""
+    emints: str = ""         # EMINTS 区间数（MCNP6 关键字 EMINTS；导入容错 EINTS/EMINTS）
     tmesh: str = ""          # TMESH 时间（可选；注意与 TMESH 卡种类别区分字段名）
-    t_ints: str = ""         # TINTS
+    tmints: str = ""         # TMINTS 区间数（MCNP6 关键字 TMINTS；导入容错 TINTS/TMINTS）
     mat: str = ""            # MAT（可选）
     out: str = ""            # OUT（可选）
+    axs: str = ""            # AXS（可选，cyl 网格轴向量）
+    vec: str = ""            # VEC（可选，cyl 网格方向向量）
+    tr: str = ""             # TR（可选，网格变换编号）
     raw: str = ""            # 原文卡体（round-trip 保真兜底）
 
 

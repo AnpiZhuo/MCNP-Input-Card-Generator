@@ -170,3 +170,43 @@ def test_no_fmesh_deck_not_regressed():
     assert getattr(deck.tally, "fmesh_defs", None) in (None, [])
     g1 = generate_inp_from_deck(deck)
     assert "FMESH" not in g1 and "TMESH" not in g1
+
+
+# ── 7. 时间/能量关键字 + 新字段 deck 级 round-trip（回归）────────
+def test_fmesh_time_energy_new_fields_deck_roundtrip():
+    """FMESH cyl 卡（EMESH/EMINTS + TMESH/TMINTS + AXS/VEC/TR/OUT）全链 round-trip。
+
+    回归：`TMESH=` 是 FMESH 时间关键字（配对 TMINTS），`_is_fmesh_body_line` 不得把
+    5 空格缩进的 `TMESH=` 续行误判为新的 TMESH 卡头（否则 body 收集中断、tmesh/tmints 丢失）。
+    """
+    data_lines = [
+        "MODE N",
+        "FMESH6:N GEOM=CYL ORIGIN=0 0 0",
+        "     AXS=1 0 0 VEC=0 1 0",
+        "     TR=3 OUT=f",
+        "     EMESH=1 10 EMINTS=5",
+        "     TMESH=0 100 TMINTS=2",
+        "NPS 1000",
+    ]
+    result = parse_data_cards(data_lines)
+    fds = result["fmesh_defs"]
+    assert len(fds) == 1, "FMESH cyl 卡应吸收为 1 个结构化定义"
+    fd = fds[0]
+    assert fd.axs == "1 0 0" and fd.vec == "0 1 0"
+    assert fd.tr == "3" and fd.out == "f"
+    assert fd.emints == "5" and fd.tmints == "2", f"时间/能量区间数丢失: emints={fd.emints!r} tmints={fd.tmints!r}"
+    assert fd.tmesh == "0 100", f"tmesh 丢失: {fd.tmesh!r}"
+
+    deck, _w = parse_inp_text("t\n1 0 -1 imp:n=1\n\n1 px 0\n\n" + "\n".join(data_lines) + "\n")
+    g1 = generate_inp_from_deck(deck)
+    assert "EMINTS=5" in g1 and "TMINTS=2" in g1, "生成回放未含 EMINTS/TMINTS"
+    assert "AXS=1 0 0" in g1 and "VEC=0 1 0" in g1 and "TR=3" in g1 and "OUT=f" in g1
+    assert "GEOM=CYL" in g1 and "GEOM=C Y L" not in g1, "GEOM 未连写"
+
+    deck2, _w2 = parse_inp_text(g1)
+    fd2 = deck2.tally.fmesh_defs[0]
+    for attr in ("kind", "number", "geom", "origin", "axs", "vec", "tr", "out",
+                 "emints", "tmints", "tmesh"):
+        assert getattr(fd, attr) == getattr(fd2, attr), f"字段 {attr} 再导入丢失"
+    g2 = generate_inp_from_deck(deck2)
+    assert g1 == g2, "R1 不动点不成立（FMESH 新字段回放漂移）"
