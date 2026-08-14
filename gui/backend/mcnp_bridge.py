@@ -3,6 +3,12 @@
 
 所有功能（导入/解析/生成/3D/截面/材料校验）都走 http://localhost:5001，
 因此 sidecar 的作用是让 api_server 常驻监听 5001，前端关闭时随之终止。
+
+argv 分派：
+  --meshtal-worker  以 meshtal 子进程 worker 模式运行（stdin JSON → stdout JSON，
+                     完成后退出，不启动 HTTP 服务器）。打包版 sys.executable 传参
+                     即走此入口（api_server 的 _meshtal_worker_cmd()），避免带脚本
+                     路径再启第二个 5001（端口冲突挂起）。
 """
 import sys, os
 
@@ -18,7 +24,19 @@ for _p in [
     if os.path.isdir(_p) and _p not in sys.path:
         sys.path.insert(0, _p)
 
-import api_server  # noqa: E402
+# 打包环境：_MEIPASS/app（meshtal 数据落盘目录）也加入路径，供 top-level meshtal import
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    _mei_app = os.path.join(sys._MEIPASS, "app")
+    if os.path.isdir(_mei_app) and _mei_app not in sys.path:
+        sys.path.insert(0, _mei_app)
+
 
 if __name__ == "__main__":
+    if "--meshtal-worker" in sys.argv:
+        # meshtal 子进程 worker：stdin JSON → stdout JSON，完成后退出，不启 HTTP
+        from meshtal._meshtal_worker import main as _meshtal_worker_main
+        _meshtal_worker_main()
+        sys.exit(0)
+
+    import api_server  # noqa: E402
     api_server.main()

@@ -31,15 +31,19 @@ from xsdir_db import DB as xsdir_db
 PORT = 5001
 
 
-def _meshtal_worker_script() -> str:
-    """定位 app/meshtal/_meshtal_worker.py（打包环境 sys._MEIPASS 感知）。
+def _meshtal_worker_cmd() -> list:
+    """返回 meshtal worker 的 spawn 命令。
 
-    照 step_importer_geouned.py:22 模式：打包后 worker 脚本落盘
-    _internal/app/meshtal/_meshtal_worker.py，用 sidecar python.exe spawn。
+    - frozen：`[sys.executable, "--meshtal-worker"]` —— sidecar exe 入口
+      mcnp_bridge.py 分派到 worker main（stdin JSON → stdout JSON），不传脚本路径，
+      避免打包版 sys.executable 带参数运行冻结入口再启第二个 5001（端口冲突挂起）。
+    - dev：`[sys.executable, mcnp_bridge.py, "--meshtal-worker"]` —— 同一入口分派，
+      dev 真实解释器经 mcnp_bridge 走 worker。
     """
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return os.path.join(sys._MEIPASS, "app", "meshtal", "_meshtal_worker.py")
-    return os.path.join(PROJECT_DIR, "app", "meshtal", "_meshtal_worker.py")
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--meshtal-worker"]
+    bridge = os.path.join(PROJECT_DIR, "gui", "backend", "mcnp_bridge.py")
+    return [sys.executable, bridge, "--meshtal-worker"]
 
 
 # ── preview-3d deck 指纹缓存（P0a：同 deck 二次打开免 FreeCAD 子进程）──
@@ -806,9 +810,9 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 self._err("不是有效的 meshtal 文件",
                           hint="请确认是 MCNP 生成的 meshtal 文件，文件格式不对或版本不兼容")
                 return
-            worker = _meshtal_worker_script()
+            worker = _meshtal_worker_cmd()
             proc = subprocess.run(
-                [sys.executable, worker],
+                worker,
                 input=json.dumps({"mode": "parse", "path": path}),
                 capture_output=True, text=True, timeout=120,
             )
@@ -877,9 +881,9 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 self._err("不是有效的 meshtal 文件",
                           hint="请确认是 MCNP 生成的 meshtal 文件，文件格式不对或版本不兼容")
                 return
-            worker = _meshtal_worker_script()
+            worker = _meshtal_worker_cmd()
             proc = subprocess.run(
-                [sys.executable, worker],
+                worker,
                 input=json.dumps({
                     "mode": "texture", "path": path,
                     "tallyNumber": data.get("tallyNumber"),

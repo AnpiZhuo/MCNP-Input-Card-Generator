@@ -59,6 +59,16 @@ if os.path.isdir(os.path.join(GEOUNED_SRC, "geouned")):
 # 排除 pymcnp._show*（渲染层，不拉 pyvista/vtk）
 _hidden = [m for m in collect_submodules("pymcnp") if not m.startswith("pymcnp._show")]
 
+# meshtal 网格计数模块（app/meshtal 8 模块 + __init__）进 PYZ：冻结 exe 内
+# mcnp_bridge --meshtal-worker 分派与 worker 内部 `from meshtal.xxx import` 都从
+# PYZ 可 import（_keep_dirs data 保留供核对/旁路）。worker 保持模块顶只 stdlib。
+_meshtal_mods = [
+    "meshtal", "meshtal.meshtal_parser", "meshtal.volume_builder",
+    "meshtal.colormap", "meshtal.downsample_plan", "meshtal.meshtal_cache",
+    "meshtal.deck_match", "meshtal.fmesh_parser", "meshtal._meshtal_worker",
+]
+_hidden += _meshtal_mods
+
 a = Analysis(
     [os.path.join(GUI_BACKEND, "mcnp_bridge.py")],
     pathex=[APP_SRC, GUI_BACKEND, PROJECT],

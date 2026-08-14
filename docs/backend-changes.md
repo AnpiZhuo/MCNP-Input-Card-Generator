@@ -522,3 +522,46 @@ python app/meshtal/_meshtal_worker.py        # stdin JSON → stdout JSON（mode
 
 全量 pytest：**430 通过 / 0 失败**（343 基线零回归 + 3 新测试文件 21 用例 + 其余 meshtal
 新增全绿）；R1 不动点不回归；vitest 76 不在后端改动范围。
+
+---
+
+# I. P0 打包模式 meshtal worker spawn 修复（v1.7.0 实包冒烟）
+
+> 施工方：后端 | 日期：2026-08-14
+> 根因：api_server 用 `subprocess.run([sys.executable, worker_script])` spawn worker。
+> 打包版 `sys.executable` = 冻结 PyInstaller sidecar exe（入口 mcnp_bridge.py）→
+> 带参数运行冻结入口会再启第二个 5001 服务器 → 端口冲突挂起。
+
+## I.1 mcnp_bridge.py argv 分派
+
+`gui/backend/mcnp_bridge.py`：`__main__` 先判 `--meshtal-worker` → `from
+meshtal._meshtal_worker import main` → 调其 `main()`（stdin JSON → stdout JSON），
+`sys.exit(0)`，**不 import api_server、不启 HTTP 服务器**。另加 `_MEIPASS/app`
+路径（打包环境 top-level `meshtal` import 兜底）。
+
+## I.2 api_server spawn 统一 helper
+
+`gui/backend/api_server.py`：`_meshtal_worker_script()` → `_meshtal_worker_cmd()`：
+- frozen：`[sys.executable, "--meshtal-worker"]`（不传脚本路径）
+- dev：`[sys.executable, <mcnp_bridge.py>, "--meshtal-worker"]`
+两处 handler（parse/texture）改调 `_meshtal_worker_cmd()`。
+
+## I.3 spec hiddenimports
+
+`gui/mcnp_sidecar.spec`：`_hidden` 追加 `meshtal` 包 9 模块（meshtal/
+meshtal_parser/volume_builder/colormap/downsample_plan/meshtal_cache/deck_match/
+fmesh_parser/_meshtal_worker）进 PYZ（冻结 exe 内可 import）；`_keep_dirs` data
+保留（核对/旁路）。worker 保持"模块顶只 stdlib、numpy/pymcnp 惰性"纪律不变。
+
+## I.4 测试
+
+`tests/unit/test_meshtal_worker.py` 新增 3 条 dev 模式 spawn 测试
+（`python mcnp_bridge.py --meshtal-worker` 喂 stdin JSON 断言 stdout 信封：
+parse grid_bounds / texture 标量帧 / 坏 tally → status=error）。测试不 import
+api_server/FreeCAD（subprocess spawn 不受红线限制）。
+
+## I.5 终态
+
+全量 pytest：**433 通过 / 0 失败**（430 + 3 新 spawn 测试；343 基线零回归 +
+全部 meshtal 新增全绿）；R1 不动点不回归。dev 模式 worker spawn 实测走通
+（mcnp_bridge --meshtal-worker → worker main → stdin→stdout 协议一致）。

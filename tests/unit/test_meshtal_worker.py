@@ -92,3 +92,49 @@ def test_worker_texture_bad_tally_errors(isolated_cache):
                 "tallyNumber": 99, "energyBin": 0, "timeBin": 0})
     assert res["status"] == "error"
     assert res.get("message")
+
+
+# ── dev 模式 spawn：python mcnp_bridge.py --meshtal-worker ─────
+# P0 打包模式 worker spawn 修复：mcnp_bridge argv 分派（--meshtal-worker →
+# worker main，不启 HTTP）。dev 模式 spawn 即走此入口，测试验证 stdin→stdout 协议。
+BRIDGE = WORKER.parent.parent.parent / "gui" / "backend" / "mcnp_bridge.py"
+
+
+def _spawn_worker(payload: dict) -> dict:
+    import json
+    import subprocess
+    import sys
+    proc = subprocess.run(
+        [sys.executable, str(BRIDGE), "--meshtal-worker"],
+        input=json.dumps(payload),
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, f"worker spawn 失败: {proc.stderr[-500:]}"
+    return json.loads(proc.stdout)
+
+
+def test_worker_spawn_dev_mode_parse():
+    """dev 模式 spawn parse：stdin JSON → stdout JSON（grid_bounds 一致）。"""
+    res = _spawn_worker({"mode": "parse", "path": str(FIXTURES / "minimal_meshtal.txt")})
+    assert res["status"] == "ok"
+    assert res["grid_bounds"] == {"min": [0.0, 0.0, 0.0], "max": [2.0, 2.0, 1.0]}
+    assert res["tallies"][0]["number"] == 1
+
+
+def test_worker_spawn_dev_mode_texture():
+    """dev 模式 spawn texture：标量帧字段（resolution/worldBox/dataBase64）。"""
+    res = _spawn_worker({"mode": "texture", "path": str(FIXTURES / "minimal_meshtal.txt"),
+                         "tallyNumber": 1, "energyBin": 0, "timeBin": 0, "resolution": 128})
+    assert res["status"] == "ok"
+    frame = res["frame"]
+    assert frame["resolution"] == [2, 2, 2]
+    assert frame["worldBox"]["max"] == [2.0, 2.0, 1.0]
+    assert "dataBase64" in frame
+
+
+def test_worker_spawn_dev_mode_bad_tally_error():
+    """dev 模式 spawn：坏 tallyNumber → status=error（worker 不裸崩）。"""
+    res = _spawn_worker({"mode": "texture", "path": str(FIXTURES / "minimal_meshtal.txt"),
+                         "tallyNumber": 99, "energyBin": 0, "timeBin": 0})
+    assert res["status"] == "error"
+    assert res.get("message")
