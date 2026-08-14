@@ -6,6 +6,11 @@
 > 目标：FMESH/TMESH 卡结构化 + MESHTAL 文件解析 + 光线追踪体积渲染（Three.js/WebGL2 DataTexture3D）+ 独立「3D 结果」窗口；零新依赖、343 pytest 基线 / 19 vitest 基线不破、api.yaml 漂移闸门 25→28 双向同步
 > **交付版本目标：1.7.0**（用户 2026-08-14 指定，非 1.6.5；网格计数可视化是下个大功能按 1.7.0 发布；打包时按 docs/手动打包方法.md 步骤 1 三处+README 同步到 1.7.0，其中 Cargo.toml v1.6.4 曾漏改需特别注意）
 > 行号说明：本契约行号为 2026-08-14 工作树 Grep 锚定值，施工以每次 Grep 重锚定为准（见 §16）。
+>
+> **修订记录（2026-08-14 · QA F1/F2/F6 契约滞后修复，仅文档不改码；详见 docs/qa-report-fmesh-c810.md §3）**
+> - **F6 字段名同步**：§5.1 字段名 `eints`/`t_ints` → `emints`/`tmints`（对齐 models.py:225-227、api_server.py:373-375、fmesh_parser.py EMINTS/TMINTS 容错）；§4.7.1 幽灵文字 `EINTS`/`TINTS` → `EMINTS`/`TMINTS`；§5.1 补 `axs`/`vec`/`tr` 字段（对齐 models.py:230-232）。
+> - **F2 1INTS 文案**：删除「1INTS n 语法」支持声明（§4.7.1:286、§5.3:335）——v1 结构化解析仅支持多区间 `IMESH= v1 v2 ... IINTS= n1 n2 ...`，`1INTS n` 简写不吸收（`_KEYS`/`KEY_TO_FIELD` 无 `1INTS` 键），用户须改写为多值形式；C810 原文是否收录 1INTS 待人工核验。
+> - **F1 OUT 初步对齐**：§4.7.1 OUT 由 `[f|q|n]`（TMESH 输出单位语义）初步对齐实现九选项（COL 默认/CF/COLSC/CFSC/IJ/IK/JK/NONE/XDMF，FMESH 输出格式语义，fmeshState.ts:145-155）；XDMF 是否 MCNP6.2+ 待 C810 3-118 人工核验（qa-report-fmesh-c810 §3 F1）。
 
 ---
 
@@ -283,13 +288,13 @@ class MeshtalParseCache:
 ```
 网格类型      GEOM   [xyz]                     $ 网格几何：xyz 矩形（v1 仅此渲染）
 原点          ORIGIN [x y z]                   $ 网格原点坐标（MCNP 全局坐标）
-X 方向       IMESH [边界]  IINTS [区间数]      $ X 向网格边界（可多值或 1INTS n 语法）
+X 方向       IMESH [边界]  IINTS [区间数]      $ X 向网格边界（可多值，与 IINTS 条目一一对应；1INTS n 简写 v1 不支持）
 Y 方向       JMESH [边界]  JINTS [区间数]
 Z 方向       KMESH [边界]  KINTS [区间数]
-能量边界     EMESH [边界]  EINTS [区间数]       $ 可选能量分箱（多值；空=不分箱）
-时间边界     TMESH [边界]  TINTS [区间数]       $ 可选时间分箱
+能量边界     EMESH [边界]  EMINTS [区间数]      $ 可选能量分箱（多值；空=不分箱；生成发 EMINTS，导入容错 EINTS/EMINTS）
+时间边界     TMESH [边界]  TMINTS [区间数]      $ 可选时间分箱（生成发 TMINTS，导入容错 TINTS/TMINTS）
 材料过滤     MAT   [材料号]                     $ 可选：只统计该材料栅元
-输出单位     OUT   [f|q|n]                      $ 可选：通量/电荷/径迹长度
+输出单位     OUT   [COL]  $ 可选：COL（默认）/CF/COLSC/CFSC/IJ/IK/JK/NONE/XDMF（FMESH 输出格式；XDMF=MCNP6.2+ ParaView，C810 待核验）
 粒子设计符   FMESHn:N/P/E（卡头）                $ 粒子类型
 ```
 - 每行输入框 `title`/`placeholder` 展示上述关键字作用（照 TallyTab FM 乘子框 `placeholder="如 8.65E10 1 -5 -6" title="FM 响应乘子…"` 先例，:180）。
@@ -316,11 +321,14 @@ class FmeshDefinition:
     kmesh: str = ""          # KMESH
     kints: str = ""
     emesh: str = ""          # EMESH（可选）
-    eints: str = ""
+    emints: str = ""         # EMINTS 区间数（MCNP6 关键字；导入容错 EINTS/EMINTS）
     tmesh: str = ""          # TMESH 时间（可选；注意与 TMESH 卡种类别区分字段名）
-    t_ints: str = ""         # TINTS
+    tmints: str = ""         # TMINTS 区间数（MCNP6 关键字；导入容错 TINTS/TMINTS）
     mat: str = ""            # MAT（可选）
-    out: str = ""            # OUT（可选）
+    out: str = ""            # OUT（可选；FMESH 输出格式九选项 COL/CF/COLSC/CFSC/IJ/IK/JK/NONE/XDMF，见 §4.7.1）
+    axs: str = ""            # AXS（可选，cyl 网格轴向量）
+    vec: str = ""            # VEC（可选，cyl 网格方向向量）
+    tr: str = ""             # TR（可选，网格变换编号）
     raw: str = ""            # 原文卡体（round-trip 保真兜底；结构化字段为空时回放 raw）
 ```
 - 挂载：`TallySettings.fmesh_defs: list[FmeshDefinition] = field(default_factory=list)`。
@@ -332,7 +340,7 @@ class FmeshDefinition:
 - 前端 `contract.ts` `backend: "fmesh_defs"` 字段 ⊆ models.py（漂移闸门 §2 自动覆盖）。
 
 ### 5.3 FMESH/TMESH 卡体 → FmeshDefinition（`fmesh_parser.py`）
-- **FMESH 语法**：`FMESHn:N/P/E  GEOM=xyz  ORIGIN=x0 y0 z0`（续行 `IMESH=... IINTS=...` / `JMESH` / `KMESH` / `EMESH` / `TMESH` / `MAT` / `OUT`）。MCNP6.2+ 支持 `IMESH= v1 v2 ... IINTS= n1 n2 ...`（多区间）与 `1INTS n` 语法。
+- **FMESH 语法**：`FMESHn:N/P/E  GEOM=xyz  ORIGIN=x0 y0 z0`（续行 `IMESH=... IINTS=...` / `JMESH` / `KMESH` / `EMESH` / `TMESH` / `MAT` / `OUT`）。**v1 结构化支持多区间** `IMESH= v1 v2 ... IINTS= n1 n2 ...`（条目一一对应，MCNP6.2+ 行为，QA d 节已 pin）；**`1INTS n` 简写语法 v1 不吸收**（`_KEYS`/`KEY_TO_FIELD` 无 `1INTS` 键，QA F2）——用户须改写为多值形式；C810 原文是否收录 `1INTS` 待人工核验。
 - **TMESH 语法**：`TMESHn`（标题行）+ 子卡 `RMESHn:...`（rect）/ `CMESHn:...`（cyl）各带 GEOM/ORIGIN/IMESH/.../EMESH/TMESH/MAT/OUT。v1 结构化吸收 `RMESHn`（rect，GEOM=xyz）；`CMESHn`（cyl）解析但 `unsupported_geom=True`（渲染降级提示，round-trip 保留 raw）。
 - `parse_fmesh_lines(lines) -> list[FmeshDefinition]`：按 kind 吸收；`fmesh_defs_to_lines(defs) -> list[str]`：回放（结构化字段齐全走结构化，否则回放 raw——round-trip 兜底，照 D-10 raw_line 先例）。
 - **只吸收 GEOM=xyz / 参数化边界原文保留**：边界值以原文字符串存（不数值化），生成回放逐字（保 R1 不动点）。

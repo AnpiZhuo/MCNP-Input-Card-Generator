@@ -22,7 +22,7 @@ _KEYS = {
     "EMESH": "emesh", "EMINTS": "emints", "EINTS": "emints",  # EINTS/EMINTS 容错
     "TMESH": "tmesh", "TMINTS": "tmints", "TINTS": "tmints",  # TINTS/TMINTS 容错
     "AXS": "axs", "VEC": "vec", "TR": "tr",
-    "MAT": "mat", "OUT": "out",
+    "MAT": "mat", "OUT": "out", "FACTOR": "factor",
 }
 
 
@@ -30,7 +30,7 @@ def _has_structured(fd: FmeshDefinition) -> bool:
     """是否有可回放的结构化字段（否则回放 raw）。"""
     for attr in ("origin", "imesh", "iints", "jmesh", "jints", "kmesh", "kints",
                  "emesh", "emints", "tmesh", "tmints", "mat", "out",
-                 "axs", "vec", "tr"):
+                 "factor", "axs", "vec", "tr"):
         if getattr(fd, attr):
             return True
     return False
@@ -111,7 +111,7 @@ def parse_fmesh_lines(lines) -> list:
             fd.raw = _extract_subcard_raw(cleaned, "CMESH", fd.number) or fd.raw
             fd.origin = fd.imesh = fd.iints = fd.jmesh = fd.jints = ""
             fd.kmesh = fd.kints = fd.emesh = fd.emints = fd.tmesh = ""
-            fd.tmints = fd.mat = fd.out = ""
+            fd.tmints = fd.mat = fd.out = fd.factor = ""
             fd.axs = fd.vec = fd.tr = ""
 
     if not defs and pending_tmesh_number is None and tokens:
@@ -187,7 +187,8 @@ def _card_lines(fd: FmeshDefinition, sub: str) -> list:
                  ("JINTS", fd.jints), ("KMESH", fd.kmesh), ("KINTS", fd.kints),
                  ("EMESH", fd.emesh), ("EMINTS", fd.emints), ("TMESH", fd.tmesh),
                  ("TMINTS", fd.tmints), ("MAT", fd.mat), ("OUT", fd.out),
-                 ("AXS", fd.axs), ("VEC", fd.vec), ("TR", fd.tr)):
+                 ("FACTOR", fd.factor), ("AXS", fd.axs), ("VEC", fd.vec),
+                 ("TR", fd.tr)):
         if v:
             lines.append(f"     {k}={v}")
     return lines

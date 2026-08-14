@@ -42,6 +42,7 @@ export interface FmeshRow {
   axs: string; // 圆柱轴向量（CYL/RZT 系）
   vec: string; // 圆柱网格方向向量（与 AXS 不平行）
   tr: string; // 可选变换编号（正整数）
+  factor: string; // 乘法因子（每网格单元乘一个系数，正整数；默认 1）【C810 3-119 有 FACTOR 关键字】
   raw: string; // 原文卡体（round-trip 兜底）
 }
 
@@ -58,8 +59,70 @@ export const emptyFmeshRow = (): FmeshRow => ({
   tmesh: "", tmints: "",
   mat: "", out: "",
   axs: "", vec: "", tr: "",
+  factor: "1",
   raw: "",
 });
+
+/* ── 通用模板一键填充（PM 指令：纯函数镜像后端契约，不放 UI 逻辑） ── */
+export interface FmeshTemplate {
+  id: string;
+  label: string;
+  hint: string;
+  /** 把模板网格值并入行（返回新行，不修改入参）；未填的 geom/particle/number 给默认 XYZ/N/4 */
+  apply(row: FmeshRow): FmeshRow;
+}
+
+interface FmeshGridTemplate {
+  origin: string;
+  imesh: string; iints: string;
+  jmesh: string; jints: string;
+  kmesh: string; kints: string;
+}
+
+/**
+ * apply 公共语义（两档模板共用）：
+ * - 只覆盖网格字段（origin/imesh/iints/jmesh/jints/kmesh/kints）；
+ * - geom/particle/number 仅在未填时给默认（XYZ / N / 4）；
+ * - 其余字段（emesh/emints/tmesh/tmints/mat/out/axs/vec/tr/raw/kind）保持用户已填值不变。
+ */
+function applyFmeshTemplate(row: FmeshRow, g: FmeshGridTemplate): FmeshRow {
+  return {
+    ...row,
+    origin: g.origin,
+    imesh: g.imesh, iints: g.iints,
+    jmesh: g.jmesh, jints: g.jints,
+    kmesh: g.kmesh, kints: g.kints,
+    geom: row.geom || "XYZ",
+    particle: row.particle || "N",
+    number: row.number || "4",
+  };
+}
+
+/** 通用模板两档（FMeshForm 消费：先粗网格看分布，再按需加密） */
+export const fmeshTemplates: FmeshTemplate[] = [
+  {
+    id: "minimal",
+    label: "最小可用（1×1×1）",
+    hint: "单网格快速验证卡能跑通：ORIGIN=-100 -100 -150，IMESH=100 IINTS=1，JMESH=100 JINTS=1，KMESH=50 KINTS=1",
+    apply: (row) => applyFmeshTemplate(row, {
+      origin: "-100 -100 -150",
+      imesh: "100", iints: "1",
+      jmesh: "100", jints: "1",
+      kmesh: "50", kints: "1",
+    }),
+  },
+  {
+    id: "starter",
+    label: "通用起步（20×20×10）",
+    hint: "推荐：先粗网格看分布，再按需加密。20×20×10 = 4000 单元，3D 渲染开销小",
+    apply: (row) => applyFmeshTemplate(row, {
+      origin: "-100 -100 -150",
+      imesh: "100", iints: "20",
+      jmesh: "100", jints: "20",
+      kmesh: "50", kints: "10",
+    }),
+  },
+];
 
 /* ── GEOM / OUT 下拉选项（字段契约，FMeshForm 消费） ── */
 export interface FmeshGeomOption {
@@ -125,6 +188,7 @@ export const FMESH_PLACEHOLDERS: Record<string, string> = {
   axs: "圆柱轴向量（CYL/RZT 系，3 分量）",
   vec: "圆柱方向向量（3 分量，与 AXS 不平行）",
   tr: "可选变换编号（正整数）",
+  factor: "乘法因子（每网格单元乘一个系数，正整数；默认 1）",
 };
 
 const FAMILY_RE = /^(FMESH|TMESH|RMESH|CMESH)(\d*):?([NPEHAS]?)$/i;
@@ -139,6 +203,7 @@ const KEY_TO_FIELD: Record<string, FmeshStringField> = {
   EMESH: "emesh", EMINTS: "emints", EINTS: "emints", // EINTS/EMINTS 容错
   TMESH: "tmesh", TMINTS: "tmints", TINTS: "tmints", // TINTS/TMINTS 容错
   AXS: "axs", VEC: "vec", TR: "tr",
+  FACTOR: "factor",
   MAT: "mat", OUT: "out",
 };
 
@@ -251,7 +316,7 @@ function cardLines(r: FmeshRow, sub: string): string[] {
     ["IMESH", "imesh"], ["IINTS", "iints"], ["JMESH", "jmesh"], ["JINTS", "jints"],
     ["KMESH", "kmesh"], ["KINTS", "kints"], ["EMESH", "emesh"], ["EMINTS", "emints"],
     ["TMESH", "tmesh"], ["TMINTS", "tmints"], ["MAT", "mat"], ["OUT", "out"],
-    ["AXS", "axs"], ["VEC", "vec"], ["TR", "tr"],
+    ["AXS", "axs"], ["VEC", "vec"], ["TR", "tr"], ["FACTOR", "factor"],
   ];
   for (const [k, v] of order) {
     const val = r[v];
@@ -312,6 +377,7 @@ export function buildFmeshPayload(rows: FmeshRow[]): Record<string, any>[] {
     axs: r.axs,
     vec: r.vec,
     tr: r.tr,
+    factor: r.factor,
     raw: r.raw,
   }));
 }
@@ -339,6 +405,7 @@ export function fmeshDefsToRows(defs: Record<string, any>[]): FmeshRow[] {
     axs: f.axs || "",
     vec: f.vec || "",
     tr: f.tr || "",
+    factor: f.factor ?? "1",
     raw: f.raw || "",
   }));
 }
@@ -540,5 +607,30 @@ export function validateFmeshRow(r: FmeshRow): FmeshValidationIssue[] {
     push("IINTS", "warning", `网格规模 ${i}×${j}×${k} = ${cells.toLocaleString()} 单元，超出 128³ 渲染预算，3D 体积渲染内存/性能开销大`);
   }
 
+  // 8) FACTOR 乘法因子（正整数 ≥ 1；默认 1 合法，空串不校验）
+  if (r.factor && !/^[1-9]\d*$/.test(r.factor.trim())) {
+    push("FACTOR", "error", "FACTOR 须为正整数（乘法因子 ≥ 1）");
+  }
+
   return issues;
+}
+
+/* ── 简单/高级模式（傻瓜友好：简单默认只露核心 4 项，其余折叠进高级） ── */
+export type FmeshFormMode = "simple" | "advanced";
+
+/** 简单模式核心字段：粒子 + 三向网格范围（IMESH/JMESH/KMESH） */
+export const FMESH_SIMPLE_FIELDS: (keyof FmeshRow)[] = ["particle", "imesh", "jmesh", "kmesh"];
+
+/** 高级模式追加字段（ORIGIN/INTS×3/能量/时间/MAT/OUT/AXS/VEC/TR/factor/GEOM） */
+export const FMESH_ADVANCED_FIELDS: (keyof FmeshRow)[] = [
+  "geom", "origin", "iints", "jints", "kints",
+  "emesh", "emints", "tmesh", "tmints",
+  "mat", "out", "axs", "vec", "tr", "factor",
+];
+
+/** 模式 → 可见字段列表（可测纯函数；展开/收起状态存组件本地 state，不落 deck） */
+export function simpleModeVisibleFields(mode: FmeshFormMode): (keyof FmeshRow)[] {
+  return mode === "simple"
+    ? [...FMESH_SIMPLE_FIELDS]
+    : [...FMESH_SIMPLE_FIELDS, ...FMESH_ADVANCED_FIELDS];
 }

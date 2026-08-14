@@ -680,3 +680,43 @@ R1 不动点不回归；api.yaml **无 fmesh_defs schema → 无变更**（漂�
 ## K.5 数据库 / 环境变量
 
 无数据库变更；无新增环境变量。
+
+---
+
+## L. FMESH 卡 FACTOR（乘法因子）字段支持（2026-08-14）
+
+> 指令：PM 派发，为 FMESH 卡新增 `factor`（`FACTOR=`）字段（C810/MCNP6 均有，默认 1，正整数）。测试先行。契约字段名 `factor` / 关键字 `FACTOR=`；前端表单默认显示 "1"，后端只存/回放原文（字符串，不强制 float），正整数校验在前端表单层。
+
+### L.1 字段契约
+
+| 前端 JSON key | 后端字段 | 卡体关键字 | 默认 | 说明 |
+| :--- | :--- | :--- | :--- | :--- |
+| `factor` | `factor` | `FACTOR=` | 空串 / 前端表单显示 "1" | 乘法因子（每网格单元乘系数）。解析认 `FACTOR=`；生成非空才发；round-trip 原文保留（不数值化） |
+
+### L.2 改动文件
+
+| 文件 | 改动 |
+| :--- | :--- |
+| `app/models.py` | `FmeshDefinition` 新增 `factor: str = ""`（:228 后插入） |
+| `app/meshtal/fmesh_parser.py` | `_KEYS` 加 `"FACTOR": "factor"`（:26）；`_has_structured` 字段表加 `factor`；`_card_lines` 回放发 `FACTOR=`（OUT 后、AXS 前）；CMESH(cyl) 结构化清空循环加 `fd.factor = ""`（防含 FACTOR 的 CMESH 卡被误判为结构化 RMESH） |
+| `gui/backend/api_server.py` | `_fmesh_from_list` 读 `factor=f.get("factor", "")`（:379 前插入，缺 key 容忍）；出向序列化经 `dataclasses.asdict` 自动带出（`_deck_to_frontend_dict`/`_handle_parse_inp` 无需改动） |
+| `app/generator/inp_generator.py` | **未动**（`_generate_tallies` 委托 `fmesh_defs_to_lines`） |
+
+### L.3 新增测试（测试先行，tests/parser/test_fmesh_parser.py）
+
+| 用例 | 覆盖 |
+| :--- | :--- |
+| `test_factor_parse_and_emit` | `FACTOR=` 解析 → factor 字段；生成输出 `FACTOR=` |
+| `test_factor_roundtrip_preserved` | 含 `FACTOR=` 卡体 → 解析 → 再生成 → factor 保留 |
+| `test_factor_default_empty_when_absent` | 无 `FACTOR=` → factor 默认空串；生成不输出 `FACTOR=` |
+| `test_factor_mixed_keywords_not_lost` | AXS+VEC+TR+OUT+FACTOR 多关键字混排全不丢（round-trip） |
+
+未改任何既有测试断言。
+
+### L.4 终态
+
+全量 pytest：**449 通过 / 0 失败**（445 基线零回归 + 新增 4 用例全绿）。序列化冒烟：`deck_from_json` + `_deck_to_frontend_dict` factor 带出、缺 key 容忍；INP e2e（parse → generate → reparse）FACTOR 保留、无 FACTOR 默认空串且不输出 `FACTOR=`；CMESH cyl 含 FACTOR 走 raw 降级不被结构化污染。api.yaml 无 fmesh_defs schema → 无变更。
+
+### L.5 数据库 / 环境变量
+
+无数据库变更；无新增环境变量。

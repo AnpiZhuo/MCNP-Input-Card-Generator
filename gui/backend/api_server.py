@@ -374,6 +374,7 @@ def _fmesh_from_list(arr: list) -> list[FmeshDefinition]:
         tmesh=f.get("tmesh", ""),
         tmints=f.get("tmints", f.get("t_ints", "")),
         mat=f.get("mat", ""), out=f.get("out", ""),
+        factor=f.get("factor", ""),
         axs=f.get("axs", ""), vec=f.get("vec", ""), tr=f.get("tr", ""),
         raw=f.get("raw", ""),
     ) for f in arr]

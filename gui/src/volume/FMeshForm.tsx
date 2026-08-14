@@ -17,8 +17,11 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   emptyFmeshRow, fmeshToCardText, FMESH_PLACEHOLDERS,
   FMESH_GEOM_OPTIONS, FMESH_OUT_OPTIONS, isCylGeom, validateFmeshRow,
-  type FmeshKind, type FmeshRow, type FmeshValidationIssue,
+  fmeshTemplates, simpleModeVisibleFields,
+  type FmeshFormMode, type FmeshKind, type FmeshRow, type FmeshTemplate, type FmeshValidationIssue,
 } from "./fmeshState";
+import { computeSurfacesAABB, aabbToFmeshValues } from "./surfacesAABB";
+import { useDeck } from "../utils/DeckContext";
 
 interface RowWithId extends FmeshRow {
   _uid: number;
@@ -40,6 +43,7 @@ const FMESH_FIELD_LABELS: { key: keyof FmeshRow; label: string; placeholder: str
   { key: "axs", label: "AXS", placeholder: FMESH_PLACEHOLDERS.axs, width: 130 },
   { key: "vec", label: "VEC", placeholder: FMESH_PLACEHOLDERS.vec, width: 130 },
   { key: "tr", label: "TR", placeholder: FMESH_PLACEHOLDERS.tr, width: 60 },
+  { key: "factor", label: "FACTOR", placeholder: FMESH_PLACEHOLDERS.factor, width: 70, hint: "每网格单元乘一个系数（正整数，默认 1）" },
 ];
 
 /**
@@ -75,6 +79,9 @@ export default function FMeshForm({ value, onChange }: FMeshFormProps) {
   const [rows, setRows] = useState<RowWithId[]>(() =>
     (value || []).map((r, i) => ({ ...r, _uid: i + 1 })),
   );
+  // 简单/高级模式（傻瓜友好：默认简单只露核心 4 项；展开状态存组件本地 state，不落 deck）
+  const [mode, setMode] = useState<FmeshFormMode>("simple");
+  const { deck } = useDeck();
 
   // 外部 value 变化（导入/文本模式回填）→ 同步本地 rows
   useEffect(() => {
@@ -105,6 +112,22 @@ export default function FMeshForm({ value, onChange }: FMeshFormProps) {
   };
   const delRow = (uid: number) => {
     pushRows(rows.filter((r) => r._uid !== uid));
+  };
+
+  // 通用模板一键填充：把模板网格值并入当前行（走受控状态更新，其余字段保留）
+  const applyTemplate = (uid: number, tpl: FmeshTemplate) => {
+    pushRows(rows.map((r) => (r._uid === uid ? { ...tpl.apply(r), _uid: r._uid } : r)));
+  };
+
+  // ⚡ 按几何自动填充：解析曲面卡算模型 AABB → 一键填入 ORIGIN + IMESH/JMESH/KMESH（网格覆盖模型）
+  const autoFillByGeometry = (uid: number) => {
+    const aabb = computeSurfacesAABB(deck.surfaces || "", deck.tr_cards || "");
+    if (!aabb) {
+      alert("无法从曲面卡解析几何包围盒。请先在「几何」标签页填写曲面卡（平面/球/圆柱等可解类型，TR 变换需对应 TR 卡），或改用「通用模板一键填充」。");
+      return;
+    }
+    const vals = aabbToFmeshValues(aabb);
+    pushRows(rows.map((r) => (r._uid === uid ? { ...r, ...vals } : r)));
   };
 
   // 每行校验（TMESH 只读导入行数据原样保留，不做校验提示）
@@ -142,6 +165,23 @@ export default function FMeshForm({ value, onChange }: FMeshFormProps) {
       </label>
     );
   };
+
+  const particleSelect = (r: RowWithId) => (
+    <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 10 }}>
+      <span style={{ color: "var(--text-tertiary)" }}>粒子设计符</span>
+      <select
+        className="form-select"
+        value={r.particle}
+        onChange={(e) => updateRow(r._uid, "particle", e.target.value)}
+        style={{ height: 26, fontSize: 11, width: 70 }}
+        title="粒子设计符：N/P/E"
+      >
+        <option value="N">N（中子）</option>
+        <option value="P">P（光子）</option>
+        <option value="E">E（电子）</option>
+      </select>
+    </label>
+  );
 
   const geomSelect = (r: RowWithId) => (
     <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 10 }}>
@@ -204,6 +244,14 @@ export default function FMeshForm({ value, onChange }: FMeshFormProps) {
     <div className="glass-card" style={{ marginTop: 16 }}>
       <div className="card-header">
         <span className="card-title">网格计数（FMESH）</span>
+        <button
+          type="button"
+          className="btn btn-ghost btn-xs"
+          onClick={() => setMode(mode === "simple" ? "advanced" : "simple")}
+          title={mode === "simple" ? "显示全部字段（ORIGIN/INTS/能量/时间/MAT/OUT/AXS/VEC/TR/FACTOR 等）" : "回到简单模式（只显示粒子 + 三向范围）"}
+        >
+          {mode === "simple" ? "高级模式 ▾" : "收起高级 ▲"}
+        </button>
         <button className="btn btn-success btn-sm" onClick={addRow}>+ 添加网格计数</button>
       </div>
 
@@ -213,10 +261,14 @@ export default function FMeshForm({ value, onChange }: FMeshFormProps) {
           尚无网格计数卡。点「+ 添加网格计数」创建 FMESH 卡，或从 INP 导入自动识别。
         </div>
       ) : (
-        rows.map((r) => {
+        (() => {
+        const visible = simpleModeVisibleFields(mode);
+        return rows.map((r) => {
           const kindCtrl = fmeshKindControl(r.kind, r.geom);
+          const isSelectRow = kindCtrl.control === "select";
           return (
           <div key={r._uid} style={{ border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: 8, margin: "8px 0" }}>
+            {/* 头行：类型 + 编号 + 删除（始终可见） */}
             <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 6, flexWrap: "wrap" }}>
               <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 10 }}>
                 <span style={{ color: "var(--text-tertiary)" }}>类型</span>
@@ -240,47 +292,75 @@ export default function FMeshForm({ value, onChange }: FMeshFormProps) {
                 <span style={{ color: "var(--text-tertiary)" }}>编号</span>
                 <input className="form-input" value={r.number} onChange={(e) => updateRow(r._uid, "number", e.target.value)} placeholder="如 4" style={{ height: 26, fontSize: 11, width: 60 }} />
               </label>
-              <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 10 }}>
-                <span style={{ color: "var(--text-tertiary)" }}>粒子设计符</span>
-                <select
-                  className="form-select"
-                  value={r.particle}
-                  onChange={(e) => updateRow(r._uid, "particle", e.target.value)}
-                  style={{ height: 26, fontSize: 11, width: 70 }}
-                  title="粒子设计符：N/P/E"
-                >
-                  <option value="N">N（中子）</option>
-                  <option value="P">P（光子）</option>
-                  <option value="E">E（电子）</option>
-                </select>
-              </label>
-              {geomSelect(r)}
-              {input(r, "origin")}
               <button className="btn btn-danger btn-xs" onClick={() => delRow(r._uid)} style={{ marginLeft: "auto", alignSelf: "flex-end" }}>x</button>
             </div>
+
+            {/* 三步上手引导（简单模式，FMESH 可编辑行） */}
+            {mode === "simple" && isSelectRow && (
+              <div style={{ marginBottom: 6, fontSize: 11, color: "var(--accent)" }}>
+                ① 选粒子　② 点自动填充　③ 解析看 3D 结果
+              </div>
+            )}
+
+            {/* 字段区：按模式可见性渲染（简单=粒子+三向范围；高级=全部） */}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {visible.map((f) => {
+                if (f === "particle") return particleSelect(r);
+                if (f === "geom") return geomSelect(r);
+                if (f === "out") return outSelect(r);
+                if ((f === "axs" || f === "vec") && !isCylGeom(r.geom)) return null;
+                return input(r, f);
+              })}
+            </div>
+
+            {/* 粒子说明（每个网格计数一个粒子） */}
+            {mode === "simple" && isSelectRow && (
+              <div style={{ marginTop: 6, fontSize: 9, color: "var(--text-tertiary)" }}>
+                每个网格计数一个粒子（N/P/E）；要多种粒子就加多行
+              </div>
+            )}
+
+            {/* 一键填充按钮（⚡ 按几何自动填充 + 通用模板） */}
+            {isSelectRow && (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8, fontSize: 10 }}>
+                <button
+                  type="button"
+                  className="btn btn-success btn-xs"
+                  onClick={() => autoFillByGeometry(r._uid)}
+                  title="解析曲面卡算模型 x/y/z 包围盒，自动填 ORIGIN + IMESH/JMESH/KMESH（网格覆盖模型）"
+                >
+                  ⚡ 按几何自动填充
+                </button>
+                <span style={{ color: "var(--text-tertiary)" }}>通用模板一键填充</span>
+                <div className="btn-group">
+                  {fmeshTemplates.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      title={`${t.label}：${t.hint}`}
+                      onClick={() => applyTemplate(r._uid, t)}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+                <span style={{ color: "var(--text-tertiary)", fontSize: 9, lineHeight: 1.35 }}>
+                  先粗网格看分布，再按需加密 · 只覆盖网格字段，其余已填内容保留
+                </span>
+              </div>
+            )}
+
             {kindCtrl.control === "badge" && kindCtrl.note && (
-              <div style={{ width: "100%", fontSize: 9, color: "var(--text-tertiary)", marginBottom: 6 }}>
+              <div style={{ width: "100%", fontSize: 9, color: "var(--text-tertiary)", marginTop: 6 }}>
                 {kindCtrl.note}
               </div>
             )}
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {input(r, "imesh")}{input(r, "iints")}
-              {input(r, "jmesh")}{input(r, "jints")}
-              {input(r, "kmesh")}{input(r, "kints")}
-              {input(r, "emesh")}{input(r, "emints")}
-              {input(r, "tmesh")}{input(r, "tmints")}
-              {input(r, "mat")}
-              {isCylGeom(r.geom) && (<>
-                {input(r, "axs")}
-                {input(r, "vec")}
-              </>)}
-              {input(r, "tr")}
-              {outSelect(r)}
-            </div>
             {issuesBlock(r._uid)}
           </div>
           );
-        })
+        });
+        })()
       )}
 
       {cardText && (

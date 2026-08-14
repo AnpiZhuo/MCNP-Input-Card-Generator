@@ -505,3 +505,68 @@
 1. **导入含 GEOM=xyz（小写）的 INP**：前端解析归一化为 `XYZ`，生成 `GEOM=XYZ`（大小写变化，MCNP 大小写不敏感，语义等价；进入前端后 round-trip 稳定）。
 2. **OUT 旧值（如 `f`）**：下拉显示空白并回退说明文案，值仍原样保留回放，不丢数据。
 3. **TMESH 导入行**：仍只读徽标 + 数据原样保留；校验跳过；`fmeshKindControl` 改用 `isCylGeom` 后 cyl 行提示保持正确。
+
+---
+
+## FMESH 傻瓜友好改造 + factor 字段（2026-08-14，PM 指令）
+
+> 范围：仅 `gui/src/volume/`、`gui/test/volume/`、`docs/frontend-changes.md`。零新依赖；**未改后端**（`app/`、`gui/backend/` 零触碰；后端 factor 已由 backend-fmesh-factor 同步）。
+
+### ① 简单/高级模式（默认简单，傻瓜友好）
+
+- 新增纯函数 `simpleModeVisibleFields(mode)` + 常量 `FMESH_SIMPLE_FIELDS` / `FMESH_ADVANCED_FIELDS`（fmeshState.ts:606-626）：
+  - 简单模式只露核心 4 项：`particle` + `imesh/jmesh/kmesh`；
+  - 高级模式追加：`geom/origin/iints/jints/kints/emesh/emints/tmesh/tmints/mat/out/axs/vec/tr/factor`。
+- FMeshForm 组件本地 `mode` state（默认 `"simple"`，不落 deck）；卡头「高级模式 ▾ / 收起高级 ▲」切换（FMeshForm.tsx:246-256）；字段区按 `visible.map` 渲染（:301-315），AXS/VEC 仍仅圆柱系显示。
+
+### ② 按几何自动填充
+
+- 新增深模块 `gui/src/volume/surfacesAABB.ts`：`computeSurfacesAABB(surfaces[, trCards]) → {min,max} | null`（纯函数）：
+  - 解析曲面卡（平面 PX/PY/PZ、球 SO/S/SX/SY/SZ/SPH、圆柱 CX/CY/CZ/C/X/C/Y/C/Z、宏体 RPP/RCC/TRC/REC/WED/BOX/RHP/HEX/ELL/ARB、环面保守球包）合并取 x/y/z 并集；
+  - 无限/不可解类型（一般平面 P、二次曲面 GQ/SQ、锥面 K*）跳过；任一轴无有界 → 返回 null；
+  - TR 变换：有 trCards 且可解析（含 `*TRn` 角度）→ 平移/旋转后取有界盒；否则跳过该曲面（容错）。
+  - `aabbToFmeshValues(aabb)` → `{origin, imesh, jmesh, kmesh}` 填表值 + `formatCoord` 坐标格式化。
+- FMeshForm 用 `useDeck()` 接回 `deck.surfaces` + `deck.tr_cards`（TallyTab 未改，表单直连 deck）；「⚡ 按几何自动填充」按钮（FMeshForm.tsx:123-131, :322-328）：解析 AABB 一键填 ORIGIN + IMESH/JMESH/KMESH（网格覆盖模型）；解不出 alert 提示。
+
+### ③ 粒子说明 + 三步上手引导
+
+- 粒子说明：「每个网格计数一个粒子（N/P/E）；要多种粒子就加多行」（FMeshForm.tsx，简单模式粒子旁）。
+- 三步引导：「① 选粒子 ② 点自动填充 ③ 解析看 3D 结果」（FMeshForm.tsx，简单模式 FMESH 行顶部）。
+
+### ④ factor 字段（放高级模式）
+
+- `FmeshRow.factor` 默认 `"1"`（fmeshState.ts:45, :64）；`KEY_TO_FIELD` 加 `FACTOR→factor`（:202）；`cardLines` 回放 `FACTOR=`（非空才发，:320）；`buildFmeshPayload` 带 `factor` key（:385）；`fmeshDefsToRows` 读 `factor`（缺省默认 `"1"`，:413）。
+- `validateFmeshRow` 加规则 ⑧：FACTOR 正整数（≥1），非法友好提示「FACTOR 须为正整数（乘法因子 ≥ 1）」（fmeshState.ts:598-601）。
+- FMeshForm 高级模式 FACTOR 输入框 + 幽灵文字/提示（FMESH_FIELD_LABELS + FMESH_PLACEHOLDERS.factor）。
+
+### ⑤ 未改既有行为
+
+- 既有字段/校验/geom 下拉/AXS/VEC/TR/OUT/MAT 零改动；`hasStructured` 未含 factor（raw 兜底 round-trip 保真不变）。
+
+## 测试（测试先行：先红后绿）
+
+| 文件 | 用例 | 覆盖 |
+| :--- | :--- | :--- |
+| `gui/test/volume/fmeshFactor.test.ts`（新增 9） | 默认 "1" / 卡体含 FACTOR=（非空才发）/ 解析 FACTOR=→factor（round-trip）/ 载荷+解析透传 / 校验正整数（合法/非法/空） | factor 全链路 |
+| `gui/test/volume/simpleMode.test.ts`（新增 4） | 简单只露核心 4 项 / 高级含 factor 等全部 / 无重复 / ADVANCED_FIELDS 齐备 | 简单/高级可见性纯函数 |
+| `gui/test/volume/surfacesAABB.test.ts`（新增 22） | 平面/球/圆柱/宏体/混合 AABB / */+ 前缀 / TR 平移与角度旋转 / 解不出→null（空/无限/二次曲面/单轴无界/TR 未提供/非法数值） / formatCoord+aabbToFmeshValues | AABB 纯函数全套 |
+
+## 验证结果
+
+| 项 | 结果 |
+| :--- | :--- |
+| `cd gui && npx vitest run` | 22 文件 / **190 用例全绿**（155 基线不破 + 新增 35） |
+| `cd gui && npx tsc --noEmit` | EXIT 0 |
+| `cd gui && npm run build` | EXIT 0（仅既有 chunk 体积警告） |
+
+## 与后端契约一致性（factor）
+
+- 字段名 `factor` / 关键字 `FACTOR=` / 默认 `1` / 序列化 JSON key `factor` —— 与 backend-fmesh-factor 同步一致（后端 `fmesh_parser.py` / `_fmesh_from_list`）。
+- 卡体生成发 `FACTOR=`（前端默认 "1"，后端默认 1，语义一致）；解析 `FACTOR=` → factor。
+- **无与后端不一致项。**
+
+## 回归风险
+
+1. **生成卡体新增 `FACTOR=1`**：前端 `emptyFmeshRow.factor="1"` → 结构化 FMESH 卡体回放/载荷现含 `FACTOR=1`（MCNP factor 默认 1，语义等价；后端已支持）。旧 localStorage 工作区行无 factor 字段 → `fmeshToCardText` 按空串不发，round-trip 文本稳定。
+2. **简单模式隐藏字段**：默认简单只露粒子+三向范围；ORIGIN/INTS/能量/时间/GEOM 等在高级模式。老用户需点「高级模式」查看全部（GEOM 默认 XYZ，行为不变）。
+3. **AABB 容错**：TR 变换未提供 TR 卡 / 仅无限曲面的模型 → 自动填充提示解不出，回退「通用模板一键填充」；宏体方向矢量类按保守合成角点，网格只可能偏大（覆盖模型，安全）。

@@ -232,3 +232,68 @@ def test_old_spelling_import_emits_new_keywords_roundtrip():
     assert "EMINTS=5" in out and "TMINTS=2" in out, f"旧拼写未转为新关键字: {out}"
     defs2 = parse_fmesh_lines(emitted)
     assert defs2[0].emints == "5" and defs2[0].tmints == "2"
+
+
+# ── 11. FACTOR 字段（乘法因子，C810/MCNP6 均有，默认 1，正整数）────
+def test_factor_parse_and_emit():
+    """`FACTOR=` 解析 → factor 字段；生成输出 `FACTOR=`。"""
+    lines = [
+        "FMESH4:N GEOM=XYZ ORIGIN=0 0 0",
+        "     IMESH=10 IINTS=2",
+        "     FACTOR=2",
+    ]
+    defs = parse_fmesh_lines(lines)
+    assert len(defs) == 1
+    assert defs[0].factor == "2", "FACTOR= 未解析到 factor 字段"
+
+    emitted = fmesh_defs_to_lines(defs)
+    out = "\n".join(emitted)
+    assert "FACTOR=2" in out, f"生成未输出 FACTOR=: {out}"
+
+
+def test_factor_roundtrip_preserved():
+    """含 `FACTOR=` 卡体 → 解析 → 再生成 → factor 保留（round-trip）。"""
+    lines = [
+        "FMESH4:N GEOM=XYZ ORIGIN=0 0 0",
+        "     FACTOR=5",
+        "     IMESH=10 IINTS=2",
+    ]
+    defs = parse_fmesh_lines(lines)
+    emitted = fmesh_defs_to_lines(defs)
+    defs2 = parse_fmesh_lines(emitted)
+    assert defs2[0].factor == "5", f"factor 往返丢失: {defs2[0].factor!r}"
+
+
+def test_factor_default_empty_when_absent():
+    """无 `FACTOR=` → factor 默认空串；生成不输出 FACTOR=。"""
+    defs = parse_fmesh_lines(FMESH4)
+    assert defs[0].factor == "", "无 FACTOR 时 factor 应为空串"
+    out = "\n".join(fmesh_defs_to_lines(defs))
+    assert "FACTOR=" not in out, "无 factor 值不应输出 FACTOR="
+
+
+def test_factor_mixed_keywords_not_lost():
+    """AXS+VEC+TR+OUT+FACTOR 多个关键字混排全不丢（round-trip）。"""
+    lines = [
+        "FMESH4:N GEOM=CYL ORIGIN=0 0 0",
+        "     AXS=1 0 0 VEC=0 1 0",
+        "     TR=1 OUT=f",
+        "     FACTOR=2",
+    ]
+    defs = parse_fmesh_lines(lines)
+    assert len(defs) == 1
+    fd = defs[0]
+    assert fd.axs == "1 0 0" and fd.vec == "0 1 0", "AXS/VEC 未解析"
+    assert fd.tr == "1" and fd.out == "f", "TR/OUT 未解析"
+    assert fd.factor == "2", "FACTOR 未解析"
+
+    emitted = fmesh_defs_to_lines(defs)
+    out = "\n".join(emitted)
+    assert "AXS=1 0 0" in out and "VEC=0 1 0" in out, f"回放丢失 AXS/VEC: {out}"
+    assert "TR=1" in out and "OUT=f" in out, f"回放丢失 TR/OUT: {out}"
+    assert "FACTOR=2" in out, f"回放丢失 FACTOR: {out}"
+
+    defs2 = parse_fmesh_lines(emitted)
+    a, b = defs[0], defs2[0]
+    for attr in ("kind", "number", "geom", "origin", "axs", "vec", "tr", "out", "factor"):
+        assert getattr(a, attr) == getattr(b, attr), f"字段 {attr} 往返丢失"

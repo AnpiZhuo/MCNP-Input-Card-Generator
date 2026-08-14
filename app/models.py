@@ -225,6 +225,7 @@ class FmeshDefinition:
     emints: str = ""         # EMINTS 区间数（MCNP6 关键字 EMINTS；导入容错 EINTS/EMINTS）
     tmesh: str = ""          # TMESH 时间（可选；注意与 TMESH 卡种类别区分字段名）
     tmints: str = ""         # TMINTS 区间数（MCNP6 关键字 TMINTS；导入容错 TINTS/TMINTS）
+    factor: str = ""         # FACTOR 乘法因子（C810/MCNP6 均有，默认 1；正整数由前端表单校验，后端只存/回放原文）
     mat: str = ""            # MAT（可选）
     out: str = ""            # OUT（可选）
     axs: str = ""            # AXS（可选，cyl 网格轴向量）
