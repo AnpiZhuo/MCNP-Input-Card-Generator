@@ -196,3 +196,181 @@
 2. **DataTexture3D 命名**：PM 指令写「three 0.160.0 已含 DataTexture3D」；实测 three 0.160 类名为 **Data3DTexture**（DataTexture3D 为旧名，@types/runtime 均无）。已用 `THREE.Data3DTexture`。
 3. **DeckContext fmesh 字段**：契约 §4.7.1「tally 对象加 fmesh」；落位 `deck.tally.fmesh`（deck.tally 为 Record，D-05 先例：tally 字段在 DeckContext 而非 contract.ts，contract.ts 仅 source/SSW/KCODE 映射）。generate 载荷映射后端 key `fmesh_defs`。
 4. **ResultWindow 首帧**：桥不携带纹理，ResultWindow 挂载后调 meshtal-texture 取首帧再 createVolumeRenderer（渲染器需真实 frame.resolution 建 Data3DTexture dims）。
+---
+# 前端改动清单 — UI 调整两处（2026-08-14，experiment/geouned）
+
+> 施工方：前端 | 指令：PM 直接派发（两处 UI 调整）| 范围：仅 `gui/src/` 4 个文件
+> 纪律：不碰后端/测试基线；vitest 76 / tsc / build 全绿
+
+## 任务 1 — 删除 F1-F8 可展开提示
+
+- **`gui/src/components/TallyTab.tsx`**：删除 `:222-230` 的 `<details>` 折叠"FN 计数卡结构参考"表格（F1 曲面电流 / F2 曲面通量 … F8 脉冲高度）。该块为纯内联内容，无外部常量引用，整块移除无残留。
+
+## 任务 2 — 3D 结果入口移到「输出」标签页
+
+### 新增共享模块 `gui/src/volume/openVolume3DWindow.ts`
+
+- 导出 `openVolume3DWindow(params)`（签名 `{ path, tally, resolution, model?, parseResult? }` → `OpenVolume3DWindowOutcome`），封装原 `FMeshForm.openWindow` 开窗逻辑（openVolume3D 数据桥 + 非 Tauri fallback），**行为逐字节一致**：
+  - 成功 → `{ ok: true }`；非 Tauri → `{ ok: false, kind: "fallback", message: "已写入 3D 结果数据（浏览器模式无法自动开窗，可访问 #/volume 查看）" }`；异常 → `{ ok: false, kind: "error", message: errorHint(e, "打开 3D 结果窗口失败") }`。
+  - 原 `buildBinOptions`/`fmtBound` 迁入本模块；`readOutputDir` 一并迁入（读 `mcnp_workspace_v1` 的 `outputPath`）。
+
+### FMeshForm 退化为纯表单（`gui/src/volume/FMeshForm.tsx`）
+
+- **移除**：3D 可视化启动器整段（`runParse`/`chooseMeshtalFile`/`openWindow`/F3 预算弹窗/工作流提示横幅）+ 启动按钮（原 `:189` runParse 自动开窗、`:309`「打开 3D 结果」、`:376/:390` F3「流畅/精细」）。`FMeshFormProps` 去掉 `cells/surfaces/trCards`。
+- **保留**：网格定义编辑（幽灵文字 F5.1）、`cardText` 卡体预览、空态提示。
+- 死代码清理：`parseResult`/`parseError`/`workflowState`/`pendingBudget`/`busy`/`outputDir`/`files` 等启动器状态全删；`buildBinOptions`/`fmtBound`/`readOutputDir` 迁出。
+
+### OutputTab 新增「网格计数 3D 结果」小节（`gui/src/components/OutputTab.tsx`）
+
+- 布局参考原 FMeshForm 启动器：`解析 MESHTAL`（`meshtal-detect` 自动探测，outputDir 读工作区落盘目录）+ `选择 meshtal 文件`（Tauri `POST /api/choose-file`）+ 主按钮 `3D 体积可视化`（调共享 `openVolume3DWindow`）。
+- `meshtal-parse` 取 tally 列表 → `<select>` 选择 xyz 矩形网格 tally；`decideResolution` 超预算 → F3「流畅/精细」弹窗；保留 F1 空态三步引导 / F1.2 无文件提示 / A1.2 不匹配横幅 / F4 错误 hint 优先。
+- 几何外壳模型来自 `useDeck()`（`deck.cells/surfaces/tr_cards`，cells 映射照 TallyTab → FMeshForm 原实现）。
+
+### TallyTab FMeshForm 调用点（`gui/src/components/TallyTab.tsx`）
+
+- FMeshForm 调用移除 `cells/surfaces/trCards` 三个 props（不再需要 3D 启动器素材），仅传 `value`/`onChange`。
+
+## 验证结果
+
+| 项 | 结果 |
+| :--- | :--- |
+| `cd gui && npx vitest run` | 13 文件 / 76 用例全绿 |
+| `cd gui && npx tsc --noEmit` | EXIT 0 |
+| `cd gui && npm run build` | EXIT 0（仅既有 chunk 体积/动态导入警告） |
+
+## 测试同步说明
+
+- 无既有测试断言 FMeshForm/OutputTab 启动按钮行为（grep `gui/test` 无命中）。`fmeshState`/`workflow`/`downsampleRequest` 纯模块测试不受影响，无需改动。
+---
+# 前端改动清单 — 材料编辑对话框两 Bug 修复（2026-08-14，experiment/geouned）
+
+> 施工方：前端 | 指令：PM 派发（用户报 Bug 1 导入 INP 不自动查截面库 / Bug 2 Fe57 编辑异常）
+> 范围：仅 `gui/src/components/MaterialEditDialog.tsx` + 新增 `gui/test/zaidSplit.test.ts` + 本文档。不碰后端/其它前端文件/既有测试。
+
+## Bug 1 — 导入 INP 后材料编辑不自动查截面库（实证与用户描述有出入）
+
+**真实根因**：手动核素行的 `onChange`（原 :264/:274）**确实接了** `/api/validate-zaid`——用户描述"没接校验"不准确。缺的是**载入时的自动校验**：`nucs` 由 `initial`（含导入 INP 的核素）在 :69 初始化，`zaidValid` 初始为空（:77），**没有挂载 effect** → 打开对话框时核素行圆点恒为灰（#555），只有用户手动改元素/质量数才触发校验。公式路径（:96-107）解析后逐核素校验，手动路径无对应。
+
+**修法**（MaterialEditDialog.tsx）：
+- 新增共用 `validateZaid(i, zaid)`（:123-130）：统一 strip 库后缀/前导 0 → GET `/api/validate-zaid` → 回写 `zaidValid[i]`。
+- 新增挂载 effect（:132-137）：对 `initial` 里每个非空核素自动调 `validateZaid`（deps `[initial]`），行内立即显示 ✓/✗；外部喂入新核素时顺带重新校验。
+- 公式路径校验循环改用 `validateZaid`（:193-195），行为不变。
+
+## Bug 2 — 核素输入（Fe57）编辑异常（代码走查实证）
+
+**真实根因**：导入 INP 的核素是**数值 ZAID**（如 `26057`，api_server:639 `lstrip("0")`）。原元素/质量数两个受控输入框的 `value`（:258/:268）都从 `nu.zaid` 派生（数值→`zaidToEl`→`split("-")`），每个 `onChange` 又用 `nu.zaid.split("-")` 重建 `nu.zaid` 回写（:260/:270）——**数值串 `split("-")` 得到 `["26057"]`，`old[1]`/`el` 取成整个 `"26057"`**：
+- 删元素（Fe→F）→ 回写 `"F-"`，mass 段丢空 → **删 Fe 删掉 7**；
+- 改质量数（57→56）→ 回写 `"26057-56"`，再 `zaidToEl("26057-56")` → 元素变 `"2605"` → **改 57 改不动**。
+
+即"value 派生 + onChange 回写"闭环打在同一个 `nu.zaid` 上，且数值/带横线两种表示互相错位。
+
+**修法**（MaterialEditDialog.tsx，本地编辑草稿方案）：
+- 抽 3 个可测纯函数并导出（:38-71）：`splitZaid(zaid)→{el,mass}`（兼容数值 `26057`/`26057.50c`、自然元素 `6000`、手写 `Fe-57`）、`buildZaid(el,mass)`（对齐旧 elToZaid 语义）、`resolveZaid(ed)`（元素为空→null 不提交）。
+- 新增每行本地编辑草稿 `rowEdits`（:104-110，载入时由 `zaid` 初始化一次）；sync effect（:140-151）为新增/结构变更后的核素行补初始化，不覆盖正在编辑的行。
+- 元素/质量数输入框 `value` 改读 `rowEdits[i]`（:347/:354），onChange 只写草稿（:349/:356，函数式更新防交叉丢失），**不再逐键回写 nu.zaid**。
+- `onBlur → commitRow(i)`（:154-166）：`resolveZaid` → `buildZaid` 写回 `nu.zaid` + `validateZaid`（失焦时校验，对齐公式路径做法）。
+- 保存按钮改 `mergePendingEdits()`（:169-182，:227）：未失焦草稿兜底并入 nucs。
+- `delRow`/`moveRow`/`parseFormula` 清空草稿（:201/:217/:191），防按位置缓存的行号错位。
+
+**新增可测纯函数 vitest**：`gui/test/zaidSplit.test.ts`（22 用例）：拆组/组装/往返稳定（splitZaid∘buildZaid 恒等）+ Bug 2 回归（改质量数不动元素、改元素不动质量数、删元素不清质量数）+ resolveZaid 空元素不提交。
+
+## 验证结果
+
+| 项 | 结果 |
+| :--- | :--- |
+| `cd gui && npx vitest run` | 14 文件 / 98 用例全绿（76 基线不破 + 新增 22） |
+| `cd gui && npx tsc --noEmit` | EXIT 0 |
+| `cd gui && npm run build` | EXIT 0（仅既有 chunk 体积警告） |
+
+## 回归风险（需 PM 留意）
+
+1. **校验时机从"逐键"变为"失焦/提交"**：手动编辑元素/质量数时不再每键打 validate-zaid（请求更少、避免中间态），✓/✗ 在失焦/保存时刷新。行为对齐公式路径。若 PM 希望"输入过程中实时变灰"的视觉反馈，可后续再加。
+2. **自然元素显示变化**：`6000`（自然 C）质量数框从显示 `0` 变为空串（质量位 000 语义更贴合 MCNP），失焦提交仍回写 `6000`，往返稳定（有测试 pin）。
+3. **结构操作（删除/拖动排序/公式重解析）会丢弃未失焦的行内草稿**（清空 rowEdits 后按已提交值重新初始化）——预测性行为，窗口极小。
+---
+# 前端改动清单 — 化学式份额语义 UI（2026-08-14，experiment/geouned）
+
+> 施工方：前端 | 指令：PM 直接派发（份额语义标注 + 可选原子份额切换）| 后端已加 `is_weight`（`/api/expand-formula`，body JSON 布尔，缺省 true）
+> 范围：仅 `gui/src/components/MaterialEditDialog.tsx` + 新增 `gui/test/shareMode.test.ts` + 本文档。不碰后端/其它前端文件/既有测试。
+> 纪律：fraction 仍为不透明字符串直通（未改直通语义）；未动 zaidValid/rowEdits/commitRow/mergePendingEdits（两 Bug 修复链路零触碰）。
+
+## 背景（已实证）
+
+正负号全链路保留、无数据丢失。用户困惑源于 UI 未说明 MCNP 约定：**负号=质量份额、正号=原子份额**，而 expand-formula 默认输出质量份额（负）。本次让 UI 说清楚 + 可选原子份额。
+
+## 改动点（MaterialEditDialog.tsx）
+
+### ① UI 标注（份额语义）
+- **化学式区**：解析结果处新增标注行（:333-335）「`份额 = {质量份额|原子份额} · MCNP 负号=质量份额，正号=原子份额 · 质量份额按各核素质量占比；原子份额按原子数占比`」。
+- **文本区幽灵文字**（:315）：注明「份额符号由右侧模式决定：负号=质量份额，正号=原子份额」。
+- **解析表**：份额表头与每个 fraction 单元格加 `title` tooltip（SIGN_CONVENTION_NOTE，:344/:352）；手动行份额输入框 placeholder `"份额"`→`"份额(负=质量)"` + tooltip（:400）。
+- 密度栏原已注明「负号=质量密度，正号=原子密度」（:277），语义一致。
+
+### ② 份额模式切换（质量/原子）
+- 新增 `shareMode` state（:119，默认 `"weight"`）+ 切换按钮组（:317-331，在「解析化学式」旁两个小按钮 `质量份额 / 原子份额`）。
+- 对接后端 `is_weight`：`expandFormula(formula, isWeight)` 请求体加 `is_weight` 布尔（:97-100）；`parseFormula` 按当前模式取值 `shareModeToIsWeight(mode ?? shareMode)`（:206）；切换时若已填公式立即按新模式重解析（`toggleShareMode` :207-213）→ 各核素份额显示更新（负号=质量 / 正号=原子）。
+- 新增 6 个导出纯函数/常量（:74-90）：`ShareMode` / `SIGN_CONVENTION_NOTE` / `SHARE_CONVERSION_NOTE` / `shareModeToIsWeight` / `shareModeLabel` —— 可测、防正负号约定与参数名漂移。
+
+### ③ 导入 INP 的份额保留原样 + 正负含义提示
+- 手动模式核素列表标题下新增小字（:367-370）：「份额保留原样：负号=质量份额、正号=原子份额（导入 INP 不自动转换）」——不擅自转换，仅提示含义。
+
+## is_weight 对接方式
+
+- `POST /api/expand-formula` body：`{ "formula": string, "is_weight": boolean }`。
+- `is_weight: true`（质量份额，默认）→ 输出负号；`false`（原子份额）→ 输出正号。
+- 前端始终显式传 `is_weight`（weight 模式传 `true`）；后端 `data.get("is_weight", True)` + `None`→`True` + 字符串 truthy 解析，向后兼容（未传/传 null 行为与现状一致）。fraction 仍直通展示、不改符号。
+
+## 新增测试
+
+`gui/test/shareMode.test.ts`（6 用例）：shareModeToIsWeight（weight→true / atomic→false）、shareModeLabel（两种显示名 + 穷举）、SIGN_CONVENTION_NOTE（含负号=质量份额 与 正号=原子份额）、SHARE_CONVERSION_NOTE（含质量占比 与 原子数占比）。
+
+## 验证结果
+
+| 项 | 结果 |
+| :--- | :--- |
+| `cd gui && npx vitest run` | 15 文件 / 104 用例全绿（98 基线不破 + 新增 6） |
+| `cd gui && npx tsc --noEmit` | EXIT 0 |
+| `cd gui && npm run build` | EXIT 0（仅既有 chunk 体积/动态导入警告） |
+
+## 未破坏项确认
+
+- `splitZaid/buildZaid/resolveZaid` + `zaidValid/validateZaid` + `rowEdits/commitRow/mergePendingEdits`（载入自动校验 + 元素/质量数稳定编辑）全部原样保留，`zaidSplit.test.ts` 22 用例仍全绿。
+- fraction 直通语义未改（手动行 :400 / 公式解析 :352 均原样展示后端返回的字符串）。
+---
+# 前端改动清单 — 份额归一化提示 + 计数类型自动变修复（2026-08-14，experiment/geouned）
+
+> 施工方：前端 | 指令：PM 转派两项新任务（在份额标注/切换工作之后接续）| 范围：仅 MaterialEditDialog.tsx + TallyTab.tsx + 新增 2 测试文件 + 本文档
+> 纪律：vitest 104 全绿不破（+10=114）；tsc/build EXIT 0；零新依赖；不改后端/测试基线。未 commit（任务 3 统一提交由 PM 安排）。
+
+## 任务 1 — 份额归一化提示（MaterialEditDialog）
+
+- 归一化保留现状（后端 api_server.py:636-638 不动）。化学式解析结果处新增提示（MaterialEditDialog.tsx :340-343，`parsed` 时显示，样式与份额标注一致：小字/tertiary 色）：
+  「份额已归一化（总和=1）；化学式:比例 只影响各成分的相对比例，结果仍会归一化」
+- 让用户明白为什么 `H2O:2` 和 `H2O` 份额一样。
+
+## 任务 2 — 计数类型自动变修复（TallyTab）
+
+**bug 定位**：`handleNumberChange` 只对纯数字走 `numberToType`；`parseF5Variant` 对 `F25`/`F25X` 的 num 段是 `"F25"`（`parseInt`→NaN，`pn>0` 分支跳过）→ 输入带 F 前缀时类型字段不自动跳 F5；且 `F25` 存入 number 后 `parseInt`→0 会污染 deck 编号。
+
+**修法**：
+- 新增导出纯函数 `parseTallyTypeNumber(raw)`（TallyTab.tsx :45-57）：剥前导 `F` + 剥 `X`/`Y`/`Z` 后缀 → 按个位数经 `numberToType` 映射类型；无效输入（""/abc/F/0/成像前缀）→ `{ type:null, number:原样 }`。编号字段回填剥净后的数字（`F25X`→"25"，顺带修掉 parseInt→0 的 latent bug）。
+- `handleNumberChange`（TallyTab.tsx :150-159）改接 `parseTallyTypeNumber`：命中类型即 `{ number, type }`；未命中再走 `parseF5Variant`（F5 成像 IC/IR/IP 既有语义保留）。
+- `parseF5Variant`（TallyTab.tsx :62-70）导出，普通编号分支改委托 `parseTallyTypeNumber`；删死常量 `F5_RING_SUFFIXES`（环形后缀判定并入通用解析）。
+
+## 新增测试（gui/test/tallyTypeNumber.test.ts，10 用例）
+
+- `parseTallyTypeNumber`：25/F25/25X/F25X/5/F5 → F5（含编号回填 25/5）；1/12/24/6/17/8/F4 → 各类型；无效兜底 ""/abc/F/0/F5IC123 → type null、编号原样。
+- `parseF5Variant`：成像前缀 IC123；普通 5/25X/F25 → F5（保留既有语义）。
+
+## 验证结果
+
+| 项 | 结果 |
+| :--- | :--- |
+| `cd gui && npx vitest run` | 16 文件 / 114 用例全绿（104 基线不破 + 新增 10） |
+| `cd gui && npx tsc --noEmit` | EXIT 0 |
+| `cd gui && npm run build` | EXIT 0（仅既有 chunk 体积/动态导入警告） |
+
+## 行为细节说明（PM 留意）
+
+- 环形后缀输入 `25X` 现在编号框回填 "25"（旧行为保留 "25X"）：下游 deck push 本就 `parseInt(t.number)` 剥掉 X（deck 恒存整数），生成端只发 `F{number}`，行为等价；且 `F25X` 此前存成 "F25X"→parseInt→0（deck 编号丢失 bug）本次一并修复。
+- `parseTallyTypeNumber`/`parseF5Variant` 已导出（测试可 pin），不改变组件对外行为。

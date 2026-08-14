@@ -87,7 +87,7 @@ paths:
       operationId: expandFormula
       tags: [source]
       summary: 化学式 → 核素列表（pymcnp M_0.from_formula）
-      description: 入参 data.get("formula")，返回核素 ZAID+份额（api_server.py:557-593）。
+      description: 入参 data.get("formula")，返回核素 ZAID+份额（api_server.py:606-651）。
       requestBody:
         required: true
         content:
@@ -96,6 +96,14 @@ paths:
               type: object
               properties:
                 formula: { type: string, description: 化学式文本（空则 500） }
+                is_weight:
+                  type: boolean
+                  default: true
+                  description: |
+                    true=质量份额（fraction 带负号，MCNP 约定 负=质量），
+                    false=原子份额（fraction 带正号，MCNP 约定 正=原子）。
+                    缺省/true 保持向后兼容（与既有行为一致）；仅控制符号语义，
+                    不改变份额归一化（abs-sum 归一行为不变）。
       responses:
         '200':
           description: 展开成功（_ok({"nuclides": …})）
@@ -108,7 +116,9 @@ paths:
                     properties:
                       nuclides:
                         type: array
-                        description: 份额已归一化（sum=1），fraction 为 6 位小数串
+                        description: |
+                          份额按 sum(abs)=1 归一化（既有行为不变）；
+                          fraction 为 6 位小数串，质量份额带负号、原子份额带正号
                         items:
                           type: object
                           properties:

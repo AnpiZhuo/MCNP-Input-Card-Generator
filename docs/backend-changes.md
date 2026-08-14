@@ -565,3 +565,54 @@ api_server/FreeCAD（subprocess spawn 不受红线限制）。
 全量 pytest：**433 通过 / 0 失败**（430 + 3 新 spawn 测试；343 基线零回归 +
 全部 meshtal 新增全绿）；R1 不动点不回归。dev 模式 worker spawn 实测走通
 （mcnp_bridge --meshtal-worker → worker main → stdin→stdout 协议一致）。
+
+---
+
+# J. /api/expand-formula 份额语义扩展（is_weight：质量份额 / 原子份额）
+
+> 施工方：后端 | 日期：2026-08-14 | 分支：`experiment/geouned`
+> 需求：让前端可选「质量份额 / 原子份额」。MCNP 约定 负=质量、正=原子。
+> 默认 `is_weight=True`（质量份额负号）保持向后兼容；`is_weight=false` 产出原子份额正号。
+> 只加 is_weight 参数扩展，**不改既有份额语义/归一化行为**。
+
+## J.1 handler 改动（api_server.py）
+
+- `_handle_expand_formula`（`gui/backend/api_server.py:606-650`）：
+  - 读取请求参数 `is_weight = data.get("is_weight", True)`（缺省 true）。
+  - 防御性布尔解析：`None` → 视为缺省 true；字符串 `""/0/false/no` → false，
+    其余 → true（输入校验，兼容 JSON 布尔与表单字符串）。
+  - 调 `pymcnp.inp.M_0.from_formula({sym: 1}, is_weight=is_weight, cutoff=1e-9)`
+    显式透传 is_weight。pymcnp 默认即 `is_weight=True`（质量份额负号），
+    显式传参不改变既有行为。
+  - **未动**：份额 ×ratio 系数、abs-sum 归一化块、fraction 6 位小数格式、
+    zaid lstrip 处理、xsdir_db 匹配逻辑（正负号全链路保留）。
+
+## J.2 api.yaml 改动（docs/contracts/api.yaml）
+
+- `/api/expand-formula` requestBody schema 新增 `is_weight`：
+  `type: boolean`、`default: true`，文档化 质量份额（负号）/ 原子份额（正号）语义
+  与「仅控制符号语义，不改变份额归一化」。
+- path / operationId（`expandFormula`）不变 → 漂移闸门 `test_api_contract.py`
+  保持绿（该闸门只 AST 断言 path↔operationId 双向存在，与 body schema 无关）。
+
+## J.3 新增/更新测试
+
+- **新增** `tests/integration/test_api_expand_formula.py`（7 用例，子进程 HTTP 范式，
+  不 import api_server）：
+  ① 默认（不传 is_weight）= 质量份额负号（向后兼容）；
+  ② `is_weight=false` = 原子份额正号；
+  ③ 符号约定正确（质量全负 / 原子全正，且同一 zaid 互为相反数）；
+  ④ 显式 `is_weight=true` == 默认（加性兼容不漂移）；
+  ⑤ `is_weight=null` 视为缺省 true；字符串 `"false"` 防御性解析为原子份额；
+  ⑥ 空公式仍 500 error（错误路径不回归）。
+- 未改既有测试断言（无既有 expand-formula 测试，契约漂移闸门 path/operationId 不变）。
+
+## J.4 终态
+
+全量 pytest：**440 通过 / 0 失败**（433 基线零回归 + 新增 7 用例全绿）；
+漂移闸门 `test_api_contract.py` 7 用例绿；R1 不动点不回归。默认向后兼容确认：
+不传 is_weight 与传 is_weight=true 响应逐字节一致（J.3 ④ 断言覆盖）。
+
+## J.5 数据库 / 环境变量
+
+无数据库变更；无新增环境变量。

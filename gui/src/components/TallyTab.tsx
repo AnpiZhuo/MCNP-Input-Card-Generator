@@ -41,18 +41,33 @@ const TYPE_BY_DIGIT: Record<number, TallyType> = { 1: "F1", 2: "F2", 4: "F4", 5:
 const numberToType = (n: number): TallyType | null => TYPE_BY_DIGIT[n % 10] || null;
 
 const F5_IMAGING_PREFIXES = ["IC", "IR", "IP"];
-const F5_RING_SUFFIXES = ["X", "Y", "Z"];
 
-const parseF5Variant = (val: string): { num: string; label: string } => {
+/**
+ * 从计数编号输入解析 { 类型, 编号 }（剥前导 F + 剥 X/Y/Z 后缀，按个位数映射类型）：
+ *   25 / F25 / 25X / F25X / 5 → { type:"F5", number:"25"|"5" }
+ *   12 → { type:"F2", number:"12" }；无效（""/abc/F/0/成像前缀…）→ { type:null, number:原样 }
+ */
+export function parseTallyTypeNumber(raw: string): { type: TallyType | null; number: string } {
+  const up = raw.trim().toUpperCase();
+  const base = up.replace(/^F/, "").replace(/[XYZ]$/, "");
+  const m = base.match(/^\d+$/);
+  if (!m) return { type: null, number: raw };
+  return { type: numberToType(parseInt(m[0], 10)), number: m[0] };
+}
+
+/**
+ * F5 成像（IC/IR/IP）变体解析；普通编号（含 F 前缀 / X/Y/Z 后缀）走 parseTallyTypeNumber。
+ * 返回值仅供 handleNumberChange 判断是否命中 F5 类型。
+ */
+export function parseF5Variant(val: string): { num: string; label: string } {
   const up = val.toUpperCase();
   for (const p of F5_IMAGING_PREFIXES) {
     if (up.startsWith(p)) { const rest = up.slice(p.length); return { num: rest, label: `F${p}${rest}` }; }
   }
-  for (const s of F5_RING_SUFFIXES) {
-    if (up.endsWith(s)) { const base = up.slice(0, -1); if (/^\d+$/.test(base)) return { num: base, label: `F5${s}` }; }
-  }
+  const parsed = parseTallyTypeNumber(up);
+  if (parsed.type === "F5") return { num: parsed.number, label: "F5" };
   return { num: up, label: `F${up}` };
-};
+}
 
 export default function TallyTab() {
   const [doc, setDoc] = useState<{path:string;title:string}|null>(null);
@@ -135,10 +150,12 @@ export default function TallyTab() {
   const handleNumberChange = (id: number, val: string) => {
     setTallies(tallies.map((t) => {
       if (t.id !== id) return t;
-      const m = val.match(/^\d+$/);
-      if (m) { const num = parseInt(m[0]); const nt = numberToType(num); return { ...t, number: val, ...(nt ? { type: nt } : {}) }; }
+      // 通用解析：剥 F 前缀 + X/Y/Z 后缀 → 按个位数映射类型（25/F25/25X/F25X/5 → F5）
+      const parsed = parseTallyTypeNumber(val);
+      if (parsed.type) return { ...t, number: parsed.number, type: parsed.type };
+      // F5 成像变体（IC/IR/IP）：保留既有语义
       const v = parseF5Variant(val);
-      if (v.num) { const pn = parseInt(v.num)||0; if (pn > 0 && pn % 10 === 5) return { ...t, number: val, type: "F5" }; }
+      if (v.num) { const pn = parseInt(v.num) || 0; if (pn > 0 && pn % 10 === 5) return { ...t, number: val, type: "F5" }; }
       return { ...t, number: val };
     }));
   };
@@ -219,34 +236,10 @@ export default function TallyTab() {
         </div>
       </div>
 
-      <details style={{fontSize:12,color:"var(--text-secondary)",marginTop:4}}>
-        <summary style={{cursor:"pointer",fontWeight:600,color:"var(--text-secondary)",fontSize:11}}>FN 计数卡结构参考（点击展开）</summary>
-        <div style={{maxHeight:400,overflow:"auto",padding:"8px 0",lineHeight:1.7}}>
-          <table style={{fontSize:11,width:"100%",borderCollapse:"collapse"}}>
-            <thead><tr style={{borderBottom:"1px solid rgba(255,255,255,0.06)"}}><th style={{padding:"6px 8px",textAlign:"left"}}>类型</th><th style={{padding:"6px 8px",textAlign:"left"}}>描述</th><th style={{padding:"6px 8px",textAlign:"left"}}>单位</th><th style={{padding:"6px 8px",textAlign:"left"}}>说明</th></tr></thead>
-            <tbody>{[["F1","曲面电流","particles","穿过曲面的粒子数"],["F2","曲面通量","particles/cm2","曲面上平均通量"],["F4","栅元通量","particles/cm2","最常用"],["F5","点探测器","particles/cm2","位置 X Y Z +/-R0"],["F6","能量沉积","MeV/g","裂变除外"],["F7","裂变能沉积","MeV/g","仅中子"],["F8","脉冲高度","pulses","探测器响应"]].map(([t,d,u,nn]) => <tr key={t} style={{borderBottom:"1px solid rgba(255,255,255,0.03)"}}><td style={{padding:"4px 8px",fontWeight:600}}>{t}</td><td style={{padding:"4px 8px"}}>{d}</td><td style={{padding:"4px 8px",color:"var(--text-tertiary)"}}>{u}</td><td style={{padding:"4px 8px"}}>{nn}</td></tr>)}</tbody>
-          </table>
-        </div>
-      </details>
-
-      {/* 网格计数（FMESH/TMESH）：结构化表单 + 3D 体积可视化启动器（契约 meshtal-visualization.md §4.7.1） */}
+      {/* 网格计数（FMESH/TMESH）：结构化表单（契约 meshtal-visualization.md §4.7.1）；3D 结果入口在「输出」标签页 */}
       <FMeshForm
         value={(deck.tally as any)?.fmesh || []}
         onChange={(rows) => patch({ tally: { ...(deck.tally || {}), fmesh: rows } })}
-        cells={deck.cells
-          .filter((c) => c.kind === "cell")
-          .map((c) => {
-            const cell = (c as any).cell || {};
-            return {
-              num: String(cell.number),
-              mat: cell.material,
-              comment: cell.comment,
-              density: cell.density,
-              surface_expr: cell.surface_expr,
-            };
-          })}
-        surfaces={deck.surfaces}
-        trCards={deck.tr_cards}
       />
       {doc && <DocViewer path={doc.path} title={doc.title} onClose={() => setDoc(null)} />}
     </>

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import FloatingDialog from "./FloatingDialog";
 
 interface Nuclide { zaid: string; fraction: string }
@@ -29,19 +29,62 @@ const EL_Z: Record<string, string> = {
 };
 for (var _k in EL_Z) Z_EL[EL_Z[_k]] = _k;
 
-function zaidToEl(zaid: string): string {
-  var z = zaid.replace(/\..*$/, "").replace(/^0+/, "");
-  var znum = z.slice(0, -3) || "0";
-  var mass = z.slice(-3) || "";
-  var el = Z_EL[znum] || znum;
-  return el + (mass ? "-" + parseInt(mass) : "");
+/**
+ * 把任意 ZAID 拆成 { el, mass }，兼容三种形态：
+ *   数值 ZAID（导入/展开，如 26057、26057.50c）→ { el:"Fe", mass:"57" }
+ *   自然元素（6000，质量位 AAA=000）→ { el:"C", mass:"" }
+ *   手写 "元素-质量数"（如 Fe-57、Fe-57.50c）→ { el:"Fe", mass:"57" }
+ */
+export function splitZaid(zaid: string): { el: string; mass: string } {
+  if (!zaid) return { el: "", mass: "" };
+  var dash = zaid.split("-");
+  if (dash.length >= 2 && !/^\d+$/.test(dash[0])) {
+    // "Fe-57" 形态：元素段含字母，质量段取第二段
+    return { el: dash[0], mass: dash[1].split(".")[0] || "" };
+  }
+  // 数值形态（26057 / 26057.50c / 6000）
+  var num = zaid.replace(/\..*$/, "").replace(/^0+/, "");
+  var znum = num.slice(0, -3) || "";
+  var mass = num.slice(-3) || "";
+  var parsed = parseInt(mass, 10);
+  return { el: Z_EL[znum] || "", mass: parsed ? String(parsed) : "" };
 }
 
-function elToZaid(el: string, mass: string): string {
+/**
+ * 由 { 元素, 质量数 } 组装数值 ZAID（对齐旧 elToZaid 语义）：
+ *   合法符号（Fe）→ 质子数 + 三位质量数（26 + 057 = 26057）；
+ *   数字元素（92）→ 原样作质子数（92235）；非法元素 → 0 兜底。
+ *   质量数为空 → 000（自然元素）。
+ */
+export function buildZaid(el: string, mass: string): string {
   var z = EL_Z[el.charAt(0).toUpperCase() + el.slice(1).toLowerCase()];
   if (!z) z = el.replace(/[^0-9]/g, "");
   if (!z || z === "") z = "0";
-  return z + mass.padStart(3, "0");
+  return z + (mass || "").trim().padStart(3, "0");
+}
+
+/** 由 { 元素, 质量数 } 草稿解析数值 ZAID；元素为空 → null（不提交，保留草稿继续编辑） */
+export function resolveZaid(ed: { el: string; mass: string }): string | null {
+  var el = ed.el.trim();
+  if (!el) return null;
+  return buildZaid(el, ed.mass);
+}
+
+/** 化学式份额模式：weight=质量份额（负号），atomic=原子份额（正号） */
+export type ShareMode = "weight" | "atomic";
+/** 全部合法份额模式（UI 切换与测试穷举共用） */
+export const SHARE_MODES: ShareMode[] = ["weight", "atomic"];
+/** MCNP 正负号约定（负号=质量份额，正号=原子份额） */
+export const SIGN_CONVENTION_NOTE = "MCNP 负号=质量份额，正号=原子份额";
+/** 质量/原子两种份额的含义说明 */
+export const SHARE_CONVERSION_NOTE = "质量份额按各核素质量占比；原子份额按原子数占比";
+/** 份额模式 → 后端 is_weight（body JSON 布尔，缺省 true=质量份额→负号） */
+export function shareModeToIsWeight(mode: ShareMode): boolean {
+  return mode === "weight";
+}
+/** 份额模式显示名 */
+export function shareModeLabel(mode: ShareMode): string {
+  return mode === "weight" ? "质量份额" : "原子份额";
 }
 
 const UP_KEY = "mcnp_user_presets";
@@ -53,10 +96,10 @@ const s: Record<string, React.CSSProperties> = {
   inp: { height: 32, padding: "0 10px", borderRadius: 6, border: "1px solid var(--border-glass)", background: "var(--bg-input)", color: "var(--text-primary)", fontSize: 12, outline: "none", width: "100%" },
 };
 
-async function expandFormula(formula: string): Promise<Nuclide[]> {
+async function expandFormula(formula: string, isWeight: boolean = true): Promise<Nuclide[]> {
   const r = await fetch(apiUrl("/api/expand-formula"), {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ formula }),
+    body: JSON.stringify({ formula, is_weight: isWeight }),
   });
   const j = await r.json();
   if (j.status === "error") throw new Error(j.message);
@@ -75,6 +118,14 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
   const [parsing, setParsing] = useState(false);
   const [parsed, setParsed] = useState<Nuclide[] | null>(null);
   const [zaidValid, setZaidValid] = useState<Record<number, boolean|null>>({});
+  const [shareMode, setShareMode] = useState<ShareMode>("weight");  // 化学式份额模式：质量(负号)/原子(正号)
+  // 每行核素的本地编辑草稿（元素/质量数）：载入时由 zaid 初始化一次，
+  // 编辑期间不受 nu.zaid 派生回写干扰，失焦/提交时再 buildZaid 回写 nu.zaid + 触发校验。
+  const [rowEdits, setRowEdits] = useState<Record<number, { el: string; mass: string }>>(() => {
+    const m: Record<number, { el: string; mass: string }> = {};
+    initial.forEach((r, i) => { if (r.kind === "nuclide" && r.zaid) m[i] = splitZaid(r.zaid); });
+    return m;
+  });
 
   // 用拍平映射快速查找
   const flatPresets: Record<string, PresetItem> = {};
@@ -86,31 +137,93 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
     if (p.density) setDensity(p.density);  // 预设密度自动填入密度栏
   };
 
-  const parseFormula = async (text?: string) => {
+  // 对第 i 行核素调 /api/validate-zaid 并回写 zaidValid（载入/公式/手动失焦提交共用）
+  const validateZaid = (i: number, zaid: string) => {
+    const zaidNum = zaid.replace(/\..*$/, "").replace(/^0+/, "");
+    if (!zaidNum) { setZaidValid(p => { const n = { ...p }; n[i] = null; return n; }); return; }
+    fetch(apiUrl("/api/validate-zaid?zaid=" + encodeURIComponent(zaidNum)))
+      .then(r => r.json())
+      .then(j => setZaidValid(p => { const n = { ...p }; n[i] = j.in_db; return n; }))
+      .catch(() => {});
+  };
+
+  // Bug 1 修复：载入时（含导入 INP 的核素）自动逐个查截面库，行内立即显示 ✓/✗
+  useEffect(() => {
+    initial.forEach((r, i) => { if (r.kind === "nuclide" && r.zaid) validateZaid(i, r.zaid); });
+    // initial 在对话框打开期间不变（打开=每次新建）；若外部喂入新核素则顺带重新校验
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initial]);
+
+  // 保持每个核素行都有本地编辑草稿（新增行/结构变更后补初始化，不覆盖正在编辑的行）
+  useEffect(() => {
+    setRowEdits(prev => {
+      let m = prev;
+      nucs.forEach((r, i) => {
+        if (r.kind === "nuclide" && m[i] === undefined) {
+          if (m === prev) m = { ...prev };
+          m[i] = splitZaid(r.zaid);
+        }
+      });
+      return m;
+    });
+  }, [nucs]);
+
+  // Bug 2 修复：失焦/提交时把草稿 元素/质量数 组装回数值 ZAID，写回 nu.zaid 并触发校验
+  const commitRow = (i: number) => {
+    const ed = rowEdits[i];
+    if (!ed) return;
+    const newZaid = resolveZaid(ed);
+    if (newZaid === null) return;  // 元素为空：不提交，保留草稿继续编辑
+    const c = [...nucs];
+    if (c[i] && c[i].kind === "nuclide" && c[i].zaid !== newZaid) {
+      c[i] = { kind: "nuclide", zaid: newZaid, fraction: c[i].fraction };
+      setNucs(c);
+    }
+    validateZaid(i, newZaid);
+    setRowEdits(prev => { const m = { ...prev }; delete m[i]; return m; });
+  };
+
+  // 保存前把未失焦的草稿并入 nucs（onBlur 通常在点击保存前触发，这里兜底防漏）
+  const mergePendingEdits = (): MaterialRow[] => {
+    let changed = false;
+    const merged = nucs.map((r, i) => {
+      if (r.kind !== "nuclide") return r;
+      const ed = rowEdits[i];
+      if (!ed) return r;
+      const newZaid = resolveZaid(ed);
+      if (newZaid === null || newZaid === r.zaid) return r;
+      changed = true;
+      return { kind: "nuclide" as const, zaid: newZaid, fraction: r.fraction };
+    });
+    if (changed) setNucs(merged);
+    return merged;
+  };
+
+  const parseFormula = async (text?: string, mode?: ShareMode) => {
     const t = text || formulaText; if (!t.trim()) return;
     setParsing(true);
     try {
-      const result = await expandFormula(t);
+      const result = await expandFormula(t, shareModeToIsWeight(mode ?? shareMode));
       setParsed(result);
       setNucs(result.map(n => ({ kind: "nuclide" as const, zaid: n.zaid, fraction: n.fraction })));
+      setRowEdits({});  // 公式展开整体重建行，丢弃旧草稿（sync effect 按新行重新初始化）
       // 验证每个解析出来的 ZAID
-      const valMap: Record<number, boolean|null> = {};
-      result.forEach((n: Nuclide) => {
-        var zaidNum = n.zaid.replace(/\..*$/, "").replace(/^0+/, "");
-        if (zaidNum) {
-          var idx = result.indexOf(n);
-          fetch(apiUrl("/api/validate-zaid?zaid=" + encodeURIComponent(zaidNum)))
-            .then(function(r){return r.json();})
-            .then(function(j){ setZaidValid(function(p){var m={...p}; m[idx]=j.in_db; return m;}); })
-            .catch(function(){});
-        }
+      result.forEach((n, i) => {
+        if (n.zaid.replace(/\..*$/, "").replace(/^0+/, "")) validateZaid(i, n.zaid);
       });
     } catch (e: any) { alert("解析失败: " + e.message); }
     finally { setParsing(false); }
   };
 
+  // 切换份额模式：质量份额(is_weight:true→负号) / 原子份额(is_weight:false→正号)；已填公式则立即按新模式重解析
+  const toggleShareMode = (m: ShareMode) => {
+    if (m === shareMode) return;
+    setShareMode(m);
+    if (formulaText.trim()) parseFormula(formulaText, m);
+  };
+
   const addRow = () => setNucs([...nucs, { kind: "nuclide", zaid: "", fraction: "" }]);
-  const delRow = (i: number) => { if (nucs.length > 1) setNucs(nucs.filter((_, j) => j !== i)); };
+  const delRow = (i: number) => { if (nucs.length > 1) { setNucs(nucs.filter((_, j) => j !== i)); setRowEdits({}); } };
   // 插入一条原样条件行（#ifdef/#else/#endif/其它）
   const addRawRow = (text: string) => setNucs([...nucs, { kind: "raw", text }]);
   // 一键生成 #ifdef 名称 / #else / #endif 三行（名称用 prompt 填）
@@ -126,6 +239,7 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
     const [m] = c.splice(from, 1);
     c.splice(to, 0, m);
     setNucs(c);
+    setRowEdits({});  // 排序后行号重排，丢弃按位置缓存的草稿（sync effect 按新行重新初始化）
   };
   const drag = useRowDrag(moveRow);
 
@@ -135,7 +249,7 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
     width: 600,
     footer: React.createElement(React.Fragment, null,
       React.createElement("button", { className: "btn btn-ghost btn-sm", onClick: onClose }, "取消"),
-      React.createElement("button", { className: "btn btn-primary btn-sm", onClick: () => onSave({ matNum, name: comment, nuclides: (mode === "formula" && parsed ? parsed.map(n => ({ kind: "nuclide" as const, zaid: n.zaid, fraction: n.fraction })) : nucs), options, mtCard, density }) }, "保存"),
+      React.createElement("button", { className: "btn btn-primary btn-sm", onClick: () => onSave({ matNum, name: comment, nuclides: (mode === "formula" && parsed ? parsed.map(n => ({ kind: "nuclide" as const, zaid: n.zaid, fraction: n.fraction })) : mergePendingEdits()), options, mtCard, density }) }, "保存"),
     ),
   },
     React.createElement("div", { style: { padding: 0 } },
@@ -200,23 +314,40 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
               style: { ...s.inp, minHeight: 60, fontFamily: "Consolas,monospace", fontSize: 12, marginBottom: 8, resize: "vertical" },
               value: formulaText,
               onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => setFormulaText(e.target.value),
-              placeholder: "H2O: 1\nN2: 0.8, O2: 0.2\nUO2: 1",
+              placeholder: "如 H2O: 1 / N2: 0.8, O2: 0.2\n（份额符号由右侧模式决定：负号=质量份额，正号=原子份额）",
             }),
-            React.createElement("button", {
-              className: "btn btn-primary btn-sm",
-              style: { marginBottom: 10 },
-              onClick: () => parseFormula(),
-              disabled: parsing,
-            }, parsing ? "解析中..." : "解析化学式"),
+            // 份额模式切换：质量份额=is_weight:true→负号 / 原子份额=is_weight:false→正号
+            React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", marginBottom: 8 } },
+              React.createElement("button", {
+                className: "btn btn-primary btn-sm",
+                onClick: () => parseFormula(),
+                disabled: parsing,
+              }, parsing ? "解析中..." : "解析化学式"),
+              React.createElement("span", { style: { fontSize: 11, color: "var(--text-secondary)" } }, "份额模式"),
+              SHARE_MODES.map(m => React.createElement("button", {
+                key: m,
+                className: "btn btn-xs " + (shareMode === m ? "btn-primary" : "btn-ghost"),
+                onClick: () => toggleShareMode(m),
+                title: m === "weight" ? "负号输出（is_weight:true，默认）" : "正号输出（is_weight:false）",
+              }, shareModeLabel(m))),
+            ),
+            // 份额语义标注：当前模式 + MCNP 正负号约定 + 两种份额含义
+            React.createElement("div", { style: { fontSize: 10, color: "var(--text-tertiary)", marginBottom: 8, lineHeight: 1.5 } },
+              `份额 = ${shareModeLabel(shareMode)} · ${SIGN_CONVENTION_NOTE} · ${SHARE_CONVERSION_NOTE}`,
+            ),
             parsed && React.createElement("div", { style: { fontSize: 11, color: "var(--text-tertiary)", marginBottom: 8 } },
               `共 ${parsed.length} 个核素（含 >0.1% 天然丰度组分）`,
+            ),
+            // 归一化提示：份额总和恒为 1；化学式:比例 只影响各成分相对比例，结果仍会归一化
+            parsed && React.createElement("div", { style: { fontSize: 10, color: "var(--text-tertiary)", marginBottom: 8, lineHeight: 1.5 } },
+              "份额已归一化（总和=1）；化学式:比例 只影响各成分的相对比例，结果仍会归一化",
             ),
             parsed && React.createElement("div", { style: { maxHeight: 150, overflow: "auto", marginBottom: 8 } },
               React.createElement("table", { style: { width: "100%", fontSize: 11, borderCollapse: "collapse" } },
                 React.createElement("thead", null, React.createElement("tr", null,
                   React.createElement("th", { style: { width: 16, padding: "4px 4px" } }),
                   React.createElement("th", { style: { padding: "4px 8px", textAlign: "left" } }, "ZAID"),
-                  React.createElement("th", { style: { padding: "4px 8px", textAlign: "left" } }, "份额"),
+                  React.createElement("th", { style: { padding: "4px 8px", textAlign: "left" }, title: SIGN_CONVENTION_NOTE }, "份额"),
                 )),
                 React.createElement("tbody", null, parsed.map((n, i) =>
                   React.createElement("tr", { key: i, style: { borderBottom: "1px solid rgba(255,255,255,0.03)" } },
@@ -224,7 +355,7 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
                       React.createElement("span", { style: { width: 8, height: 8, borderRadius: "50%", display: "inline-block", background: zaidValid[i] === true ? "#4caf50" : zaidValid[i] === false ? "#e53935" : "#555", verticalAlign: "middle" } }),
                     ),
                     React.createElement("td", { style: { padding: "3px 8px", fontWeight: 600 } }, n.zaid),
-                    React.createElement("td", { style: { padding: "3px 8px" } }, n.fraction),
+                    React.createElement("td", { style: { padding: "3px 8px" }, title: SIGN_CONVENTION_NOTE }, n.fraction),
                   )
                 )),
               ),
@@ -232,12 +363,16 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
           )
         ) : (
           React.createElement(React.Fragment, null,
-            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 } },
               React.createElement("span", { style: s.lbl }, "核素组成（核素/条件行，所有行可拖动排序）"),
               React.createElement("div", { style: { display: "flex", gap: 6 } },
                 React.createElement("button", { className: "btn btn-success btn-xs", onClick: addRow }, "+ 核素"),
                 React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: addConditional, title: "插入 #ifdef 名称 / #else / #endif 三行" }, "# 条件"),
               ),
+            ),
+            // 导入 INP 的份额保留原样，仅提示其正负含义，不擅自转换
+            React.createElement("div", { style: { fontSize: 10, color: "var(--text-tertiary)", marginBottom: 6 } },
+              "份额保留原样：负号=质量份额、正号=原子份额（导入 INP 不自动转换）",
             ),
             ...nucs.map((nu, i) =>
               React.createElement("div", {
@@ -255,26 +390,20 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
                   React.createElement(React.Fragment, null,
                     React.createElement("span", { style: { width: 8, height: 8, borderRadius: "50%", background: zaidValid[i] === true ? "#4caf50" : zaidValid[i] === false ? "#e53935" : "#555", flexShrink: 0, display: "inline-block" } as React.CSSProperties }),
                     React.createElement("span", { style: { fontSize: 9, color: "var(--text-tertiary)", minWidth: 20 } }, (i+1) + "."),
-                    React.createElement("input", { style: { ...s.inp, flex: 1 } as React.CSSProperties, placeholder: "元素 (如 U, 92, H, Fe)", value: (nu.zaid.match(/^\d/) ? zaidToEl(nu.zaid).split("-")[0] : nu.zaid.split("-")[0]) || "",
+                    React.createElement("input", { style: { ...s.inp, flex: 1 } as React.CSSProperties, placeholder: "元素 (如 U, 92, H, Fe)", value: (rowEdits[i] ? rowEdits[i].el : splitZaid(nu.zaid).el) || "",
                       onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
-                        const c = [...nucs]; var old = nu.zaid.split("-"); c[i] = { kind: "nuclide", zaid: e.target.value + "-" + (old[1] || ""), fraction: nu.fraction }; setNucs(c);
-                        var el = e.target.value.trim(); var mass = (old[1] || "");
-                        if (!el || !mass) { setZaidValid(function(p){var n={...p}; n[i]=null; return n;}); return; }
-                        var z = elToZaid(el, mass); var idx = i;
-                        fetch(apiUrl("/api/validate-zaid?zaid=" + encodeURIComponent(z))).then(function(r){return r.json();}).then(function(j){ setZaidValid(function(p){var n={...p}; n[idx]=j.in_db; return n;}); }).catch(function(){});
+                        setRowEdits(prev => ({ ...prev, [i]: { el: e.target.value, mass: (prev[i] ? prev[i].mass : splitZaid(nu.zaid).mass) || "" } }));
                       },
+                      onBlur: () => commitRow(i),
                     }),
                     React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 11 } }, "-"),
-                    React.createElement("input", { style: { ...s.inp, maxWidth: 70 } as React.CSSProperties, placeholder: "质量数", value: (nu.zaid.match(/^\d/) ? zaidToEl(nu.zaid).split("-")[1] : nu.zaid.split("-")[1]) || "",
+                    React.createElement("input", { style: { ...s.inp, maxWidth: 70 } as React.CSSProperties, placeholder: "质量数", value: (rowEdits[i] ? rowEdits[i].mass : splitZaid(nu.zaid).mass) || "",
                       onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
-                        const c = [...nucs]; var el = nu.zaid.split("-")[0]; c[i] = { kind: "nuclide", zaid: el + "-" + e.target.value, fraction: nu.fraction }; setNucs(c);
-                        var mass = e.target.value.trim();
-                        if (!el || !mass) { setZaidValid(function(p){var n={...p}; n[i]=null; return n;}); return; }
-                        var z = elToZaid(el, mass); var idx = i;
-                        fetch(apiUrl("/api/validate-zaid?zaid=" + encodeURIComponent(z))).then(function(r){return r.json();}).then(function(j){ setZaidValid(function(p){var n={...p}; n[idx]=j.in_db; return n;}); }).catch(function(){});
+                        setRowEdits(prev => ({ ...prev, [i]: { el: (prev[i] ? prev[i].el : splitZaid(nu.zaid).el) || "", mass: e.target.value } }));
                       },
+                      onBlur: () => commitRow(i),
                     }),
-                    React.createElement("input", { style: { ...s.inp, maxWidth: 90 } as React.CSSProperties, placeholder: "份额", value: nu.fraction, onChange: (e: React.ChangeEvent<HTMLInputElement>) => { const c = [...nucs]; c[i] = { kind: "nuclide", zaid: nu.zaid, fraction: e.target.value }; setNucs(c); } }),
+                    React.createElement("input", { style: { ...s.inp, maxWidth: 90 } as React.CSSProperties, placeholder: "份额(负=质量)", title: SIGN_CONVENTION_NOTE, value: nu.fraction, onChange: (e: React.ChangeEvent<HTMLInputElement>) => { const c = [...nucs]; c[i] = { kind: "nuclide", zaid: nu.zaid, fraction: e.target.value }; setNucs(c); } }),
                     React.createElement("button", { className: "btn btn-danger btn-xs", onClick: () => delRow(i) }, "x"),
                   )
                 ),

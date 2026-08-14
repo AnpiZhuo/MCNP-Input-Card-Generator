@@ -608,6 +608,13 @@ class MCNPHandler(BaseHTTPRequestHandler):
             data = self._read_body()
             text = data.get("formula", "").strip()
             if not text: raise ValueError("化学式为空")
+            # is_weight：True=质量份额（MCNP 负号约定），False=原子份额（正号）。
+            # 默认 True 保持向后兼容（前端未传/传 null 时行为与现状一致）。
+            is_weight = data.get("is_weight", True)
+            if is_weight is None:
+                is_weight = True
+            elif isinstance(is_weight, str):
+                is_weight = is_weight.strip().lower() not in ("", "0", "false", "no")
             import pymcnp
             formulas = {}
             for line in text.split("\n"):
@@ -622,7 +629,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
                         formulas[tok[0]] = float(tok[1]) if len(tok) > 1 else 1
             all_rows = []
             for sym, ratio in formulas.items():
-                sub = pymcnp.inp.M_0.from_formula({sym: 1}, cutoff=1e-9)
+                sub = pymcnp.inp.M_0.from_formula({sym: 1}, is_weight=is_weight, cutoff=1e-9)
                 parts = str(sub).replace("&", " ").replace("\n", " ").split()
                 for k in range(1, len(parts)-1, 2):  # 跳过 m1 标签
                     zaid = parts[k]
