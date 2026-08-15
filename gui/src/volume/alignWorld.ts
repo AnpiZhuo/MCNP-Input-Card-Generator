@@ -69,3 +69,24 @@ export function translateToCenter(geometries: Translatable[], box: AABB): Vec3 {
 export function applyOffset(vec: Vec3, offset: Vec3): Vec3 {
   return [vec[0] + offset[0], vec[1] + offset[1], vec[2] + offset[2]];
 }
+
+/**
+ * 开窗取景盒判定阈值：体积盒最大边 / 并集最大边 < 此值 → 外壳远大于体积盒，
+ * 以体积盒为主取景（用户反馈「默认视距特别大、把栅元弄的特别小」）。
+ */
+export const VOLUME_FRAMING_RATIO = 0.25;
+
+/**
+ * 开窗取景盒（A2.1 修正版，纯函数）：
+ * - 无外壳 / 外壳 ⊆ 体积 / 外壳与体积可比（比例 ≥ 阈值）→ 返回并集（既有行为，中心重合不回归）
+ * - 外壳 ≫ 体积盒（体积盒最大边 < 25% 并集最大边）→ 返回体积盒（体积层清晰可辨，避免视距过大）
+ * 仅影响相机取景；共享归一化 offset 仍按并集（§7.2 对齐不变量不变）。
+ */
+export function computeFramingBox(shellBox: AABB | null, volumeBox: AABB): AABB {
+  if (shellBox == null) return volumeBox;
+  const union = unionBoxes([shellBox, volumeBox]);
+  const unionMaxDim = Math.max(boxSize(union)[0], boxSize(union)[1], boxSize(union)[2]);
+  const volMaxDim = Math.max(boxSize(volumeBox)[0], boxSize(volumeBox)[1], boxSize(volumeBox)[2]);
+  const ratio = unionMaxDim > 0 ? volMaxDim / unionMaxDim : 1;
+  return ratio < VOLUME_FRAMING_RATIO ? volumeBox : union;
+}

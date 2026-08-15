@@ -13,9 +13,13 @@ export interface TimeOption {
 }
 
 export interface VolumeControlPanelProps {
-  // 透明度（高级控件，F2 默认折叠）
-  opacity: number;
-  onOpacityChange: (v: number) => void;
+  // 双透明度滑杆（用户反馈：一个滑杆语义不清且只控体积层）
+  // 栅元透明度 = 几何外壳（默认半透明 0.4）
+  shellOpacity: number;
+  onShellOpacityChange: (v: number) => void;
+  // 体积透明度 = 体积计数数据层（默认 1 不透明）
+  volumeOpacity: number;
+  onVolumeOpacityChange: (v: number) => void;
   // 能量区间选择
   energyOptions: TimeOption[];
   energyIndex: number;
@@ -29,9 +33,6 @@ export interface VolumeControlPanelProps {
   // 几何外壳开关（高级控件）
   shellVisible: boolean;
   onShellVisibleChange: (v: boolean) => void;
-  // 半透明查看
-  seeThrough: boolean;
-  onSeeThroughChange: (v: boolean) => void;
   // 色阶（高级控件：手改上下限；图例常显 F5.2）
   colorMin: number;
   colorMax: number;
@@ -43,10 +44,11 @@ export interface VolumeControlPanelProps {
 
 export default function VolumeControlPanel(props: VolumeControlPanelProps) {
   const {
-    opacity, onOpacityChange,
+    shellOpacity, onShellOpacityChange,
+    volumeOpacity, onVolumeOpacityChange,
     energyOptions, energyIndex, onEnergyChange,
     timeOptions, timeIndex, playing, onPlayToggle, onSeek,
-    shellVisible, onShellVisibleChange, seeThrough, onSeeThroughChange,
+    shellVisible, onShellVisibleChange,
     colorMin, colorMax, scalarMin, scalarMax, onColorRangeChange,
     unit = "归一化计数",
   } = props;
@@ -114,16 +116,33 @@ export default function VolumeControlPanel(props: VolumeControlPanelProps) {
       </div>
       {showAdvanced && (
         <div style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
-          {/* 透明度 */}
+          {/* 双透明度滑杆：栅元（外壳）与体积（数据层）独立控制 */}
           <div style={row}>
-            <span style={label}>透明度</span>
+            <span style={{ ...label, width: 64 }} title="栅元透明度：控制几何外壳（栅元）的不透明度，越低越能看穿外壳看到体积层">
+              栅元透明度
+            </span>
             <input
-              type="range" min={0} max={1} step={0.05} value={opacity}
-              onChange={(e) => onOpacityChange(parseFloat(e.target.value))}
+              type="range" min={0} max={1} step={0.05} value={shellOpacity}
+              onChange={(e) => onShellOpacityChange(parseFloat(e.target.value))}
               style={{ flex: 1, accentColor: "var(--accent)" }}
+              title="栅元透明度：控制几何外壳（栅元）的不透明度；默认半透明（40%），拉满=不透明"
             />
             <span style={{ color: "var(--text-tertiary)", fontSize: 10, width: 34, textAlign: "right" }}>
-              {Math.round(opacity * 100)}%
+              {Math.round(shellOpacity * 100)}%
+            </span>
+          </div>
+          <div style={row}>
+            <span style={{ ...label, width: 64 }} title="体积透明度：控制体积计数数据层的不透明度">
+              体积透明度
+            </span>
+            <input
+              type="range" min={0} max={1} step={0.05} value={volumeOpacity}
+              onChange={(e) => onVolumeOpacityChange(parseFloat(e.target.value))}
+              style={{ flex: 1, accentColor: "var(--accent)" }}
+              title="体积透明度：控制体积计数数据层（着色计数数据）的不透明度；100% 最实，越低越淡"
+            />
+            <span style={{ color: "var(--text-tertiary)", fontSize: 10, width: 34, textAlign: "right" }}>
+              {Math.round(volumeOpacity * 100)}%
             </span>
           </div>
           {/* 几何外壳开关 */}
@@ -135,16 +154,6 @@ export default function VolumeControlPanel(props: VolumeControlPanelProps) {
               style={{ accentColor: "var(--accent)" }}
             />
             <span style={{ color: "var(--text-tertiary)" }}>显示半透明模型外壳</span>
-          </div>
-          {/* 半透明查看 */}
-          <div style={row}>
-            <span style={label}>半透明</span>
-            <input
-              type="checkbox" checked={seeThrough}
-              onChange={(e) => onSeeThroughChange(e.target.checked)}
-              style={{ accentColor: "var(--accent)" }}
-            />
-            <span style={{ color: "var(--text-tertiary)" }}>可看穿外壳查看体积层</span>
           </div>
           {/* 手改色阶上下限（A2.2 默认自适应 scalarRange） */}
           <div style={{ padding: "6px 14px", fontSize: 11 }}>

@@ -762,3 +762,69 @@ MCNP 允许空格分隔关键字（`imesh 51`）、等号可选；原 `KEY_RE = 
 | `cd gui/src-tauri && cargo check` | EXIT 0（mcnp-ui v1.7.0 Finished dev，29.73s） |
 
 - 未改后端（app/、gui/backend 零触碰）；未装任何依赖；未 commit（等 PM 统一提交，P0 落库后派 packager 重打包）。
+
+---
+
+# 前端改动清单 — 3D 结果窗口体积可视化用户实测 4 症状修复（2026-08-15，PM 指令，测试先行）
+
+> 施工方：前端 | 指令：PM 直接派发（用户实测反馈 4 症状：改透明度没用 / 单滑杆语义不清 / 栅元默认应半透明 / 默认视距过大栅元极小 / 只见栅元不见体积层）+ PM 补充指令（用真实文件确认真实体积层渲染链路完整）
+> 范围：仅 `gui/src/volume/`、`gui/src/three/`、`gui/test/volume/` 新测试 + 本文档。零新依赖；未改后端/契约（§7 共享 offset、renderGate 复用、WebGL2 降级、cameraParams farNear≤1e4 铁律全部保持）。
+
+## 症状与根因（PM 已定位，本批照修）
+
+| 症状（用户原话） | 根因 |
+| :--- | :--- |
+| 1「改透明度没有用」+ 5「只看见栅元」 | 栅元外壳默认 opaque（VolumeRenderer `transparentMode="opaque"`，cellMaterial 默认 `{transparent:false, depthWrite:true}`）→ 不透明外壳 depthWrite 挡住体积层 → 体积层永远被遮住 |
+| 2「栅元透明度还是粒子透明度？」 | 只有一个「透明度」滑杆且只控体积层 uOpacity（VolumeControlPanel opacity → setOpacity → volumeMat.uniforms.uOpacity）；外壳只有二元「半透明」checkbox（see-through→opacity 0.6 硬编码），无连续控制 |
+| 4「默认视距特别大、把栅元弄的特别小」 | 默认取景按并集包围盒（VolumeRenderer alignAndFrame → unionBoxes([shellBox, volumeWorldBox]) → computeVolumeCamera → viewDist=realExt*3.5）；外壳远大于体积盒时（真实几何模型包 1×2×2 微网格）视距过大、体积层小到看不见 |
+
+## 修复 1 — 栅元外壳默认半透明（`gui/src/three/cellMaterial.ts` + `gui/src/volume/VolumeRenderer.ts`）
+
+- `TransparentMode` 扩为 `"opaque" | "semi" | "see-through"`；新增 `DEFAULT_SHELL_OPACITY = 0.4`。
+- `buildCellMaterial` 新增 **semi 档位**：`{transparent:true, depthWrite:false, opacity:0.4}`——**depthWrite:false 是体积层透出的关键**（外壳不再写深度）；新增可选 `opacity` 参数作半透明档位连续透明度覆盖（栅元滑杆 0~1）；真空栅元（M0）opacity 0 语义全档位保持；**模块无 mode 调用默认仍 opaque**（Preview3D 主组件默认契约不变，不回归）。
+- `VolumeRenderer` 默认 `let shellOpacity = DEFAULT_SHELL_OPACITY`（原 `transparentMode="opaque"`）；`shellSpecFor(color)`/`applyShellMaterial(mesh,color)` 单点应用（透明度滑杆 0~1 → semi；1 → opaque 恢复 depthWrite 无 overdraw）。
+
+## 修复 2 — 双透明度滑杆、语义明确（`VolumeControlPanel.tsx` + `ResultWindow.tsx` + `VolumeRenderer.ts`）
+
+- `VolumeControlPanel` 拆两个独立滑杆，标签/tooltip 写清"哪个管哪个"：
+  - **栅元透明度**（控几何外壳；默认 0.4=半透明；拉满=不透明；title「越低越能看穿外壳看到体积层」）
+  - **体积透明度**（控体积计数数据层；默认 1 最实；title「100% 最实，越低越淡」）
+- 删除原二元「半透明」checkbox（seeThrough/onSeeThroughChange）——语义并入「栅元透明度」滑杆（连续 0~1 含默认半透明）。
+- `ResultWindow` 状态改为 `shellOpacity`（`DEFAULT_SHELL_OPACITY`）/ `volumeOpacity`（`DEFAULT_VOLUME_OPACITY`）→ `renderer.setShellOpacity` / `renderer.setOpacity`。
+- `VolumeRendererHandle` 新增 `setShellOpacity(v)`；`setTransparentMode` 保留（向后兼容，档位→透明度映射）。
+- 新增可测纯函数 `deriveOpacity(shellOpacity, volumeOpacity)`：两滑杆**独立、可叠加**，越界钳制 [0,1]；1 → 外壳 opaque（无 overdraw）、(0,1) → semi、0 → 全透明。
+
+## 修复 3 — 默认取景以外壳≫体积时以体积盒为主（`alignWorld.ts` + `VolumeRenderer.ts`）
+
+- 新增纯函数 `computeFramingBox(shellBox, volumeBox)`（alignWorld.ts）：无外壳 / 外壳⊆体积 / 外壳与体积可比（体积盒最大边 ≥ 25% 并集最大边）→ 返回**并集**（既有行为，中心重合不回归）；外壳≫体积盒（< `VOLUME_FRAMING_RATIO=0.25`）→ 返回**体积盒**（体积层清晰可辨，避免视距过大）。
+- `VolumeRenderer.alignAndFrame` 相机改接 `computeVolumeCamera(computeFramingBox(shellBox, volumeWorldBox))`；**共享归一化 offset 仍按并集**（§7.2 对齐不变量逐字节不变，cameraParams near/far≤1e4 铁律未破坏）。
+
+## 修复 4 — 真实文件体积层渲染链路纯 seam 验证（PM 补充指令）
+
+用户真实文件 `tests/fixtures/real_meshtal_jk.meshtal`（tally14/p/1×2×2 四体素，grid_bounds 49,-10,90~51,10,110）是受支持文件；把渲染链路中可测的纯几何/数据派生全部 pin 住（GPU 实渲染为 `#/volume` e2e/人工冒烟，契约 §9.3）：
+
+- 新增 `textureDimsFromResolution([ni,nj,nk])` → `[nk,nj,ni]`（Data3DTexture 维度，后端 numpy z 最快扁平布局）。
+- 新增 `volumeBoxSceneTransform(volumeWorldBox, offset)` → Mesh position/scale + shader uBoxMin/uBoxMax（复用 alignWorld.applyOffset）。
+- 验证：标量帧长度 = 4 体素 → colorize 输出 RGBA 16 字节；dims=(2,2,1)；box scale=(2,20,20)；外壳≫体积时取景 target=体积盒中心。
+
+## 测试（测试先行：先写红 → 实现转绿）
+
+新增 `gui/test/volume/` 4 文件 27 用例，首跑 **22 失败 / 5 通过（红）** → 实现后全绿：
+
+| 文件 | 用例 | 覆盖 |
+| :--- | :--- | :--- |
+| `shellSemiTransparent.test.ts`（6） | DEFAULT_SHELL_OPACITY=0.4 / semi 档位 transparent+depthWrite:false / 连续 opacity 覆盖 / 真空 opacity 0 / 拉满 opaque / 无 mode 默认 opaque | 修复 1 外壳默认半透明 spec |
+| `dualOpacity.test.ts`（7） | 默认双滑杆值 / 两滑杆独立（改壳不动体积、改体积不动壳）/ 可叠加 / 拉满 opaque / 拉 0 全透明 / 越界钳制 | 修复 2 双滑杆状态派生 |
+| `framingBox.test.ts`（8） | 阈值常量 0.25 / 外壳≫体积→体积为主 / 无外壳→体积 / 外壳⊆体积→并集 / 可比→并集 / 阈值边界 24% vs 25% / 中心重合不回归 / 真实文件场景 | 修复 3 取景纯函数 |
+| `volumeLayer.test.ts`（6） | worldBoxFromEdges=真实 grid_bounds / dims=(nk,nj,ni) / 4 体素→RGBA 16 / 盒场景变换 / 外壳≫体积取景 target=体积中心 / §7.3 共享 offset 不变量 | 修复 4 真实文件体积层链路 |
+
+## 验证结果
+
+| 项 | 结果 |
+| :--- | :--- |
+| `cd gui && npx vitest run` | 28 文件 / **233 用例全绿**（206 基线零回归 + 新增 27） |
+| `cd gui && npx tsc --noEmit` | EXIT 0 |
+| `cd gui && npm run build` | EXIT 0（仅既有 chunk 体积警告） |
+
+- 未改后端（app/、gui/backend 零触碰）；未改契约 / JSON key / meshtal 数据；未装任何依赖；未 commit（等 PM 统一提交）。
+- simplify 单趟已跑（boxMin/boxMax 复用 applyOffset；`clamp01` 全库无既有工具，保留新建）。

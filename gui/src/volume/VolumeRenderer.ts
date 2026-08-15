@@ -17,10 +17,24 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { computeCameraParams, type CameraParams } from "../three/cameraParams";
 import { createRenderLoop } from "../three/renderGate";
-import { buildCellMaterial, type TransparentMode } from "../three/cellMaterial";
+import {
+  buildCellMaterial,
+  DEFAULT_SHELL_OPACITY,
+  type CellMaterialSpec,
+  type TransparentMode,
+} from "../three/cellMaterial";
 import { buildRayMarchMaterial, isWebGL2, WEBGL2_UNAVAILABLE } from "./volumeShader";
 import { colorizeScalar, weatherLut, type ScalarRange } from "./colorize";
-import { unionBoxes, boxCenter, boxSize, translateToCenter, type AABB } from "./alignWorld";
+import {
+  unionBoxes,
+  boxCenter,
+  boxSize,
+  translateToCenter,
+  computeFramingBox,
+  applyOffset,
+  type AABB,
+  type Vec3,
+} from "./alignWorld";
 
 export interface VolumeFrame {
   resolution: [number, number, number];
@@ -56,7 +70,10 @@ export interface VolumeRendererOptions {
 }
 
 export interface VolumeRendererHandle {
+  /** 体积透明度（体积数据层 uOpacity uniform） */
   setOpacity(v: number): void;
+  /** 栅元透明度（几何外壳连续透明度 0~1） */
+  setShellOpacity(v: number): void;
   setShellVisible(v: boolean): void;
   setFrame(frame: VolumeFrame): void;
   setColorizeRange(range: ScalarRange, displayMin: number): void;
@@ -75,6 +92,75 @@ export function computeVolumeCamera(unionBox: AABB): CameraParams {
   const c = boxCenter(unionBox);
   const s = boxSize(unionBox);
   return computeCameraParams(c, s);
+}
+
+/** 体积透明度默认值（体积数据层 uOpacity；100% 最实） */
+export const DEFAULT_VOLUME_OPACITY = 1;
+
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v));
+}
+
+export interface DerivedOpacity {
+  /** 栅元外壳材质参数（由「栅元透明度」滑杆派生） */
+  shellSpec: CellMaterialSpec;
+  /** 体积数据层 uniform 值（由「体积透明度」滑杆派生） */
+  volumeUniform: number;
+}
+
+/**
+ * 双透明度滑杆 → 渲染参数派生（纯函数）：
+ * - 栅元透明度（控外壳）：0 → 全透明；1 → 不透明（depthWrite 恢复，无 overdraw）；(0,1) → semi 半透明
+ * - 体积透明度（控体积数据层）：直接映射 uOpacity uniform
+ * 两者独立、可叠加（用户反馈：一个滑杆语义不清、且原滑杆只控体积层）。
+ */
+export function deriveOpacity(shellOpacity: number, volumeOpacity: number, color = "#3366ff"): DerivedOpacity {
+  const so = clamp01(shellOpacity);
+  const vo = clamp01(volumeOpacity);
+  return {
+    shellSpec: buildCellMaterial({
+      color,
+      transparentMode: so >= 1 ? "opaque" : "semi",
+      opacity: so,
+    }),
+    volumeUniform: vo,
+  };
+}
+
+export interface VolumeBoxScene {
+  /** 体积盒 Mesh position（世界盒中心 + 归一化 offset） */
+  position: Vec3;
+  /** 体积盒 Mesh scale（世界尺寸，单位盒放大到真实体积） */
+  scale: Vec3;
+  /** shader uBoxMin（场景空间） */
+  boxMin: Vec3;
+  /** shader uBoxMax（场景空间） */
+  boxMax: Vec3;
+}
+
+/**
+ * 体积盒场景变换（纯函数，PM 补充指令：真实文件体积层链路可测性）：
+ * 世界盒 + 归一化 offset → Mesh position/scale + ray-march shader uBoxMin/uBoxMax。
+ * 渲染链路关键一环：position/scale 错了体积层就显示错位，uBoxMin/uBoxMax 错了光线步进盒就错。
+ */
+export function volumeBoxSceneTransform(volumeWorldBox: AABB, offset: Vec3): VolumeBoxScene {
+  const vc = boxCenter(volumeWorldBox);
+  const vs = boxSize(volumeWorldBox);
+  return {
+    position: [vc[0] + offset[0], vc[1] + offset[1], vc[2] + offset[2]],
+    scale: [vs[0], vs[1], vs[2]],
+    boxMin: applyOffset(volumeWorldBox.min, offset),
+    boxMax: applyOffset(volumeWorldBox.max, offset),
+  };
+}
+
+/**
+ * Data3DTexture 维度：后端 numpy (x,y,z) 扁平布局（z 最快）→ dims=(nk,nj,ni)，
+ * 与 frame.resolution=[ni,nj,nk] 一一对应（纹理维度错则体积层采样错位/不可见）。
+ */
+export function textureDimsFromResolution(resolution: [number, number, number]): [number, number, number] {
+  const [ni, nj, nk] = resolution;
+  return [nk, nj, ni];
 }
 
 /** base64 → Uint8Array */
@@ -119,12 +205,32 @@ export function createVolumeRenderer(
 
   /* ── 外壳 STL 网格（独立场景，复用 cellMaterial 勾选显隐）── */
   const shellMeshes: THREE.Mesh[] = [];
-  let transparentMode: TransparentMode = "opaque";
+  // 栅元外壳默认半透明（用户反馈 #3），连续透明度由「栅元透明度」滑杆控制
+  let shellOpacity = DEFAULT_SHELL_OPACITY;
 
   function cellIndex(cellNum: string): number {
     const views = opts.cellViews || [];
     for (let i = 0; i < views.length; i++) if (views[i].num === cellNum) return i;
     return 0;
+  }
+
+  /** 外壳材质规格：透明度滑杆 0~1 → semi 半透明；1 → opaque（无 overdraw） */
+  function shellSpecFor(color: string): CellMaterialSpec {
+    return buildCellMaterial({
+      color,
+      transparentMode: shellOpacity >= 1 ? "opaque" : "semi",
+      opacity: shellOpacity,
+    });
+  }
+
+  function applyShellMaterial(mesh: THREE.Mesh, color: string) {
+    const spec = shellSpecFor(color);
+    const mat = mesh.material as THREE.MeshStandardMaterial;
+    mat.color.set(spec.color);
+    mat.transparent = spec.transparent;
+    mat.depthWrite = spec.depthWrite;
+    mat.opacity = spec.opacity;
+    mat.needsUpdate = true;
   }
 
   function loadShell() {
@@ -143,7 +249,7 @@ export function createVolumeRenderer(
         const geo = loader.parse(bytes.buffer as ArrayBuffer);
         const idx = cellIndex(key);
         const cv = (opts.cellViews || [])[idx] || { color: "#888888", visible: true };
-        const spec = buildCellMaterial({ color: cv.color, transparentMode });
+        const spec = shellSpecFor(cv.color);
         const mat = new THREE.MeshStandardMaterial({
           color: spec.color, roughness: 0.3, metalness: 0,
           transparent: spec.transparent, opacity: spec.opacity,
@@ -208,23 +314,15 @@ export function createVolumeRenderer(
       shellMeshes.map((m) => m.geometry as unknown as { translate(x: number, y: number, z: number): void }),
       unionBox,
     );
-    // 体积盒：世界坐标 box 中心 + 同一 offset
-    const vc = boxCenter(volumeWorldBox);
-    const vs = boxSize(volumeWorldBox);
-    volumeBox.position.set(vc[0] + offset[0], vc[1] + offset[1], vc[2] + offset[2]);
-    volumeBox.scale.set(vs[0], vs[1], vs[2]);
-    // shader 盒（场景空间）
-    const boxMin = new THREE.Vector3(
-      volumeWorldBox.min[0] + offset[0], volumeWorldBox.min[1] + offset[1], volumeWorldBox.min[2] + offset[2],
-    );
-    const boxMax = new THREE.Vector3(
-      volumeWorldBox.max[0] + offset[0], volumeWorldBox.max[1] + offset[1], volumeWorldBox.max[2] + offset[2],
-    );
-    volumeMat.uniforms.uBoxMin.value.copy(boxMin);
-    volumeMat.uniforms.uBoxMax.value.copy(boxMax);
+    // 体积盒场景变换（Mesh position/scale + shader uBoxMin/uBoxMax，统一 offset）
+    const vt = volumeBoxSceneTransform(volumeWorldBox, offset);
+    volumeBox.position.set(vt.position[0], vt.position[1], vt.position[2]);
+    volumeBox.scale.set(vt.scale[0], vt.scale[1], vt.scale[2]);
+    volumeMat.uniforms.uBoxMin.value.set(vt.boxMin[0], vt.boxMin[1], vt.boxMin[2]);
+    volumeMat.uniforms.uBoxMax.value.set(vt.boxMax[0], vt.boxMax[1], vt.boxMax[2]);
 
-    // A2.1 自动取景：按联合包围盒摆相机（center+offset ≈ 0）
-    const cp = computeVolumeCamera(unionBox);
+    // A2.1 自动取景：外壳≫体积盒时以体积盒为主（避免视距过大），否则并集取景
+    const cp = computeVolumeCamera(computeFramingBox(shellBox, volumeWorldBox));
     camera.near = cp.near;
     camera.far = cp.far;
     camera.position.set(cp.position[0], cp.position[1], cp.position[2]);
@@ -294,16 +392,14 @@ export function createVolumeRenderer(
       markDirty();
     },
     setTransparentMode(mode: TransparentMode) {
-      transparentMode = mode;
-      for (const m of shellMeshes) {
-        const spec = buildCellMaterial({ color: m.userData.color, transparentMode });
-        const mat = m.material as THREE.MeshStandardMaterial;
-        mat.color.set(spec.color);
-        mat.transparent = spec.transparent;
-        mat.depthWrite = spec.depthWrite;
-        mat.opacity = spec.opacity;
-        mat.needsUpdate = true;
-      }
+      // 档位 → 连续透明度（向后兼容）；「栅元透明度」滑杆走 setShellOpacity
+      shellOpacity = mode === "opaque" ? 1 : mode === "see-through" ? 0.6 : DEFAULT_SHELL_OPACITY;
+      for (const m of shellMeshes) applyShellMaterial(m, m.userData.color);
+      markDirty();
+    },
+    setShellOpacity(v: number) {
+      shellOpacity = clamp01(v);
+      for (const m of shellMeshes) applyShellMaterial(m, m.userData.color);
       markDirty();
     },
     setCellVisible(index: number, vis: boolean) {

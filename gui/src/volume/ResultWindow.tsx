@@ -13,7 +13,13 @@ import { readVolumeData, closeCurrentWindow } from "../utils/windows";
 import { meshtalTexture, errorHint, type MeshtalTextureFrame } from "../utils/api";
 import { getMatColor } from "../utils/materialColors";
 import { CellList } from "../components/MaterialPanel";
-import { createVolumeRenderer, type VolumeRendererHandle, type VolumeFrame } from "./VolumeRenderer";
+import {
+  createVolumeRenderer,
+  DEFAULT_VOLUME_OPACITY,
+  type VolumeRendererHandle,
+  type VolumeFrame,
+} from "./VolumeRenderer";
+import { DEFAULT_SHELL_OPACITY } from "../three/cellMaterial";
 import VolumeControlPanel from "./VolumeControlPanel";
 
 interface BridgeData {
@@ -32,9 +38,10 @@ export default function ResultWindow() {
   const rendererRef = useRef<VolumeRendererHandle | null>(null);
   const [data] = useState<BridgeData | null>(() => readVolumeData() as BridgeData | null);
   const [error, setError] = useState("");
-  const [opacity, setOpacity] = useState(1);
+  // 双透明度滑杆：栅元透明度（外壳，默认半透明 0.4）+ 体积透明度（数据层，默认 1）
+  const [shellOpacity, setShellOpacityState] = useState(DEFAULT_SHELL_OPACITY);
+  const [volumeOpacity, setVolumeOpacityState] = useState(DEFAULT_VOLUME_OPACITY);
   const [shellVisible, setShellVisible] = useState(true);
-  const [seeThrough, setSeeThrough] = useState(false);
   const [energyIndex, setEnergyIndex] = useState(0);
   const [timeIndex, setTimeIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -141,12 +148,14 @@ export default function ResultWindow() {
     setShellVisible(v);
     rendererRef.current?.setShellVisible(v);
   };
-  const onSeeThroughChange = (v: boolean) => {
-    setSeeThrough(v);
-    rendererRef.current?.setTransparentMode(v ? "see-through" : "opaque");
+  // 栅元透明度滑杆 → 外壳连续透明度（默认半透明）
+  const onShellOpacityChange = (v: number) => {
+    setShellOpacityState(v);
+    rendererRef.current?.setShellOpacity(v);
   };
-  const onOpacityChange = (v: number) => {
-    setOpacity(v);
+  // 体积透明度滑杆 → 体积数据层 uniform
+  const onVolumeOpacityChange = (v: number) => {
+    setVolumeOpacityState(v);
     rendererRef.current?.setOpacity(v);
   };
   const onColorRangeChange = (min: number, max: number) => {
@@ -213,8 +222,10 @@ export default function ResultWindow() {
         )}
 
         <VolumeControlPanel
-          opacity={opacity}
-          onOpacityChange={onOpacityChange}
+          shellOpacity={shellOpacity}
+          onShellOpacityChange={onShellOpacityChange}
+          volumeOpacity={volumeOpacity}
+          onVolumeOpacityChange={onVolumeOpacityChange}
           energyOptions={data.energyOptions || []}
           energyIndex={energyIndex}
           onEnergyChange={onEnergyChange}
@@ -225,8 +236,6 @@ export default function ResultWindow() {
           onSeek={onSeek}
           shellVisible={shellVisible}
           onShellVisibleChange={onShellVisibleChange}
-          seeThrough={seeThrough}
-          onSeeThroughChange={onSeeThroughChange}
           colorMin={colorRange.min}
           colorMax={colorRange.max}
           scalarMin={data.scalarRange?.min ?? 0}
