@@ -71,6 +71,15 @@ export function applyOffset(vec: Vec3, offset: Vec3): Vec3 {
 }
 
 /**
+ * AABB + offset → 场景盒（尺寸不变，min/max 同步平移）。
+ * 对齐不变式（§7）：相机取景、体积盒、外壳几何必须共用同一 offset；
+ * 相机若用未 offset 的 world 盒会盯着原中心而物体已被平移到原点（P0 相机错位根因）。
+ */
+export function applyOffsetToBox(box: AABB, offset: Vec3): AABB {
+  return { min: applyOffset(box.min, offset), max: applyOffset(box.max, offset) };
+}
+
+/**
  * 开窗取景盒判定阈值：体积盒最大边 / 并集最大边 < 此值 → 外壳远大于体积盒，
  * 以体积盒为主取景（用户反馈「默认视距特别大、把栅元弄的特别小」）。
  */

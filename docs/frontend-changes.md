@@ -883,3 +883,51 @@ three r160 的 WebGLProgram 对 **RawShaderMaterial 会前置 `#define SHADER_TY
 - 临时复现页 `gui/repro_volume.html` 已删除（不留垃圾）；截图证据保留 `D:/code/vol_repro.png`（前）/ `vol_repro_fixed.png`（后）。
 - **需要重新打包**：已部署版（HEAD 301d325）仍带本 bug（体积层全程未渲染），修复后需重打包才能让用户看到体积层。
 - 未改后端/契约；零新依赖；未 commit。
+
+---
+
+# P0 第二弹：相机未 offset 导致体积层画面错位（2026-08-15，用户实测 v1.7.2）
+
+> 用户实测：`#version` 修复生效，体积层终于能渲染了；但新反馈「摄像机位置不对，渲染出来的位置也不对」——相机视角错位、物体出现在画面错误位置。
+
+## 根因（PM 代码级分析经验证成立）
+
+`VolumeRenderer.alignAndFrame` 用 `translateToCenter` 把外壳/体积盒按 `offset = -unionBox.center` 平移到场景中心（原点），体积盒 position/scale、uBoxMin/uBoxMax 都已适配 offset；**但相机参数仍用未 offset 的 world 坐标**：`computeVolumeCamera(computeFramingBox(shellBox, volumeWorldBox))` 传的是原始 world 盒（用户文件 center=(50,0,100)）→ `camera.target=(50,0,100)`、`position=(71,21,117.5)`。物体已被平移到原点 → **相机对空、物体偏出视锥/极小** = 用户看到的现象。此 bug 同样自 ea20ad7 引入（#version 修复让体积层首次可见才暴露）。
+
+## 修复（`gui/src/volume/VolumeRenderer.ts` + `alignWorld.ts`）
+
+- `alignWorld.ts` 新增纯函数 `applyOffsetToBox(box, offset)`：AABB min/max 同步平移（尺寸不变）。
+- `VolumeRenderer.alignAndFrame`：`computeVolumeCamera(computeFramingBox(shellBox, volumeWorldBox))` → `computeVolumeCamera(applyOffsetToBox(framingWorld, offset))`——相机 target/position 用 offset 后场景坐标（联合盒居中时 target≈原点）。near/far 尺寸平移不变，farNear≤1e4 铁律保持。
+- 全链路核对（§7）：外壳几何 translate（offset）、体积盒 position/scale（offset）、uBoxMin/uBoxMax（offset）、相机（offset）四者现共享同一 offset。Preview3D 用 `computeCameraParams` + 自身归一化，不受影响（未触碰）。
+
+## 真实渲染验证（headless Edge + SwiftShader，临时 repro_camera.html / repro_camera_noshell.html，已删）
+
+完整场景复刻（外壳 300×200×300 半透明 + 体积盒 2×20×20 四体素 ray-march，用户数据 center(50,0,100)），左右分屏 BEFORE（未 offset 相机）/ AFTER（offset 相机），两种场景（有外壳 / 无外壳）：
+
+| 场景 | BEFORE 体积色块占比 | AFTER 体积色块占比 |
+| :--- | :--- | :--- |
+| 有外壳 | **0.3%**（相机在 shell 内看向空 world 中心，体积层偏出视锥不可见） | **32.7%**（G/Y/R/B 四色块清晰居中） |
+| 无外壳（纯体积盒） | **0.1%**（背景 95.8%） | **32.7%** |
+
+截图证据保留 `D:/code/vol_camera_compare.png`（有外壳 前后对比）/ `vol_camera_noshell.png`（无外壳 前后对比）；数值经 PIL 像素统计 + ASCII 图双确认。
+
+## 回归测试（`gui/test/volume/cameraSceneAlign.test.ts`，+6 用例，先红后绿）
+
+- `applyOffsetToBox` 纯函数（min/max 平移、尺寸不变）。
+- 相机 target = 场景盒中心（世界中心 + offset）；联合盒居中时 target ≈ 原点（用户场景 (50,0,100) → 0）。
+- position 相对场景中心偏移（viewDist*(0.6,0.6,0.5)）。
+- farNear ≤ 1e4 铁律保持。
+- 全链路：world framing → applyOffsetToBox → computeVolumeCamera（外壳≫体积时以体积为主）。
+- 无外壳场景（shellBox=null）同样对原点。
+
+## 验证结果
+
+| 项 | 结果 |
+| :--- | :--- |
+| `cd gui && npx vitest run` | 29 文件 / **242 用例全绿**（236 基线 + 6 新增；colorize 128³ 计时既有 flaky 负载偶发，隔离跑 10/10 通过，非回归） |
+| `cd gui && npx tsc --noEmit` | EXIT 0 |
+| `cd gui && npm run build` | EXIT 0（仅既有 chunk 体积警告） |
+
+- 临时复现页已删（不留垃圾）；截图证据保留 `D:/code/vol_camera_compare.png` / `vol_camera_noshell.png`。
+- **需要重新打包**：v1.7.2（HEAD 135b1a1）仍带此相机错位 bug。
+- 未改后端/契约；零新依赖；未 commit。

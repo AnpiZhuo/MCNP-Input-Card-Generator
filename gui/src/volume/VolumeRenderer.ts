@@ -32,6 +32,7 @@ import {
   translateToCenter,
   computeFramingBox,
   applyOffset,
+  applyOffsetToBox,
   type AABB,
   type Vec3,
 } from "./alignWorld";
@@ -321,8 +322,12 @@ export function createVolumeRenderer(
     volumeMat.uniforms.uBoxMin.value.set(vt.boxMin[0], vt.boxMin[1], vt.boxMin[2]);
     volumeMat.uniforms.uBoxMax.value.set(vt.boxMax[0], vt.boxMax[1], vt.boxMax[2]);
 
-    // A2.1 自动取景：外壳≫体积盒时以体积盒为主（避免视距过大），否则并集取景
-    const cp = computeVolumeCamera(computeFramingBox(shellBox, volumeWorldBox));
+    // A2.1 自动取景：外壳≫体积盒时以体积盒为主（避免视距过大），否则并集取景。
+    // ⚠️ 相机必须用 offset 后的【场景坐标】：物体已被 translateToCenter 平移到中心
+    // （offset = -unionBox.center），若用未 offset 的 world 盒 → 相机盯着原中心、
+    // 物体偏出视锥（用户实测 v1.7.2「摄像机位置不对，渲染出来的位置也不对」根因）。
+    const framingWorld = computeFramingBox(shellBox, volumeWorldBox);
+    const cp = computeVolumeCamera(applyOffsetToBox(framingWorld, offset));
     camera.near = cp.near;
     camera.far = cp.far;
     camera.position.set(cp.position[0], cp.position[1], cp.position[2]);
