@@ -10,6 +10,9 @@
  * - 卡体生成发 `EMINTS=`/`TMINTS=`（非 EINTS/TINTS）；导入容错 `EINTS`/`EMINTS`、`TINTS`/`TMINTS`。
  * - GEOM 值**连写单 token**（XYZ/REC 直角、CYL/RZT 圆柱），后端存首 token。
  * - 校验规则抽为纯函数 `validateFmeshRow` / `vectorsParallel`（表单提交/卡体生成前友好提示）。
+ * - **关键字等号可选（2026-08-15 PM 指令，镜像后端 fmesh_parser）**：MCNP 允许空格分隔 `imesh 51`。
+ *   解析 `KEY` 或 `KEY=value` 两形式；收集循环边界判定 = 已知关键字（KEY_TO_FIELD 内，大小写不敏感）或
+ *   卡族头，未知 key 带 `=`（inc= 等）跳过不报错，裸字母词当值收集（防 `geom xyz` 的 `xyz` 被误断）。
  *
  * 镜像后端 `app/meshtal/fmesh_parser.py`：
  * - FMESH 语法：`FMESHn:N/P/E GEOM=xyz ORIGIN=x0 y0 z0`（续行 IMESH=/IINTS/…）
@@ -192,7 +195,10 @@ export const FMESH_PLACEHOLDERS: Record<string, string> = {
 };
 
 const FAMILY_RE = /^(FMESH|TMESH|RMESH|CMESH)(\d*):?([NPEHAS]?)$/i;
-const KEY_RE = /^([A-Za-z]+)=(.*)$/;
+/** 关键字 token：`KEY` 或 `KEY=value`（等号可选——MCNP 允许空格分隔 `imesh 51`，镜像后端 fmesh_parser） */
+const KEY_RE = /^([A-Za-z]+)(?:=(.*))?$/;
+/** 带显式等号的 token（`KEY=`/`KEY=val`）——必定是关键字起点，无论已知未知 */
+const KEY_EQ_RE = /^([A-Za-z]+)=/;
 
 /** 仅字符串字段（kind 为判别联合，不在关键字映射内） */
 type FmeshStringField = Exclude<keyof FmeshRow, "kind">;
@@ -206,6 +212,15 @@ const KEY_TO_FIELD: Record<string, FmeshStringField> = {
   FACTOR: "factor",
   MAT: "mat", OUT: "out",
 };
+
+/**
+ * token 是否为已知关键字（KEY_TO_FIELD 内，大小写不敏感；裸 `imesh` 或带 `=` 均算）。
+ * 供收集循环做边界判定——不再用「任意字母词」，防 `geom xyz` 的字母值 `xyz` 被误断截断。
+ */
+function isKnownKeyToken(tok: string): boolean {
+  const m = tok.match(KEY_RE);
+  return !!m && !!KEY_TO_FIELD[m[1].toUpperCase()];
+}
 
 /** 是否有可回放的结构化字段（否则回放 raw） */
 const STRUCTURED_KEYS: (keyof FmeshRow)[] = [
@@ -267,11 +282,15 @@ export function cardTextToFmesh(text: string): FmeshRow[] {
         i += 1;
         continue;
       }
-      const vals: string[] = [km[2]].filter(Boolean);
+      const vals: string[] = km[2] ? [km[2]] : [];
       let j = i + 1;
       while (j < tokens.length) {
         const nt = tokens[j];
-        if (FAMILY_RE.test(nt) || KEY_RE.test(nt)) break;
+        // 边界判定：卡族头 / 已知关键字（裸或带 =）/ 未知关键字带 =（inc= 等）
+        // 不用「任意字母词」匹配——防 `geom xyz` 的字母值 `xyz` 被误判截断
+        if (FAMILY_RE.test(nt)) break;
+        if (isKnownKeyToken(nt)) break;
+        if (KEY_EQ_RE.test(nt)) break;
         vals.push(nt);
         j += 1;
       }
@@ -615,22 +634,19 @@ export function validateFmeshRow(r: FmeshRow): FmeshValidationIssue[] {
   return issues;
 }
 
-/* ── 简单/高级模式（傻瓜友好：简单默认只露核心 4 项，其余折叠进高级） ── */
-export type FmeshFormMode = "simple" | "advanced";
-
-/** 简单模式核心字段：粒子 + 三向网格范围（IMESH/JMESH/KMESH） */
-export const FMESH_SIMPLE_FIELDS: (keyof FmeshRow)[] = ["particle", "imesh", "jmesh", "kmesh"];
-
-/** 高级模式追加字段（ORIGIN/INTS×3/能量/时间/MAT/OUT/AXS/VEC/TR/factor/GEOM） */
-export const FMESH_ADVANCED_FIELDS: (keyof FmeshRow)[] = [
-  "geom", "origin", "iints", "jints", "kints",
-  "emesh", "emints", "tmesh", "tmints",
-  "mat", "out", "axs", "vec", "tr", "factor",
+/* ── FMeshForm 字段控件布局（2026-08-15 PM 指令：去掉简单/高级切换，按 MCNP 卡结构 9 行分组） ──
+ * 每行对应 FMESH 卡体的一行结构：卡头（粒子/GEOM/OUT）→ ORIGIN →
+ * 每轴 IMESH/IINTS → EMESH/EMINTS → TMESH/TMINTS → MAT/FACTOR/TR → AXS/VEC（圆柱系才显示）。
+ * 纯布局数据：字段值/placeholder/校验/round-trip 均不受影响；FMeshForm 逐行渲染。
+ */
+export const FMESH_ROW_LAYOUT: (keyof FmeshRow)[][] = [
+  ["particle", "geom", "out"], // 第1行 卡头：粒子 | GEOM | OUT
+  ["origin"],                  // 第2行 ORIGIN
+  ["imesh", "iints"],          // 第3行 IMESH | IINTS
+  ["jmesh", "jints"],          // 第4行 JMESH | JINTS
+  ["kmesh", "kints"],          // 第5行 KMESH | KINTS
+  ["emesh", "emints"],         // 第6行 EMESH | EMINTS
+  ["tmesh", "tmints"],         // 第7行 TMESH | TMINTS
+  ["mat", "factor", "tr"],     // 第8行 MAT | FACTOR | TR
+  ["axs", "vec"],              // 第9行 AXS | VEC（仅圆柱系显示）
 ];
-
-/** 模式 → 可见字段列表（可测纯函数；展开/收起状态存组件本地 state，不落 deck） */
-export function simpleModeVisibleFields(mode: FmeshFormMode): (keyof FmeshRow)[] {
-  return mode === "simple"
-    ? [...FMESH_SIMPLE_FIELDS]
-    : [...FMESH_SIMPLE_FIELDS, ...FMESH_ADVANCED_FIELDS];
-}

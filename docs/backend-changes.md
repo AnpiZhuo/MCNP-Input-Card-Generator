@@ -720,3 +720,46 @@ R1 不动点不回归；api.yaml **无 fmesh_defs schema → 无变更**（漂�
 ### L.5 数据库 / 环境变量
 
 无数据库变更；无新增环境变量。
+
+
+---
+
+## M. FMESH 卡关键字解析 Bug 修复：等号可选 + 未知关键字容错（2026-08-15）
+
+> 指令：PM 派发，官方测试文件暴露——MCNP 允许空格分隔（`imesh 51`）、等号可选；原 `_KEY_RE` 强制 `=` 导致 `imesh` 被当未知 token 跳过、网格字段空。修复关键字解析 + 边界判定 + 未知关键字容错。JSON key 不变。
+
+### M.1 修复内容
+
+| # | 修复 | 文件:行 | 逻辑 |
+| :--- | :--- | :--- | :--- |
+| 1 | `_KEY_RE` 等号可选 | `app/meshtal/fmesh_parser.py`:20 | `^([A-Za-z]+)(?:=(.*))?$`，`imesh 51` / `IMESH=10` 两种形式都命中 |
+| 2 | 裸关键字进入值收集 | `fmesh_parser.py`:89-130 | 等号可选后 `imesh`（无 =）命中 `_KEY_RE`，走字段值收集分支 |
+| 3 | 边界判定改已知关键字/卡族/`key=` 形 | `fmesh_parser.py`:32-41 `_is_boundary_token` | 收集循环 break 改为：卡族头 or（`key=` 形 or 已知关键字）；裸字母词（`xyz`/`infinite`）当值收集不截断 |
+| 4 | 未知关键字容错 | `fmesh_parser.py`:93-111 | `inc=` 等带 = 非已知 key → 跳过不报错 + 整段记入 `raw` 兜底（round-trip 不丢）；裸字母词忽略/当值 |
+| 5 | raw 段回放 | `fmesh_parser.py`:228-234 `_card_lines` | 结构化字段外保留的未知关键字段逐行追加回放（复用既有 `raw` 字段，不加新 JSON key） |
+
+### M.2 关键修正过程
+
+初版 `_is_boundary_token` 只认已知关键字/卡族头 → 测试暴露：`out=jk inc= 0` 中未知的 `inc=`（带 =）被 out 字段值收集吞掉（out='jk inc= 0'）。修正：带 `=` 的任何未知关键字也是边界，防止被上一字段吞并。
+
+### M.3 新增测试（tests/parser/test_fmesh_parser.py，+5）
+
+| 用例 | 覆盖 |
+| :--- | :--- |
+| `test_space_separated_imesh_jmesh_kmesh` | `imesh 51` 空格分隔 → 网格字段 |
+| `test_equals_form_case_insensitive` | `IMESH=10` 等号 + 大写不敏感 |
+| `test_mixed_equals_and_space_geom_xyz_value` | 混排 + `geom xyz` 字母值不截断 |
+| `test_unknown_keyword_inc_tolerated_raw_preserved` | `inc=` 容错不报错 + raw 兜底 round-trip |
+| `test_official_case_fixtures_grid_fields_nonempty` | vendor 官方 case1~5.i → IMESH/JMESH/KMESH 非空 |
+
+### M.4 新增 fixtures（tests/fixtures/，+5）
+
+`official_fmesh_case1.i` ~ `official_fmesh_case5.i` —— 官方 `D:\MCNP\MCNP6\MCNP_CODE\MCNP6\Testing\FEATURES\FMESH_INC\Inputs\case1~5.i` 原样复制（空格分隔 `imesh 51` + `out=jk` + 可选 `inc=`）。
+
+### M.5 终态
+
+全量 pytest：**454 通过 / 0 失败**（449 基线零回归 + 新增 5 用例全绿）。INP e2e 冒烟（parse → generate → reparse，5 个官方 case）：imesh/jmesh/kmesh 全非空且值正确（51/10/110.0）、out=jk、case2~5 的 `inc=` 段 raw 保留、R1 不动点成立。JSON key 未变（imesh/iints/jmesh/jints/kmesh/kints/emesh/emints/tmesh/tmints/mat/out/axs/vec/tr/factor/geom/origin）。
+
+### M.6 数据库 / 环境变量
+
+无数据库变更；无新增环境变量。

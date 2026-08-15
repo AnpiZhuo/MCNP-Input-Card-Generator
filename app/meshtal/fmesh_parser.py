@@ -14,7 +14,10 @@ from app.models import FmeshDefinition
 _FAMILY_RE = re.compile(
     r'^(FMESH|TMESH|RMESH|CMESH)(\d*):?([NPEHAS]?)$', re.IGNORECASE
 )
-_KEY_RE = re.compile(r'^([A-Za-z]+)=(.*)$')
+# MCNP 关键字值可空格分隔（`imesh 51`）或等号（`IMESH=10`），`=` 可选。
+# 注：等号可选后该正则也会匹配任意裸字母词（如 `xyz`），不能直接用作边界判定，
+# 必须用 _is_boundary_token() 只认已知关键字/卡族头。
+_KEY_RE = re.compile(r'^([A-Za-z]+)(?:=(.*))?$')
 
 _KEYS = {
     "GEOM": "geom", "ORIGIN": "origin", "IMESH": "imesh", "IINTS": "iints",
@@ -24,6 +27,23 @@ _KEYS = {
     "AXS": "axs", "VEC": "vec", "TR": "tr",
     "MAT": "mat", "OUT": "out", "FACTOR": "factor",
 }
+
+
+def _is_boundary_token(tok: str) -> bool:
+    """字段值收集的边界判定：已知关键字（_KEYS，大小写不敏感）或卡族头，
+    或任何 `key=` 形未知关键字（带 `=`）。
+
+    不能用 `_KEY_RE` 全匹配——等号可选后它会匹配任意裸字母词，把 `geom xyz` 的值
+    `xyz`、`inc= 1 infinite` 的值 `infinite` 误判为新关键字提前截断字段收集；
+    也不能只认已知关键字——`out=jk inc= 0` 里未知的 `inc=`（带 `=`）必须作为边界，
+    否则被上一字段 out 的值收集吞掉（out='jk inc= 0'）。
+    """
+    if _FAMILY_RE.match(tok):
+        return True
+    m = _KEY_RE.match(tok)
+    if not m:
+        return False
+    return "=" in tok or m.group(1).upper() in _KEYS
 
 
 def _has_structured(fd: FmeshDefinition) -> bool:
@@ -75,14 +95,33 @@ def parse_fmesh_lines(lines) -> list:
         if km:
             key = km.group(1).upper()
             attr = _KEYS.get(key)
-            if attr is None or current is None:
+            if attr is None:
+                # 未知关键字容错：
+                # - 带 `=`（形如 `inc=`）：跳过不报错，整段（含其后续值 token）记入 raw
+                #   兜底（round-trip 不丢）；裸字母词（如 `infinite`）照常忽略/当值。
+                if "=" in tok and current is not None:
+                    seg = [tok]
+                    j = i + 1
+                    while j < len(tokens):
+                        nt = tokens[j]
+                        if _is_boundary_token(nt):
+                            break
+                        seg.append(nt)
+                        j += 1
+                    extra = " ".join(seg)
+                    current.raw = (current.raw + "\n" + extra) if current.raw else extra
+                    i = j
+                else:
+                    i += 1
+                continue
+            if current is None:
                 i += 1
                 continue
             vals = [km.group(2)] if km.group(2) else []
             j = i + 1
             while j < len(tokens):
                 nt = tokens[j]
-                if _FAMILY_RE.match(nt) or _KEY_RE.match(nt):
+                if _is_boundary_token(nt):
                     break
                 vals.append(nt)
                 j += 1
@@ -191,4 +230,11 @@ def _card_lines(fd: FmeshDefinition, sub: str) -> list:
                  ("TR", fd.tr)):
         if v:
             lines.append(f"     {k}={v}")
+    # 未知关键字 raw 兜底：结构化字段之外保留的原文段（如 `inc= 0`）逐行追加回放，
+    # round-trip 不丢（结构化字段齐全时 raw 仅含这些段，不会与结构化行重复）。
+    if fd.raw:
+        for ln in fd.raw.split("\n"):
+            s = ln.strip()
+            if s:
+                lines.append(f"     {s}")
     return lines

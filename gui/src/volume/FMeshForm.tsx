@@ -17,8 +17,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   emptyFmeshRow, fmeshToCardText, FMESH_PLACEHOLDERS,
   FMESH_GEOM_OPTIONS, FMESH_OUT_OPTIONS, isCylGeom, validateFmeshRow,
-  fmeshTemplates, simpleModeVisibleFields,
-  type FmeshFormMode, type FmeshKind, type FmeshRow, type FmeshTemplate, type FmeshValidationIssue,
+  fmeshTemplates, FMESH_ROW_LAYOUT,
+  type FmeshKind, type FmeshRow, type FmeshTemplate, type FmeshValidationIssue,
 } from "./fmeshState";
 import { computeSurfacesAABB, aabbToFmeshValues } from "./surfacesAABB";
 import { useDeck } from "../utils/DeckContext";
@@ -79,8 +79,7 @@ export default function FMeshForm({ value, onChange }: FMeshFormProps) {
   const [rows, setRows] = useState<RowWithId[]>(() =>
     (value || []).map((r, i) => ({ ...r, _uid: i + 1 })),
   );
-  // 简单/高级模式（傻瓜友好：默认简单只露核心 4 项；展开状态存组件本地 state，不落 deck）
-  const [mode, setMode] = useState<FmeshFormMode>("simple");
+  // 始终显示完整字段表单（2026-08-15 PM 指令：去掉简单/高级模式切换；布局按 FMESH_ROW_LAYOUT 9 行分组）
   const { deck } = useDeck();
 
   // 外部 value 变化（导入/文本模式回填）→ 同步本地 rows
@@ -244,14 +243,6 @@ export default function FMeshForm({ value, onChange }: FMeshFormProps) {
     <div className="glass-card" style={{ marginTop: 16 }}>
       <div className="card-header">
         <span className="card-title">网格计数（FMESH）</span>
-        <button
-          type="button"
-          className="btn btn-ghost btn-xs"
-          onClick={() => setMode(mode === "simple" ? "advanced" : "simple")}
-          title={mode === "simple" ? "显示全部字段（ORIGIN/INTS/能量/时间/MAT/OUT/AXS/VEC/TR/FACTOR 等）" : "回到简单模式（只显示粒子 + 三向范围）"}
-        >
-          {mode === "simple" ? "高级模式 ▾" : "收起高级 ▲"}
-        </button>
         <button className="btn btn-success btn-sm" onClick={addRow}>+ 添加网格计数</button>
       </div>
 
@@ -261,9 +252,7 @@ export default function FMeshForm({ value, onChange }: FMeshFormProps) {
           尚无网格计数卡。点「+ 添加网格计数」创建 FMESH 卡，或从 INP 导入自动识别。
         </div>
       ) : (
-        (() => {
-        const visible = simpleModeVisibleFields(mode);
-        return rows.map((r) => {
+        rows.map((r) => {
           const kindCtrl = fmeshKindControl(r.kind, r.geom);
           const isSelectRow = kindCtrl.control === "select";
           return (
@@ -295,26 +284,31 @@ export default function FMeshForm({ value, onChange }: FMeshFormProps) {
               <button className="btn btn-danger btn-xs" onClick={() => delRow(r._uid)} style={{ marginLeft: "auto", alignSelf: "flex-end" }}>x</button>
             </div>
 
-            {/* 三步上手引导（简单模式，FMESH 可编辑行） */}
-            {mode === "simple" && isSelectRow && (
+            {/* 三步上手引导（FMESH 可编辑行） */}
+            {isSelectRow && (
               <div style={{ marginBottom: 6, fontSize: 11, color: "var(--accent)" }}>
                 ① 选粒子　② 点自动填充　③ 解析看 3D 结果
               </div>
             )}
 
-            {/* 字段区：按模式可见性渲染（简单=粒子+三向范围；高级=全部） */}
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {visible.map((f) => {
-                if (f === "particle") return particleSelect(r);
-                if (f === "geom") return geomSelect(r);
-                if (f === "out") return outSelect(r);
-                if ((f === "axs" || f === "vec") && !isCylGeom(r.geom)) return null;
-                return input(r, f);
-              })}
-            </div>
+            {/* 字段区：按 MCNP 卡结构 9 行分组（FMESH_ROW_LAYOUT：卡头粒子/GEOM/OUT → ORIGIN → 各轴 IMESH/IINTS → 能量/时间 → MAT/FACTOR/TR → AXS/VEC 圆柱系才显示） */}
+            {FMESH_ROW_LAYOUT.map((rowFields) => {
+              const shown = rowFields.filter((f) => (f === "axs" || f === "vec") ? isCylGeom(r.geom) : true);
+              if (shown.length === 0) return null;
+              return (
+                <div key={rowFields[0]} style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+                  {shown.map((f) => {
+                    if (f === "particle") return particleSelect(r);
+                    if (f === "geom") return geomSelect(r);
+                    if (f === "out") return outSelect(r);
+                    return input(r, f);
+                  })}
+                </div>
+              );
+            })}
 
             {/* 粒子说明（每个网格计数一个粒子） */}
-            {mode === "simple" && isSelectRow && (
+            {isSelectRow && (
               <div style={{ marginTop: 6, fontSize: 9, color: "var(--text-tertiary)" }}>
                 每个网格计数一个粒子（N/P/E）；要多种粒子就加多行
               </div>
@@ -359,8 +353,7 @@ export default function FMeshForm({ value, onChange }: FMeshFormProps) {
             {issuesBlock(r._uid)}
           </div>
           );
-        });
-        })()
+        })
       )}
 
       {cardText && (

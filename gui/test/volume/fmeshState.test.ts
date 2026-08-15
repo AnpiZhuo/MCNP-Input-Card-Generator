@@ -223,3 +223,136 @@ describe("FMESH_PLACEHOLDERS 幽灵文字（F5.1）", () => {
     expect(FMESH_PLACEHOLDERS.tmints).toContain("区间数");
   });
 });
+
+/**
+ * 关键字等号可选解析（2026-08-15 PM 指令，镜像后端 fmesh_parser）。
+ * MCNP 允许空格分隔 `imesh 51`；等号可选。收集循环边界判定改「已知关键字/卡族头」，
+ * 未知 key 带 `=`（inc= 等）跳过，裸字母词当值收集（防 `geom xyz` 的 `xyz` 被误断）。
+ */
+describe("FMESH 关键字等号可选解析（imesh 51）", () => {
+  it("空格分隔：裸关键字进入值收集，字段不丢", () => {
+    const text = [
+      "FMESH4:N GEOM xyz ORIGIN -100 -100 -150",
+      "     IMESH 51 IINTS 10",
+      "     JMESH 100 JINTS=10",
+      "     KMESH -50 KINTS=100",
+    ].join("\n");
+    const rows = cardTextToFmesh(text);
+    expect(rows.length).toBe(1);
+    expect(rows[0].geom).toBe("XYZ"); // GEOM xyz 裸关键字 + 字母值
+    expect(rows[0].origin).toBe("-100 -100 -150");
+    expect(rows[0].imesh).toBe("51");
+    expect(rows[0].iints).toBe("10");
+    expect(rows[0].jmesh).toBe("100");
+    expect(rows[0].jints).toBe("10");
+    expect(rows[0].kmesh).toBe("-50");
+    expect(rows[0].kints).toBe("100");
+  });
+
+  it("等号形式不受影响（回归）", () => {
+    const text = "FMESH4:N GEOM=xyz ORIGIN=-100 -100 -150\n     IMESH=100 IINTS=10\n     JMESH=100 JINTS=10\n     KMESH=-50 KINTS=100";
+    const rows = cardTextToFmesh(text);
+    expect(rows[0].imesh).toBe("100");
+    expect(rows[0].iints).toBe("10");
+    expect(rows[0].geom).toBe("XYZ");
+    expect(rows[0].origin).toBe("-100 -100 -150");
+  });
+
+  it("混排：等号与空格分隔混合，值不串位", () => {
+    const text = [
+      "FMESH1:P GEOM=CYL ORIGIN 0 0 0",
+      "     IMESH 1 2 IINTS 2 2",
+      "     JMESH=2 JINTS=4",
+      "     KMESH 1 KINTS=8",
+      "     AXS=0 0 1",
+      "     VEC 1 0 0",
+      "     TR=3",
+    ].join("\n");
+    const rows = cardTextToFmesh(text);
+    expect(rows.length).toBe(1);
+    expect(rows[0].geom).toBe("CYL");
+    expect(rows[0].origin).toBe("0 0 0");
+    expect(rows[0].imesh).toBe("1 2");
+    expect(rows[0].iints).toBe("2 2");
+    expect(rows[0].jmesh).toBe("2");
+    expect(rows[0].jints).toBe("4");
+    expect(rows[0].kmesh).toBe("1");
+    expect(rows[0].kints).toBe("8");
+    expect(rows[0].axs).toBe("0 0 1");
+    expect(rows[0].vec).toBe("1 0 0");
+    expect(rows[0].tr).toBe("3");
+  });
+
+  it("未知关键字 `inc=` 跳过不报错，不污染相邻字段", () => {
+    const text = "FMESH2:N GEOM=xyz IMESH=10 IINTS=2 INC=1 JMESH=10 JINTS=2";
+    const rows = cardTextToFmesh(text);
+    expect(rows[0].imesh).toBe("10");
+    expect(rows[0].iints).toBe("2");
+    expect(rows[0].jmesh).toBe("10");
+    expect(rows[0].jints).toBe("2");
+  });
+
+  it("关键字大小写不敏感（小写/混合大小写均识别）", () => {
+    const text = [
+      "fmesh4:n geom=xyz",
+      "     imesh=10 iints=2",
+      "     jmesh 20 jINTS=2",
+      "     kmesh=30 KINTS=2",
+    ].join("\n");
+    const rows = cardTextToFmesh(text);
+    expect(rows.length).toBe(1);
+    expect(rows[0].kind).toBe("FMESH");
+    expect(rows[0].geom).toBe("XYZ");
+    expect(rows[0].imesh).toBe("10");
+    expect(rows[0].iints).toBe("2");
+    expect(rows[0].jmesh).toBe("20");
+    expect(rows[0].jints).toBe("2");
+    expect(rows[0].kmesh).toBe("30");
+    expect(rows[0].kints).toBe("2");
+  });
+
+  it("`geom xyz` 的字母值 xyz 不被误判截断（含能量值字母词环境）", () => {
+    const text = "FMESH3:N GEOM xyz ORIGIN=0 0 0\n     IMESH=10 IINTS=2\n     EMESH=1 14 EMINTS=2";
+    const rows = cardTextToFmesh(text);
+    expect(rows[0].geom).toBe("XYZ");
+    expect(rows[0].origin).toBe("0 0 0");
+    expect(rows[0].imesh).toBe("10");
+    expect(rows[0].emesh).toBe("1 14");
+    expect(rows[0].emints).toBe("2");
+  });
+
+  it("round-trip：空格分隔卡体 → 结构化 → 生成（= 形式）字段保留", () => {
+    const text = [
+      "FMESH4:N GEOM xyz ORIGIN -100 -100 -150",
+      "     IMESH 51 100 IINTS 10 5",
+      "     JMESH 100 JINTS 10",
+      "     KMESH -50 KINTS 100",
+      "     EMESH 1 14 EMINTS 2",
+      "     MAT 3",
+      "     OUT f",
+    ].join("\n");
+    const rows = cardTextToFmesh(text);
+    const back = fmeshToCardText(rows);
+    expect(back).toContain("FMESH4:N GEOM=XYZ ORIGIN=-100 -100 -150");
+    expect(back).toContain("IMESH=51 100");
+    expect(back).toContain("IINTS=10 5");
+    expect(back).toContain("JMESH=100");
+    expect(back).toContain("JINTS=10");
+    expect(back).toContain("KMESH=-50");
+    expect(back).toContain("KINTS=100");
+    expect(back).toContain("EMESH=1 14");
+    expect(back).toContain("EMINTS=2");
+    expect(back).toContain("MAT=3");
+    expect(back).toContain("OUT=f");
+    // 二次解析字段不丢（round-trip 稳定）
+    const rows2 = cardTextToFmesh(back);
+    expect(rows2[0].imesh).toBe("51 100");
+    expect(rows2[0].iints).toBe("10 5");
+    expect(rows2[0].origin).toBe("-100 -100 -150");
+    expect(rows2[0].geom).toBe("XYZ");
+    expect(rows2[0].emesh).toBe("1 14");
+    expect(rows2[0].emints).toBe("2");
+    expect(rows2[0].mat).toBe("3");
+    expect(rows2[0].out).toBe("f");
+  });
+});

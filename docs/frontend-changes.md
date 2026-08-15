@@ -570,3 +570,101 @@
 1. **生成卡体新增 `FACTOR=1`**：前端 `emptyFmeshRow.factor="1"` → 结构化 FMESH 卡体回放/载荷现含 `FACTOR=1`（MCNP factor 默认 1，语义等价；后端已支持）。旧 localStorage 工作区行无 factor 字段 → `fmeshToCardText` 按空串不发，round-trip 文本稳定。
 2. **简单模式隐藏字段**：默认简单只露粒子+三向范围；ORIGIN/INTS/能量/时间/GEOM 等在高级模式。老用户需点「高级模式」查看全部（GEOM 默认 XYZ，行为不变）。
 3. **AABB 容错**：TR 变换未提供 TR 卡 / 仅无限曲面的模型 → 自动填充提示解不出，回退「通用模板一键填充」；宏体方向矢量类按保守合成角点，网格只可能偏大（覆盖模型，安全）。
+
+---
+
+## FMESH 关键字等号可选解析修复（2026-08-15，PM 指令，镜像后端 fmesh_parser）
+
+> 范围：仅 `gui/src/volume/fmeshState.ts` + `gui/test/volume/fmeshState.test.ts` + 本文档。零新依赖；**未改后端**（后端同步在修 `app/meshtal/fmesh_parser.py`）。
+
+### Bug
+
+MCNP 允许空格分隔关键字（`imesh 51`）、等号可选；原 `KEY_RE = /^([A-Za-z]+)=(.*)$/` 强制 `=` → 裸 `imesh` 不匹配，落到 `i += 1` 被当未知 token 跳过，网格字段全空。
+
+### 改动（fmeshState.ts）
+
+1. **`KEY_RE` 等号可选**（:199）：`/^([A-Za-z]+)(?:=(.*))?$/` —— 裸 `imesh` 与 `imesh=51` 均匹配，`km[2]` 为 `undefined` 时走收集分支（`vals = km[2] ? [km[2]] : []`，:285）。
+2. **新增 `KEY_EQ_RE`**（:201）：`/^([A-Za-z]+)=/` —— 带显式等号必是关键字起点（无论已知未知），作收集循环边界。
+3. **新增 `isKnownKeyToken`**（:220-223）：`KEY_TO_FIELD` 内、大小写不敏感（裸或带 `=` 均算），作收集循环已知关键字边界判定。
+4. **收集循环 break 条件**（:288-296）：由「任意字母词（`FAMILY_RE || KEY_RE`）」改为「卡族头 / 已知关键字 / 未知关键字带 `=`」三判——防 `geom xyz` 的字母值 `xyz` 被误判截断，同时 `inc=1` 之类在收集中途出现时不污染字段值。
+5. **未知关键字容错**：`inc=` 等非已知 key（带 `=`）在主循环经 `!field` 分支跳过不报错（既有 :281-284 已覆盖，未改）；裸字母词在收集循环当值收集。
+
+### 测试（fmeshState.test.ts 13 → 20，+7）
+
+| 用例 | 覆盖 |
+| :--- | :--- |
+| 空格分隔：裸关键字进入值收集，字段不丢 | `IMESH 51 IINTS 10` 等 + `GEOM xyz` + `ORIGIN -100 -100 -150` |
+| 等号形式不受影响 | 回归：`IMESH=100 IINTS=10` |
+| 混排：等号与空格分隔混合，值不串位 | GEOM=CYL / ORIGIN 0 0 0 / AXS=0 0 1 / VEC 1 0 0 等 |
+| 未知关键字 `inc=` 跳过不报错，不污染相邻字段 | `IINTS=2 INC=1 JMESH=10` → jmesh 正确 |
+| 关键字大小写不敏感 | `fmesh4:n geom=xyz` / `imesh=10` / `jmesh 20 jINTS=2` |
+| `geom xyz` 的字母值 xyz 不被误判截断 | GEOM 裸关键字 + 字母值 + 后续 EMESH 多值 |
+| round-trip：空格分隔卡体 → 结构化 → 生成（= 形式）字段保留 | 二次解析字段不丢 |
+
+### 验证结果
+
+| 项 | 结果 |
+| :--- | :--- |
+| `cd gui && npx vitest run` | 22 文件 / **197 用例全绿**（190 基线不破 + 新增 7） |
+| `cd gui && npx tsc --noEmit` | EXIT 0 |
+| `cd gui && npm run build` | EXIT 0（仅既有 chunk 体积警告） |
+
+### 与后端契约一致性
+
+- JSON key 不变：`imesh/iints/jmesh/jints/kmesh/kints/emesh/emints/tmesh/tmints/mat/out/axs/vec/tr/factor` —— 与后端 `fmesh_parser.py` 同步（后端等号可选修复同语义）。
+- 生成仍发 `=` 形式（`IMESH=…`），MCNP 双形式兼容；round-trip 保真。
+
+---
+
+## FMeshForm 去简单/高级模式 + 字段控件 9 行布局分组（2026-08-15，PM 指令，纯布局）
+
+> 范围：仅 `gui/src/volume/fmeshState.ts` + `gui/src/volume/FMeshForm.tsx` + `gui/test/volume/simpleMode.test.ts`→`fmeshLayout.test.ts` + 本文档。
+> **零数据模型 / 卡体生成格式 / 解析逻辑改动**：`cardTextToFmesh`/`fmeshToCardText` 生成与解析逻辑完全未动（关键字等号可选修复保留，属合法）。
+
+### 改动 1：去掉简单/高级模式切换（始终显示完整表单）
+
+- `fmeshState.ts`：删除 `FmeshFormMode` 类型、`FMESH_SIMPLE_FIELDS`、`FMESH_ADVANCED_FIELDS`、`simpleModeVisibleFields(mode)`（原 :637-655）。
+- `FMeshForm.tsx`：删除 `mode` state、card-header「高级模式 ▾ / 收起高级 ▲」折叠按钮（原 :247-254）、渲染 IIFE `(() => { const visible = simpleModeVisibleFields(mode); return … })()`（原 :264-265/:362-363）；三步引导/粒子说明由 `mode === "simple" && isSelectRow` 改为 `isSelectRow`（原 :299/:317），去掉模式条件。
+
+### 改动 2：字段控件按 MCNP 卡结构 9 行分组（纯布局）
+
+新增可测纯数据常量 `FMESH_ROW_LAYOUT`（`fmeshState.ts` 末尾），FMeshForm 逐行渲染：
+
+| 行 | 字段（值/placeholder/校验/round-trip 不变） | 对应卡体行 |
+| :--- | :--- | :--- |
+| 1 | 粒子 \| GEOM \| OUT | 卡头 |
+| 2 | ORIGIN | ORIGIN 行 |
+| 3 | IMESH \| IINTS | 轴行 |
+| 4 | JMESH \| JINTS | 轴行 |
+| 5 | KMESH \| KINTS | 轴行 |
+| 6 | EMESH \| EMINTS | 能量行 |
+| 7 | TMESH \| TMINTS | 时间行 |
+| 8 | MAT \| FACTOR \| TR | 材料/因子/变换行 |
+| 9 | AXS \| VEC | 圆柱系才显示（`isCylGeom` 过滤） |
+
+- 每组（边界+区间数）拆单独一行，视觉与 FMESH 卡续行逐行对应；多行 FMESH 卡（每行一个卡）保持。
+- 每行分组 `display:flex; flexWrap:wrap; marginBottom:6`；AXS/VEC 行在直角系整行隐藏（`shown.length===0` → 不渲染）。
+- 控件 value/placeholder/title/hint/校验、GMESH/OUT 下拉、kind 徽标（TMESH 只读导入行）全部不变。
+
+### 改动 3：simpleMode 测试迁移（等量，197 不破）
+
+- 删除 `gui/test/volume/simpleMode.test.ts`（4 用例，测已删除的模式可见性函数）。
+- 新增 `gui/test/volume/fmeshLayout.test.ts`（4 用例，按布局方向迁移）：①9 行分组结构逐字节断言；②全部 19 字段恰好出现一次（无遗漏无重复 = 始终完整显示）；③每对 边界+区间数 在同一行；④MAT/FACTOR/TR 一行 + AXS/VEC 一行。
+
+### 保留项确认
+
+⚡ 按几何自动填充按钮（`autoFillByGeometry`）、通用模板一键填充、粒子说明「每个网格计数一个粒子（N/P/E）」、三步引导「① 选粒子 ② 点自动填充 ③ 解析看 3D 结果」、factor 字段（默认 1/正整数校验/FACTOR= 关键字）全部在位。
+
+### 验证结果
+
+| 项 | 结果 |
+| :--- | :--- |
+| `cd gui && npx vitest run` | 22 文件 / **197 用例全绿**（197 基线不破：-4 simpleMode + 4 fmeshLayout） |
+| `cd gui && npx tsc --noEmit` | EXIT 0 |
+| `cd gui && npm run build` | EXIT 0（仅既有 chunk 体积警告） |
+
+### 零格式/解析改动确认
+
+- `git diff gui/src/volume/fmeshState.ts`：仅「删模式块 + 加 FMESH_ROW_LAYOUT」+ 既有关键字等号可选修复（KEY_RE/KEY_EQ_RE/isKnownKeyToken/cardTextToFmesh 边界判定，上个会话合法改动，未动）。
+- `fmeshToCardText`/`cardLines` 生成逻辑 grep 零改动；卡体预览即生成格式不变。
+- 未改后端（app/、gui/backend 零触碰）。

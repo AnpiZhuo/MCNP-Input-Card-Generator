@@ -4,9 +4,14 @@
 CMESH(cyl) 降级 + raw 保留；structured 空 → raw 回放。
 纯 stdlib + app.models，不 import gui.backend.api_server / FreeCAD。
 """
+import re
+from pathlib import Path
+
 import pytest
 
 from app.meshtal.fmesh_parser import fmesh_defs_to_lines, parse_fmesh_lines
+
+FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 
 FMESH4 = [
     "FMESH4:N GEOM=XYZ ORIGIN=-100 -100 -150",
@@ -297,3 +302,135 @@ def test_factor_mixed_keywords_not_lost():
     a, b = defs[0], defs2[0]
     for attr in ("kind", "number", "geom", "origin", "axs", "vec", "tr", "out", "factor"):
         assert getattr(a, attr) == getattr(b, attr), f"字段 {attr} 往返丢失"
+
+
+# ── 12. 空格分隔（等号可选）：imesh 51 官方卡体语法 ─────────────
+def test_space_separated_imesh_jmesh_kmesh():
+    """`imesh 51` 空格分隔（无 `=`）→ imesh/jmesh/kmesh 字段解析。"""
+    lines = [
+        "FMESH14:P GEOM=XYZ ORIGIN=49.0 -10.0 90.0",
+        "     imesh 51  iints 1",
+        "     jmesh 10 jints 2",
+        "     kmesh 110.0 kints 2",
+    ]
+    defs = parse_fmesh_lines(lines)
+    assert len(defs) == 1
+    fd = defs[0]
+    assert fd.imesh == "51", f"imesh 空格分隔未解析: {fd.imesh!r}"
+    assert fd.jmesh == "10" and fd.kmesh == "110.0"
+    assert fd.iints == "1" and fd.jints == "2" and fd.kints == "2"
+
+
+# ── 13. 等号形式 + 大小写不敏感 ────────────────────────────────
+def test_equals_form_case_insensitive():
+    """`IMESH=10`（等号 + 大写关键字）→ imesh 解析。"""
+    lines = [
+        "fmesh4:n geom=xyz origin=0 0 0",
+        "     IMESH=10 IINTS=2",
+        "     JMESH=20 JINTS=2",
+        "     KMESH=30 KINTS=2",
+    ]
+    defs = parse_fmesh_lines(lines)
+    assert len(defs) == 1
+    fd = defs[0]
+    assert fd.kind == "FMESH" and fd.number == 4
+    assert fd.imesh == "10" and fd.jmesh == "20" and fd.kmesh == "30"
+    assert fd.iints == "2" and fd.jints == "2" and fd.kints == "2"
+
+
+# ── 14. 混排（等号 + 空格）+ 边界不截断 xyz 类字母值 ───────────
+def test_mixed_equals_and_space_geom_xyz_value():
+    """`geom xyz` 字母值不误判为新关键字；等号/空格混排全解析。"""
+    lines = [
+        "FMESH4:N GEOM=XYZ ORIGIN=0 0 0",
+        "     IMESH=10 IINTS=2",
+        "     jmesh 20  jints 2",
+        "     kmesh 30.0 kints 2",
+    ]
+    defs = parse_fmesh_lines(lines)
+    assert len(defs) == 1
+    fd = defs[0]
+    assert fd.geom.lower() == "xyz", f"GEOM 值被边界误判截断: {fd.geom!r}"
+    assert fd.imesh == "10" and fd.jmesh == "20" and fd.kmesh == "30.0"
+    assert fd.iints == "2" and fd.jints == "2" and fd.kints == "2"
+
+    # 空格分隔 `geom xyz` 同样成立（字母值 xyz 不被当新关键字）
+    lines_bare = [
+        "FMESH4:N geom xyz origin=0 0 0",
+        "     imesh 10 iints 2",
+    ]
+    defs_bare = parse_fmesh_lines(lines_bare)
+    assert defs_bare[0].geom.lower() == "xyz", f"裸 geom xyz 值被截断: {defs_bare[0].geom!r}"
+
+
+# ── 15. 未知关键字容错：inc= 不报错 + 记 raw 兜底（round-trip）──
+def test_unknown_keyword_inc_tolerated_raw_preserved():
+    """`inc=`（非已知关键字）跳过不报错；结构化字段照常解析；raw 兜底不丢。"""
+    lines = [
+        "fmesh14:p geom=xyz out=jk inc= 1 infinite",
+        "       origin= 49.0 -10.0 90.0",
+        "       imesh 51  iints 1",
+        "       jmesh 10 jints 2",
+        "       kmesh 110.0 kints 2",
+    ]
+    defs = parse_fmesh_lines(lines)
+    assert len(defs) == 1
+    fd = defs[0]
+    assert fd.imesh == "51" and fd.jmesh == "10" and fd.kmesh == "110.0"
+    assert fd.out == "jk" and fd.origin == "49.0 -10.0 90.0"
+    assert "inc=" in fd.raw, f"inc= 段未记入 raw 兜底: {fd.raw!r}"
+
+    # round-trip：结构化 + raw 段回放 → 再解析字段保留
+    emitted = fmesh_defs_to_lines(defs)
+    out = "\n".join(emitted)
+    assert "inc= 1 infinite" in out, f"回放丢失 inc= 段: {out}"
+    defs2 = parse_fmesh_lines(emitted)
+    fd2 = defs2[0]
+    assert fd2.imesh == "51" and fd2.kmesh == "110.0"
+    assert "inc=" in fd2.raw, f"再解析丢失 inc= 段: {fd2.raw!r}"
+
+
+# ── 16. 官方 case1~5.i vendor 解析 → 网格字段非空 ──────────────
+# 官方 FMESH_INC 样例（MCNP6 Testing）核心卡体：`imesh 51` 空格分隔 +
+# `out=jk` 等号 + 可选 `inc= 1 infinite`（case2~5，未知关键字容错目标）。
+OFFICIAL_CASE_EXPECT = {
+    "imesh": "51", "jmesh": "10", "kmesh": "110.0",
+    "iints": "1", "jints": "2", "kints": "2", "out": "jk",
+}
+
+
+def _fmesh_body_from_inp(path: Path) -> list:
+    """从官方 .i 提取 FMESH 卡体行（卡头 + 后续缩进续行）。"""
+    body = []
+    started = False
+    for ln in path.read_text(encoding="utf-8").splitlines():
+        s = ln.rstrip()
+        if re.match(r'^\s*fmesh\d', s, re.IGNORECASE):
+            started = True
+            body.append(s.strip())
+            continue
+        if started:
+            if s.strip() and (s.startswith(" ") or s.startswith("\t")):
+                body.append(s.rstrip())
+            else:
+                break
+    return body
+
+
+def test_official_case_fixtures_grid_fields_nonempty():
+    """官方 case1~5.i vendor 解析：IMESH/JMESH/KMESH 网格字段非空且有值。"""
+    for n in (1, 2, 3, 4, 5):
+        path = FIXTURES / f"official_fmesh_case{n}.i"
+        assert path.exists(), f"fixture 缺失: {path}"
+        body = _fmesh_body_from_inp(path)
+        assert body, f"未提取到 FMESH 卡体: {path}"
+        defs = parse_fmesh_lines(body)
+        assert len(defs) == 1, f"case{n} 应解析为 1 个 FmeshDefinition，实际 {len(defs)}"
+        fd = defs[0]
+        assert fd.imesh, f"case{n} IMESH 空（空格分隔关键字未解析）: {fd.imesh!r}"
+        assert fd.jmesh, f"case{n} JMESH 空: {fd.jmesh!r}"
+        assert fd.kmesh, f"case{n} KMESH 空: {fd.kmesh!r}"
+        for attr, exp in OFFICIAL_CASE_EXPECT.items():
+            assert getattr(fd, attr) == exp, (
+                f"case{n} {attr} 值不符: {getattr(fd, attr)!r} != {exp!r}"
+            )
