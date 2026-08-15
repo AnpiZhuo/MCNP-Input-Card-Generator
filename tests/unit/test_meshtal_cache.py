@@ -83,3 +83,24 @@ def test_manifest_changes_fingerprint_isolation(tmp_path):
     c = _cache(tmp_path)
     c.put_manifest("fp1", {"tallies": [1]})
     assert c.get_manifest("fp2") is None
+
+
+def test_manifest_old_format_version_invalidated(tmp_path):
+    """旧版 manifest（无 cache_version 字段）→ get_manifest 返回 None（版本失效重解析）。
+
+    Bug 2 收尾：解析行为修正后须让旧版磁盘 manifest（可能携带旧误导性 warnings）
+    失效重解析，否则命中缓存仍投放旧警告。
+    """
+    import json
+    c = _cache(tmp_path)
+    fp = c.fingerprint("old-format", 1.0)
+    # 直接落一个旧版（无版本号）manifest
+    with open(c._manifest_path(fp), "w", encoding="utf-8") as f:
+        json.dump({"grid_bounds": {"min": [0.0, 0.0, 0.0]}}, f)
+    assert c.get_manifest(fp) is None
+    # 新版 put 后 get 命中且不含内部版本键
+    data = {"grid_bounds": {"min": [0.0, 0.0, 0.0]}, "tallies": [{"number": 1}]}
+    c.put_manifest(fp, data)
+    got = c.get_manifest(fp)
+    assert got == data
+    assert "cache_version" not in got

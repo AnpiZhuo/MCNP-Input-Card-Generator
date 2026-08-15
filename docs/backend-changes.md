@@ -763,3 +763,90 @@ R1 不动点不回归；api.yaml **无 fmesh_defs schema → 无变更**（漂�
 ### M.6 数据库 / 环境变量
 
 无数据库变更；无新增环境变量。
+
+## N. MESHTAL 解析 Bug 2 修复：out=jk 二维矩阵格式支持（2026-08-15）
+
+> 指令：PM 派发，用户实测官方 case 生成卡跑完 MCNP 后解析 MESHTAL 报「请确认是 MCNP 生成的 meshtal 文件，文件格式不对或版本不兼容」。根因实证 + 修复。
+
+### N.1 根因实证
+
+用户真实文件 `D:\MCNP\new\claude\meshtal`（官方 case1 fmesh14:p，`out=jk`）是**二维矩阵布局**：
+
+```
+Tally Results:  Y (across) by Z (down)
+            -5.00        5.00
+    95.00 1.48185E-05 1.51877E-05
+   105.00 1.49623E-05 1.24125E-05
+```
+
+原 `_parse_tally_block` 只认默认 **col** 布局（每体素一行 `X Y Z Result Rel Error`），
+按 bin 数推断 `ncols = 5 + x_off`；矩阵行 token 数 ≠ ncols → 全部数据行被跳过 →
+`ValueError("未解析到数据行")` → worker error 信封 → api_server `_err` hint。
+
+附加发现（实跑 MCNP6.1 四种 out 变体验证）：
+- **pymcnp.Meshtal 从不生效**：`from pymcnp.meshtal import Meshtal` 恒 ImportError
+  （pymcnp 的 `meshtal/__init__.py` 只导出 Block/Header/Tally，无 `Meshtal` 类）→
+  实际解析一直走轻量兜底。Meshtal 类在 `src/pymcnp/Meshtal.py`（大写 M），本封装未引用。
+- **col 布局自身也有坑**：真实 `out=col` 文件在「显式能量边界但单 bin」时仍打印
+  Energy 列（6 列），原 `has_energy_col = energy_bins > 1` 判为 5 列 → 同样全跳过。
+  用户跑的官方 case1 恰好 `out=jk` 命中矩阵缺陷，但 col+单 bin 显式能量也会挂。
+- **`.msht` 文件头多数无 `mcnp version` 横幅**：首行即问题标题，原
+  `_parse_global_header` 把标题首词当 code（用户文件 → code="Test"）。
+
+### N.2 修复内容
+
+| # | 修复 | 文件:行 | 逻辑 |
+| :--- | :--- | :--- | :--- |
+| 1 | col 布局改**列头按列名识别** | `app/meshtal/meshtal_parser.py` `_parse_col_data` | 列头 `Result`/`Rel Error` 所在行按列名建位置映射（X/Y/Z/Result/Rel/Energy/Time），兼容 Energy/Time 列有无；`Total` 行因非数值 token 自然跳过 |
+| 2 | 新增**二维矩阵解析** | `_parse_matrix_data` | 识别 `Energy Bin:`/`Time Bin:` 帧标签（下边界 → bisect 序号）、`<C> bin:` 固定轴、`Tally Results: <A> (across) by <B> (down)` 列头+数据行；`Total Time/Energy Bin` 聚合段跳过（防重复计数，实测 2E×2T 恰 4 帧）；列号==across bin 序号 |
+| 3 | 布局判别 | `_parse_tally_block`:330-343 | 按 `X bin:`/`Energy Bin:`/`Tally Results:` 签名判别矩阵 vs col，分派到对应解析器 |
+| 4 | 文件头 code 修正 | `_parse_global_header`:72 | 仅在 `^\s*(\w+)\s+version\b` 横幅出现时取首词，否则恒 "mcnp"（防标题首词冒充 code） |
+| 5 | 共享帧构建 | `_get_frames` | col/矩阵共用按 (e,t) 取稠密数组对（simplify 抽取） |
+
+### N.3 新增测试（tests/unit/test_meshtal_matrix.py，+5，先红后绿）
+
+| 用例 | 覆盖 |
+| :--- | :--- |
+| `test_real_meshtal_jk_parses` | 用户真实 out=jk 文件解析成功，bins/帧值/误差/scalar_range 全断言（Bug 2 直接回归） |
+| `test_real_meshtal_ij_parses` | out=ij（Z 固定，X across / Y down）同数据 |
+| `test_real_meshtal_ik_parses` | out=ik（Y 固定，X across / Z down）同数据 |
+| `test_col_and_jk_equivalent` | 同一计数 col（Energy 列+单 bin）与 jk 逐体素数据/误差一致 |
+| `test_real_meshtal_jk_multi_energy_time_frames` | 2E×2T out=jk 恰 4 帧、Total 段不重复、非零帧定位、误差矩阵、scalar_range |
+
+### N.4 新增 fixtures（tests/fixtures/，+5，全部真实 MCNP6 输出）
+
+- `real_meshtal_jk.meshtal` —— 用户真实文件 `D:\MCNP\new\claude\meshtal` 原样复制
+  （官方 case1 fmesh14:p out=jk，1×2×2 网格，1 能量 bin）
+- `real_meshtal_ij.meshtal` / `real_meshtal_ik.meshtal` —— MCNP6.1 实跑 out=ij/ik
+- `real_meshtal_col.meshtal` —— 同一计数 out=col（含 Energy 列单 bin，用于 col 稳健性与跨格式等价）
+- `real_meshtal_jk_multi.meshtal` —— out=jk + 2 能量 × 2 时间 bin（Total 聚合段）
+
+### N.5 终态
+
+全量 pytest：**459 通过 / 0 失败**（454 基线零回归 + 新增 5 用例全绿）。端到端冒烟：
+worker `_run({mode:"parse", path: 用户真实 meshtal})` → `status:"ok"`，tally 14 / particle p /
+dims ni=1 nj=2 nk=2 / grid_bounds [49,-10,90]~[51,10,110]；texture 同样 ok（标量帧 1×2×2）。
+既有 valid_38/39/40 col fixtures 零回归（列头识别兼容 5/6/7 列）。
+
+### N.6 数据库 / 环境变量 / 契约
+
+无数据库变更；无新增环境变量。JSON key 与 api 契约零改动。
+
+### N.7 收尾：成功解析不再 emit 误导性「pymcnp 解析失败」警告（2026-08-15，PM 决策）
+
+> 背景：parse 响应 warnings 恒带「pymcnp 解析失败…」一条（`from pymcnp.meshtal
+> import Meshtal` 恒 ImportError，pymcnp 校验从不生效）；前端 OutputTab.tsx:329
+> 展示「警告 N 条」→ 用户成功解析合法 jk 文件仍见「警告 1 条」，与解析成功自相矛盾。
+
+| # | 改动 | 文件:行 | 逻辑 |
+| :--- | :--- | :--- | :--- |
+| 1 | 移除死代码 pymcnp 校验路径 + 误导性警告 | `meshtal_parser.py` `parse_meshtal` | 删 `used_pymcnp` try/except 与 `warnings=[...]` emit；成功解析 warnings 恒为 `[]`；真正失败仍抛异常（worker 转 error 信封） |
+| 2 | manifest 缓存版本号 | `meshtal_cache.py` `_MANIFEST_VERSION=2` + `get_manifest`/`put_manifest` | 旧版磁盘 manifest（无版本号，可能携带旧误导性 warnings）命中即失效重解析；返回的 dict 不含内部 `cache_version` 键 |
+| 3 | 模块/函数 docstring | `meshtal_parser.py` | 澄清 pymcnp.meshtal 不导出 Meshtal、解析始终走轻量解析器 |
+
+测试（先红后绿）：`tests/unit/test_meshtal_parser.py` +1 `test_successful_parse_no_misleading_warning`
+（valid_38 col + real_meshtal_jk 成功解析 → warnings 为空，先红后绿）；
+`tests/unit/test_meshtal_cache.py` +1 `test_manifest_old_format_version_invalidated`
+（旧版无版本号 manifest → get_manifest None 强制重解析；新版往返不含版本键）。
+**全量 pytest 461/0**（459 基线零回归 + 2 新增）。真实场景核验：worker `_run(mode=parse,
+用户真实 meshtal)` → `warnings:[]`，tally14/p/1×2×2；前端「已解析…」不再带「警告 N 条」。

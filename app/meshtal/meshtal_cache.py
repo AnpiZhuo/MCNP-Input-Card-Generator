@@ -13,6 +13,10 @@ import tempfile
 
 _MAX_BYTES = 512 * 1024 * 1024
 
+# 解析元数据 manifest 格式版本：解析行为/响应字段变化时 +1，使旧版磁盘 manifest
+# 失效重解析（防旧警告/旧元数据被缓存继续投放）。v1 = 无版本号字段的旧格式。
+_MANIFEST_VERSION = 2
+
 
 class MeshtalParseCache:
     """path+mtime 指纹 pickle 缓存（LRU 按磁盘量驱逐）。"""
@@ -33,22 +37,31 @@ class MeshtalParseCache:
         return os.path.join(self._dir, f"{fp}.manifest.json")
 
     def get_manifest(self, fp: str) -> dict | None:
-        """parse 元数据 manifest（JSON）——命中即免整文件重解析（契约 §4.4/§8）。"""
+        """parse 元数据 manifest（JSON）——命中即免整文件重解析（契约 §4.4/§8）。
+
+        版本不匹配（旧版 manifest）→ None（视为未命中，强制重解析）。
+        返回的 dict 不含内部 `cache_version` 键。
+        """
         p = self._manifest_path(fp)
         if not os.path.isfile(p):
             return None
         try:
             with open(p, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
         except Exception:
             return None
+        if data.pop("cache_version", None) != _MANIFEST_VERSION:
+            return None
+        return data
 
     def put_manifest(self, fp: str, data: dict) -> None:
         """parse 元数据 manifest 落盘（含全部 tally 元数据 + grid_bounds）。"""
+        payload = dict(data)
+        payload["cache_version"] = _MANIFEST_VERSION
         p = self._manifest_path(fp)
         tmp = p + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
+            json.dump(payload, f, ensure_ascii=False)
         try:
             os.replace(tmp, p)
         except OSError:

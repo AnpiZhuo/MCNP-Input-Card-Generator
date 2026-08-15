@@ -165,6 +165,26 @@ export function normalizeGeom(g: string): string {
   return (first || "XYZ").toUpperCase();
 }
 
+/**
+ * 粒子设计符归一化：统一大写单字母（N/P/E…，MCNP 大小写不敏感）。
+ * 导入值小写（`fmesh14:p` → "p"）须归一化，否则不匹配下拉 option 大写值 → select 空白（Bug 1 根因之一）。
+ */
+export function normalizeParticle(p: string): string {
+  const t = (p || "").trim();
+  return t ? t.toUpperCase() : t;
+}
+
+/**
+ * OUT 归一化：大小写不敏感匹配下拉选项（COL/CF/COLSC/CFSC/IJ/IK/JK/NONE/XDMF）。
+ * 命中转大写下拉值（`out=jk` → "JK"，修 Bug 1 下拉不更新）；未知值保留原文（round-trip 保真）。
+ */
+export function normalizeOut(o: string): string {
+  const t = (o || "").trim();
+  if (!t) return t;
+  const hit = FMESH_OUT_OPTIONS.find((opt) => opt.value.toUpperCase() === t.toUpperCase());
+  return hit ? hit.value : t;
+}
+
 /** 是否圆柱系（CYL/RZT）：AXS/VEC 显示 + kmesh 末值=1 校验 + 平行检测的前提 */
 export function isCylGeom(g: string): boolean {
   const t = normalizeGeom(g);
@@ -267,7 +287,7 @@ export function cardTextToFmesh(text: string): FmeshRow[] {
         ...emptyFmeshRow(),
         number,
         kind,
-        particle,
+        particle: normalizeParticle(particle), // 导入 `fmesh14:p` → "P"（下拉 option 大写值）
         geom,
       };
       rows.push(current);
@@ -297,6 +317,9 @@ export function cardTextToFmesh(text: string): FmeshRow[] {
       if (field === "geom") {
         // GEOM 值必须单 token（`GEOM=X Y Z` 非法，MCNP 只认 GEOM=XYZ/CYL）；只取首值，防御空格拆开
         current[field] = normalizeGeom(vals[0] || "");
+      } else if (field === "out") {
+        // OUT 归一化为下拉选项大写值（`out=jk` → "JK"，大小写不敏感；未知值保留原文保 round-trip）
+        current[field] = normalizeOut(vals.join(" "));
       } else {
         current[field] = vals.join(" ").trim();
       }
@@ -406,7 +429,7 @@ export function fmeshDefsToRows(defs: Record<string, any>[]): FmeshRow[] {
   return (defs || []).map((f) => ({
     number: String(f.number ?? ""),
     kind: (f.kind === "TMESH" ? "TMESH" : "FMESH") as FmeshKind,
-    particle: f.particle || "",
+    particle: normalizeParticle(f.particle || ""),
     geom: normalizeGeom(f.geom || ""),
     origin: f.origin || "",
     imesh: f.imesh || "",
@@ -420,7 +443,7 @@ export function fmeshDefsToRows(defs: Record<string, any>[]): FmeshRow[] {
     tmesh: f.tmesh || "",
     tmints: f.tmints ?? f.t_ints ?? "",
     mat: f.mat || "",
-    out: f.out || "",
+    out: normalizeOut(f.out || ""),
     axs: f.axs || "",
     vec: f.vec || "",
     tr: f.tr || "",

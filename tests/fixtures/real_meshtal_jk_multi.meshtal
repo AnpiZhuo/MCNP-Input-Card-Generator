@@ -1,0 +1,166 @@
+mcnp   version 6     ld=05/08/13  probid =  08/15/26 13:51:48 
+ Test of unc - uncollided secondaries card (multi bin out=jk)                    
+ Number of histories used for normalizing tallies =        100000.00
+
+ Mesh Tally Number        14
+ photon   mesh tally.
+
+ Tally bin boundaries:
+    X direction:     49.00     51.00
+    Y direction:    -10.00      0.00     10.00
+    Z direction:     90.00    100.00    110.00
+    Time bin boundaries:  -1.00E+36 0.00E+00 2.00E+00
+    Energy bin boundaries: 0.00E+00 1.00E-03 5.00E-01
+
+Energy Bin:  0.00E+00 - 1.00E-03 MeV
+
+
+Time Bin: -1.00E+36 - 0.00E+00 shakes
+
+  X bin:      49.00   -    51.00
+
+     Tally Results:  Y (across) by Z (down)
+                -5.00        5.00
+        95.00 0.00000E+00 0.00000E+00
+       105.00 0.00000E+00 0.00000E+00
+
+     Relative Errors
+                -5.00        5.00
+        95.00 0.00000     0.00000
+       105.00 0.00000     0.00000
+
+
+
+Time Bin:  0.00E+00 - 2.00E+00 shakes
+
+  X bin:      49.00   -    51.00
+
+     Tally Results:  Y (across) by Z (down)
+                -5.00        5.00
+        95.00 0.00000E+00 0.00000E+00
+       105.00 0.00000E+00 0.00000E+00
+
+     Relative Errors
+                -5.00        5.00
+        95.00 0.00000     0.00000
+       105.00 0.00000     0.00000
+
+
+
+Total Time Bin
+
+  X bin:      49.00   -    51.00
+
+     Tally Results:  Y (across) by Z (down)
+                -5.00        5.00
+        95.00 0.00000E+00 0.00000E+00
+       105.00 0.00000E+00 0.00000E+00
+
+     Relative Errors
+                -5.00        5.00
+        95.00 0.00000     0.00000
+       105.00 0.00000     0.00000
+
+
+
+Energy Bin:  1.00E-03 - 5.00E-01 MeV
+
+
+Time Bin: -1.00E+36 - 0.00E+00 shakes
+
+  X bin:      49.00   -    51.00
+
+     Tally Results:  Y (across) by Z (down)
+                -5.00        5.00
+        95.00 0.00000E+00 0.00000E+00
+       105.00 0.00000E+00 0.00000E+00
+
+     Relative Errors
+                -5.00        5.00
+        95.00 0.00000     0.00000
+       105.00 0.00000     0.00000
+
+
+
+Time Bin:  0.00E+00 - 2.00E+00 shakes
+
+  X bin:      49.00   -    51.00
+
+     Tally Results:  Y (across) by Z (down)
+                -5.00        5.00
+        95.00 4.08101E-06 3.18320E-06
+       105.00 1.13455E-06 1.69206E-06
+
+     Relative Errors
+                -5.00        5.00
+        95.00 0.21568     0.24443
+       105.00 0.37764     0.33045
+
+
+
+Total Time Bin
+
+  X bin:      49.00   -    51.00
+
+     Tally Results:  Y (across) by Z (down)
+                -5.00        5.00
+        95.00 4.08101E-06 3.18320E-06
+       105.00 1.13455E-06 1.69206E-06
+
+     Relative Errors
+                -5.00        5.00
+        95.00 0.21568     0.24443
+       105.00 0.37764     0.33045
+
+
+
+Total Energy Bin
+
+
+Time Bin: -1.00E+36 - 0.00E+00 shakes
+
+  X bin:      49.00   -    51.00
+
+     Tally Results:  Y (across) by Z (down)
+                -5.00        5.00
+        95.00 0.00000E+00 0.00000E+00
+       105.00 0.00000E+00 0.00000E+00
+
+     Relative Errors
+                -5.00        5.00
+        95.00 0.00000     0.00000
+       105.00 0.00000     0.00000
+
+
+
+Time Bin:  0.00E+00 - 2.00E+00 shakes
+
+  X bin:      49.00   -    51.00
+
+     Tally Results:  Y (across) by Z (down)
+                -5.00        5.00
+        95.00 4.08101E-06 3.18320E-06
+       105.00 1.13455E-06 1.69206E-06
+
+     Relative Errors
+                -5.00        5.00
+        95.00 0.21568     0.24443
+       105.00 0.37764     0.33045
+
+
+
+Total Time Bin
+
+  X bin:      49.00   -    51.00
+
+     Tally Results:  Y (across) by Z (down)
+                -5.00        5.00
+        95.00 4.08101E-06 3.18320E-06
+       105.00 1.13455E-06 1.69206E-06
+
+     Relative Errors
+                -5.00        5.00
+        95.00 0.21568     0.24443
+       105.00 0.37764     0.33045
+
+

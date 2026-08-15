@@ -668,3 +668,55 @@ MCNP 允许空格分隔关键字（`imesh 51`）、等号可选；原 `KEY_RE = 
 - `git diff gui/src/volume/fmeshState.ts`：仅「删模式块 + 加 FMESH_ROW_LAYOUT」+ 既有关键字等号可选修复（KEY_RE/KEY_EQ_RE/isKnownKeyToken/cardTextToFmesh 边界判定，上个会话合法改动，未动）。
 - `fmeshToCardText`/`cardLines` 生成逻辑 grep 零改动；卡体预览即生成格式不变。
 - 未改后端（app/、gui/backend 零触碰）。
+
+---
+
+## Bug 1 修复：FMESH 导入时粒子/GEOM/OUT 下拉不更新（2026-08-15，PM 指令）
+
+> 用户实测官方测试文件（`tests/fixtures/official_fmesh_case1~5.i`，卡体 `fmesh14:p geom=xyz out=jk`）导入后，粒子设计符 / GEOM / OUT 三个下拉未正确变化；手动生成正常。
+> 范围：仅 `gui/src/volume/fmeshState.ts` + 新增 `gui/test/volume/fmeshNormalize.test.ts` + 本文档。未碰后端/契约，JSON key 零改动。
+
+### 根因确认
+
+导入值小写、下拉选项大写 → React 受控 `<select>` 的 `value` 不匹配任何 `<option>` → 下拉空白不更新：
+
+| 字段 | 导入值 | 下拉 option 值 | 归一化函数 |
+| :--- | :--- | :--- | :--- |
+| 粒子 | `fmesh14:p` → `particle="p"` | `P`（N/P/E） | 无（缺）→ Bug |
+| GEOM | `geom=xyz` → `"xyz"` | `XYZ` | `normalizeGeom` 已有 → 正常 |
+| OUT | `out=jk` → `"jk"` | `JK` | 无（缺）→ Bug |
+
+- 导入链路两条：INP 导入走后端 parse → `fmeshDefsToRows`（`App.tsx:170` / `TallyTab.tsx:83`）；文本模式走 `cardTextToFmesh`。两条路径 `geom` 均经 `normalizeGeom` 归一化，`particle`/`out` 均未归一化。
+
+### 改动 1：新增归一化纯函数（`fmeshState.ts`，`normalizeGeom` 之后）
+
+- `normalizeParticle(p)`：统一大写单字母（N/P/E…，MCNP 大小写不敏感）；未知值/空值保留原文。
+- `normalizeOut(o)`：大小写不敏感匹配 `FMESH_OUT_OPTIONS`（COL/CF/COLSC/CFSC/IJ/IK/JK/NONE/XDMF），命中转大写下拉值（`jk`→`JK`）；**未知值保留原文**（round-trip 保真，如既有测试 `OUT=f` 不破坏）。
+
+### 改动 2：导入/解析路径统一应用归一化（`fmeshState.ts`）
+
+- `cardTextToFmesh` 卡头 FAMILY_RE 分支：`particle: normalizeParticle(particle)`。
+- `cardTextToFmesh` 通用 KEY 分支：`field === "out"` 时 `normalizeOut(vals.join(" "))`。
+- `fmeshDefsToRows`：`particle` / `out` 两字段归一化（geom 原本已有 `normalizeGeom`）。
+- 生成路径 `fmeshToCardText` / `cardLines` / `buildFmeshPayload` 零改动 —— 行值解析时已归一化，生成自然输出大写 MCNP 写法（`FMESH14:P GEOM=XYZ … OUT=JK`），round-trip 稳定。
+
+### 新增测试（红→绿，测试先行）
+
+`gui/test/volume/fmeshNormalize.test.ts`（6 用例）：
+1. `normalizeParticle` 纯函数（p→P / n→N / E 不变 / 空→空）。
+2. `normalizeOut` 纯函数（jk→JK / col→COL / xdmf→XDMF / 未知 f 保留 / 空→空）。
+3. `cardTextToFmesh` 官方 case1 卡体 → particle=P / geom=XYZ / out=JK（回归样本=官方 case 原样复制）。
+4. `fmeshDefsToRows` 后端 parse 载荷（小写值）→ 同样归一化。
+5. round-trip：解析→生成→再解析，粒子/GEOM/OUT 保持大写下拉值，网格字段保留。
+6. 官方 case2~5 变体（含未知关键字 `inc=`）不污染字段，`out=jk` 仍归一化。
+
+### 验证结果
+
+| 项 | 结果 |
+| :--- | :--- |
+| `cd gui && npx vitest run` | 23 文件 / **203 用例全绿**（197 基线不破 + 6 新增） |
+| `cd gui && npx tsc --noEmit` | EXIT 0 |
+| `cd gui && npm run build` | EXIT 0（仅既有 chunk 体积警告） |
+
+- 说明：全量首跑曾见 `colorize.test.ts` 128³ 计时用例 1 次失败（50.9ms>50ms），为 PROJECT_MEMORY 已记录的 **flaky 计时用例**（负载偶发），隔离重跑通过（49ms），非本次改动回归。
+- 未改后端（app/、gui/backend 零触碰）；未装任何依赖。

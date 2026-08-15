@@ -168,7 +168,25 @@ def test_parse_meshtal_file_mtime_path():
     assert len(mf.tallies) == 1
 
 
-# ── 6. 畸形输入 → 优雅错误信封 ──────────────────────────────────
+# ── 6. 成功解析不 emit 误导性警告（Bug 2 收尾，2026-08-15）────────────
+def test_successful_parse_no_misleading_warning():
+    """合法 meshtal 成功解析 → warnings 不含「pymcnp 解析失败」误导条目。
+
+    现状（Bug 2 收尾）：`from pymcnp.meshtal import Meshtal` 恒 ImportError
+    （pymcnp.meshtal 只导出 Block/Header/Tally，Meshtal 类在 src/pymcnp/Meshtal.py
+    大写 M），pymcnp 校验从不生效，但成功解析后仍 emit 一条「pymcnp 解析失败…」
+    → 前端 OutputTab 显示「警告 1 条」与解析成功自相矛盾。
+    修复：成功解析 warnings 为空；真正失败走异常传播（worker 转 error 信封）。
+    col 与矩阵（out=jk）两类真实样本都要覆盖。
+    """
+    _require_module()
+    for name in ("valid_38.meshtal", "real_meshtal_jk.meshtal"):
+        mf = parse_meshtal(_fixture(name))
+        assert mf.tallies, f"{name} 应解析出 tally"
+        assert mf.warnings == [], f"{name} 成功解析后不应带误导性警告: {mf.warnings}"
+
+
+# ── 7. 畸形输入 → 优雅错误信封 ──────────────────────────────────
 def test_malformed_input_raises_graceful_error():
     """畸形/空输入 → 抛明确错误（不静默返回空文件、不裸崩溃）。"""
     _require_module()

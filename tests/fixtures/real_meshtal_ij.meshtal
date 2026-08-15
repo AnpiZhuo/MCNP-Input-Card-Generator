@@ -1,0 +1,40 @@
+ Test of unc - uncollided secondaries card                                       
+ Number of histories used for normalizing tallies =        100000.00
+
+ Mesh Tally Number        14
+ photon   mesh tally.
+
+ Tally bin boundaries:
+    X direction:     49.00     51.00
+    Y direction:    -10.00      0.00     10.00
+    Z direction:     90.00    100.00    110.00
+    Energy bin boundaries: 1.00E-03 1.00E+36
+
+Energy Bin:  1.00E-03 - 1.00E+36 MeV
+
+  Z bin:      90.00   -   100.00
+
+     Tally Results:  X (across) by Y (down)
+                50.00
+        -5.00 1.48185E-05
+         5.00 1.51877E-05
+
+     Relative Errors
+                50.00
+        -5.00 0.11487
+         5.00 0.11171
+
+
+  Z bin:     100.00   -   110.00
+
+     Tally Results:  X (across) by Y (down)
+                50.00
+        -5.00 1.49623E-05
+         5.00 1.24125E-05
+
+     Relative Errors
+                50.00
+        -5.00 0.11346
+         5.00 0.13166
+
+
