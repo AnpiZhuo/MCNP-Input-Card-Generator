@@ -286,6 +286,7 @@
 
 ## 5. 核心业务规则（必读）
 
+- **版本号锁定 1.7.1（上级硬规则，2026-08-15）**：网格计数可视化功能（FMESH/TMESH 3D 体积可视化）交付版本统一为 **1.7.1**；**任何 bug 修复批次严禁提升版本号**（改多少轮 bug，文件版本号恒为 1.7.1；PM 曾擅自升到 1.7.2/1.7.3 属违规，已回退并记此规则）。仅**实际新功能**上线才由上级重新指定版本号。打包时版本四处+锁文件（tauri.conf.json / package.json / Cargo.toml / README 徽章 / Cargo.lock）一律填 1.7.1。
 - **DeckData 是聚合根**：前端 DeckContext ↔ 后端 generate/parse 全走 DeckData 单对象，避免参数膨胀。
 - **密度写在栅元卡（CELL）上**，材料卡（Mm）只含 ZAID+份额，不含密度。
 - **栅元/材料/计数行支持判别联合**：`kind=="cell"|"raw"`（栅元）、`kind=="nuclide"|"raw"`（材料）——`raw` 行承载 `#ifdef/#else/#endif` 原样条件行。

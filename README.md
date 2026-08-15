@@ -6,7 +6,7 @@ A desktop application for visually creating, editing, and validating **MCNP** in
 
 ![应用截图](![alt text](<屏幕截图 2026-08-01 015145.png>))
 
-![Version](https://img.shields.io/badge/Version-1.7.3-blue)
+![Version](https://img.shields.io/badge/Version-1.7.1-blue)
 ![Frontend](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-teal)
 ![Shell](https://img.shields.io/badge/Shell-Tauri-green)
 ![License](https://img.shields.io/badge/License-All%20Rights%20Reserved-red)

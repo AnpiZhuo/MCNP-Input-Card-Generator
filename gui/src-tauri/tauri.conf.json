@@ -7,7 +7,7 @@
   },
   "package": {
     "productName": "MCNP \u8f93\u5165\u5361\u751f\u6210\u5668",
-    "version": "1.7.3"
+    "version": "1.7.1"
   },
   "tauri": {
     "allowlist": {
