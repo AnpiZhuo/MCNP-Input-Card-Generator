@@ -1,5 +1,35 @@
 import { describe, it, expect } from "vitest";
-import { RAY_MARCH_VERTEX, RAY_MARCH_FRAGMENT, isWebGL2, WEBGL2_UNAVAILABLE } from "../../src/volume/volumeShader";
+import {
+  RAY_MARCH_VERTEX,
+  RAY_MARCH_FRAGMENT,
+  buildRayMarchMaterial,
+  isWebGL2,
+  WEBGL2_UNAVAILABLE,
+} from "../../src/volume/volumeShader";
+
+/**
+ * 真实渲染回归守卫（2026-08-15 用户实测「体积层完全没渲染」根因）：
+ * three r160 对 RawShaderMaterial 会先前置 `#define SHADER_TYPE …` 块再拼用户源码；
+ * 旧实现 shader 字符串以 `#version 300 es` 开头 → 编译报
+ * 「#version directive must occur before anything else」→ 程序无效 → 体积层从不显示。
+ * 本组断言锁定正确契约：shader 字符串不含 #version、材质设 glslVersion=GLSL3。
+ */
+describe("RawShaderMaterial #version 指令契约（真实渲染回归）", () => {
+  it("shader 字符串不得含 #version（three 前置 #define 块，用户源码首行 #version 会编译失败）", () => {
+    expect(RAY_MARCH_VERTEX).not.toContain("#version");
+    expect(RAY_MARCH_FRAGMENT).not.toContain("#version");
+  });
+
+  it("shader 首行为 precision 声明（#version 300 es 由 three 经 glslVersion 生成在最顶端）", () => {
+    expect(RAY_MARCH_VERTEX.split("\n")[0]).toContain("precision");
+    expect(RAY_MARCH_FRAGMENT.split("\n")[0]).toContain("precision");
+  });
+
+  it("buildRayMarchMaterial 设 glslVersion=GLSL3（three 在最顶端生成 #version 300 es）", () => {
+    const mat = buildRayMarchMaterial({ texture: {} as any });
+    expect(mat.glslVersion).toBe("300 es");
+  });
+});
 
 /**
  * 光线步进 shader 字符串快照 + WebGL2 判定（契约 meshtal-visualization.md §4.7 / §13）

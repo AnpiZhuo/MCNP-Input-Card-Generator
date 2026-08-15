@@ -828,3 +828,58 @@ MCNP 允许空格分隔关键字（`imesh 51`）、等号可选；原 `KEY_RE = 
 
 - 未改后端（app/、gui/backend 零触碰）；未改契约 / JSON key / meshtal 数据；未装任何依赖；未 commit（等 PM 统一提交）。
 - simplify 单趟已跑（boxMin/boxMax 复用 applyOffset；`clamp01` 全库无既有工具，保留新建）。
+
+---
+
+# P0 根因修复：体积层真实渲染从未生效（2026-08-15，PM 实测未闭环后真实复现）
+
+> 用户实测：4 症状修复后**外壳半透明已生效，但体积层（云雾/着色体素）完全没显示**，画面几乎全透明只剩一个小栅元。此前的 seam 测试只验证纯函数/数据维度，未验证 WebGL2 真实渲染。
+
+## 真实复现（零新依赖，本机 Edge headless + SwiftShader）
+
+临时自包含复现页 `gui/repro_volume.html`（已删除）：从 `gui/node_modules/three/build/three.min.js` 加载，复刻 VolumeRenderer 体积盒路径（相同 RAY_MARCH_VERTEX/FRAGMENT + RawShaderMaterial + Data3DTexture(2,2,1) + 四体素 RGBA + BoxGeometry(1,1,1)×scale(2,20,20) + uBoxMin/uBoxMax + computeCameraParams 相机 Z-up）。
+
+Edge headless 截图 + stderr 日志铁证：
+```
+WebGL: INVALID_OPERATION: useProgram: program not valid
+=== VOLUME SHADER PROGRAM INFO === Vertex shader is not compiled.
+=== VOLUME SHADER VS INFO === ERROR: 0:3: 'version' : #version directive must occur before anything else
+=== VOLUME SHADER FS INFO === ERROR: 0:3: 'version' : #version directive must occur before anything else
+```
+**shader 程序从未编译成功 → 体积层从未渲染**（外壳 MeshStandardMaterial 正常编译，所以只有外壳可见）。
+
+## 根因（一句话）
+
+three r160 的 WebGLProgram 对 **RawShaderMaterial 会前置 `#define SHADER_TYPE RawShaderMaterial`… 块**再拼用户源码；旧 shader 字符串以 `#version 300 es` 开头 → `#version` 不再处于首位 → GLSL 编译失败 → 程序无效 → 体积层从没画出来。此 bug 自 ea20ad7 引入后从未在真浏览器跑过（契约 §9.3 `#/volume` e2e 一直标注"待人工补跑"），shader 快照测试只锁字符串、不编译，故一路绿灯放行。
+
+## 修复（`gui/src/volume/volumeShader.ts`）
+
+1. `RAY_MARCH_VERTEX` / `RAY_MARCH_FRAGMENT` 去掉首行 `#version 300 es`（shader 字符串内不再含 `#version`）。
+2. `buildRayMarchMaterial` 增 `glslVersion: THREE.GLSL3`（= "300 es"）——由 three 在最顶端生成 `#version 300 es`（版本指令必须为首行，随后 three 的 `#define` 块 + 用户 shader 顺序合法）。
+
+## 真实渲染验证（前后截图对比，保存在 D:/code/vol_repro.png / vol_repro_fixed.png）
+
+| 项 | 修复前 `vol_repro.png` | 修复后 `vol_repro_fixed.png` |
+| :--- | :--- | :--- |
+| stderr shader 日志 | `program not valid` + `#version directive` 报错 | 无（编译通过） |
+| 中心 120×120 非背景像素 | **0 / 14400**（纯背景，体积层零渲染） | **14400 / 14400** |
+| 画面内容（ASCII 采样） | 全 `.` 背景 | 4 体素色块 **G 绿 / Y 黄 / R 红 / B 蓝** 按 y/z 布局清晰渲染 |
+
+## 回归测试（volumeShader.snapshot.test.ts，+3 用例，防再回归）
+
+- shader 字符串不得含 `#version`（three 前置 #define 块，用户源码首行 #version 必编译失败）——**此守卫能直接抓住本 bug**。
+- shader 首行为 `precision` 声明（#version 由 three 经 glslVersion 生成在最顶端）。
+- `buildRayMarchMaterial(...).glslVersion === "300 es"`。
+- 快照更新 2（fragment/vertex 字符串去掉首行 `#version 300 es`）。
+
+## 验证结果
+
+| 项 | 结果 |
+| :--- | :--- |
+| `cd gui && npx vitest run` | 28 文件 / **236 用例全绿**（233 基线 + 3 新增回归守卫） |
+| `cd gui && npx tsc --noEmit` | EXIT 0 |
+| `cd gui && npm run build` | EXIT 0（仅既有 chunk 体积警告） |
+
+- 临时复现页 `gui/repro_volume.html` 已删除（不留垃圾）；截图证据保留 `D:/code/vol_repro.png`（前）/ `vol_repro_fixed.png`（后）。
+- **需要重新打包**：已部署版（HEAD 301d325）仍带本 bug（体积层全程未渲染），修复后需重打包才能让用户看到体积层。
+- 未改后端/契约；零新依赖；未 commit。

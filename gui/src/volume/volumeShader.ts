@@ -1,6 +1,13 @@
 /**
  * volumeShader — WebGL2 光线步进体积渲染（契约 meshtal-visualization.md §4.7）
  *
+ * ⚠️ 重要（真实渲染根因修复，2026-08-15）：shader 字符串**不得**以 `#version 300 es` 开头——
+ * three r160 对 RawShaderMaterial 会先前置 `#define SHADER_TYPE …` 块再拼用户源码，
+ * 若用户源码首行是 `#version`，编译报「#version directive must occur before anything else」，
+ * 程序无效 → 体积层从未渲染（用户实测「只见栅元不见体积层」的真根因）。
+ * 正确做法：shader 字符串不含 `#version`，材质设 `glslVersion: THREE.GLSL3`（= "300 es"），
+ * 由 three 在最顶端生成 `#version 300 es`（版本指令必须是首行）。
+ *
  * - 前向光线步进（front-to-back 累积 alpha 合成）
  * - CPU 已上色（colorizeScalar RGBA，阈值以下 alpha 0）→ GPU 只采样 + alpha 合成
  * - 数据布局：后端 numpy (x,y,z) 扁平（z 最快），DataTexture3D dims=(nk,nj,ni)，
@@ -12,8 +19,7 @@
 /** 最大光线步进数（uniform uSteps 上限，注入 shader 循环常量） */
 export const MAX_RAY_STEPS = 256;
 
-export const RAY_MARCH_VERTEX = `#version 300 es
-precision highp float;
+export const RAY_MARCH_VERTEX = `precision highp float;
 in vec3 position;
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
@@ -26,8 +32,7 @@ void main() {
 }
 `;
 
-export const RAY_MARCH_FRAGMENT = `#version 300 es
-precision highp float;
+export const RAY_MARCH_FRAGMENT = `precision highp float;
 precision highp sampler3D;
 in vec3 vWorldPos;
 uniform sampler3D uTex;
@@ -108,8 +113,12 @@ export interface RayMarchMaterialOptions {
 
 /**
  * 构建光线步进 RawShaderMaterial（CPU 已上色 → 采样 + alpha 合成）。
- * 用 RawShaderMaterial：shader 自带 `#version 300 es` + 完整 uniform/属性声明，
- * three 不会自动前缀（避免双 `#version` 编译错误）。
+ *
+ * 关键（真实渲染修复）：RawShaderMaterial + `glslVersion: THREE.GLSL3` ——
+ * shader 字符串不含 `#version`，由 three 在编译源最顶端生成 `#version 300 es`
+ * （three 会给 RawShaderMaterial 前置 `#define SHADER_TYPE …` 块，`#version` 必须
+ * 在其之前且为首行，故不能放在用户 shader 字符串里）。
+ * 完整 uniform/属性声明由本 shader 自带（RawShaderMaterial 不做属性/varying 前缀转换）。
  * 由 VolumeRenderer 注入 texture/box/camera 相关 uniform 更新。
  */
 export function buildRayMarchMaterial(opts: RayMarchMaterialOptions): THREE.RawShaderMaterial {
@@ -124,6 +133,7 @@ export function buildRayMarchMaterial(opts: RayMarchMaterialOptions): THREE.RawS
     },
     vertexShader: RAY_MARCH_VERTEX,
     fragmentShader: RAY_MARCH_FRAGMENT,
+    glslVersion: THREE.GLSL3,
     transparent: true,
     depthWrite: false,
   });

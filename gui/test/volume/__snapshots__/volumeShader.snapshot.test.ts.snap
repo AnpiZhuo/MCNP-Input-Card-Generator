@@ -1,8 +1,7 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
 exports[`RAY_MARCH_FRAGMENT > 快照：片段着色器字符串稳定 1`] = `
-"#version 300 es
-precision highp float;
+"precision highp float;
 precision highp sampler3D;
 in vec3 vWorldPos;
 uniform sampler3D uTex;
@@ -58,8 +57,7 @@ void main() {
 `;
 
 exports[`RAY_MARCH_VERTEX > 透传世界坐标（vWorldPos 供片段射线方向） 1`] = `
-"#version 300 es
-precision highp float;
+"precision highp float;
 in vec3 position;
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
