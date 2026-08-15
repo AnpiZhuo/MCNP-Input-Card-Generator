@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
 import {
-  weatherLut, colorizeScalar, WEATHER_STOPS, roundHalfEven,
+  weatherLut, colorizeScalar, WEATHER_STOPS, roundHalfEven, defaultDisplayMin, minPositiveOfBytes,
 } from "../../src/volume/colorize";
 
 /**
@@ -45,6 +45,50 @@ describe("weatherLut golden（跨语言防漂移）", () => {
     expect(positions).toEqual([0.0, 0.33, 0.55, 0.75, 1.0]);
     expect(WEATHER_STOPS[0][1][0]).toBe(0x3b); // 蓝
     expect(WEATHER_STOPS[WEATHER_STOPS.length - 1][1][0]).toBe(0xdc); // 红
+  });
+});
+
+describe("defaultDisplayMin（自适应色阶下限）", () => {
+  it("数据最小值恰为 0 且提供最小正值 → minPositive*0.5（只隐纯零背景，正结构全保留）", () => {
+    // 用户实测：±2000 全域网格，u8 纹理最小非零值≈7.38e-8、max=1.88e-5；
+    // sqrt 规则切太狠（200cm 粗光束只剩 1 体素宽的"一个面"观感），改为只隐零背景
+    expect(defaultDisplayMin({ min: 0, max: 1.88115e-5 }, 7.376e-8)).toBeCloseTo(7.376e-8 * 0.5, 12);
+  });
+
+  it("数据最小值恰为 0 但无 minPositive → 保守兜底 max*1e-6", () => {
+    expect(defaultDisplayMin({ min: 0, max: 1.88115e-5 })).toBeCloseTo(1.88115e-11, 20);
+  });
+
+  it("最小值 > 0（无零背景）→ 保持数据最小值（自适应色阶既有行为）", () => {
+    expect(defaultDisplayMin({ min: 0.5, max: 5 })).toBe(0.5);
+    expect(defaultDisplayMin({ min: 0.5, max: 5 }, 0.6)).toBe(0.5);
+  });
+
+  it("全零网格（退化）→ 0，不产生负/NaN 阈值", () => {
+    expect(defaultDisplayMin({ min: 0, max: 0 })).toBe(0);
+    expect(defaultDisplayMin({ min: 0, max: 0 }, undefined)).toBe(0);
+  });
+
+  it("负最小值（异常数据）→ 保持最小值（不回退到 0 规则）", () => {
+    expect(defaultDisplayMin({ min: -1, max: 5 })).toBe(-1);
+  });
+});
+
+describe("minPositiveOfBytes（纹理最小非零正值）", () => {
+  it("线性归一化 u8 → 最小非零重建值", () => {
+    const bytes = new Uint8Array([0, 0, 1, 5, 255]);
+    const mp = minPositiveOfBytes(bytes, { min: 0, max: 1.88115e-5 });
+    expect(mp).toBeCloseTo((1.88115e-5 / 255) * 1, 12);
+  });
+
+  it("带偏移的 scalarRange：f = u8*scale + offset", () => {
+    const bytes = new Uint8Array([0, 100]);
+    const mp = minPositiveOfBytes(bytes, { min: 10, max: 20 });
+    expect(mp).toBeCloseTo(10 + (10 / 255) * 100, 12);
+  });
+
+  it("全零帧 → undefined", () => {
+    expect(minPositiveOfBytes(new Uint8Array([0, 0, 0]), { min: 0, max: 1 })).toBeUndefined();
   });
 });
 

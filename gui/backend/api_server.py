@@ -150,6 +150,44 @@ def parse_surfaces(text: str) -> list:
                     pass
     return surfs
 
+def _model_box_from_cells_surfaces(data: dict):
+    """由 cells/surfaces 推算模型包围盒（A1.2 匹配检测，请求未带 modelBox 时的契约分支）。
+
+    契约 §4.6A「modelBox（或 surfaces/cells/tr_cards 由 handler 算）」——此前只实现了
+    modelBox 直读，前端只发 cells/surfaces → match 恒 null → 不匹配横幅从未触发
+    （绝不静默错位失效，2026-08-15 修复）。
+
+    口径 = 可见外壳：只统计**非真空**栅元引用的曲面（与 preview-3d 实际渲染的 shell
+    一致；真空外层球 so 1000/2000 不参与，否则模型盒会被撑成世界盒导致漏报）。
+    范围 = model_extent_unpadded 的 max-abs（无 padding，保小模型真实范围）。
+    """
+    import re
+    from freecad_preview import _pymcnp_surf_to_dict, model_extent_unpadded
+    surfaces_text = str(data.get("surfaces") or "")
+    cells = data.get("cells") or []
+    if not surfaces_text or not cells:
+        return None
+    used = set()
+    for c in cells:
+        if str(c.get("material", "") or "").strip() == "0":
+            continue  # 真空栅元不渲染外壳，不参与模型盒
+        for tok in re.findall(r"-?\d+", str(c.get("surface_expr", "") or "")):
+            used.add(tok.lstrip("-"))
+    if not used:
+        return None
+    surf_dicts = []
+    for s in parse_surfaces(surfaces_text):
+        num = str(getattr(s, "number", "") or "").lstrip("-")
+        if num in used:
+            try:
+                surf_dicts.append(_pymcnp_surf_to_dict(s))
+            except Exception:
+                continue
+    ext = model_extent_unpadded(surf_dicts) if surf_dicts else 0.0
+    if ext <= 0:
+        return None
+    return {"min": [-ext, -ext, -ext], "max": [ext, ext, ext]}
+
 def parse_tr_cards(text: str) -> dict:
     """解析 TRn 变换卡文本为 {num: {translate, rotate}}"""
     import re
@@ -853,6 +891,12 @@ class MCNPHandler(BaseHTTPRequestHandler):
             mb = data.get("modelBox")
             if mb is not None and mb.get("min") is not None and mb.get("max") is not None:
                 model_box = AABB(tuple(mb["min"]), tuple(mb["max"]))
+            else:
+                # A1.2 契约缺口修复（2026-08-15）：前端只发 cells/surfaces/tr_cards，
+                # 由 handler 推算模型盒（契约「或由 handler 算」分支此前未实现 → match 恒 null）
+                mb2 = _model_box_from_cells_surfaces(data)
+                if mb2 is not None:
+                    model_box = AABB(tuple(mb2["min"]), tuple(mb2["max"]))
             match = None
             if grid_box is not None and model_box is not None:
                 rep = check_match(grid_box, model_box)

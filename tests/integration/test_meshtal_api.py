@@ -205,6 +205,40 @@ def test_http_meshtal_parse_no_model_box_match_null(backend_base_url):
     assert body.get("match") is None, "缺 modelBox 时应 match=null"
 
 
+def test_http_meshtal_parse_model_box_from_cells_surfaces(backend_base_url):
+    """A1.2 契约缺口修复：请求带 cells/surfaces（无 modelBox）→ handler 推算模型盒并返回 match。"""
+    fixture = FIXTURES / "minimal_meshtal.txt"
+    status, body = _post(backend_base_url, "/api/meshtal-parse", {
+        "path": str(fixture),
+        "surfaces": "1 rpp 0 2 0 2 0 1",
+        "cells": [{"number": 1, "material": "1", "surface_expr": "-1"}],
+        "tr_cards": "",
+    })
+    assert status == 200 and body.get("status") == "ok", body
+    m = body.get("match")
+    assert m is not None, "带 cells/surfaces 应推算 modelBox 并返回 match（A1.2 契约缺口）"
+    assert m["matched"] is True, m
+
+
+def test_http_meshtal_parse_detects_displaced_grid(backend_base_url):
+    """真实案例回归（绝不静默错位）：模型在原点（rpp -1 1 -1 1 0 1），
+    网格在 (50,0,100)（用户真实 meshtal）→ matched=False。"""
+    fixture = FIXTURES / "real_meshtal_jk.meshtal"
+    status, body = _post(backend_base_url, "/api/meshtal-parse", {
+        "path": str(fixture),
+        "surfaces": "1 rpp -1 1 -1 1 0 1\n9 so 1000\n10 so 2000",
+        "cells": [
+            {"number": 10, "material": "1", "surface_expr": "-1"},
+            {"number": 20, "material": "0", "surface_expr": "1 -9"},
+            {"number": 30, "material": "0", "surface_expr": "9 -10"},
+        ],
+        "tr_cards": "",
+    })
+    assert status == 200 and body.get("status") == "ok", body
+    m = body.get("match")
+    assert m is not None and m["matched"] is False, m
+
+
 # ── 6. meshtal-parse 坏文件 → 友好 hint（F4）────────────────────
 def test_http_meshtal_parse_bad_file_friendly_hint(backend_base_url):
     """坏/不存在路径 → 错误响应带 hint（友好中文提示，F4）。"""

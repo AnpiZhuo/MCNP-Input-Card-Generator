@@ -5,7 +5,7 @@
  * 基础（自适应色阶、自动取景、外壳开）开箱即用。
  */
 import React, { useState } from "react";
-import ColorLegend from "./ColorLegend";
+import ColorLegend, { formatLegendValue } from "./ColorLegend";
 
 export interface TimeOption {
   index: number;
@@ -59,9 +59,46 @@ export default function VolumeControlPanel(props: VolumeControlPanelProps) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-      {/* 色条图例（常显，F5.2 单位 + 上下限数值） */}
+      {/* 色条图例（常显，F5.2 单位 + 上下限数值）+ 两条独立 range 滑杆（用户需求）：
+          下限滑杆=显示阈值（低于不显示），上限滑杆=色阶上限；各管一个，互不吸附 */}
       <div style={{ padding: "8px 14px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
         <ColorLegend min={colorMin} max={colorMax} unit={unit} />
+        {scalarMax > scalarMin && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ color: "var(--text-secondary)", fontSize: 10, width: 30, flexShrink: 0 }}>下限</span>
+              <input
+                type="range"
+                min={scalarMin}
+                max={scalarMax}
+                step={(scalarMax - scalarMin) / 200}
+                value={Math.min(Math.max(colorMin, scalarMin), scalarMax)}
+                onChange={(e) => onColorRangeChange(Math.min(parseFloat(e.target.value), colorMax), colorMax)}
+                style={{ flex: 1, accentColor: "var(--accent)" }}
+                title="色阶下限（显示阈值）：低于该值的体素不显示"
+              />
+              <span style={{ color: "var(--text-tertiary)", fontSize: 10, width: 58, textAlign: "right", flexShrink: 0 }}>
+                {formatLegendValue(colorMin)}
+              </span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ color: "var(--text-secondary)", fontSize: 10, width: 30, flexShrink: 0 }}>上限</span>
+              <input
+                type="range"
+                min={scalarMin}
+                max={scalarMax}
+                step={(scalarMax - scalarMin) / 200}
+                value={Math.min(Math.max(colorMax, scalarMin), scalarMax)}
+                onChange={(e) => onColorRangeChange(colorMin, Math.max(parseFloat(e.target.value), colorMin))}
+                style={{ flex: 1, accentColor: "var(--accent)" }}
+                title="色阶上限：色带映射到该值的颜色最红"
+              />
+              <span style={{ color: "var(--text-tertiary)", fontSize: 10, width: 58, textAlign: "right", flexShrink: 0 }}>
+                {formatLegendValue(colorMax)}
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 能量区间选择 */}

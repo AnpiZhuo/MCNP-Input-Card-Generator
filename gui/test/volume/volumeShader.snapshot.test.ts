@@ -60,6 +60,21 @@ describe("RAY_MARCH_FRAGMENT", () => {
     expect(RAY_MARCH_FRAGMENT).toContain("acc.a > 0.98");
   });
 
+  it("体积透明度为图层级：uOpacity 只乘最终 alpha，不乘每采样步（防 256 步累积饱和）", () => {
+    // 用户实测回归：uOpacity 若按每采样步乘（col.a * uOpacity），大网格（±2000 全域）
+    // 256 个采样步累积后 acc.a ≈ 1-(1-a)^256，滑杆再低也近乎不透明 →「调低透明度没用」。
+    expect(RAY_MARCH_FRAGMENT).toContain("fragColor = vec4(acc.rgb, acc.a * uOpacity)");
+    expect(RAY_MARCH_FRAGMENT).not.toContain("col.a * uOpacity");
+  });
+
+  it("深度剥除：拉低透明度时外层先淡出（peel 段二次曲线），内层保持完整采样", () => {
+    // 用户需求「外层先透明、内层慢慢跟」：滑杆越低，每条光线靠近视线的外侧
+    // peel 段按二次曲线淡出（m=k²），内层完整采样；u=1 → peel=0 零回归。
+    expect(RAY_MARCH_FRAGMENT).toContain("float peel = (1.0 - uOpacity) * 0.5;");
+    expect(RAY_MARCH_FRAGMENT).toContain("m = k * k");
+    expect(RAY_MARCH_FRAGMENT).toContain("float a = col.a * m");
+  });
+
   it("快照：片段着色器字符串稳定", () => {
     expect(RAY_MARCH_FRAGMENT).toMatchSnapshot();
   });

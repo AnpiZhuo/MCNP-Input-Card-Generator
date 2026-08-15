@@ -15,11 +15,13 @@ import { getMatColor } from "../utils/materialColors";
 import { CellList } from "../components/MaterialPanel";
 import {
   createVolumeRenderer,
+  base64ToBytes,
   DEFAULT_VOLUME_OPACITY,
   type VolumeRendererHandle,
   type VolumeFrame,
 } from "./VolumeRenderer";
 import { DEFAULT_SHELL_OPACITY } from "../three/cellMaterial";
+import { defaultDisplayMin, minPositiveOfBytes } from "./colorize";
 import VolumeControlPanel from "./VolumeControlPanel";
 
 interface BridgeData {
@@ -46,7 +48,10 @@ export default function ResultWindow() {
   const [timeIndex, setTimeIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [colorRange, setColorRange] = useState(() =>
-    data ? { min: data.scalarRange?.min ?? 0, max: data.scalarRange?.max ?? 1 } : { min: 0, max: 1 },
+    data ? {
+      min: defaultDisplayMin(data.scalarRange ?? { min: 0, max: 1 }),
+      max: data.scalarRange?.max ?? 1,
+    } : { min: 0, max: 1 },
   );
   const dataRef = useRef(data);
   dataRef.current = data;
@@ -94,6 +99,11 @@ export default function ResultWindow() {
       try {
         const frame = await fetchTexture(0, 0);
         if (disposed) return;
+        // 数量级自适应色阶下限：由帧数据最小正值推算（sqrt(minPositive*max)），
+        // 隐去零通量背景；同步到色阶输入框，与渲染器实际阈值一致
+        const mp = minPositiveOfBytes(base64ToBytes(frame.dataBase64), frame.scalarRange);
+        const dm = defaultDisplayMin(frame.scalarRange, mp);
+        setColorRange({ min: dm, max: frame.scalarRange.max });
         const cellViews = d.cells.map((c) => ({
           num: String(c.num),
           mat: c.mat,
@@ -105,6 +115,7 @@ export default function ResultWindow() {
           stlData: d.stlData || {},
           cellViews,
           frame,
+          initialDisplayMin: dm,
           energyOptions: d.energyOptions || [],
           timeOptions: d.timeOptions || [],
           onTimeSeek: (idx: number) => {

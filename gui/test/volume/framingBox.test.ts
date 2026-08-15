@@ -68,4 +68,14 @@ describe("computeFramingBox（外壳≫体积时以体积为主）", () => {
     expect(box.min).toEqual(volume.min);
     expect(box.max).toEqual(volume.max);
   });
+
+  it("外壳与体积盒空间不相交（网格不在模型上）→ 并集取景，两者都可见", () => {
+    // 用户实测 bug：meshtal 网格（x∈[49,51]、z∈[90,110]）与模型（原点钨板 rpp -1 1 -1 1 0 1）
+    // 世界坐标不相交 → 旧逻辑按比例取体积盒 → 模型被整个挤出屏幕，观感=「体积层错位」。
+    const shell: AABB = { min: [-1, -1, 0], max: [1, 1, 1] };
+    const volume: AABB = { min: [49, -10, 90], max: [51, 10, 110] }; // 20/112 = 0.18 < 0.25 但不相交
+    const box = computeFramingBox(shell, volume);
+    expect(box.min).toEqual([-1, -10, 0]);
+    expect(box.max).toEqual([51, 10, 110]);
+  });
 });

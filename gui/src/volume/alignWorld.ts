@@ -85,14 +85,25 @@ export function applyOffsetToBox(box: AABB, offset: Vec3): AABB {
  */
 export const VOLUME_FRAMING_RATIO = 0.25;
 
+/** 两盒是否空间相交（任一轴 min≥max 或 max≤min 即分离） */
+export function boxesOverlap(a: AABB, b: AABB): boolean {
+  for (let i = 0; i < 3; i++) {
+    if (a.min[i] >= b.max[i] || b.min[i] >= a.max[i]) return false;
+  }
+  return true;
+}
+
 /**
  * 开窗取景盒（A2.1 修正版，纯函数）：
  * - 无外壳 / 外壳 ⊆ 体积 / 外壳与体积可比（比例 ≥ 阈值）→ 返回并集（既有行为，中心重合不回归）
  * - 外壳 ≫ 体积盒（体积盒最大边 < 25% 并集最大边）→ 返回体积盒（体积层清晰可辨，避免视距过大）
+ * - 外壳与体积盒**空间不相交**（网格与模型不在一起）→ 返回并集（两者都可见；
+ *   否则体积盒取景会把模型挤出屏幕，观感=「体积层错位」，A1.2 横幅同步解释）
  * 仅影响相机取景；共享归一化 offset 仍按并集（§7.2 对齐不变量不变）。
  */
 export function computeFramingBox(shellBox: AABB | null, volumeBox: AABB): AABB {
   if (shellBox == null) return volumeBox;
+  if (!boxesOverlap(shellBox, volumeBox)) return unionBoxes([shellBox, volumeBox]);
   const union = unionBoxes([shellBox, volumeBox]);
   const unionMaxDim = Math.max(boxSize(union)[0], boxSize(union)[1], boxSize(union)[2]);
   const volMaxDim = Math.max(boxSize(volumeBox)[0], boxSize(volumeBox)[1], boxSize(volumeBox)[2]);

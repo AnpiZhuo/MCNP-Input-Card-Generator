@@ -3,6 +3,9 @@
  *
  * 色条两端显示当前 displayMin/displayMax 数值 + 单位标签（如「归一化计数」）。
  * `legendTicks(min, max, n)` 纯函数生成等距刻度（vitest 可测）。
+ *
+ * 纯展示组件（上下限调节在 VolumeControlPanel 用两条独立 range 滑杆实现；
+ * 曾试双柄叠层滑杆，手动改数字后拖动吸附逻辑诡异，用户拍板移除）。
  */
 import React from "react";
 

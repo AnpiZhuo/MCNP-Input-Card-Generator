@@ -24,7 +24,7 @@ import {
   type TransparentMode,
 } from "../three/cellMaterial";
 import { buildRayMarchMaterial, isWebGL2, WEBGL2_UNAVAILABLE } from "./volumeShader";
-import { colorizeScalar, weatherLut, type ScalarRange } from "./colorize";
+import { colorizeScalar, weatherLut, defaultDisplayMin, type ScalarRange } from "./colorize";
 import {
   unionBoxes,
   boxCenter,
@@ -61,6 +61,8 @@ export interface VolumeRendererOptions {
   stlData: Record<string, string>;
   cellViews: CellView[];
   frame: VolumeFrame;
+  /** 初始色阶下限（自适应显示阈值）；缺省 → defaultDisplayMin(frame.scalarRange) 保守兜底 */
+  initialDisplayMin?: number;
   /** 能量/时间选项（时间轴动画用；timeOptions.length>1 才有时间轴） */
   energyOptions?: TimeOption[];
   timeOptions?: TimeOption[];
@@ -165,7 +167,7 @@ export function textureDimsFromResolution(resolution: [number, number, number]):
 }
 
 /** base64 → Uint8Array */
-function base64ToBytes(b64: string): Uint8Array {
+export function base64ToBytes(b64: string): Uint8Array {
   const raw = atob(b64);
   const buf = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i) & 0xff;
@@ -289,7 +291,9 @@ export function createVolumeRenderer(
 
   let lut = weatherLut(256);
   let colorRange: ScalarRange = { min: opts.frame.scalarRange.min, max: opts.frame.scalarRange.max };
-  let displayMin = colorRange.min;
+  // 自适应色阶下限（数量级自适应）：宿主可传 initialDisplayMin（由帧数据最小正值推算），
+  // 缺省走保守兜底 max*1e-6（隐去纯零背景）
+  let displayMin = opts.initialDisplayMin ?? defaultDisplayMin(opts.frame.scalarRange);
 
   function applyColorize(frame: VolumeFrame) {
     const scalar = base64ToBytes(frame.dataBase64);

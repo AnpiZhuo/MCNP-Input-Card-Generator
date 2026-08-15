@@ -931,3 +931,114 @@ three r160 的 WebGLProgram 对 **RawShaderMaterial 会前置 `#define SHADER_TY
 - 临时复现页已删（不留垃圾）；截图证据保留 `D:/code/vol_camera_compare.png` / `vol_camera_noshell.png`。
 - **需要重新打包**：v1.7.2（HEAD 135b1a1）仍带此相机错位 bug。
 - 未改后端/契约；零新依赖；未 commit。
+
+## 取景盒不相交修复（2026-08-15，用户实测「体积彩色数据层位置偏/错位」批）
+
+**根因**：`computeFramingBox` 只看体积/并集尺寸比。用户真实场景——meshtal 网格在
+(50,0,100)（围 F5 点探测器）而模型钨板在原点，两盒**空间不相交**；比例 20/112=0.18<0.25
+→ 以体积盒取景 → 模型被整个挤出屏幕，用户只看到一个"浮在一边"的彩色块，观感=体积层错位。
+
+**修复**（`gui/src/volume/alignWorld.ts`）：
+- 新增纯函数 `boxesOverlap(a, b)`（任一轴 min≥max 或 max≤min 即分离）。
+- `computeFramingBox` 前置分支：外壳与体积盒不相交 → 返回并集（两者都可见，
+  由 A1.2 不匹配横幅同步解释"网格与模型不在一起"）；其余行为逐字节不变。
+- 共享归一化 offset 仍按并集（§7.2 对齐不变量不变），仅取景受影响。
+
+测试（先红后绿）：`gui/test/volume/framingBox.test.ts` +1
+（真实场景数值：shell rpp [-1,1]×[-1,1]×[0,1] + volume [49,51]×[-10,10]×[90,110]
+不相交 → 并集 [-1,-10,0..51,10,110]），先红后绿；既有 8 用例零回归。
+
+## 验证结果
+
+| 项 | 结果 |
+| :--- | :--- |
+| `vitest run` | 31 文件 / **248 用例全绿**（242 基线 + framing 不相交 1 + 诊断期探针已删） |
+| `npx tsc --noEmit` | EXIT 0 |
+| `vite build` | EXIT 0（仅既有 chunk 体积警告） |
+
+- 配套后端修复见 docs/backend-changes.md §O（A1.2 match 恒 null 契约缺口）。
+- 版本号不提升（bug 修复批恒 1.7.1）；零新依赖；未 commit。
+
+## 体积透明度图层级语义修复（2026-08-15，用户实测「大网格调低透明度没用」）
+
+**根因**：shader 把 `uOpacity` 乘在**每采样步** alpha 上（`a = col.a * uOpacity`）。±2000 全域
+大网格光线路程 256 步、每步都有非零通量 → 累积 alpha = 1-(1-a)^256 必然饱和，
+滑杆再低也近乎不透明 →「看不到体积内部/模型」。
+
+**修复**（`gui/src/volume/volumeShader.ts` RAY_MARCH_FRAGMENT）：
+- `uOpacity` 改为**图层级**：只乘最终 alpha（`fragColor = vec4(acc.rgb, acc.a * uOpacity)`），
+  每采样步用原 alpha（`a = col.a`）。uOpacity=1 行为逐字节不变；拉到 30% 即可看穿体积见外壳。
+- 测试（先红后绿）：volumeShader.snapshot.test.ts +1
+  `体积透明度为图层级：uOpacity 只乘最终 alpha，不乘每采样步`（断言含新合成式、且不含 `col.a * uOpacity`）
+  + 快照更新 1。**vitest 244/0** + tsc/build EXIT 0。
+- 配套使用提示：0 通量体素被涂蓝（整块蓝）属色阶下限=0 的默认行为；在高级设置把
+  「色阶下限」调到 ~1e-7 即让零通量体素全透明，只剩光束区域与外壳。
+- 仅前端改动；已重打包部署（exe 22:45:54，bundle index-CTAsPTG-.js 嵌入确认）。
+
+## 自适应色阶下限（数量级自适应，2026-08-15，用户反馈）
+
+**背景**：±2000 全域网格（20×20×10，4000 体素中 3576 个精确 0）默认把零通量背景
+涂成蓝色挡住模型。第一版规则 `max*1e-6` 是固定 6 个数量级偏移，用户要求"数量级自适应"。
+
+**修复**（`gui/src/volume/colorize.ts` + `VolumeRenderer.ts` + `ResultWindow.tsx`）：
+- 新增纯函数 `defaultDisplayMin(sr, minPositive?)`：数据最小值恰为 0 时，
+  阈值 = `sqrt(minPositive * max)`（**log10 空间几何中点**，数量级自适应，
+  把接近 0 的噪声尾与真实信号分开）；无 minPositive 时保守兜底 `max*1e-6`；
+  最小值 >0 保持数据最小值（既有自适应行为）。
+- 新增纯函数 `minPositiveOfBytes(bytes, sr)`：从纹理 u8（后端线性归一化）重建最小非零正值。
+- `ResultWindow` 首帧取到纹理后：`dm = defaultDisplayMin(sr, minPositiveOfBytes(...))` →
+  `setColorRange({min: dm})`（色阶输入框显示与实际阈值一致）→ `createVolumeRenderer({initialDisplayMin: dm})`；
+  `VolumeRenderer` 用 `opts.initialDisplayMin ?? defaultDisplayMin(sr)`（缺省兜底）。
+- 用户数据实测：u8 最小非零≈7.38e-8 → 阈值 sqrt(7.38e-8×1.88e-5)≈1.18e-6 →
+  只显示 u8≥16 的光束核心，零背景全透明；仍可手动覆盖。
+- 测试（先红后绿）：colorize.test.ts +7（sqrt 规则 / 兜底 / min>0 / 退化 / 负 min /
+  minPositiveOfBytes 线性+偏移 / 全零 undefined），**vitest 252 用例**（唯一偶发红=
+  colorize 128³ 计时既有 flaky 负载 65ms，隔离 18/18 全绿）+ tsc/build EXIT 0。
+- 已重打包部署（exe 23:00:22，bundle index-DbM58sDm.js 嵌入确认）。
+
+## 体积透明度深度剥除（2026-08-15，用户需求「拉低时外层先透明、内层慢慢跟」）
+
+**设计**（`gui/src/volume/volumeShader.ts` RAY_MARCH_FRAGMENT）：
+- `peel = (1 - uOpacity) * 0.5`：滑杆越低，每条光线靠近视线外侧的 peel 段越大（最大剥到一半深）。
+- peel 段内每采样系数 `m = k²`（k = df/peel 二次曲线）→ **外层先平滑淡出**；
+  内层（df ≥ peel）完整采样 → **内层保持**；整体再乘图层级透明度 `uOpacity` → **内层慢慢跟着变淡**。
+- `uOpacity=1` → peel=0、m=1，与全不透明行为逐字节一致（零回归）。
+- 配合自适应色阶下限：零通量背景透明后，"剥壳"作用在光束核心的外侧面上，
+  中等滑杆值即可看穿外壳看内部结构 + 背后的模型外壳。
+- 测试：volumeShader.snapshot.test.ts +1（深度剥除守卫：peel 公式 / m=k² / col.a*m）
+  + 快照更新 1；**vitest 253/253** + tsc/build EXIT 0。
+- 已重打包部署（exe 23:11:24，bundle index-ZwgTVVaq.js 嵌入确认）。
+
+## 色条图例双柄滑杆（2026-08-15，用户需求「色阶上加两个拉动按钮调控显示/不显示」）
+
+**改动**（`gui/src/volume/ColorLegend.tsx` + `VolumeControlPanel.tsx`）：
+- ColorLegend 新增可选 props：`scalarMin`/`scalarMax`（数据范围，把手定位基准）+
+  `onRangeChange(min,max)`；提供后色条变成**双柄滑杆**：
+  - **左柄 = 色阶下限（显示阈值）**：拖低/拖高决定"低于该值的颜色不显示"；
+  - **右柄 = 色阶上限**：决定色带映射上限；
+  - 点击色条任意处自动吸附最近的柄开始拖动；把手位置按数据范围**线性映射**
+    （与 colorizeScalar 线性映射一致）；两端数值标签随拖动实时更新。
+- VolumeControlPanel 把 scalarMin/scalarMax/onColorRangeChange 透传给 ColorLegend
+  （与「高级设置」里的色阶上下限数字输入共享同一状态，拖滑杆=改数字输入，双向同步）。
+- 纯函数 `rangeThumbPercent`（数值→百分比，钳 [0,1]，span≤0 兜底）+
+  `rangeValueFromPercent`（百分比→数值）导出，可测。
+- 测试：ColorLegend.test.ts +5（双柄渲染守卫 / 线性映射 / 钳位 / 零范围 / 往返一致）；
+  **vitest 258/258** + tsc/build EXIT 0。
+- 已重打包部署（bundle index-D27x-vPy.js 嵌入确认）。
+
+## 色阶调节交互改版（2026-08-15 深夜，用户反馈修正）
+
+**① 双柄叠层滑杆移除**（用户实测：手动改数字上下限后拖动吸附逻辑诡异）：
+- ColorLegend 恢复为**纯展示**组件（删除 rangeThumbPercent/rangeValueFromPercent/双柄交互），
+  上下限改由 VolumeControlPanel 中图例下方的**两条独立 range 滑杆**控制——
+  「下限」滑杆=显示阈值（低于不显示），「上限」滑杆=色阶上限，各管一个、互不吸附，
+  右侧实时显示数值（formatLegendValue）；与「高级设置」数字输入共享同一状态双向同步。
+- 测试：ColorLegend.test.ts 恢复展示守卫（legendTicks/formatLegendValue/SSR 渲染）。
+
+**② 自适应色阶下限规则修正**（用户实测「体素只显示一个面」）：
+- 根因 = 网格体素 200×200×400cm、光束约 200cm 粗 → 光束只占 1 体素宽；叠加
+  sqrt(minPositive×max) 阈值把低值光晕也切掉 → 只剩细蓝柱。
+- 规则改为 **minPositive × 0.5**（只隐精确 0 背景，正结构全保留；纹理是线性 u8，
+  比噪声小的值本就量化为 0，无需阈值切噪声）；兜底 max*1e-6、min>0 保持 min 不变。
+- 测试：colorize.test.ts 更新（minPositive*0.5 断言），**vitest 253/253** + tsc/build EXIT 0。
+- 已重打包部署（bundle index-DzFV9Bgk.js 嵌入确认）。

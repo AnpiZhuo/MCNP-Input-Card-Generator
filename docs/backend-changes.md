@@ -850,3 +850,17 @@ dims ni=1 nj=2 nk=2 / grid_bounds [49,-10,90]~[51,10,110]；texture 同样 ok（
 （旧版无版本号 manifest → get_manifest None 强制重解析；新版往返不含版本键）。
 **全量 pytest 461/0**（459 基线零回归 + 2 新增）。真实场景核验：worker `_run(mode=parse,
 用户真实 meshtal)` → `warnings:[]`，tally14/p/1×2×2；前端「已解析…」不再带「警告 N 条」。
+
+## §O. A1.2 匹配检测契约缺口修复（2026-08-15，用户实测「体积层错位」批）
+
+**根因**：契约 meshtal-visualization.md §4.6A「请求带 `modelBox`（或 `surfaces`/`cells`/`tr_cards` 由 handler 算）」只实现了前半——`_handle_meshtal_parse` 只读 `data.get("modelBox")`，而前端 `meshtalParse` 只发 `surfaces`/`cells`/`tr_cards` → `match` 恒 `null` → A1.2「网格与模型不匹配」横幅从未触发（绝不静默错位失效）。
+
+**修复**：
+| # | 改动 | 文件:行 | 逻辑 |
+| :--- | :--- | :--- | :--- |
+| 1 | `model_extent_unpadded(surf_dicts)` | `app/freecad_preview.py`（`_compute_bound_from_surfaces` 旁） | A1.2 匹配用模型范围：max-abs **无 padding**（`_compute_bound` 的 `*1.3+100`/`default=500` 会把 rpp -1 1 -1 1 0 1 撑成 ±500 → 漏报错位）；GQ/SQ 跳过；空输入 0.0 |
+| 2 | `_model_box_from_cells_surfaces(data)` | `gui/backend/api_server.py`（`parse_surfaces` 后） | modelBox 缺失时由 cells/surfaces 推算：**只统计非真空栅元引用的曲面**（与 preview-3d 实际渲染的 shell 口径一致；真空外层球不参与，防世界盒撑大漏报）→ `model_extent_unpadded` → `{min:[-e,-e,-e], max:[e,e,e]}` |
+| 3 | `_handle_meshtal_parse` 接线 | `gui/backend/api_server.py` | `modelBox` 直读失败时走 `_model_box_from_cells_surfaces`；两者皆缺仍 `match:null`（契约不回归） |
+
+测试（先红后绿）：`tests/unit/test_preview_bound.py` +2（`test_model_extent_unpadded_real_geometry_range` / `test_model_extent_unpadded_skips_gq_sq_and_empty`）；`tests/integration/test_meshtal_api.py` +2（`test_http_meshtal_parse_model_box_from_cells_surfaces`：无 modelBox 带 cells/surfaces → match 非空且 matched；`test_http_meshtal_parse_detects_displaced_grid`：用户真实场景——模型原点钨板 rpp -1 1 -1 1 0 1 + 真空外层 so 1000/2000，网格 real_meshtal_jk（49,-10,90~51,10,110）→ `matched=False`，绝不静默错位）。
+**全量 pytest 465/0**（461 基线零回归 + 4 新增）。

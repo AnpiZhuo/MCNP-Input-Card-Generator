@@ -289,6 +289,28 @@ def _compute_bound_from_surfaces(surf_dicts: list, default: float = 500) -> floa
     return max(max_coord * 1.3 + 100, default)
 
 
+def model_extent_unpadded(surf_dicts: list) -> float:
+    """A1.2 匹配检测用模型范围（无 padding、无 500 兜底）。
+
+    与 _compute_bound_from_surfaces 的差异：匹配检测需要**真实**范围——
+    _compute_bound 的 max*1.3+100 与 default=500 会把小模型（如 rpp -1 1 -1 1 0 1）
+    撑成 ±500 盒子，导致「网格离模型上百厘米却判匹配」漏报错位（绝不静默错位）。
+    此处 max-abs 后原样返回；GQ/SQ 二次型系数跳过；空输入返回 0.0。
+    """
+    max_coord = 0.0
+    for s in surf_dicts:
+        if s.get("type") in ("GQ", "SQ"):
+            continue
+        for v in _surface_extent_values(s.get("type", ""), s.get("params", []) or []):
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                continue
+            if abs(f) > max_coord:
+                max_coord = abs(f)
+    return max_coord
+
+
 class FreeCADEngine:
     """FreeCAD CSG 几何引擎封装。
 

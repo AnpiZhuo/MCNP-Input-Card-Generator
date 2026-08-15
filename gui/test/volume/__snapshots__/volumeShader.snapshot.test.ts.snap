@@ -33,6 +33,12 @@ void main() {
   }
   float t0 = max(t.x, 0.0);
   float t1 = t.y;
+  // 深度剥除（用户需求「拉低时外层先透明、内层慢慢跟」）：
+  // 滑杆越低，每条光线靠近视线的外侧 peel 段按二次曲线平滑淡出（外层先透明），
+  // 内层保持完整采样；整体再乘图层级透明度 uOpacity（内层慢慢跟着变淡）。
+  // uOpacity=1 → peel=0、采样系数 m=1，行为与全不透明完全一致（零回归）。
+  float peel = (1.0 - uOpacity) * 0.5;
+  float spanT = max(t1 - t0, 1e-9);
   int steps = max(1, uSteps);
   float d = (t1 - t0) / float(steps);
   vec3 span = max(uBoxMax - uBoxMin, vec3(1e-9));
@@ -40,18 +46,27 @@ void main() {
   for (int i = 0; i < 256; i++) {
     if (i >= steps) break;
     float s = t0 + (float(i) + 0.5) * d;
+    float df = (s - t0) / spanT;
+    float m = 1.0;
+    if (peel > 0.0 && df < peel) {
+      float k = clamp(df / max(peel, 1e-6), 0.0, 1.0);
+      m = k * k;
+    }
     vec3 pos = ro + rd * s;
     vec3 n = (pos - uBoxMin) / span;
     // 数据布局：numpy (x,y,z) 扁平（z 最快），DataTexture3D dims=(nk,nj,ni)
     // → 纹理坐标 = (z, y, x)，采样 uv 需 swizzle
     vec3 uvw = clamp(vec3(n.z, n.y, n.x), 0.0, 1.0);
     vec4 col = texture(uTex, uvw);
-    float a = col.a * uOpacity;
+    float a = col.a * m;
     acc.rgb += (1.0 - acc.a) * col.rgb * a;
     acc.a += (1.0 - acc.a) * a;
     if (acc.a > 0.98) break;
   }
-  fragColor = acc;
+  // uOpacity 是【图层级】透明度：只乘最终 alpha（用户实测：若按每采样步乘，
+  // 大网格 256 步累积后无论滑杆多低都近乎不透明，「调低透明度没用」）。
+  // acc.rgb 为 front-to-back 预乘累积，NormalBlending 下与场景正确合成。
+  fragColor = vec4(acc.rgb, acc.a * uOpacity);
 }
 "
 `;

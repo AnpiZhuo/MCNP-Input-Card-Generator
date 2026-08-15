@@ -78,6 +78,44 @@ export interface ScalarRange {
 }
 
 /**
+ * 自适应色阶下限（默认显示阈值，纯函数）：
+ * MCNP meshtal 虚空体素 = **精确 0** 通量（背景）。数据最小值恰为 0 时，
+ * 阈值取 `minPositive * 0.5`——只隐去纯零背景，**所有正结构全部保留**
+ * （用户实测：sqrt(minPositive×max) 切得过狠，200cm 粗光束只剩 1 体素宽的
+ * "一个面"观感、光晕体素被误杀；纹理是线性 u8，比噪声更小的值本就量化为 0，
+ * 无需再靠阈值切噪声）。无 minPositive 信息时保守兜底 max*1e-6；
+ * 最小值 > 0（无零背景）→ 保持数据最小值（自适应色阶既有行为）；
+ * 全零/负最小值（异常数据）→ 原样返回 min。
+ */
+export function defaultDisplayMin(scalarRange: ScalarRange, minPositive?: number): number {
+  const { min, max } = scalarRange;
+  if (min === 0 && max > 0) {
+    if (minPositive !== undefined && minPositive > 0 && Number.isFinite(minPositive)) {
+      return minPositive * 0.5;
+    }
+    return max * 1e-6;
+  }
+  return min;
+}
+
+/**
+ * 标量帧字节的最小正值（float 重建，纯函数）：
+ * 后端纹理为线性归一化 u8（f = u8*(max-min)/255 + min），0 字节 = 0 通量背景。
+ * 返回最小的非零重建值；全零帧 → undefined。
+ */
+export function minPositiveOfBytes(bytes: Uint8Array, sr: ScalarRange): number | undefined {
+  const scale = (sr.max - sr.min) / 255;
+  const offset = sr.min;
+  let best = Infinity;
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i] === 0) continue;
+    const f = bytes[i] * scale + offset;
+    if (f > 0 && f < best) best = f;
+  }
+  return best === Infinity ? undefined : best;
+}
+
+/**
  * 标量 u8 [0,255] → RGBA Uint8Array（长度 = scalar.length*4，布局与输入一致）。
  *
  * - 默认 `range` = 标量源范围（frame.scalarRange）→ 自适应数据范围（A2.2），

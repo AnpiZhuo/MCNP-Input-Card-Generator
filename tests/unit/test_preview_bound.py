@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pymcnp.inp as _pi
 
-from app.freecad_preview import _compute_bound_from_surfaces, _pymcnp_surf_to_dict
+from app.freecad_preview import _compute_bound_from_surfaces, _pymcnp_surf_to_dict, model_extent_unpadded
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 
@@ -136,3 +136,24 @@ def test_gq_sq_skipped_do_not_inflate_bound():
     dicts.append({"type": "SQ", "number": 998, "params": [1e6] * 10, "transform": None})
     b = _compute_bound_from_surfaces(dicts)
     assert abs(b - 13100) / 13100 <= 0.05, f"GQ/SQ 系数不应当撑大 bound，bound={b:.2f}"
+
+
+# ── A1.2 匹配检测用模型范围（无 padding）────────────────────
+def test_model_extent_unpadded_real_geometry_range():
+    """model_extent_unpadded：真实范围 max-abs，无 *1.3+100 / 500 兜底（A1.2 绝不静默错位）。"""
+    dicts = [
+        {"type": "RPP", "number": 1, "params": [-1, 1, -1, 1, 0, 1], "transform": None},
+    ]
+    e = model_extent_unpadded(dicts)
+    assert abs(e - 1.0) < 1e-9, f"RPP 小板范围应=1（旧 bound 兜底会到 500），得到 {e}"
+
+
+def test_model_extent_unpadded_skips_gq_sq_and_empty():
+    """GQ/SQ 系数跳过；空输入 → 0.0。"""
+    dicts = [
+        {"type": "RPP", "number": 1, "params": [-1, 1, -1, 1, 0, 1], "transform": None},
+        {"type": "GQ", "number": 999, "params": [1e6] * 10, "transform": None},
+        {"type": "SQ", "number": 998, "params": [1e6] * 10, "transform": None},
+    ]
+    assert abs(model_extent_unpadded(dicts) - 1.0) < 1e-9
+    assert model_extent_unpadded([]) == 0.0
