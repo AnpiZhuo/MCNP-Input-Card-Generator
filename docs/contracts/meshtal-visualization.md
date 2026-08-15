@@ -11,6 +11,7 @@
 > - **F6 字段名同步**：§5.1 字段名 `eints`/`t_ints` → `emints`/`tmints`（对齐 models.py:225-227、api_server.py:373-375、fmesh_parser.py EMINTS/TMINTS 容错）；§4.7.1 幽灵文字 `EINTS`/`TINTS` → `EMINTS`/`TMINTS`；§5.1 补 `axs`/`vec`/`tr` 字段（对齐 models.py:230-232）。
 > - **F2 1INTS 文案**：删除「1INTS n 语法」支持声明（§4.7.1:286、§5.3:335）——v1 结构化解析仅支持多区间 `IMESH= v1 v2 ... IINTS= n1 n2 ...`，`1INTS n` 简写不吸收（`_KEYS`/`KEY_TO_FIELD` 无 `1INTS` 键），用户须改写为多值形式；C810 原文是否收录 1INTS 待人工核验。
 > - **F1 OUT 初步对齐**：§4.7.1 OUT 由 `[f|q|n]`（TMESH 输出单位语义）初步对齐实现九选项（COL 默认/CF/COLSC/CFSC/IJ/IK/JK/NONE/XDMF，FMESH 输出格式语义，fmeshState.ts:145-155）；XDMF 是否 MCNP6.2+ 待 C810 3-118 人工核验（qa-report-fmesh-c810 §3 F1）。
+> - **窗口 label 建议值同步（2026-08-15，P0 修复单值统一，仅文档不改码）**：§1.2 项 6 / §2.1 数据流 / §4.7 ResultWindow 行 / §10 步 4 / §17 检查清单 中窗口 label 建议值 `volume3d` → `volume`（对齐 App.tsx WindowRouter 路由 `volume` 与调试 hash `#/volume`）；command 名 `open_volume3d_window`、windows.ts 桥 key、窗口标题「3D 结果」、尺寸 1300×820 均不变。
 
 ---
 
@@ -47,7 +48,7 @@
 3. **渲染**：光线追踪体积渲染（烟雾云雾质感，Three.js/WebGL2 光线步进 shader，DataTexture3D）。
 4. **分辨率**：128³ 流畅默认、256³ 供用户选；超预算**弹窗让用户选**（流畅=自动降采样 / 精细=保原精度）。预算阈值：GPU 驻留 ≤256MB、128³ 默认。
 5. **配色**：天气图式蓝→黄→橙→红阶梯渐变；**色阶下限=显示阈值（低于不显示）**；生成时自适应数据范围 + 用户可手改上下限。
-6. **窗口**：独立「3D 结果」窗口（label 建议 `volume3d`），复用当前 deck 几何（半透明模型）+ 彩色体积层。
+6. **窗口**：独立「3D 结果」窗口（label 建议 `volume`），复用当前 deck 几何（半透明模型）+ 彩色体积层。
 7. **控制**：透明度、能量区间选择、时间轴动画（播放/暂停/拖动）、几何外壳开关、3D 视角。
 8. **几何外壳交互**：像 3D 预览一样可交互——可勾选显示哪些栅元 + 栅元内粒子是否显示（复用 Preview3D 的勾选逻辑）。
 9. **降采样算法**：均值（box-average），保总量准确。
@@ -64,7 +65,7 @@
   → POST /api/meshtal-detect（扫描 output_dir 找 meshtal* / MSHT*）
   → POST /api/meshtal-parse（子进程 worker 解析 → 网格元数据 + tally 列表 + 数据范围统计）
   → 前端分辨率决策（128³ 默认 / 256³ 可选 / 超预算弹窗）
-  → 打开 volume3d 窗口
+  → 打开 volume 窗口
   → POST /api/meshtal-texture（子进程 worker 取当前 (energy,time) 帧 → 降采样标量帧 base64）
   → 前端 colorize → RGBA → DataTexture3D 上传（当前帧 texSubImage3D 复用）
 ```
@@ -282,7 +283,7 @@ class MeshtalParseCache:
 | `ColorLegend.tsx` | 色条图例（单位标签 + 上下限数值）；导出 `legendTicks(min,max,n)` 纯函数 | F5.2 图例；刻度纯函数 | vitest |
 | `FMeshForm.tsx` | 受控表单（§4.7.1） | 计数标签页「网格计数」小节 | tsc + vitest（状态） |
 | `VolumeControlPanel.tsx` | 面板（透明度/能量/时间轴/外壳/视角） | 纯展示 + 回调 | tsc |
-| `ResultWindow.tsx` | Tauri `volume3d` 窗口宿主（读桥 + 挂 VolumeRenderer + 关闭只 close_window） | 独立场景 | `#/volume` e2e 冒烟 |
+| `ResultWindow.tsx` | Tauri `volume` 窗口宿主（读桥 + 挂 VolumeRenderer + 关闭只 close_window） | 独立场景 | `#/volume` e2e 冒烟 |
 
 **4.7.1 `FMeshForm` 词条与幽灵文字（placeholder 注明关键字作用）**
 ```
@@ -463,7 +464,7 @@ class FmeshDefinition:
 | 1 | FMESH 结构化五步（§6）：sections.py 补 `^TMESH` + core.py 入口门 + fmesh_parser.py + models.py + inp_generator.py 回放 + api_server 三处序列化 | 后端 | test_regress_fmesh_import 绿；R1 不动点不回归；343 不破 |
 | 2 | `app/meshtal/`：meshtal_parser / volume_builder / colormap / downsample_plan / meshtal_cache / _meshtal_worker + **deck_match.py（§4.6A）** | 后端 | test_meshtal_* 单测绿（含 deck_match 容差边界）；vendor fixture 解析绿 |
 | 3 | 3 端点 handler + worker 接线 + **`_err` hint（F4）+ meshtal-parse `grid_bounds`/`match`（A1.2）** + api.yaml 25→28（schema 补 grid_bounds/match/hint） | 后端 | 漂移闸门 25→28 双向一致绿；test_meshtal_api HTTP 往返绿（含 hint/匹配断言） |
-| 4 | 前端 `gui/src/volume/`（volumeShader/VolumeRenderer/colorize/alignWorld/downsampleRequest/fmeshState/**workflow/ColorLegend**/FMeshForm/VolumeControlPanel/ResultWindow + 高级控件折叠 F2）+ windows.ts（KEY_VOLUME3D/openVolume3D/readVolume3DData）+ main.rs（open_volume3d_window/label `volume3d`）+ App.tsx `#/volume` 路由 + **run-mcnp 后自动 meshtal-detect 联动（A1.1）** | 前端 | vitest 全绿（19 不破 + 新增）；tsc/build 过 |
+| 4 | 前端 `gui/src/volume/`（volumeShader/VolumeRenderer/colorize/alignWorld/downsampleRequest/fmeshState/**workflow/ColorLegend**/FMeshForm/VolumeControlPanel/ResultWindow + 高级控件折叠 F2）+ windows.ts（KEY_VOLUME3D/openVolume3D/readVolume3DData）+ main.rs（open_volume3d_window/label `volume`）+ App.tsx `#/volume` 路由 + **run-mcnp 后自动 meshtal-detect 联动（A1.1）** | 前端 | vitest 全绿（19 不破 + 新增）；tsc/build 过 |
 | 5 | 收尾：tester 复核（全量 pytest 343 不破 + 漂移闸门绿 + vitest 不破 + 对齐断言 + KPI 实测 + `#/volume` e2e 冒烟 + **§12 上级产品方向验收项全过**）+ 重锚定 | 测试 | 全验收表达成；向 PM 汇报 commit 索引 |
 
 **联调点**：
@@ -643,7 +644,7 @@ class FmeshDefinition:
 - [ ] vendor fixture（valid_38/39/40.meshtal + minimal_meshtal.txt + minimal_fmesh.inp）拷贝进 `tests/fixtures/`
 - [ ] FMESH 结构化五步全链（core.py 入口门 + fmesh_parser.py + models.py + inp_generator.py 回放 + api_server 三处序列化 + sections.py 补 `^TMESH`）
 - [ ] 3 端点 handler + worker 接线 + **`_err` hint（F4）+ meshtal-parse `grid_bounds`/`match`（A1.2）** + api.yaml 25→28 双向一致；漂移闸门绿
-- [ ] 前端 `gui/src/volume/` 11 模块（含 **workflow/ColorLegend**）+ 高级控件折叠（F2）+ windows.ts 桥 + main.rs `open_volume3d_window`（label `volume3d`）+ `#/volume` 路由
+- [ ] 前端 `gui/src/volume/` 11 模块（含 **workflow/ColorLegend**）+ 高级控件折叠（F2）+ windows.ts 桥 + main.rs `open_volume3d_window`（label `volume`）+ `#/volume` 路由
 - [ ] **A1.1**：run-mcnp 后自动 meshtal-detect；外部 choose-file 可选文件
 - [ ] **A1.2**：test_meshtal_deck_match 全绿（容差边界）；不匹配 → 前端友好横幅，不静默
 - [ ] **A2/F2**：开窗自动取景 + 色阶自动范围 + 128³ 自动决策；高级控件默认折叠

@@ -53,11 +53,6 @@ fn create_or_focus(
         let _ = win.set_focus();
         return Ok(());
     }
-    if let Some(win) = app.get_window(label) {
-        let _ = win.show();
-        let _ = win.set_focus();
-        return Ok(());
-    }
     tauri::WindowBuilder::new(
         app,
         label,
@@ -82,7 +77,9 @@ async fn open_cross_section_window(app: tauri::AppHandle) -> Result<(), String> 
 
 #[tauri::command]
 async fn open_volume3d_window(app: tauri::AppHandle) -> Result<(), String> {
-    create_or_focus(&app, "volume3d", "3D 结果", 1300.0, 820.0)
+    // label 必须与 App.tsx WindowRouter 路由分支同值（"volume"→ResultWindow）。
+    // 曾用 "volume3d"：与路由 "volume" 不匹配 → 子窗口渲染整个主应用（P0，已修）。
+    create_or_focus(&app, "volume", "3D 结果", 1300.0, 820.0)
 }
 
 fn main() {

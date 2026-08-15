@@ -720,3 +720,45 @@ MCNP 允许空格分隔关键字（`imesh 51`）、等号可选；原 `KEY_RE = 
 
 - 说明：全量首跑曾见 `colorize.test.ts` 128³ 计时用例 1 次失败（50.9ms>50ms），为 PROJECT_MEMORY 已记录的 **flaky 计时用例**（负载偶发），隔离重跑通过（49ms），非本次改动回归。
 - 未改后端（app/、gui/backend 零触碰）；未装任何依赖。
+
+---
+
+## P0 修复：3D 结果窗口渲染整棵主应用树（2026-08-15，PM 指令，测试先行）
+
+> 用户反馈「网格计数 3D 结果会弹出一个客户端」。只读排查定位：`main.rs` 建窗 label `volume3d` 与 `App.tsx` WindowRouter 路由分支 `volume` 不匹配 → volume3d 窗口落空到 `<AppInner/>`，子窗口渲染整个主应用。
+> 范围：`gui/src-tauri/src/main.rs`（label 单值统一 + 死代码清理）+ 新增 `gui/test/volume/windowRouteConsistency.test.ts` + 本文档。未碰后端/契约，未 commit。
+
+### 根因
+
+- `main.rs:85` `create_or_focus(&app, "volume3d", "3D 结果", 1300.0, 820.0)` —— 建窗 label = `volume3d`。
+- `App.tsx:444` WindowRouter `if (label === "volume") return <ResultWindow />` —— 路由只认 `volume`（对应浏览器调试 hash `#/volume`）。
+- `"volume3d"` 不匹配任何路由分支 → `App.tsx:445` 落到 `<DeckProvider><AppInner /></DeckProvider>` → 子窗口渲染整个主应用 UI（视觉 = 第二个完整客户端）。
+- 对照 preview3d / cross_section 两窗 label 与路由一致，唯独 volume3d 例外；git 历史确认自 `ea20ad7` 首次引入、从未修复。
+
+### 改动 1：窗口 label 单值统一（`main.rs`）
+
+- `open_volume3d_window` 的 `create_or_focus` label `"volume3d"` → `"volume"`（title「3D 结果」、尺寸 1300×820、command 名 `open_volume3d_window` 均不变）。App.tsx:444 已路由 `volume`→ResultWindow，无需改 App.tsx；调试 hash `#/volume` 与真实窗口 label 从此统一为 `volume`（对齐 preview3d/cross_section 惯例）。
+- 完整性核验：全仓 grep `volume3d`，唯一作为**窗口 label** 的是 main.rs:85；`windows.ts` 的 `KEY_VOLUME3D = "mcnp_win_volume3d"`（桥 key）与 `invoke("open_volume3d_window")`（command 名）**保持不动**。docs（contracts/qa-report/frontend-changes 历史条目）为文档层，由 PM 决定是否通知架构师更新契约建议 label。
+
+### 改动 2：死代码清理（`main.rs`，PM 批准，低风险）
+
+- `create_or_focus` 内重复的 `if let Some(win)` 块两段逐字节相同，删一段（原 :51-60 → 单段）。
+
+### 新增测试（红→绿，测试先行）
+
+`gui/test/volume/windowRouteConsistency.test.ts`（3 用例，源码级守卫，读 `main.rs`+`App.tsx`+`windows.ts` 文本断言）：
+1. main.rs `create_or_focus` 建窗 label 集合 == App.tsx WindowRouter 路由分支 label 集合（三者一致）。
+2. 三弹出窗 label 各自与路由同值（preview3d/cross_section/volume），断言**绝无 volume3d**。
+3. localStorage 桥 key `mcnp_win_volume3d`（KEY_VOLUME3D）保持不动，不随窗口 label 更名。
+先红（2 失败：set 不等 + main.rs 缺 volume）后绿。
+
+### 验证结果
+
+| 项 | 结果 |
+| :--- | :--- |
+| `cd gui && npx vitest run` | 24 文件 / **206 用例全绿**（203 基线不破 + 3 新增；全量首跑 colorize 128³ 计时 1 次 flaky 红，隔离重跑 206/0） |
+| `cd gui && npx tsc --noEmit` | EXIT 0 |
+| `cd gui && npm run build` | EXIT 0（仅既有 chunk 体积警告） |
+| `cd gui/src-tauri && cargo check` | EXIT 0（mcnp-ui v1.7.0 Finished dev，29.73s） |
+
+- 未改后端（app/、gui/backend 零触碰）；未装任何依赖；未 commit（等 PM 统一提交，P0 落库后派 packager 重打包）。
