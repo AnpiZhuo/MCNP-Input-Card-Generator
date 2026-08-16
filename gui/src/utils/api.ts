@@ -153,6 +153,11 @@ export interface PtracParseResult {
   truncated: boolean;
 }
 
+/** POST /api/ptrac-detect：扫描 output_dir 自动探测 PTRAC 径迹文件（ptrac / ptrac.*） */
+export async function ptracDetect(outputDir: string): Promise<MeshtalDetectResult> {
+  return postJson<MeshtalDetectResult>("/api/ptrac-detect", { outputDir });
+}
+
 /** POST /api/ptrac-parse：解析 ASCII PTRAC 径迹文件（maxTracks/maxPoints 可选） */
 export async function ptracParse(path: string, maxTracks?: number, maxPoints?: number): Promise<PtracParseResult> {
   const body: Record<string, unknown> = { path };

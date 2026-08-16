@@ -27,6 +27,8 @@ FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 
 PTRAC_PATH = "/api/ptrac-parse"
 PTRAC_OPERATION_ID = "ptracParse"
+PTRAC_DETECT_PATH = "/api/ptrac-detect"
+PTRAC_DETECT_OPERATION_ID = "ptracDetect"
 
 
 # ── 1. 漂移闸门（端点 29）───────────────────────────────────────
@@ -72,6 +74,21 @@ def test_api_yaml_has_ptrac_parse():
     assert PTRAC_PATH in yaml_ops, f"api.yaml 缺少 path {PTRAC_PATH}"
     assert yaml_ops[PTRAC_PATH] == PTRAC_OPERATION_ID, (
         f"api.yaml {PTRAC_PATH} operationId 应为 {PTRAC_OPERATION_ID}"
+    )
+
+
+def test_handlers_dict_has_ptrac_detect():
+    """漂移闸门：handlers dict 必须含 /api/ptrac-detect（自动探测按钮后端）。"""
+    handler_paths = _handlers_dict_paths()
+    assert PTRAC_DETECT_PATH in handler_paths, f"handlers dict 缺少 {PTRAC_DETECT_PATH}"
+
+
+def test_api_yaml_has_ptrac_detect():
+    """漂移闸门：api.yaml 必须含 /api/ptrac-detect 且 operationId=ptracDetect。"""
+    yaml_ops = _yaml_paths_operation_ids()
+    assert PTRAC_DETECT_PATH in yaml_ops, f"api.yaml 缺少 path {PTRAC_DETECT_PATH}"
+    assert yaml_ops[PTRAC_DETECT_PATH] == PTRAC_DETECT_OPERATION_ID, (
+        f"api.yaml {PTRAC_DETECT_PATH} operationId 应为 {PTRAC_DETECT_OPERATION_ID}"
     )
 
 
@@ -152,6 +169,21 @@ def test_http_ptrac_parse_max_tracks_truncation(backend_base_url):
     assert len(body["tracks"]) == 1
     assert body["truncated"] is True
     assert body["stats"]["truncated"] is True
+
+
+# ── 2.5 ptrac-detect（自动探测按钮后端）─────────────────────────
+def test_http_ptrac_detect(backend_base_url, tmp_path):
+    """ptrac-detect：outputDir 内 ptrac 文件 → ok + files（兼容 ptrac.* 重命名，不扫 meshtal）。"""
+    (tmp_path / "ptrac").write_text("dummy", encoding="utf-8")
+    (tmp_path / "PTRAC.old").write_text("dummy2", encoding="utf-8")
+    (tmp_path / "meshtal").write_text("dummy3", encoding="utf-8")  # 不应被扫到
+    status, body = _post(backend_base_url, PTRAC_DETECT_PATH, {"outputDir": str(tmp_path)})
+    assert status == 200, f"ptrac-detect 端点未实现（HTTP {status}）"
+    assert body.get("status") == "ok", body
+    names = [f["name"] for f in body.get("files", [])]
+    assert "ptrac" in names, f"ptrac-detect 未扫到 ptrac: {names}"
+    assert "PTRAC.old" in names, f"ptrac-detect 应兼容 ptrac.* 重命名: {names}"
+    assert "meshtal" not in names, f"ptrac-detect 不应扫到 meshtal: {names}"
 
 
 # ── 3. 坏路径 → 友好 hint（F4）──────────────────────────────────

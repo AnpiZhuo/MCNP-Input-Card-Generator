@@ -1,7 +1,7 @@
 import React, { useState, useRef, useMemo } from "react";
 import { parseOutp, type ParsedOutput } from "../utils/outputParser";
 import DocViewer from "./DocViewer";
-import { apiUrl, errorHint, meshtalDetect, meshtalParse, ptracParse, type MeshtalDetectFile, type MeshtalParseResult, type MeshtalTallyMeta, type PtracParseResult } from "../utils/api";
+import { apiUrl, errorHint, meshtalDetect, meshtalParse, ptracDetect, ptracParse, type MeshtalDetectFile, type MeshtalParseResult, type MeshtalTallyMeta, type PtracParseResult } from "../utils/api";
 import { useDeck } from "../utils/DeckContext";
 import { workflowStep, noFileMessage, type MeshWorkflowState } from "../volume/workflow";
 import { decideResolution, DEFAULT_RESOLUTION, MAX_RESOLUTION, OVER_BUDGET_POPUP_COPY } from "../volume/downsampleRequest";
@@ -207,24 +207,44 @@ export default function OutputTab() {
     }
   };
 
-  const openPtrac3D = async () => {
-    if (!ptracPath) return;
+  /** 解析校验 + 开窗（手动/自动共用）：错误带 hint；开窗窗口内二次解析渲染 */
+  const parseAndOpenPtrac = async (path: string) => {
     setPtracBusy(true);
     setPtracError(null);
     try {
-      // 先解析校验（错误带 hint），再开窗（窗口内二次解析渲染）
-      const pr = await ptracParse(ptracPath, 500, 200000);
+      const pr = await ptracParse(path, 100000, 200000);
       if (pr.status === "error" || !pr.tracks) {
         setPtracError(errorHint(pr, "解析 PTRAC 失败"));
         return;
       }
       setPtracParseResult(pr);
-      const out = await openPtrac3DWindow({ path: ptracPath, model: meshModel });
+      const out = await openPtrac3DWindow({ path, model: meshModel });
       if (!out.ok) setPtracError(out.message); // fallback / error 提示
     } catch (e: any) {
       setPtracError(errorHint(e, "解析 PTRAC 文件失败"));
     } finally {
       setPtracBusy(false);
+    }
+  };
+
+  const openPtrac3D = () => {
+    if (!ptracPath) return;
+    parseAndOpenPtrac(ptracPath);
+  };
+
+  /** 自动探测：扫描输出目录找 ptrac → 解析并开窗（照「解析 MESHTAL」） */
+  const runPtracAuto = async () => {
+    setPtracError(null);
+    try {
+      const det = await ptracDetect(meshOutputDir);
+      if (!det.files || det.files.length === 0) {
+        setPtracError("输出目录里没找到 PTRAC 径迹文件（文件名应为 ptrac）。请先用 PTRAC FILE=ASC 运行 MCNP，或点「选择 ptrac 文件」手动指定。");
+        return;
+      }
+      setPtracPath(det.files[0].path);
+      await parseAndOpenPtrac(det.files[0].path);
+    } catch (e: any) {
+      setPtracError(errorHint(e, "探测 PTRAC 文件失败"));
     }
   };
 
@@ -381,6 +401,9 @@ export default function OutputTab() {
         <div className="card-header">
           <span className="card-title" style={{ flexShrink: 0 }}>粒子径迹（PTRAC）</span>
           <div style={{ display: "flex", gap: 6 }}>
+            <button className="btn btn-ghost btn-xs" onClick={runPtracAuto} disabled={ptracBusy} style={{ fontSize: 11 }}>
+              {ptracBusy ? "解析中…" : "解析 PTRAC"}
+            </button>
             <button className="btn btn-ghost btn-xs" onClick={choosePtracFile} disabled={ptracBusy} style={{ fontSize: 11 }}>
               选择 ptrac 文件
             </button>
@@ -411,7 +434,7 @@ export default function OutputTab() {
         {ptracParseResult && (
           <div style={{ fontSize: 11, marginTop: 8, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", color: "var(--text-tertiary)" }}>
             <span>
-              {ptracParseResult.stats?.nps != null ? `NPS ${ptracParseResult.stats.nps}` : ""}
+              {ptracParseResult.stats?.nps != null ? `径迹（粒子）${ptracParseResult.stats.nps} 条` : ""}
               {ptracParseResult.stats?.events != null ? ` · 事件 ${ptracParseResult.stats.events}` : ""}
               {ptracParseResult.stats?.points != null ? ` · 点 ${ptracParseResult.stats.points}` : ""}
               {ptracParseResult.truncated ? " · ⚠ 已截断" : ""}

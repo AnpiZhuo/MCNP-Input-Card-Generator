@@ -42,7 +42,10 @@ export type OpenPtracWindowOutcome =
  * 开窗：取 STL 外壳（有模型时）→ 组装桥数据 → openPtracWindow → 非 Tauri fallback 提示。
  */
 export async function openPtrac3DWindow(params: OpenPtracWindowParams): Promise<OpenPtracWindowOutcome> {
-  const { path, model, maxTracks = 500, maxPoints = 200000 } = params;
+  // maxTracks 上限给足：WRITE=SOURCE 时每粒子 1 点、10 万粒子 → 10 万条径迹，
+  // 单点径迹在渲染器里合并成一个 Points 云（一次 draw call），可流畅显示全部。
+  // 多事件径迹（WRITE=EVENT/ALL）由 maxPoints 兜底抽稀，密度抽样滑杆可进一步降采样。
+  const { path, model, maxTracks = 100000, maxPoints = 200000 } = params;
   try {
     const hasModel = !!(model?.cells && model.cells.length) || !!model?.surfaces;
     const cellsForBackend = (model?.cells || []).map((c) => ({

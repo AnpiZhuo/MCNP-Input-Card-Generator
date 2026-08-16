@@ -113,15 +113,15 @@ def test_ptrac_asdict_frontend_shape():
 # ── 6. emit 格式与前端 ptracToCardText 逐字对齐 ──────────────────
 def test_ptrac_generate_matches_frontend_card_format():
     """_generate_ptrac 与 gui/src/ptrac/ptracState.ts `ptracToCardText` 格式对齐：
-    FILE/WRITE/MAX 恒发（默认 ASC/ALL/-1，FILE/WRITE 大写）；TYPE 大写多值空格；
-    其余只发非空项；enabled=false → 无卡。"""
+    FILE/WRITE 恒发（默认 ASC/ALL，大写）；MAX 只发非空项（留空=不输出，MCNP 默认 100）；
+    TYPE 大写多值空格；其余只发非空项；enabled=false → 无卡。"""
     from app.generator.inp_generator import _generate_ptrac
     from app.models import PTRACSettings, TallySettings
 
-    # 默认：只发 FILE/WRITE/MAX（无空项）
+    # 默认：只发 FILE/WRITE（MAX 留空不输出）
     assert _generate_ptrac(TallySettings(ptrac=PTRACSettings(enabled=True))) == \
-        ["PTRAC FILE=ASC WRITE=ALL MAX=-1"]
-    # 小写归一化 + 多值 TYPE + 非空项
+        ["PTRAC FILE=ASC WRITE=ALL"]
+    # 小写归一化 + 多值 TYPE + 非空项（MAX 显式给出）
     assert _generate_ptrac(TallySettings(ptrac=PTRACSettings(
         enabled=True, file="asc", write="source", max="-1",
         types=["n", "p"], nps="1 50", cell="3", surface="7", value="1.0", event="col",

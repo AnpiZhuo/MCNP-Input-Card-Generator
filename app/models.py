@@ -250,7 +250,7 @@ class PTRACSettings:
     enabled: bool = False       # 是否启用（生成 PTRAC 卡）
     file: str = "ASC"           # FILE=ASC/BIN
     write: str = "ALL"          # WRITE=ALL/SOURCE/EVENT
-    max: str = "-1"             # MAX（数字，默认 -1）
+    max: str = ""               # MAX（留空=不输出，MCNP 默认 100）
     types: list = field(default_factory=list)  # TYPE N/P/E（可空）
     nps: str = ""               # NPS（数字，可空）
     cell: str = ""              # CELL（数字，可空）

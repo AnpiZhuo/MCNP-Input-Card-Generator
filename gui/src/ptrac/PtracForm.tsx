@@ -58,7 +58,7 @@ export default function PtracForm({ value, onChange }: Props) {
               </select>
             </Field>
             <Field label="MAX">
-              <input className="form-input" value={s.max} onChange={(e) => set({ max: e.target.value })} placeholder="-1" style={{ height: 28, fontSize: 12, width: 70 }} />
+              <input className="form-input" value={s.max} onChange={(e) => set({ max: e.target.value })} placeholder="留空=默认100" style={{ height: 28, fontSize: 12, width: 90 }} />
             </Field>
             <Field label="TYPE">
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>

@@ -149,13 +149,28 @@ export default function PtracWindow() {
           </div>
           {stats ? (
             <div>
-              NPS {stats.nps} · 事件 {stats.events} · 点 {stats.points}
+              径迹（粒子）{trackCount} 条 · 事件 {stats.events} · 点 {stats.points}
               {truncated && <span style={{ color: "#ff9800" }}> · ⚠ 已截断</span>}
             </div>
           ) : (
             <div style={{ color: "var(--text-tertiary)" }}>解析中…</div>
           )}
           <div style={{ color: "var(--text-tertiary)" }}>显示 {displayedCount}/{trackCount} 条径迹</div>
+          {trackCount === 0 && stats && (
+            <div style={{ marginTop: 4, padding: "6px 8px", background: "rgba(255,152,0,0.12)", borderRadius: 6, color: "#ff9800", lineHeight: 1.5 }}>
+              ⚠ 该 PTRAC 文件没有径迹（0 个事件）。通常是 PTRAC 卡的 TYPE 与问题 MODE 不匹配（如 MODE P 却写 TYPE=E/N），或 WRITE/MAX 过滤太严。检查输入卡后重新运行 MCNP。
+            </div>
+          )}
+          {trackCount > 0 && tracksRef.current.every((t) => (t.points?.length || 0) < 2) && (
+            <div style={{ marginTop: 4, padding: "6px 8px", background: "rgba(255,152,0,0.12)", borderRadius: 6, color: "#ff9800", lineHeight: 1.5 }}>
+              ⚠ 每条径迹仅 1 个点，无法连线（可能 PTRAC 卡过滤过严：TYPE 与 MODE 冲突、MAX 过小或运行在 nps=1 提前终止）。检查输入卡后重新运行 MCNP。
+            </div>
+          )}
+          {trackCount > 0 && stats && stats.events > trackCount * 2 && (
+            <div style={{ marginTop: 4, padding: "6px 8px", background: "rgba(255,152,0,0.12)", borderRadius: 6, color: "#ff9800", lineHeight: 1.5 }}>
+              ⚠ 事件数（{stats.events}）远大于径迹数（{trackCount}）：这是 WRITE=ALL 的正常现象——每个粒子的每次碰撞都记 1 个事件，所以“事件数”≠“粒子数”。本文件只有 {trackCount} 个粒子。想看全部粒子，请在 PTRAC 卡改用 WRITE=SOURCE（每粒子 1 点）。
+            </div>
+          )}
         </div>
 
         {/* 粒子类型三勾选 */}

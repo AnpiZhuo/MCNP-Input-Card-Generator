@@ -443,7 +443,7 @@ def _ptrac_from_dict(d) -> PTRACSettings | None:
         enabled=bool(d.get("enabled", False)),
         file=str(d.get("file", "ASC") or "ASC"),
         write=str(d.get("write", "ALL") or "ALL"),
-        max=str(d.get("max", "-1") or "-1"),
+        max=str(d.get("max", "") or ""),
         types=types,
         nps=str(d.get("nps", "") or ""),
         cell=str(d.get("cell", "") or ""),
@@ -633,6 +633,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             "/api/meshtal-detect": self._handle_meshtal_detect,
             "/api/meshtal-parse": self._handle_meshtal_parse,
             "/api/meshtal-texture": self._handle_meshtal_texture,
+            "/api/ptrac-detect": self._handle_ptrac_detect,
             "/api/ptrac-parse": self._handle_ptrac_parse,
         }
         handler = handlers.get(parsed.path)
@@ -1006,6 +1007,39 @@ class MCNPHandler(BaseHTTPRequestHandler):
             self._err(str(e), hint="提取体积纹理失败，请重新选择计数与能量/时间范围")
 
     # ── PTRAC：粒子径迹解析（子进程 worker，不阻塞 5001）──
+    # ── PTRAC：自动探测（照 meshtal-detect，输出目录扫 ptrac 径迹文件）──
+    def _handle_ptrac_detect(self):
+        """扫描 output_dir 找 PTRAC 径迹文件（大小写不敏感，按 mtime 降序）。"""
+        import datetime, re as _re
+        try:
+            data = self._read_body()
+            output_dir = data.get("outputDir", "D:/MCNP/new/claude")
+            if not isinstance(output_dir, str) or not output_dir.strip():
+                self._err("输出目录非法", hint="请确认输出目录路径正确")
+                return
+            files = []
+            if os.path.isdir(output_dir):
+                entries = []
+                try:
+                    with os.scandir(output_dir) as it:
+                        for e in it:
+                            # MCNP 默认径迹文件名为 ptrac（无扩展名），也兼容 ptrac.* 重命名
+                            if e.is_file() and _re.match(r'(?i)^ptrac(\..*)?$', e.name):
+                                st = e.stat()
+                                entries.append((st.st_mtime, {
+                                    "path": e.path, "name": e.name, "size": st.st_size,
+                                    "mtime": datetime.datetime.fromtimestamp(
+                                        st.st_mtime, tz=datetime.timezone.utc
+                                    ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                }))
+                except OSError:
+                    entries = []
+                entries.sort(key=lambda x: x[0], reverse=True)
+                files = [x[1] for x in entries]
+            self._ok({"files": files, "outputDir": output_dir})
+        except Exception as e:
+            self._err(str(e), hint="扫描 PTRAC 文件失败，请确认输出目录存在")
+
     def _handle_ptrac_parse(self):
         """子进程 worker 解析 PTRAC → header/tracks/worldBox/stats/truncated（契约 v2 §3）。"""
         try:

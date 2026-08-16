@@ -1099,6 +1099,48 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
+  /api/ptrac-detect:
+    post:
+      operationId: ptracDetect
+      tags: [ptrac]
+      summary: 扫描 output_dir 自动探测 PTRAC 径迹文件（ptrac / ptrac.*）
+      description: |
+        大小写不敏感匹配 `^ptrac(\..*)?$`（MCNP 默认径迹文件名 ptrac 无扩展名，兼容重命名），
+        按 mtime 降序。目录缺失/空 → ok files:[]。入参 outputDir 缺省回退 D:/MCNP/new/claude。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                outputDir: { type: string, description: 运行输出目录（run-mcnp 落盘目录） }
+      responses:
+        '200':
+          description: 扫描成功（_ok({"files":[…],"outputDir":…})）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      files:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            path: { type: string }
+                            name: { type: string }
+                            size: { type: integer }
+                            mtime: { type: string, description: ISO8601 UTC }
+                      outputDir: { type: string }
+        '500':
+          description: outputDir 非法
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
   /api/ptrac-parse:
     post:
       operationId: ptracParse

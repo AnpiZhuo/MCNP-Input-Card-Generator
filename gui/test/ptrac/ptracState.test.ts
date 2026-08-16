@@ -10,12 +10,12 @@ import {
  */
 
 describe("emptyPtracState 默认值（§4.5）", () => {
-  it("FILE=ASC / WRITE=ALL / MAX=-1 / 其余空", () => {
+  it("FILE=ASC / WRITE=ALL / MAX 留空 / 其余空", () => {
     const s = emptyPtracState();
     expect(s.enabled).toBe(false);
     expect(s.file).toBe("ASC");
     expect(s.write).toBe("ALL");
-    expect(s.max).toBe("-1");
+    expect(s.max).toBe("");
     expect(s.types).toEqual([]);
     expect(s.nps).toBe("");
     expect(s.cell).toBe("");
@@ -56,7 +56,7 @@ describe("ptracToCardText（状态 → 卡体）", () => {
     const text = ptracToCardText(s);
     expect(text).not.toContain("TYPE=");
     expect(text).toContain("FILE=ASC");
-    expect(text).toContain("MAX=-1");
+    expect(text).not.toContain("MAX="); // MAX 留空 → 不输出（MCNP 默认 100）
   });
 });
 

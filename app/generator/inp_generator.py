@@ -692,8 +692,9 @@ def _generate_ptrac(tally: TallySettings) -> list[str]:
     """PTRAC 卡（契约 ptrac-visualization.md v2 §4.5）：`PTRAC FILE=… WRITE=… …`。
 
     卡体格式与前端 gui/src/ptrac/ptracState.ts `ptracToCardText` 逐字对齐：
-    FILE/WRITE/MAX 恒发（默认 ASC/ALL/-1，FILE/WRITE 大写）；TYPE 多值空格分隔
-    且大写；NPS/CELL/SURFACE/VALUE/EVENT 只发非空项。
+    FILE/WRITE 恒发（默认 ASC/ALL，FILE/WRITE 大写）；MAX 只发非空项（留空=不输出，
+    用 MCNP 默认 100——此前 MAX=-1 使本机 MCNP 写完 1 个事件就终止运行，用户实测踩坑）；
+    TYPE 多值空格分隔且大写；NPS/CELL/SURFACE/VALUE/EVENT 只发非空项。
     """
     ptrac = getattr(tally, "ptrac", None)
     if not ptrac or not getattr(ptrac, "enabled", False):
@@ -701,7 +702,9 @@ def _generate_ptrac(tally: TallySettings) -> list[str]:
     parts = ["PTRAC"]
     parts.append(f"FILE={(getattr(ptrac, 'file', '') or 'ASC').upper()}")
     parts.append(f"WRITE={(getattr(ptrac, 'write', '') or 'ALL').upper()}")
-    parts.append(f"MAX={getattr(ptrac, 'max', None) or '-1'}")
+    _max = (getattr(ptrac, "max", "") or "").strip()
+    if _max:
+        parts.append(f"MAX={_max}")
     types = [str(t).strip().upper() for t in (getattr(ptrac, "types", None) or []) if str(t).strip()]
     if types:
         parts.append("TYPE=" + " ".join(types))

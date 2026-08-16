@@ -5,7 +5,7 @@
  * JSON key 与后端生成/解析同步）。纯函数：emptyPtracState / ptracFromDict /
  * cardTextToPtrac / ptracToCardText。
  *
- * 卡体生成用 `KEY=value` 连写（`PTRAC FILE=ASC WRITE=ALL MAX=-1 TYPE=N P …`），
+ * 卡体生成用 `KEY=value` 连写（`PTRAC FILE=ASC WRITE=ALL TYPE=N P …`），
  * 解析同时容错 `KEY value` 空格分隔与大小写（镜像后端 fmesh_parser 等号可选先例）。
  */
 
@@ -16,7 +16,7 @@ export interface PtracState {
   file: string;
   /** WRITE=ALL|SOURCE|EVENT（默认 ALL） */
   write: string;
-  /** MAX=数字（默认 -1） */
+  /** MAX=数字（留空=不输出，用 MCNP 默认 100） */
   max: string;
   /** TYPE=N/P/E 多选（可空） */
   types: string[];
@@ -36,13 +36,13 @@ export const PTRAC_FILE_OPTIONS = ["ASC", "BIN"];
 export const PTRAC_WRITE_OPTIONS = ["ALL", "SOURCE", "EVENT"];
 export const PTRAC_TYPE_OPTIONS = ["N", "P", "E"];
 
-/** 默认状态：未启用；FILE=ASC / WRITE=ALL / MAX=-1（契约 §4.5） */
+/** 默认状态：未启用；FILE=ASC / WRITE=ALL / MAX 留空（不输出，MCNP 默认 100） */
 export function emptyPtracState(): PtracState {
   return {
     enabled: false,
     file: "ASC",
     write: "ALL",
-    max: "-1",
+    max: "",
     types: [],
     nps: "",
     cell: "",
@@ -97,7 +97,7 @@ export function ptracToCardText(state: PtracState): string {
   const parts: string[] = ["PTRAC"];
   parts.push(`FILE=${(state.file || "ASC").toUpperCase()}`);
   parts.push(`WRITE=${(state.write || "ALL").toUpperCase()}`);
-  parts.push(`MAX=${state.max ?? "-1"}`);
+  if ((state.max || "").trim()) parts.push(`MAX=${state.max.trim()}`);
   const types = (state.types || []).map((t) => t.toUpperCase()).filter(Boolean);
   if (types.length) parts.push(`TYPE=${types.join(" ")}`);
   if ((state.nps || "").trim()) parts.push(`NPS=${state.nps.trim()}`);

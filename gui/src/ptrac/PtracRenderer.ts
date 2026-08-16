@@ -160,6 +160,7 @@ export function createPtracRenderer(canvas: HTMLCanvasElement, opts: PtracRender
 
   /* ── 径迹 LineSegments ── */
   const trackLines: THREE.LineSegments[] = [];
+  let pointMesh: THREE.Points | null = null; // 单点径迹（<2 点无法连线）→ 圆点
   let worldBox: AABB | null = null;
   let trackOpacity = 1;
   const particleVisible: Record<string, boolean> = { n: true, p: true, e: true, other: true };
@@ -173,6 +174,9 @@ export function createPtracRenderer(canvas: HTMLCanvasElement, opts: PtracRender
         l.visible = particleVisible[particleGroup(l.userData.particle)];
       }
     }
+    if (pointMesh) {
+      pointMesh.visible = highlightNps == null; // 单点云不做高亮（点极少，保持可见）
+    }
     markDirty();
   }
 
@@ -183,6 +187,36 @@ export function createPtracRenderer(canvas: HTMLCanvasElement, opts: PtracRender
       (l.material as THREE.Material).dispose();
     }
     trackLines.length = 0;
+    if (pointMesh) {
+      scene.remove(pointMesh);
+      pointMesh.geometry.dispose();
+      (pointMesh.material as THREE.Material).dispose();
+      pointMesh = null;
+    }
+  }
+
+  /** 单点径迹（<2 点）→ 圆点云几何；无则 null */
+  function buildPointGeometry(list: PtracTrack[]): THREE.BufferGeometry | null {
+    const singles: { x: number; y: number; z: number; particle: string }[] = [];
+    for (const t of list) {
+      const pts = t.points || [];
+      if (pts.length === 1) {
+        singles.push({ x: Number(pts[0][0]), y: Number(pts[0][1]), z: Number(pts[0][2]), particle: t.particle });
+      }
+    }
+    if (singles.length === 0) return null;
+    const positions = new Float32Array(singles.length * 3);
+    const colors = new Float32Array(singles.length * 3);
+    const fallback = trackShade(trackColor("other"), 0.5);
+    singles.forEach((s, i) => {
+      positions[i * 3] = s.x; positions[i * 3 + 1] = s.y; positions[i * 3 + 2] = s.z;
+      const c = new THREE.Color(trackShade(trackColor(s.particle), 0.2) || fallback);
+      colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+    });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    return geo;
   }
 
   /* ── 统一归一化对齐（alignWorld 复用）：外壳与径迹共 offset ──
@@ -190,22 +224,29 @@ export function createPtracRenderer(canvas: HTMLCanvasElement, opts: PtracRender
    * 直接用已存 offset 平移，避免重复平移外壳（否则外壳被二次位移）。 */
   let alignedOffset: Vec3 | null = null;
   function alignAndFrame(): void {
-    if (alignedOffset || !worldBox) return;
-    const shellBox: AABB = shellRawBounds.length > 0
+    if (alignedOffset) return;
+    const shellBox: AABB | null = shellRawBounds.length > 0
       ? (() => {
           const tb = new THREE.Box3();
           for (const b of shellRawBounds) tb.union(b);
           return box3ToAabb(tb);
         })()
-      : worldBox;
-    const union = unionBoxes([shellBox, worldBox]);
+      : null;
+    // 径迹为空（PTRAC 文件 0 事件，如 TYPE 与 MODE 不匹配）时退化为只给外壳取景——
+    // 否则 camera 停在 init、外壳缩在画面角落像一块"莫名其妙的底面"（用户实测反馈）。
+    if (!shellBox && !worldBox) return;
+    const boxes: AABB[] = [];
+    if (shellBox) boxes.push(shellBox);
+    if (worldBox) boxes.push(worldBox);
+    const union = unionBoxes(boxes);
     const geos: Translatable[] = [
       ...shellMeshes.map((m) => m.geometry),
       ...trackLines.map((l) => l.geometry),
     ];
+    if (pointMesh) geos.push(pointMesh.geometry);
     const offset = translateToCenter(geos, union);
     // A2.1 同款自动取景：外壳≫径迹时以径迹为主；相机用 offset 后的场景坐标
-    const framing = computeFramingBox(shellBox, worldBox);
+    const framing = computeFramingBox(shellBox, worldBox ?? shellBox!);
     const sceneBox = applyOffsetToBox(framing, offset);
     const cp: CameraParams = computeCameraParams(boxCenter(sceneBox), boxSize(sceneBox));
     camera.near = cp.near;
@@ -286,11 +327,26 @@ export function createPtracRenderer(canvas: HTMLCanvasElement, opts: PtracRender
         scene.add(line);
         trackLines.push(line);
       }
+      // 单点径迹（<2 点无法连线）→ 圆点云，避免文件稀疏时画布空白（用户实测反馈）
+      const pGeo = buildPointGeometry(list);
+      if (pGeo) {
+        const pMat = new THREE.PointsMaterial({
+          vertexColors: true,
+          size: 6,
+          sizeAttenuation: true,
+          transparent: trackOpacity < 1,
+          opacity: trackOpacity,
+          depthTest: true,
+        });
+        pointMesh = new THREE.Points(pGeo, pMat);
+        scene.add(pointMesh);
+      }
       // 已对齐（首帧后）→ 新径迹直接用已存 offset 平移；否则首帧统一对齐
       if (alignedOffset) {
         for (const l of trackLines) {
           l.geometry.translate(alignedOffset[0], alignedOffset[1], alignedOffset[2]);
         }
+        pointMesh?.geometry.translate(alignedOffset[0], alignedOffset[1], alignedOffset[2]);
       } else {
         alignAndFrame();
       }
