@@ -168,7 +168,7 @@ export default function PtracWindow() {
           )}
           {trackCount > 0 && stats && stats.events > trackCount * 2 && (
             <div style={{ marginTop: 4, padding: "6px 8px", background: "rgba(255,152,0,0.12)", borderRadius: 6, color: "#ff9800", lineHeight: 1.5 }}>
-              ⚠ 事件数（{stats.events}）远大于径迹数（{trackCount}）：这是 WRITE=ALL 的正常现象——每个粒子的每次碰撞都记 1 个事件，所以“事件数”≠“粒子数”。本文件只有 {trackCount} 个粒子。想看全部粒子，请在 PTRAC 卡改用 WRITE=SOURCE（每粒子 1 点）。
+              ⚠ 事件数（{stats.events}）远大于径迹数（{trackCount}）：这是 WRITE=ALL 的正常现象——每个粒子的每次碰撞都记 1 个事件，所以“事件数”≠“粒子数”。本文件只有 {trackCount} 个粒子。想看全部粒子，请在 PTRAC 卡改用 EVENT=src（只记源事件，每粒子 1 点）。
             </div>
           )}
         </div>

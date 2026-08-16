@@ -58,7 +58,7 @@ export default function PtracForm({ value, onChange }: Props) {
               </select>
             </Field>
             <Field label="MAX">
-              <input className="form-input" value={s.max} onChange={(e) => set({ max: e.target.value })} placeholder="留空=默认100" style={{ height: 28, fontSize: 12, width: 90 }} />
+              <input className="form-input" value={s.max} onChange={(e) => set({ max: e.target.value })} placeholder="留空=不输出" style={{ height: 28, fontSize: 12, width: 90 }} />
             </Field>
             <Field label="TYPE">
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -92,7 +92,7 @@ export default function PtracForm({ value, onChange }: Props) {
                   <input className="form-input" value={s.value} onChange={(e) => set({ value: e.target.value })} placeholder="tally 截止值" style={{ height: 28, fontSize: 12, width: 130 }} />
                 </Field>
                 <Field label="EVENT">
-                  <input className="form-input" value={s.event} onChange={(e) => set({ event: e.target.value })} placeholder="事件类型" style={{ height: 28, fontSize: 12, width: 130 }} />
+                  <input className="form-input" value={s.event} onChange={(e) => set({ event: e.target.value })} placeholder="src/bnk/sur/col/ter" style={{ height: 28, fontSize: 12, width: 130 }} />
                 </Field>
               </div>
             )}

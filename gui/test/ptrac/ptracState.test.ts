@@ -26,7 +26,7 @@ describe("emptyPtracState 默认值（§4.5）", () => {
 
   it("下拉/多选选项齐备", () => {
     expect(PTRAC_FILE_OPTIONS).toEqual(["ASC", "BIN"]);
-    expect(PTRAC_WRITE_OPTIONS).toEqual(["ALL", "SOURCE", "EVENT"]);
+    expect(PTRAC_WRITE_OPTIONS).toEqual(["ALL", "POS"]);
     expect(PTRAC_TYPE_OPTIONS).toEqual(["N", "P", "E"]);
   });
 });
@@ -56,7 +56,7 @@ describe("ptracToCardText（状态 → 卡体）", () => {
     const text = ptracToCardText(s);
     expect(text).not.toContain("TYPE=");
     expect(text).toContain("FILE=ASC");
-    expect(text).not.toContain("MAX="); // MAX 留空 → 不输出（MCNP 默认 100）
+    expect(text).not.toContain("MAX="); // MAX 留空 → 不输出（MCNP 默认 10000 事件）
   });
 });
 
@@ -91,6 +91,13 @@ describe("cardTextToPtrac（卡体 → 状态）", () => {
     expect(s.types).toEqual(["N", "P"]);
   });
 
+  it("非法 WRITE 值（SOURCE/EVENT）→ 归一化为 ALL", () => {
+    // MCNP WRITE 只接受 pos/all；SOURCE/EVENT 属 EVENT 关键字（旧版下拉误设）
+    expect(cardTextToPtrac("PTRAC WRITE=SOURCE").write).toBe("ALL");
+    expect(cardTextToPtrac("PTRAC WRITE=EVENT").write).toBe("ALL");
+    expect(cardTextToPtrac("PTRAC WRITE=POS").write).toBe("POS");
+  });
+
   it("空文本 → enabled=false", () => {
     expect(cardTextToPtrac("").enabled).toBe(false);
   });
@@ -98,11 +105,11 @@ describe("cardTextToPtrac（卡体 → 状态）", () => {
 
 describe("round-trip（状态 → 卡体 → 状态）", () => {
   it("全字段往返稳定", () => {
-    const s = { ...emptyPtracState(), enabled: true, file: "BIN", write: "SOURCE", max: "10", types: ["N", "E"], nps: "5", cell: "1", surface: "2", value: "1e-3", event: "SRC COL" };
+    const s = { ...emptyPtracState(), enabled: true, file: "BIN", write: "POS", max: "10", types: ["N", "E"], nps: "5", cell: "1", surface: "2", value: "1e-3", event: "SRC COL" };
     const back = cardTextToPtrac(ptracToCardText(s));
     expect(back.enabled).toBe(true);
     expect(back.file).toBe("BIN");
-    expect(back.write).toBe("SOURCE");
+    expect(back.write).toBe("POS");
     expect(back.max).toBe("10");
     expect(back.types).toEqual(["N", "E"]);
     expect(back.nps).toBe("5");
@@ -139,5 +146,11 @@ describe("ptracFromDict（后端 parse 返回 dict → 状态，缺 key 容忍�
   it("types 过滤非法值（只保留 N/P/E）", () => {
     const s = ptracFromDict({ enabled: true, types: ["n", "x", "p"] });
     expect(s.types).toEqual(["N", "P"]);
+  });
+
+  it("write 非法值（SOURCE/EVENT）→ 归一化为 ALL", () => {
+    expect(ptracFromDict({ write: "SOURCE" }).write).toBe("ALL");
+    expect(ptracFromDict({ write: "EVENT" }).write).toBe("ALL");
+    expect(ptracFromDict({ write: "pos" }).write).toBe("POS");
   });
 });

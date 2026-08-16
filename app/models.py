@@ -249,14 +249,14 @@ class PTRACSettings:
     """
     enabled: bool = False       # 是否启用（生成 PTRAC 卡）
     file: str = "ASC"           # FILE=ASC/BIN
-    write: str = "ALL"          # WRITE=ALL/SOURCE/EVENT
-    max: str = ""               # MAX（留空=不输出，MCNP 默认 100）
+    write: str = "ALL"          # WRITE=ALL/POS（控制写哪些参数；pos=坐标/all=坐标+方向+能量+权重+时间）
+    max: str = ""               # MAX（留空=不输出，MCNP 默认 10000 事件）
     types: list = field(default_factory=list)  # TYPE N/P/E（可空）
     nps: str = ""               # NPS（数字，可空）
     cell: str = ""              # CELL（数字，可空）
     surface: str = ""           # SURFACE（数字，可空）
     value: str = ""             # VALUE（高级，可空）
-    event: str = ""             # EVENT（高级，可空）
+    event: str = ""             # EVENT=src/bnk/sur/col/ter（高级，控制写哪些事件；想看全部粒子用 src）
 
 
 @dataclass

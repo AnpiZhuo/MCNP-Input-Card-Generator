@@ -14,9 +14,9 @@ export interface PtracState {
   enabled: boolean;
   /** FILE=ASC|BIN（默认 ASC） */
   file: string;
-  /** WRITE=ALL|SOURCE|EVENT（默认 ALL） */
+  /** WRITE=ALL|POS（默认 ALL；控制写哪些参数——pos=只坐标，all=坐标+方向+能量+权重+时间） */
   write: string;
-  /** MAX=数字（留空=不输出，用 MCNP 默认 100） */
+  /** MAX=数字（留空=不输出，用 MCNP 默认 10000 事件） */
   max: string;
   /** TYPE=N/P/E 多选（可空） */
   types: string[];
@@ -28,15 +28,16 @@ export interface PtracState {
   surface: string;
   /** VALUE=值（高级折叠） */
   value: string;
-  /** EVENT=值（高级折叠） */
+  /** EVENT=src/bnk/sur/col/ter（高级折叠；控制写哪些事件——想看全部粒子用 src） */
   event: string;
 }
 
 export const PTRAC_FILE_OPTIONS = ["ASC", "BIN"];
-export const PTRAC_WRITE_OPTIONS = ["ALL", "SOURCE", "EVENT"];
+/** MCNP WRITE 关键字只接受 pos/all（控制写哪些参数）；SOURCE/EVENT 属 EVENT 关键字，不是 WRITE 值 */
+export const PTRAC_WRITE_OPTIONS = ["ALL", "POS"];
 export const PTRAC_TYPE_OPTIONS = ["N", "P", "E"];
 
-/** 默认状态：未启用；FILE=ASC / WRITE=ALL / MAX 留空（不输出，MCNP 默认 100） */
+/** 默认状态：未启用；FILE=ASC / WRITE=ALL / MAX 留空（不输出，MCNP 默认 10000 事件） */
 export function emptyPtracState(): PtracState {
   return {
     enabled: false,
@@ -78,7 +79,10 @@ export function ptracFromDict(d: Record<string, any> | undefined): PtracState {
   const s = emptyPtracState();
   s.enabled = !!d.enabled;
   if (d.file != null) s.file = String(d.file).trim().toUpperCase() || "ASC";
-  if (d.write != null) s.write = String(d.write).trim().toUpperCase() || "ALL";
+  if (d.write != null) {
+    const w = String(d.write).trim().toUpperCase() || "ALL";
+    s.write = PTRAC_WRITE_OPTIONS.includes(w) ? w : "ALL"; // 归一化非法值（旧版 SOURCE/EVENT → ALL）
+  }
   if (d.max != null) s.max = String(d.max).trim();
   if (Array.isArray(d.types)) {
     s.types = d.types
@@ -143,8 +147,11 @@ export function cardTextToPtrac(text: string): PtracState {
     }
     i = j;
   }
-  // 归一化：FILE/WRITE 大写（MCNP 大小写不敏感）；空值回退默认
+  // 归一化：FILE/WRITE 大写（MCNP 大小写不敏感）；空值回退默认；非法 WRITE → ALL
   if (state.file) state.file = state.file.toUpperCase();
-  if (state.write) state.write = state.write.toUpperCase();
+  if (state.write) {
+    state.write = state.write.toUpperCase();
+    if (!PTRAC_WRITE_OPTIONS.includes(state.write)) state.write = "ALL";
+  }
   return state;
 }

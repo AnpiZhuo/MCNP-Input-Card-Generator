@@ -693,7 +693,7 @@ def _generate_ptrac(tally: TallySettings) -> list[str]:
 
     卡体格式与前端 gui/src/ptrac/ptracState.ts `ptracToCardText` 逐字对齐：
     FILE/WRITE 恒发（默认 ASC/ALL，FILE/WRITE 大写）；MAX 只发非空项（留空=不输出，
-    用 MCNP 默认 100——此前 MAX=-1 使本机 MCNP 写完 1 个事件就终止运行，用户实测踩坑）；
+    用 MCNP 默认 10000 事件——此前 MAX=-1 使本机 MCNP 写完 1 个事件就终止运行，用户实测踩坑）；
     TYPE 多值空格分隔且大写；NPS/CELL/SURFACE/VALUE/EVENT 只发非空项。
     """
     ptrac = getattr(tally, "ptrac", None)
