@@ -9,6 +9,8 @@ argv 分派：
                      完成后退出，不启动 HTTP 服务器）。打包版 sys.executable 传参
                      即走此入口（api_server 的 _meshtal_worker_cmd()），避免带脚本
                      路径再启第二个 5001（端口冲突挂起）。
+  --ptrac-worker    以 ptrac 子进程 worker 模式运行（stdin JSON → stdout JSON，
+                     照 --meshtal-worker，契约 ptrac-visualization.md v2 §3）。
 """
 import sys, os
 
@@ -36,6 +38,12 @@ if __name__ == "__main__":
         # meshtal 子进程 worker：stdin JSON → stdout JSON，完成后退出，不启 HTTP
         from meshtal._meshtal_worker import main as _meshtal_worker_main
         _meshtal_worker_main()
+        sys.exit(0)
+
+    if "--ptrac-worker" in sys.argv:
+        # ptrac 子进程 worker：stdin JSON → stdout JSON，完成后退出，不启 HTTP
+        from ptrac._ptrac_worker import main as _ptrac_worker_main
+        _ptrac_worker_main()
         sys.exit(0)
 
     import api_server  # noqa: E402

@@ -15,7 +15,7 @@ This module contains the main parsing logic for MCNP input card types:
 import json
 import math
 import re
-from app.models import CellData, CellRow, MaterialData, MaterialRow, SourceData, TallyDefinition
+from app.models import CellData, CellRow, MaterialData, MaterialRow, SourceData, TallyDefinition, PTRACSettings
 from app.meshtal.fmesh_parser import parse_fmesh_lines
 from .lines import _SURFACE_TYPES, extract_comment, strip_comment
 
@@ -882,6 +882,60 @@ def parse_cut(parts: list[str], tally_dict: dict):
         tally_dict[name.format(d)] = expanded[i]
 
 
+# PTRAC 结构化关键字（契约 ptrac-visualization.md v2 §4.5）。
+# 单值 KEY=value 与多值 KEY（后随空格分隔裸值）分开处理；未识别关键字 → other_cards。
+_PTRAC_SINGLE_KEYS = {"FILE": "file", "WRITE": "write", "MAX": "max",
+                      "VALUE": "value", "EVENT": "event"}
+_PTRAC_MULTI_KEYS = {"TYPE": "types", "NPS": "nps", "CELL": "cell", "SURFACE": "surface"}
+
+
+def _parse_ptrac_card(parts: list[str]) -> PTRACSettings | None:
+    """PTRAC 卡 parts（首词 "PTRAC"）→ PTRACSettings；无法结构化 → None（回 other_cards）。
+
+    口径（契约 §4.5 + D-10 回归）：仅含结构化关键字（FILE=/WRITE=/MAX=/TYPE=/NPS=/
+    CELL=/SURFACE=/VALUE=/EVENT=）才进 tally.ptrac；裸卡/行内 $ 注释/未识别关键字
+    （CONIC=/TALLY=/FILTER=/BUFFER=/MEPH=）→ None → other_cards 保留原文。
+    """
+    ptrac = PTRACSettings(enabled=True)
+    last_multi = None
+    recognized_any = False
+    for tok in parts[1:]:
+        if "=" in tok:
+            k, v = tok.split("=", 1)
+            ku = k.upper()
+            if ku in _PTRAC_SINGLE_KEYS:
+                setattr(ptrac, _PTRAC_SINGLE_KEYS[ku], v)
+                last_multi = None
+                recognized_any = True
+            elif ku in _PTRAC_MULTI_KEYS:
+                fname = _PTRAC_MULTI_KEYS[ku]
+                if fname == "types":
+                    ptrac.types = [v.upper()] if v else []
+                else:
+                    setattr(ptrac, fname, v)
+                last_multi = fname
+                recognized_any = True
+            else:
+                return None  # 未识别关键字（CONIC/TALLY/FILTER/BUFFER/MEPH…）→ other_cards
+        else:
+            # 裸值：归属上一个多值关键字（TYPE=N P / NPS=1 50 / CELL=3 4）
+            if last_multi is None:
+                return None  # 裸值但无前置多值关键字 → 无法结构化
+            if last_multi == "types":
+                ptrac.types.append(tok.upper())
+            else:
+                cur = getattr(ptrac, last_multi, "") or ""
+                setattr(ptrac, last_multi, (cur + " " + tok).strip())
+    if not recognized_any:
+        return None  # 裸卡（无结构化关键字，含行内 $ 注释）→ other_cards
+    # 归一化（镜像前端 cardTextToPtrac）：FILE/WRITE 大写，空值回退默认
+    if ptrac.file:
+        ptrac.file = ptrac.file.upper()
+    if ptrac.write:
+        ptrac.write = ptrac.write.upper()
+    return ptrac
+
+
 # ── 已知但无对应 UI 的 MCNP 卡片（保留在 other_cards 中，但不警告） ──
 _KNOWN_OTHER_CARDS = {
     "PHYS:N", "PHYS:P", "PHYS:E", "PHYS",
@@ -1326,6 +1380,15 @@ def parse_data_cards(data_lines: list[str]) -> dict:
                 # 结构化失败 → raw 兜底，round-trip 不丢
                 result["other_cards"].extend(body_lines)
             i = j
+        elif first == "PTRAC":
+            # PTRAC 径迹输出卡（契约 v2 §4.5）：含结构化关键字 → tally.ptrac；
+            # 裸卡/行内 $ 注释/未识别关键字 → other_cards 保留原文（D-10 回归）。
+            ptrac_def = _parse_ptrac_card(parts)
+            if ptrac_def is not None:
+                result["ptrac"] = ptrac_def
+            else:
+                result["other_cards"].append(raw_line)
+            i += 1
         elif first in _KNOWN_OTHER_CARDS or _TALLY_MODIFIER_RE.match(first):
             # 标准 MCNP 卡片但无对应 UI，保留原样到 other_cards
             result["other_cards"].append(raw_line)

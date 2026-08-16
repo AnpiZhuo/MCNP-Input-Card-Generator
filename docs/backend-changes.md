@@ -864,3 +864,10 @@ dims ni=1 nj=2 nk=2 / grid_bounds [49,-10,90]~[51,10,110]；texture 同样 ok（
 
 测试（先红后绿）：`tests/unit/test_preview_bound.py` +2（`test_model_extent_unpadded_real_geometry_range` / `test_model_extent_unpadded_skips_gq_sq_and_empty`）；`tests/integration/test_meshtal_api.py` +2（`test_http_meshtal_parse_model_box_from_cells_surfaces`：无 modelBox 带 cells/surfaces → match 非空且 matched；`test_http_meshtal_parse_detects_displaced_grid`：用户真实场景——模型原点钨板 rpp -1 1 -1 1 0 1 + 真空外层 so 1000/2000，网格 real_meshtal_jk（49,-10,90~51,10,110）→ `matched=False`，绝不静默错位）。
 **全量 pytest 465/0**（461 基线零回归 + 4 新增）。
+
+## §P. PTRAC 粒子径迹可视化后端（2026-08-16，契约 docs/contracts/ptrac-visualization.md v2）
+
+- 新增 `app/ptrac/`：`ptrac_parser.py`（纯 stdlib 行解析：头 8 行 + 历史"NPS 1000" + 事件两行一组；**L 表变量 ID 驱动**能量[ID 10]/粒子类型[ID 16]提取、历史首事件恒用 src 布局消歧、max_tracks/max_points 截断+均匀抽稀保首尾、PTRACFormatError）+ `_ptrac_worker.py`（子进程 worker，模块顶只 stdlib，stdin JSON→stdout JSON 信封）。
+- 新增端点 `/api/ptrac-parse`（端点总数 29）+ `docs/contracts/api.yaml` 同步 + 漂移闸门双向一致；`mcnp_bridge.py` 加 `--ptrac-worker` 分派；`mcnp_sidecar.spec` `_hidden`/`_keep_dirs` 补 ptrac（打包版 worker 实测通）。
+- §4.5 卡生成/解析 round-trip：`models.PTRACSettings` + `TallySettings.ptrac`；`_tally_from_dict` 透传；`inp_generator._generate_ptrac`（与前端 `ptracToCardText` 逐字对齐：FILE/WRITE/MAX 恒发、TYPE 大写多值空格、NPS/CELL/SURFACE/VALUE/EVENT 非空才发）；`parsers/core._parse_ptrac_card` 结构化吸收、裸卡/行内 `$ 注释`/未识别关键字（CONIC=/TALLY=/FILTER=/BUFFER=/MEPH=）回落 other_cards（D-10 不弱化）。
+- 测试（先红后绿）：`tests/unit/test_ptrac_parser.py` 12 + `tests/integration/test_ptrac_api.py` 6 + `tests/parser/test_ptrac_card.py` 6。**全量 pytest 490/0**（基线 465 + 25）。

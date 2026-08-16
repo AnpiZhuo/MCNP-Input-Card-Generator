@@ -3,6 +3,8 @@ import GridEditor from "./GridEditor";
 import TextModeSection from "./TextModeSection";
 import DocViewer from "./DocViewer";
 import FMeshForm from "../volume/FMeshForm";
+import PtracForm from "../ptrac/PtracForm";
+import { ptracFromDict } from "../ptrac/ptracState";
 import { fmeshDefsToRows } from "../volume/fmeshState";
 import { useDeck } from "../utils/DeckContext";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
@@ -240,6 +242,12 @@ export default function TallyTab() {
       <FMeshForm
         value={(deck.tally as any)?.fmesh || []}
         onChange={(rows) => patch({ tally: { ...(deck.tally || {}), fmesh: rows } })}
+      />
+
+      {/* 粒子径迹（PTRAC）表单（契约 ptrac-visualization.md §4.5）：状态 deck.tally.ptrac */}
+      <PtracForm
+        value={ptracFromDict((deck.tally as any)?.ptrac)}
+        onChange={(st) => patch({ tally: { ...(deck.tally || {}), ptrac: st } })}
       />
       {doc && <DocViewer path={doc.path} title={doc.title} onClose={() => setDoc(null)} />}
     </>

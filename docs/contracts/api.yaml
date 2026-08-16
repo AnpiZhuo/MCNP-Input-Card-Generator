@@ -3,7 +3,7 @@ info:
   title: MCNP 输入卡生成器 HTTP API
   version: 1.6.3
   description: |
-    gui/backend/api_server.py 暴露的 28 个端点契约（端口 5001）。
+    gui/backend/api_server.py 暴露的 29 个端点契约（端口 5001）。
     契约漂移闸门（tests/integration/test_api_contract.py）会以 AST 读取
     api_server.py handlers 字典，断言本文件中每个 path 都有 operationId。
 
@@ -32,6 +32,8 @@ tags:
     description: 环境检测（MCNP/FreeCAD）、文本↔表单互转
   - name: meshtal
     description: 网格计数（FMESH/TMESH）MESHTAL 探测/解析/纹理（契约 meshtal-visualization.md）
+  - name: ptrac
+    description: 粒子径迹 PTRAC 解析（契约 ptrac-visualization.md）
 
 paths:
   /api/generate:
@@ -1093,6 +1095,78 @@ paths:
                           scalarMax: { type: number }
         '500':
           description: tally/能量/时间越界或网格过密（带 hint，F4）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/ptrac-parse:
+    post:
+      operationId: ptracParse
+      tags: [ptrac]
+      summary: 解析 PTRAC ASCII 粒子径迹（子进程 worker，L 表驱动能量/粒子类型）
+      description: |
+        大文件解析走子进程 worker（_ptrac_worker.py），不阻塞 5001。
+        请求 {path, maxTracks?=500, maxPoints?=200000}；
+        响应 {header:{code,title}, tracks:[{nps,particle,points:[[x,y,z,type,energy],…]}],
+        worldBox:{min,max}, stats:{nps,events,points,truncated,particles:{n,p,e}}, truncated}。
+        文件缺失/非 PTRAC → 友好中文 hint（F4）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                path: { type: string, description: ASCII PTRAC 文件路径（FILE=ASC） }
+                maxTracks: { type: integer, default: 500, description: 最大历史数（截断标 truncated） }
+                maxPoints: { type: integer, default: 200000, description: 最大点数（均匀抽稀保持首尾） }
+      responses:
+        '200':
+          description: 解析成功（_ok({header, tracks, worldBox, stats, truncated})）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      header:
+                        type: object
+                        properties:
+                          code: { type: string }
+                          title: { type: string }
+                      tracks:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            nps: { type: integer }
+                            particle: { type: string, description: 'n/p/e；其余为空串 ""' }
+                            points:
+                              type: array
+                              description: 每点 [x,y,z,type,energy]
+                              items: { type: array, items: { type: number } }
+                      worldBox:
+                        type: object
+                        properties:
+                          min: { type: array, items: { type: number } }
+                          max: { type: array, items: { type: number } }
+                      stats:
+                        type: object
+                        properties:
+                          nps: { type: integer }
+                          events: { type: integer }
+                          points: { type: integer }
+                          truncated: { type: boolean }
+                          particles:
+                            type: object
+                            properties:
+                              n: { type: integer }
+                              p: { type: integer }
+                              e: { type: integer }
+                      truncated: { type: boolean }
+        '500':
+          description: 文件缺失 / 非 PTRAC 文件（带 hint，F4）
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

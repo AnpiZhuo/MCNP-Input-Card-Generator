@@ -5,6 +5,7 @@ import PreviewDialog from "./components/PreviewDialog";
 import Preview3DWindow from "./components/Preview3DWindow";
 import CrossSectionWindow from "./components/CrossSectionWindow";
 import ResultWindow from "./volume/ResultWindow";
+import PtracWindow from "./ptrac/PtracWindow";
 import { generateInp } from "./utils/dataCollector";
 import { currentWindowLabel, clearStlSession } from "./utils/windows";
 
@@ -316,6 +317,8 @@ function AppInner() {
           ...cutFields,
           // FMESH/TMESH 结构化卡（fmeshState 双向转换，后端 key=fmesh_defs）
           fmesh_defs: buildFmeshPayload((deck.tally as any)?.fmesh || []),
+          // PTRAC 粒子径迹卡（ptracState，后端 key=ptrac；未启用时 undefined → JSON 省略）
+          ptrac: (deck.tally as any)?.ptrac,
         },
         adv: {
           ...(deck.adv || {}),
@@ -430,18 +433,19 @@ function AppInner() {
   );
 }
 
-/** 独立窗口路由：按当前窗口 label 分派渲染（主界面 / 3D 预览 / 截面 / 3D 结果） */
+/** 独立窗口路由：按当前窗口 label 分派渲染（主界面 / 3D 预览 / 截面 / 3D 结果 / 3D 径迹） */
 function WindowRouter() {
   const [label, setLabel] = useState<string>("main");
   useEffect(() => {
-    // 调试入口：URL hash #/preview3d / #/cross_section / #/volume 可强制窗口类型（浏览器模式测试用）
+    // 调试入口：URL hash #/preview3d / #/cross_section / #/volume / #/ptrac 可强制窗口类型（浏览器模式测试用）
     const h = window.location.hash.replace(/^#\/?/, "");
-    if (h === "preview3d" || h === "cross_section" || h === "volume") { setLabel(h); return; }
+    if (h === "preview3d" || h === "cross_section" || h === "volume" || h === "ptrac") { setLabel(h); return; }
     currentWindowLabel().then(setLabel).catch(() => setLabel("main"));
   }, []);
   if (label === "preview3d") return <Preview3DWindow />;
   if (label === "cross_section") return <CrossSectionWindow />;
   if (label === "volume") return <ResultWindow />;
+  if (label === "ptrac") return <PtracWindow />;
   return <DeckProvider><AppInner /></DeckProvider>;
 }
 

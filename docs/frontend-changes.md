@@ -1042,3 +1042,13 @@ three r160 的 WebGLProgram 对 **RawShaderMaterial 会前置 `#define SHADER_TY
   比噪声小的值本就量化为 0，无需阈值切噪声）；兜底 max*1e-6、min>0 保持 min 不变。
 - 测试：colorize.test.ts 更新（minPositive*0.5 断言），**vitest 253/253** + tsc/build EXIT 0。
 - 已重打包部署（bundle index-DzFV9Bgk.js 嵌入确认）。
+
+## PTRAC 粒子径迹可视化前端（2026-08-16，契约 ptrac-visualization.md v2）
+
+- 新建 `gui/src/ptrac/`：`trackColors.ts`（三色 n=#3b82f6/p=#ef4444/e=#eab308、其余灰，能量 HSL lightness 深浅插值）、`decimateTracks.ts`（均匀抽稀保首尾 + `sampleTracks` 密度抽样 1/1…1/10000）、`ptracState.ts`（表单状态 + 卡体 round-trip）、`PtracRenderer.ts`（外壳 STL + LineSegments 顶点色=类型×能量 + alignWorld 归一化 offset + OrbitControls）、`PtracWindow.tsx`（独立窗：统计/粒子三勾选/能量图例/透明度滑杆/密度抽样滑杆/NPS 单径迹高亮/外壳开关）、`PtracForm.tsx`（计数页表单：FILE/WRITE/MAX/TYPE/NPS/CELL/SURFACE 平铺 + VALUE/EVENT 高级折叠）、`openPtracWindow.ts`（桥 + 非 Tauri fallback #/ptrac）。
+- 接线：`utils/api.ts`（ptracParse + 类型）、`utils/windows.ts`（KEY_PTRAC 桥）、`main.rs`（open_ptrac_window，label ptrac「3D 径迹」1300×820）、`App.tsx`（#/ptrac 路由 + generate 载荷 tally.ptrac）、`OutputTab.tsx`（粒子径迹 PTRAC 小节）、`TallyTab.tsx`（挂 PtracForm）。
+- 测试：`gui/test/ptrac/` 4 文件（trackColors 9 + decimateTracks 11 + ptracState 14 + PtracWindow 1）+ windowRouteConsistency 扩展；**vitest 290 绿**（唯一 flaky=colorize 128³ 计时，隔离绿）+ tsc/build EXIT 0。
+
+## 侧边栏版本号显示（2026-08-16，用户需求）
+
+- `Sidebar.tsx` 悬停展开时应用图标右侧显示 `v{package.json 版本}`（单一来源，与打包四处版本同步）；`gui/test/sidebarVersion.test.tsx` +2。

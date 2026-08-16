@@ -82,6 +82,12 @@ async fn open_volume3d_window(app: tauri::AppHandle) -> Result<(), String> {
     create_or_focus(&app, "volume", "3D 结果", 1300.0, 820.0)
 }
 
+#[tauri::command]
+async fn open_ptrac_window(app: tauri::AppHandle) -> Result<(), String> {
+    // label 必须与 App.tsx WindowRouter 路由分支同值（"ptrac"→PtracWindow）。
+    create_or_focus(&app, "ptrac", "3D 径迹", 1300.0, 820.0)
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -92,7 +98,8 @@ fn main() {
             start_dragging_window,
             open_preview3d_window,
             open_cross_section_window,
-            open_volume3d_window
+            open_volume3d_window,
+            open_ptrac_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

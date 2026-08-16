@@ -1,5 +1,7 @@
 # 项目记忆文档（AI 速查手册）
-> 最后更新时间：2026-08-15（v1.7.1 最终版 + 用户实测批修复全部进包；**版本锁定 1.7.1，bug 修复批严禁升版**）
+> 最后更新时间：2026-08-16（v1.7.1 + PTRAC 粒子径迹可视化交付；**版本锁定 1.7.1，新功能/修复批均未升版，升版由上级另行指定**）
+>
+> **✅ PTRAC 粒子径迹可视化已交付（2026-08-16，未 commit，版本恒 1.7.1）**：用户指令「像 FMESH 一样把 PTRAC 也做适配」，显示方案经用户逐项敲定（契约 docs/contracts/ptrac-visualization.md v2，AgentTeams 后端+前端+终验三员协作）。交付：计数页「粒子径迹（PTRAC）」表单（勾选启用，常用 FILE/WRITE/MAX/TYPE/NPS/CELL/SURFACE 平铺 + VALUE/EVENT 高级折叠，CONIC/TALLY/FILTER/BUFFER/MEPH 手写其他卡）→ 生成/解析 round-trip（R1 不动点）→ 输出页解析 `/api/ptrac-parse`（29 端点，L 表变量 ID 驱动提取能量[ID 10]/粒子类型[ID 16]，子进程 worker）→ 独立「3D 径迹」窗口（外壳 STL + LineSegments 顶点色=**类型三色 n蓝/p红/e黄 × 能量深浅渐变** + 粒子三勾选 + 透明度滑杆 + **密度抽样滑杆 1/1..1/10000** + NPS 单径迹高亮）。门禁 pytest **490/0** + vitest **290 绿**（唯一 flaky=colorize 128³ 计时）+ tsc/build EXIT 0；已重打包部署（exe 14:28 + 新 sidecar 含 app/ptrac，冒烟 ptrac-parse 中文/ASCII 路径均通）。侧边栏悬停展开显示版本号 `v1.7.1`（读 package.json 单一来源）。
 >
 > **当前状态（2026-08-15 深夜批，已统一提交（单 commit，未 push），版本恒 1.7.1）**
 > - 已重打包部署 `D:\MCNP\MCNP输入卡生成器`（最终 exe 23:35 + sidecar 22:21，含本批全部修复）
@@ -161,6 +163,7 @@
 
 | 日期 | 变更类型 | 改动描述 | 涉及 Agent |
 | :--- | :--- | :--- | :--- |
+| 2026-08-16 | 新增 | **PTRAC 粒子径迹可视化交付**（契约 ptrac-visualization.md v2）：后端 app/ptrac/ 解析器+worker + /api/ptrac-parse（29 端点）+ 卡生成/解析 round-trip；前端 gui/src/ptrac/ 独立「3D 径迹」窗口（类型三色×能量深浅、密度抽样、NPS 高亮）+ 计数页 PTRAC 表单；侧边栏版本号显示。pytest 490/0 + vitest 290 绿 + tsc/build EXIT 0；已重打包部署 | 后端+前端+测试（AgentTeams） |
 | 2026-08-15 | 修复/前端+后端 | **用户实测「网格计数 3D 结果」批（深夜，未 commit，版本恒 1.7.1，已重打包部署）**：① A1.2 匹配检测契约缺口（后端 `_model_box_from_cells_surfaces` + `model_extent_unpadded`，match 不再恒 null）；② 不相交取景（`boxesOverlap` → 并集，防模型挤出屏）；③ bat 白屏（vite dev 挂死 → 改 vite build + python http.server 静态服务）；④ 体积透明度**图层级 + 深度剥除**（防 256 步累积饱和；`peel=(1-u)*0.5` 外层先透明、内层慢慢跟）；⑤ 色阶下限**自适应**（`minPositive×0.5`，只隐零背景）+ 图例下方两条独立滑杆（双柄方案已按用户反馈移除）。门禁 pytest 465/0 + vitest 253 + tsc/build EXIT 0；冒烟含新匹配逻辑 matched:false + 新 bundle 嵌入；用户截图像素分析确认面板/取景/横幅正常 | 后端+前端 |
 | 2026-08-15 | 修复/前端 | **P0 体积层渲染根因修复（测试先行，frontend）**：three r160 WebGLProgram 对 RawShaderMaterial 前置 `#define SHADER_TYPE` 块使 shader 首行 `#version 300 es` 不再首行 → GLSL 编译报「#version directive must occur before anything else」→ **体积层自 ea20ad7 从未真正渲染**（静默无报错，快照测试只锁字符串不编译一路绿灯）。修复：volumeShader.ts 去首行 `#version` + `glslVersion: THREE.GLSL3`；snapshot 测试 +3 守卫（shader 不含 #version / 首行 precision / glslVersion）。headless 真渲染证据（Edge+SwiftShader，复现页已删）：修复前中心 0/14400 非背景 → 修复后 14400/14400 + 四体素 G/Y/R/B 色块。vitest 236/0 + tsc/build EXIT 0 | 前端 |
 | 2026-08-15 | 管理/构建 | **v1.7.1 最终统一版重打包部署（backend，上级要求）**：版本号统一回 **1.7.1**（PM 曾擅自升 1.7.2/1.7.3 违规纠正；上级硬规则=bug 修复批次严禁升版本号，恒 1.7.1，已入 §5 核心业务规则）；版本五处+锁文件 1.7.3→1.7.1 无残留；commit `ae6ab5b`（6 files，未 push）；门禁 pytest 461/0 + vitest 242/0 + tsc/build EXIT 0；冒烟 6 项全过（版本双信号=1.7.1 无 1.7.2/1.7.3）；部署 D:\MCNP\MCNP输入卡生成器（exe 6389760B/18:05 sha256 6EB48148）。遗留：3D 结果窗口真实渲染画面待用户实测 | 后端 |

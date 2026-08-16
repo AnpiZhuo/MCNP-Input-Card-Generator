@@ -1,4 +1,5 @@
 import React from "react";
+import pkg from "../../package.json";
 
 interface Props {
   active: string;
@@ -27,8 +28,18 @@ export default function Sidebar({ active, onSelect, tabs, theme, onThemeChange, 
     <nav className="sidebar" style={{ width: expanded ? 96 : 52 }}
       onMouseEnter={() => { if (timer.current) clearTimeout(timer.current); setExpanded(true); }}
       onMouseLeave={() => { timer.current = window.setTimeout(() => setExpanded(false), 180); }}>
-      <div className="sidebar-avatar" style={{ margin: "0 0 8px 6px", overflow: "hidden" }}>
-        <img src="/app_icon.png" alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "50%" }} />
+      <div style={{ display: "flex", alignItems: "center", margin: "0 0 8px 6px", overflow: "hidden" }}>
+        <div className="sidebar-avatar" style={{ flexShrink: 0, overflow: "hidden" }}>
+          <img src="/app_icon.png" alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "50%" }} />
+        </div>
+        {/* 悬停展开时在应用图标右侧显示版本号（用户需求；版本随 package.json 单一来源） */}
+        <span
+          className="sidebar-label"
+          style={{ opacity: expanded ? 1 : 0, marginLeft: 8, fontSize: 10, color: "var(--text-tertiary)", whiteSpace: "nowrap" }}
+          title="程序版本号"
+        >
+          v{pkg.version}
+        </span>
       </div>
       {tabs.map(tab => (
         <button key={tab.key} className={"sidebar-btn" + (active === tab.key ? " active" : "")}

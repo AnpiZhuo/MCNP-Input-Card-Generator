@@ -235,6 +235,31 @@ class FmeshDefinition:
 
 
 @dataclass
+class PTRACSettings:
+    """
+    PTRAC 粒子径迹输出卡结构化定义（契约 ptrac-visualization.md v2 §4.5）。
+
+    JSON key 与前端 deck.tally.ptrac 一致（加性字段）：
+      {enabled, file, write, max, types[], nps, cell, surface, value, event}
+
+    types 为 TYPE 粒子类型多选（N/P/E，可空）；其余为原文串（KEY=value 连写）。
+    CONIC/TALLY/FILTER/BUFFER/MEPH 不做表单 → 仍走 other_cards（round-trip 保留）。
+
+    粒子径迹输出定义
+    """
+    enabled: bool = False       # 是否启用（生成 PTRAC 卡）
+    file: str = "ASC"           # FILE=ASC/BIN
+    write: str = "ALL"          # WRITE=ALL/SOURCE/EVENT
+    max: str = "-1"             # MAX（数字，默认 -1）
+    types: list = field(default_factory=list)  # TYPE N/P/E（可空）
+    nps: str = ""               # NPS（数字，可空）
+    cell: str = ""              # CELL（数字，可空）
+    surface: str = ""           # SURFACE（数字，可空）
+    value: str = ""             # VALUE（高级，可空）
+    event: str = ""             # EVENT（高级，可空）
+
+
+@dataclass
 class TallySettings:
     """
     Tally card settings.
@@ -261,6 +286,9 @@ class TallySettings:
 
     # 网格计数（FMESH/TMESH）结构化定义（契约 §5.1；默认 []）
     fmesh_defs: list[FmeshDefinition] = field(default_factory=list)
+
+    # PTRAC 粒子径迹输出（契约 ptrac-visualization.md v2 §4.5；None=未配置）
+    ptrac: PTRACSettings | None = None
 
     # T0 — 时间网格 / Time bins (C810: T0 t1 t2 ... tn)
     t0_min: str = ""

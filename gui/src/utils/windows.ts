@@ -13,6 +13,7 @@ const KEY_PREVIEW3D = "mcnp_win_preview3d";
 const KEY_CROSS = "mcnp_win_cross";
 const KEY_VOLUME3D = "mcnp_win_volume3d";
 const KEY_MAT_CHANGE = "mcnp_win_material_change";
+const KEY_PTRAC = "mcnp_win_ptrac";
 
 /** 当前是否运行在 Tauri 环境（浏览器模式回退主窗口覆盖层） */
 export async function isTauri(): Promise<boolean> {
@@ -114,6 +115,29 @@ export function readVolumeData(): Record<string, any> | null {
     if (!raw) return null;
     const j = JSON.parse(raw);
     localStorage.removeItem(KEY_VOLUME3D);
+    return j;
+  } catch {
+    return null;
+  }
+}
+
+/** 主窗口：打开「3D 径迹」（PTRAC）独立窗口（先写数据桥再开窗） */
+export async function openPtracWindow(data: Record<string, any>): Promise<boolean> {
+  try {
+    localStorage.setItem(KEY_PTRAC, JSON.stringify(data));
+  } catch (e) {
+    console.warn("ptrac bridge write failed", e);
+  }
+  return invoke("open_ptrac_window");
+}
+
+/** 读取「3D 径迹」桥数据（新窗口一次性消费） */
+export function readPtracData(): Record<string, any> | null {
+  try {
+    const raw = localStorage.getItem(KEY_PTRAC);
+    if (!raw) return null;
+    const j = JSON.parse(raw);
+    localStorage.removeItem(KEY_PTRAC);
     return j;
   } catch {
     return null;

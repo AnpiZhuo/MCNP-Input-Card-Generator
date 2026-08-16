@@ -1,11 +1,12 @@
 import React, { useState, useRef, useMemo } from "react";
 import { parseOutp, type ParsedOutput } from "../utils/outputParser";
 import DocViewer from "./DocViewer";
-import { apiUrl, errorHint, meshtalDetect, meshtalParse, type MeshtalDetectFile, type MeshtalParseResult, type MeshtalTallyMeta } from "../utils/api";
+import { apiUrl, errorHint, meshtalDetect, meshtalParse, ptracParse, type MeshtalDetectFile, type MeshtalParseResult, type MeshtalTallyMeta, type PtracParseResult } from "../utils/api";
 import { useDeck } from "../utils/DeckContext";
 import { workflowStep, noFileMessage, type MeshWorkflowState } from "../volume/workflow";
 import { decideResolution, DEFAULT_RESOLUTION, MAX_RESOLUTION, OVER_BUDGET_POPUP_COPY } from "../volume/downsampleRequest";
 import { openVolume3DWindow, readOutputDir } from "../volume/openVolume3DWindow";
+import { openPtrac3DWindow } from "../ptrac/openPtracWindow";
 
 export default function OutputTab() {
   const [doc, setDoc] = useState<{path:string;title:string}|null>(null);
@@ -69,6 +70,12 @@ export default function OutputTab() {
   const [meshParseError, setMeshParseError] = useState<string | null>(null);
   const [meshSelectedTally, setMeshSelectedTally] = useState<MeshtalTallyMeta | null>(null);
   const [meshBudget, setMeshBudget] = useState<{ path: string; tally: MeshtalTallyMeta; native: number[] } | null>(null);
+
+  /* ── 粒子径迹（PTRAC）：选择文件 → 解析 → 开窗（契约 ptrac-visualization.md §4）── */
+  const [ptracPath, setPtracPath] = useState("");
+  const [ptracBusy, setPtracBusy] = useState(false);
+  const [ptracError, setPtracError] = useState<string | null>(null);
+  const [ptracParseResult, setPtracParseResult] = useState<PtracParseResult | null>(null);
 
   // 几何外壳模型（照 TallyTab → FMeshForm 的 cells 映射）
   const meshCells = useMemo(() => (deck.cells || [])
@@ -182,6 +189,43 @@ export default function OutputTab() {
       return;
     }
     launchMeshWindow(p, t, decision.resolution, meshParse);
+  };
+
+  /* ── PTRAC 入口：选择文件 + 解析并开窗 ── */
+  const choosePtracFile = async () => {
+    try {
+      const j: any = await fetch(apiUrl("/api/choose-file"), {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
+      }).then((r) => r.json());
+      if (j.status === "ok" && !j.cancelled && j.path) {
+        setPtracPath(j.path);
+        setPtracParseResult(null);
+        setPtracError(null);
+      }
+    } catch (e: any) {
+      setPtracError(errorHint(e, "打开文件选择器失败"));
+    }
+  };
+
+  const openPtrac3D = async () => {
+    if (!ptracPath) return;
+    setPtracBusy(true);
+    setPtracError(null);
+    try {
+      // 先解析校验（错误带 hint），再开窗（窗口内二次解析渲染）
+      const pr = await ptracParse(ptracPath, 500, 200000);
+      if (pr.status === "error" || !pr.tracks) {
+        setPtracError(errorHint(pr, "解析 PTRAC 失败"));
+        return;
+      }
+      setPtracParseResult(pr);
+      const out = await openPtrac3DWindow({ path: ptracPath, model: meshModel });
+      if (!out.ok) setPtracError(out.message); // fallback / error 提示
+    } catch (e: any) {
+      setPtracError(errorHint(e, "解析 PTRAC 文件失败"));
+    } finally {
+      setPtracBusy(false);
+    }
   };
 
   return (
@@ -328,6 +372,50 @@ export default function OutputTab() {
             <div style={{ fontSize: 10, color: "var(--text-tertiary)" }}>
               已解析：{meshParse.file?.path || ""}（{meshParse.tallies?.length || 0} 个计数{meshParse.warnings?.length ? `；警告 ${meshParse.warnings.length} 条` : ""}）
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* 粒子径迹（PTRAC）：选择/解析/开窗（契约 ptrac-visualization.md §4） */}
+      <div className="glass-card">
+        <div className="card-header">
+          <span className="card-title" style={{ flexShrink: 0 }}>粒子径迹（PTRAC）</span>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button className="btn btn-ghost btn-xs" onClick={choosePtracFile} disabled={ptracBusy} style={{ fontSize: 11 }}>
+              选择 ptrac 文件
+            </button>
+            <button
+              className="btn btn-primary btn-xs"
+              onClick={openPtrac3D}
+              disabled={ptracBusy || !ptracPath}
+              style={{ fontSize: 11 }}
+            >
+              {ptracBusy ? "解析中…" : "解析并查看 3D 径迹"}
+            </button>
+          </div>
+        </div>
+
+        {ptracPath && (
+          <div style={{ fontSize: 11, marginTop: 6, color: "var(--text-tertiary)" }}>
+            已选择：{ptracPath}
+          </div>
+        )}
+
+        {/* F4 错误 hint 优先 */}
+        {ptracError && (
+          <div style={{ fontSize: 11, marginTop: 6, padding: "6px 10px", background: "rgba(229,57,53,0.12)", borderRadius: 6, color: "#e53935" }}>
+            {ptracError}
+          </div>
+        )}
+
+        {ptracParseResult && (
+          <div style={{ fontSize: 11, marginTop: 8, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", color: "var(--text-tertiary)" }}>
+            <span>
+              {ptracParseResult.stats?.nps != null ? `NPS ${ptracParseResult.stats.nps}` : ""}
+              {ptracParseResult.stats?.events != null ? ` · 事件 ${ptracParseResult.stats.events}` : ""}
+              {ptracParseResult.stats?.points != null ? ` · 点 ${ptracParseResult.stats.points}` : ""}
+              {ptracParseResult.truncated ? " · ⚠ 已截断" : ""}
+            </span>
           </div>
         )}
       </div>

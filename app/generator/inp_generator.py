@@ -631,14 +631,17 @@ def _generate_multi_source(sources: list[SourceData]) -> list[str]:
 
 
 def _generate_tallies(tally: TallySettings) -> list[str]:
-    """计数卡 — 遍历 tally.tallies 列表生成 Fn 卡 + FMESH/TMESH 网格计数回放
+    """计数卡 — 遍历 tally.tallies 列表生成 Fn 卡 + FMESH/TMESH 网格计数回放 + PTRAC 径迹输出
 
     每张 TallyDefinition 遍历其 particles 列表，为每个粒子输出一行 Fn 卡。
     不再依赖 MODE 卡决定粒子——每行计数自带粒子选择。
     FMESH/TMESH（fmesh_defs）紧随 F 卡段后回放（契约 §6 步 4，照 FM 回放模式）。
+    PTRAC（tally.ptrac.enabled）在计数段末尾 emit（契约 ptrac-visualization.md v2 §4.5）。
     """
     fmesh_defs = getattr(tally, "fmesh_defs", None) or []
-    if not tally.tallies and not fmesh_defs:
+    ptrac = getattr(tally, "ptrac", None)
+    ptrac_enabled = bool(ptrac and getattr(ptrac, "enabled", False))
+    if not tally.tallies and not fmesh_defs and not ptrac_enabled:
         return []
 
     lines = [TALLIES_BANNER]
@@ -677,8 +680,42 @@ def _generate_tallies(tally: TallySettings) -> list[str]:
         from app.meshtal.fmesh_parser import fmesh_defs_to_lines
         lines.extend(fmesh_defs_to_lines(fmesh_defs))
 
+    # PTRAC 粒子径迹输出（契约 v2 §4.5）
+    if ptrac_enabled:
+        lines.extend(_generate_ptrac(tally))
+
     # E0 和 En 由 generate_inp_from_deck 中单独的 e0/cut 处理调用，不在此处重复生成
     return lines
+
+
+def _generate_ptrac(tally: TallySettings) -> list[str]:
+    """PTRAC 卡（契约 ptrac-visualization.md v2 §4.5）：`PTRAC FILE=… WRITE=… …`。
+
+    卡体格式与前端 gui/src/ptrac/ptracState.ts `ptracToCardText` 逐字对齐：
+    FILE/WRITE/MAX 恒发（默认 ASC/ALL/-1，FILE/WRITE 大写）；TYPE 多值空格分隔
+    且大写；NPS/CELL/SURFACE/VALUE/EVENT 只发非空项。
+    """
+    ptrac = getattr(tally, "ptrac", None)
+    if not ptrac or not getattr(ptrac, "enabled", False):
+        return []
+    parts = ["PTRAC"]
+    parts.append(f"FILE={(getattr(ptrac, 'file', '') or 'ASC').upper()}")
+    parts.append(f"WRITE={(getattr(ptrac, 'write', '') or 'ALL').upper()}")
+    parts.append(f"MAX={getattr(ptrac, 'max', None) or '-1'}")
+    types = [str(t).strip().upper() for t in (getattr(ptrac, "types", None) or []) if str(t).strip()]
+    if types:
+        parts.append("TYPE=" + " ".join(types))
+    if (getattr(ptrac, "nps", "") or "").strip():
+        parts.append(f"NPS={ptrac.nps.strip()}")
+    if (getattr(ptrac, "cell", "") or "").strip():
+        parts.append(f"CELL={ptrac.cell.strip()}")
+    if (getattr(ptrac, "surface", "") or "").strip():
+        parts.append(f"SURFACE={ptrac.surface.strip()}")
+    if (getattr(ptrac, "value", "") or "").strip():
+        parts.append(f"VALUE={ptrac.value.strip()}")
+    if (getattr(ptrac, "event", "") or "").strip():
+        parts.append(f"EVENT={ptrac.event.strip()}")
+    return [" ".join(parts)]
 
 
 def _compress_j_skip(fields: list[str]) -> str:

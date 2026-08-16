@@ -39,10 +39,10 @@ describe("窗口 label ↔ App.tsx 路由一致性（P0 回归）", () => {
     expect(mainRsWindowLabels(MAIN_RS)).toEqual(appRouteLabels(APP_TSX));
   });
 
-  it("三个弹出窗口 label 各自与路由分支同值（preview3d/cross_section/volume，绝无 volume3d）", () => {
+  it("弹出窗口 label 各自与路由分支同值（preview3d/cross_section/volume/ptrac，绝无 volume3d）", () => {
     const m = mainRsWindowLabels(MAIN_RS);
     const a = appRouteLabels(APP_TSX);
-    for (const label of ["preview3d", "cross_section", "volume"]) {
+    for (const label of ["preview3d", "cross_section", "volume", "ptrac"]) {
       expect(m).toContain(label);
       expect(a).toContain(label);
     }
@@ -52,5 +52,9 @@ describe("窗口 label ↔ App.tsx 路由一致性（P0 回归）", () => {
 
   it("localStorage 桥 key mcnp_win_volume3d（KEY_VOLUME3D）保持不动，不随窗口 label 更名", () => {
     expect(WINDOWS_TS).toMatch(/KEY_VOLUME3D = "mcnp_win_volume3d"/);
+  });
+
+  it("PTRAC 桥 key mcnp_win_ptrac（KEY_PTRAC）存在（契约 §4）", () => {
+    expect(WINDOWS_TS).toMatch(/KEY_PTRAC = "mcnp_win_ptrac"/);
   });
 });

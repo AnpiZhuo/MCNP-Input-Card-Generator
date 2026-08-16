@@ -22,7 +22,7 @@ if PROJECT_DIR not in sys.path:
 
 from models import (
     BasicSettings, CellData, CellRow, FmeshDefinition, MaterialData, MaterialRow,
-    SourceData, TallySettings, TallyDefinition, AdvancedSettings, DeckData
+    PTRACSettings, SourceData, TallySettings, TallyDefinition, AdvancedSettings, DeckData
 )
 from generator.inp_generator import generate_inp_from_deck
 from generator.parsers import parse_inp_text
@@ -44,6 +44,19 @@ def _meshtal_worker_cmd() -> list:
         return [sys.executable, "--meshtal-worker"]
     bridge = os.path.join(PROJECT_DIR, "gui", "backend", "mcnp_bridge.py")
     return [sys.executable, bridge, "--meshtal-worker"]
+
+
+def _ptrac_worker_cmd() -> list:
+    """返回 ptrac worker 的 spawn 命令（照 _meshtal_worker_cmd 打包/开发双模式）。
+
+    - frozen：`[sys.executable, "--ptrac-worker"]` —— sidecar exe 入口分派，
+      避免带脚本路径再启第二个 5001。
+    - dev：`[sys.executable, mcnp_bridge.py, "--ptrac-worker"]` —— 同一入口分派。
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--ptrac-worker"]
+    bridge = os.path.join(PROJECT_DIR, "gui", "backend", "mcnp_bridge.py")
+    return [sys.executable, bridge, "--ptrac-worker"]
 
 
 # ── preview-3d deck 指纹缓存（P0a：同 deck 二次打开免 FreeCAD 子进程）──
@@ -417,6 +430,28 @@ def _fmesh_from_list(arr: list) -> list[FmeshDefinition]:
         raw=f.get("raw", ""),
     ) for f in arr]
 
+def _ptrac_from_dict(d) -> PTRACSettings | None:
+    """前端 tally.ptrac 对象 → PTRACSettings（缺 key 容忍；无/空 → None）。"""
+    if not isinstance(d, dict):
+        return None
+    types = d.get("types") or d.get("type") or []
+    if isinstance(types, str):
+        types = [p.strip().upper() for p in types.replace(",", " ").split() if p.strip()]
+    else:
+        types = [str(p).strip().upper() for p in types if str(p).strip()]
+    return PTRACSettings(
+        enabled=bool(d.get("enabled", False)),
+        file=str(d.get("file", "ASC") or "ASC"),
+        write=str(d.get("write", "ALL") or "ALL"),
+        max=str(d.get("max", "-1") or "-1"),
+        types=types,
+        nps=str(d.get("nps", "") or ""),
+        cell=str(d.get("cell", "") or ""),
+        surface=str(d.get("surface", "") or ""),
+        value=str(d.get("value", "") or ""),
+        event=str(d.get("event", "") or ""),
+    )
+
 def _tally_from_dict(d: dict) -> TallySettings:
     tallies = []
     for t in d.get("tallies", []):
@@ -428,6 +463,7 @@ def _tally_from_dict(d: dict) -> TallySettings:
         ))
     return TallySettings(tallies=tallies,
         fmesh_defs=_fmesh_from_list(d.get("fmesh_defs", [])),
+        ptrac=_ptrac_from_dict(d.get("ptrac")),
         e_min=d.get("e_min", ""), e_max=d.get("e_max", ""), e_bins=d.get("e_bins", 0),
         e_log=d.get("e_log", False), e_custom_enabled=d.get("e_custom_enabled", False),
         e_custom_text=d.get("e_custom_text", ""),
@@ -597,6 +633,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             "/api/meshtal-detect": self._handle_meshtal_detect,
             "/api/meshtal-parse": self._handle_meshtal_parse,
             "/api/meshtal-texture": self._handle_meshtal_texture,
+            "/api/ptrac-parse": self._handle_ptrac_parse,
         }
         handler = handlers.get(parsed.path)
         if handler:
@@ -967,6 +1004,51 @@ class MCNPHandler(BaseHTTPRequestHandler):
             self._ok({"frame": result["frame"]})
         except Exception as e:
             self._err(str(e), hint="提取体积纹理失败，请重新选择计数与能量/时间范围")
+
+    # ── PTRAC：粒子径迹解析（子进程 worker，不阻塞 5001）──
+    def _handle_ptrac_parse(self):
+        """子进程 worker 解析 PTRAC → header/tracks/worldBox/stats/truncated（契约 v2 §3）。"""
+        try:
+            import subprocess
+            data = self._read_body()
+            path = data.get("path", "")
+            if not path or not os.path.isfile(path):
+                self._err("不是有效的 PTRAC 文件",
+                          hint="请确认是 MCNP 生成的 ASCII PTRAC 文件（FILE=ASC）")
+                return
+            worker = _ptrac_worker_cmd()
+            proc = subprocess.run(
+                worker,
+                input=json.dumps({
+                    "mode": "parse", "path": path,
+                    "maxTracks": data.get("maxTracks", 500),
+                    "maxPoints": data.get("maxPoints", 200000),
+                }),
+                capture_output=True, text=True, timeout=120,
+            )
+            if proc.returncode != 0:
+                self._err(f"PTRAC 解析失败: {proc.stderr[-300:]}",
+                          hint="请确认是 MCNP 生成的 ASCII PTRAC 文件（FILE=ASC）")
+                return
+            try:
+                result = json.loads(proc.stdout)
+            except json.JSONDecodeError as e:
+                self._err(f"解析 worker 输出失败: {e}",
+                          hint="请确认是 MCNP 生成的 ASCII PTRAC 文件（FILE=ASC）")
+                return
+            if result.get("status") != "ok":
+                self._err(result.get("message", "PTRAC 解析失败"),
+                          hint="请确认是 MCNP 生成的 ASCII PTRAC 文件（FILE=ASC）")
+                return
+            self._ok({
+                "header": result.get("header", {}),
+                "tracks": result.get("tracks", []),
+                "worldBox": result.get("world_box"),
+                "stats": result.get("stats", {}),
+                "truncated": result.get("truncated", False),
+            })
+        except Exception as e:
+            self._err(str(e), hint="解析 PTRAC 文件失败，请确认是 MCNP 生成的 ASCII PTRAC 文件（FILE=ASC）")
 
     # ── 保存 INP 到目录 ──
     def _handle_save_inp(self):

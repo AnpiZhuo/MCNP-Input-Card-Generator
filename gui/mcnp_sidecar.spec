@@ -22,7 +22,7 @@ _keep_py = [
     "_freecad_cross_section_worker.py",
     "stl_cross_section.py",
 ]
-_keep_dirs = ["generator", "docs", "meshtal"]  # generator（含 parsers）+ 参考文档 + meshtal 网格计数模块（8 模块落 _internal/app/meshtal/）
+_keep_dirs = ["generator", "docs", "meshtal", "ptrac"]  # generator（含 parsers）+ 参考文档 + meshtal 网格计数 + ptrac 粒子径迹模块
 
 _datas = []
 for f in _keep_py:
@@ -68,6 +68,14 @@ _meshtal_mods = [
     "meshtal.deck_match", "meshtal.fmesh_parser", "meshtal._meshtal_worker",
 ]
 _hidden += _meshtal_mods
+
+# ptrac 粒子径迹模块（app/ptrac 2 模块 + __init__）进 PYZ：照 meshtal，
+# mcnp_bridge --ptrac-worker 分派与 worker 内部 `from ptrac.xxx import` 都从
+# PYZ 可 import。parser/worker 模块顶只 stdlib。
+_ptrac_mods = [
+    "ptrac", "ptrac.ptrac_parser", "ptrac._ptrac_worker",
+]
+_hidden += _ptrac_mods
 
 a = Analysis(
     [os.path.join(GUI_BACKEND, "mcnp_bridge.py")],

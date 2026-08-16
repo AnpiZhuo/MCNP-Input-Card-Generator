@@ -125,3 +125,38 @@ export async function fetchPreview3dStl(cells: any[], surfaces: string, trCards:
   });
   return (j && j.stl_data) || {};
 }
+
+/* ── PTRAC 粒子径迹（契约 ptrac-visualization.md §3/§4）── */
+
+/** 单条径迹：一个源粒子的历史（nps）+ 事件点序列 */
+export interface PtracTrack {
+  nps: number;
+  /** 粒子类型 "n" | "p" | "e" | ""（L 表驱动提取，缺失为空串） */
+  particle: string;
+  /** 事件点 [x, y, z, type, energy]（energy 取不到记 0） */
+  points: number[][];
+}
+
+/** /api/ptrac-parse 响应（status 由 _ok 包裹；错误响应带 hint） */
+export interface PtracParseResult {
+  status?: string;
+  header?: { code: string; title: string };
+  tracks: PtracTrack[];
+  worldBox: { min: [number, number, number]; max: [number, number, number] };
+  stats: {
+    nps: number;
+    events: number;
+    points: number;
+    truncated: boolean;
+    particles: { n: number; p: number; e: number };
+  };
+  truncated: boolean;
+}
+
+/** POST /api/ptrac-parse：解析 ASCII PTRAC 径迹文件（maxTracks/maxPoints 可选） */
+export async function ptracParse(path: string, maxTracks?: number, maxPoints?: number): Promise<PtracParseResult> {
+  const body: Record<string, unknown> = { path };
+  if (maxTracks != null) body.maxTracks = maxTracks;
+  if (maxPoints != null) body.maxPoints = maxPoints;
+  return postJson<PtracParseResult>("/api/ptrac-parse", body);
+}
