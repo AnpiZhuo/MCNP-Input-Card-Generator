@@ -1,7 +1,7 @@
 # 项目记忆文档（AI 速查手册）
-> 最后更新时间：2026-08-16（v1.7.1 + PTRAC 粒子径迹可视化交付；**版本锁定 1.7.1，新功能/修复批均未升版，升版由上级另行指定**）
+> 最后更新时间：2026-08-16（v1.7.1 + PTRAC 径迹可视化：WRITE 关键字纠错 pos/all + MAX 默认值勘误 10000 事件；**版本锁定 1.7.1，新功能/修复批均未升版，升版由上级另行指定**）
 >
-> **✅ PTRAC 粒子径迹可视化已交付（2026-08-16，未 commit，版本恒 1.7.1）**：用户指令「像 FMESH 一样把 PTRAC 也做适配」，显示方案经用户逐项敲定（契约 docs/contracts/ptrac-visualization.md v2，AgentTeams 后端+前端+终验三员协作）。交付：计数页「粒子径迹（PTRAC）」表单（勾选启用，常用 FILE/WRITE/MAX/TYPE/NPS/CELL/SURFACE 平铺 + VALUE/EVENT 高级折叠，CONIC/TALLY/FILTER/BUFFER/MEPH 手写其他卡）→ 生成/解析 round-trip（R1 不动点）→ 输出页解析 `/api/ptrac-parse` + `/api/ptrac-detect` **自动探测按钮**（30 端点，照「解析 MESHTAL」：扫输出目录 ptrac → 解析 → 开窗；L 表变量 ID 驱动提取能量[ID 10]/粒子类型[ID 16]，子进程 worker）→ 独立「3D 径迹」窗口（外壳 STL + LineSegments 顶点色=**类型三色 n蓝/p红/e黄 × 能量深浅渐变** + 粒子三勾选 + 透明度滑杆 + **密度抽样滑杆 1/1..1/10000** + NPS 单径迹高亮；**统计行标「径迹(粒子)条数」**，事件数≫径迹数时提示「事件≠粒子」并建议 WRITE=SOURCE）。门禁 pytest **493/0** + vitest **291 绿**（唯一 flaky=colorize 128³ 计时）+ tsc/build EXIT 0；已重打包部署。侧边栏悬停展开显示版本号 `v1.7.1`（读 package.json 单一来源）。
+> **✅ PTRAC 粒子径迹可视化已交付（2026-08-16，已 commit e659504/4fa30bb，未 push，版本恒 1.7.1）**：用户指令「像 FMESH 一样把 PTRAC 也做适配」，显示方案经用户逐项敲定（契约 docs/contracts/ptrac-visualization.md v2，AgentTeams 后端+前端+终验三员协作）。交付：计数页「粒子径迹（PTRAC）」表单（勾选启用，常用 FILE/WRITE/MAX/TYPE/NPS/CELL/SURFACE 平铺 + VALUE/EVENT 高级折叠，CONIC/TALLY/FILTER/BUFFER/MEPH 手写其他卡）→ 生成/解析 round-trip（R1 不动点）→ 输出页解析 `/api/ptrac-parse` + `/api/ptrac-detect` **自动探测按钮**（30 端点，照「解析 MESHTAL」：扫输出目录 ptrac → 解析 → 开窗；L 表变量 ID 驱动提取能量[ID 10]/粒子类型[ID 16]，子进程 worker）→ 独立「3D 径迹」窗口（外壳 STL + LineSegments 顶点色=**类型三色 n蓝/p红/e黄 × 能量深浅渐变** + 粒子三勾选 + 透明度滑杆 + **密度抽样滑杆 1/1..1/10000** + NPS 单径迹高亮；**统计行标「径迹(粒子)条数」**，事件数≫径迹数时提示「事件≠粒子」并建议 EVENT=src）。**关键语义（C810.pdf Table 3.8 核验）**：WRITE 只接受 pos/all（写哪些参数）；SOURCE/EVENT 属 EVENT 关键字（src/bnk/sur/col/ter，写哪些事件）；MAX 默认 **10000 事件（总上限）**；想看全部粒子 = `WRITE=all EVENT=src MAX=100000`。门禁 pytest **493/0** + vitest **293 绿**（唯一 flaky=colorize 128³ 计时）+ tsc/build EXIT 0；已重打包部署。侧边栏悬停展开显示版本号 `v1.7.1`（读 package.json 单一来源）。
 >
 > **当前状态（2026-08-15 深夜批，已统一提交（单 commit，未 push），版本恒 1.7.1）**
 > - 已重打包部署 `D:\MCNP\MCNP输入卡生成器`（最终 exe 23:35 + sidecar 22:21，含本批全部修复）
@@ -97,7 +97,7 @@
 | `docs/contracts/api.yaml` | **OpenAPI 3.0 契约**（30 端点，每 path 带 operationId，防漂移闸门验证） | 架构师 |
 | | | |
 | **测试** | | |
-| `tests/` | **测试网**：unit + parser + integration（含契约闸门/真实 HTTP），pytest 493 绿；`gui/test/` vitest 291 绿 | 测试 |
+| `tests/` | **测试网**：unit + parser + integration（含契约闸门/真实 HTTP），pytest 493 绿；`gui/test/` vitest 293 绿 | 测试 |
 
 
 ## 4. 关键架构决策（ADR）
