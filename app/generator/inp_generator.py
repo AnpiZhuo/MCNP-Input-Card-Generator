@@ -694,7 +694,8 @@ def _generate_ptrac(tally: TallySettings) -> list[str]:
     卡体格式与前端 gui/src/ptrac/ptracState.ts `ptracToCardText` 逐字对齐：
     FILE/WRITE 恒发（默认 ASC/ALL，FILE/WRITE 大写）；MAX 只发非空项（留空=不输出，
     用 MCNP 默认 10000 事件——此前 MAX=-1 使本机 MCNP 写完 1 个事件就终止运行，用户实测踩坑）；
-    TYPE 多值空格分隔且大写；NPS/CELL/SURFACE/VALUE/EVENT 只发非空项。
+    TYPE 多值空格分隔且大写；NPS/CELL/SURFACE/VALUE/EVENT/BUFFER/FILTER/TALLY/MEPH 只发非空项
+    （C810 Table I.2 全 13 关键字）。
     """
     ptrac = getattr(tally, "ptrac", None)
     if not ptrac or not getattr(ptrac, "enabled", False):
@@ -718,6 +719,14 @@ def _generate_ptrac(tally: TallySettings) -> list[str]:
         parts.append(f"VALUE={ptrac.value.strip()}")
     if (getattr(ptrac, "event", "") or "").strip():
         parts.append(f"EVENT={ptrac.event.strip()}")
+    if (getattr(ptrac, "buffer", "") or "").strip():
+        parts.append(f"BUFFER={ptrac.buffer.strip()}")
+    if (getattr(ptrac, "filter", "") or "").strip():
+        parts.append(f"FILTER={ptrac.filter.strip()}")
+    if (getattr(ptrac, "tally", "") or "").strip():
+        parts.append(f"TALLY={ptrac.tally.strip()}")
+    if (getattr(ptrac, "meph", "") or "").strip():
+        parts.append(f"MEPH={ptrac.meph.strip()}")
     return [" ".join(parts)]
 
 

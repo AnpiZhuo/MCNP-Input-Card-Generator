@@ -57,9 +57,11 @@ spec `_hidden`/`_keep_dirs` 补 ptrac（照 meshtal）。
   MAX（数字，**留空=不输出**，MCNP 默认 10000 事件——MAX=-1 会使本机 MCNP 写完 1 个事件即终止，实测踩坑）、
   TYPE（N/P/E 多选，可空）、NPS（数字，可空）、**CELL（数字，可空）**、
   **SURFACE（数字，可空）**。
-- **高级折叠**：VALUE、EVENT（**EVENT=src/bnk/sur/col/ter** 控制"写哪些事件"；想看全部粒子用 `EVENT=src`）。
-- 不做表单：CONIC/TALLY/FILTER/BUFFER/MEPH（用户手写「其他卡」，解析器 round-trip 保留）。
-- 状态：`deck.tally.ptrac?: {enabled, file, write, max, types, nps, cell, surface, value, event}`（加性字段，JSON key 与后端生成/解析同步）；fmeshState.ts 同款 state 模块或并入 TallySettings——实现者取最少改动路径并测 round-trip。
+- **高级折叠（其余 6 项）**：EVENT（**EVENT=src/bnk/sur/col/ter** 控制"写哪些事件"；想看全部粒子用 `EVENT=src`）、
+  VALUE（tally 截止值）、FILTER（如 `1,8,erg`）、TALLY（如 `14,24`）、BUFFER（缓冲大小）、MEPH（每历史最大事件数）。
+- **C810 Table I.2 全 13 关键字全覆盖**（BUFFER/CELL/EVENT/FILE/FILTER/MAX/MEPH/NPS/SURFACE/TALLY/TYPE/VALUE/WRITE）；
+  未知关键字（如 CONIC=）→ other_cards 保留原文（round-trip 不丢）。
+- 状态：`deck.tally.ptrac?: {enabled, file, write, max, types, nps, cell, surface, value, event, buffer, filter, tally, meph}`（加性字段，JSON key 与后端生成/解析同步）；fmeshState.ts 同款 state 模块或并入 TallySettings——实现者取最少改动路径并测 round-trip。
 
 ## 5. 验收（测试先行，先红后绿）
 

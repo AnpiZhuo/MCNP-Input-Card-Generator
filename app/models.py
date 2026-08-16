@@ -240,10 +240,12 @@ class PTRACSettings:
     PTRAC 粒子径迹输出卡结构化定义（契约 ptrac-visualization.md v2 §4.5）。
 
     JSON key 与前端 deck.tally.ptrac 一致（加性字段）：
-      {enabled, file, write, max, types[], nps, cell, surface, value, event}
+      {enabled, file, write, max, types[], nps, cell, surface, value, event,
+       buffer, filter, tally, meph}
 
     types 为 TYPE 粒子类型多选（N/P/E，可空）；其余为原文串（KEY=value 连写）。
-    CONIC/TALLY/FILTER/BUFFER/MEPH 不做表单 → 仍走 other_cards（round-trip 保留）。
+    C810 Table I.2 全 13 关键字（BUFFER/CELL/EVENT/FILE/FILTER/MAX/MEPH/NPS/
+    SURFACE/TALLY/TYPE/VALUE/WRITE）全覆盖；未知关键字（如 CONIC=）→ other_cards。
 
     粒子径迹输出定义
     """
@@ -257,6 +259,10 @@ class PTRACSettings:
     surface: str = ""           # SURFACE（数字，可空）
     value: str = ""             # VALUE（高级，可空）
     event: str = ""             # EVENT=src/bnk/sur/col/ter（高级，控制写哪些事件；想看全部粒子用 src）
+    buffer: str = ""            # BUFFER=整数（高级，事件缓冲大小）
+    filter: str = ""            # FILTER=过滤条件（高级，如 1,8,erg）
+    tally: str = ""             # TALLY=计数号（高级，如 14,24）
+    meph: str = ""              # MEPH=整数（高级，每历史最大事件数）
 
 
 @dataclass

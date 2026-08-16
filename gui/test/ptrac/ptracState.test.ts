@@ -22,6 +22,10 @@ describe("emptyPtracState 默认值（§4.5）", () => {
     expect(s.surface).toBe("");
     expect(s.value).toBe("");
     expect(s.event).toBe("");
+    expect(s.buffer).toBe("");
+    expect(s.filter).toBe("");
+    expect(s.tally).toBe("");
+    expect(s.meph).toBe("");
   });
 
   it("下拉/多选选项齐备", () => {
@@ -36,8 +40,8 @@ describe("ptracToCardText（状态 → 卡体）", () => {
     expect(ptracToCardText(emptyPtracState())).toBe("");
   });
 
-  it("常用 7 项 + 高级 2 项全部回放", () => {
-    const s = { ...emptyPtracState(), enabled: true, file: "ASC", write: "ALL", max: "500", types: ["N", "P"], nps: "100", cell: "1 2", surface: "5", value: "0.5", event: "TER" };
+  it("13 关键字全集全部回放", () => {
+    const s = { ...emptyPtracState(), enabled: true, file: "ASC", write: "ALL", max: "500", types: ["N", "P"], nps: "100", cell: "1 2", surface: "5", value: "0.5", event: "TER", buffer: "2", filter: "1,8,erg", tally: "14,24", meph: "10" };
     const text = ptracToCardText(s);
     expect(text).toContain("PTRAC");
     expect(text).toContain("FILE=ASC");
@@ -49,6 +53,10 @@ describe("ptracToCardText（状态 → 卡体）", () => {
     expect(text).toContain("SURFACE=5");
     expect(text).toContain("VALUE=0.5");
     expect(text).toContain("EVENT=TER");
+    expect(text).toContain("BUFFER=2");
+    expect(text).toContain("FILTER=1,8,erg");
+    expect(text).toContain("TALLY=14,24");
+    expect(text).toContain("MEPH=10");
   });
 
   it("TYPE 为空 → 不输出 TYPE 关键字", () => {
@@ -62,7 +70,7 @@ describe("ptracToCardText（状态 → 卡体）", () => {
 
 describe("cardTextToPtrac（卡体 → 状态）", () => {
   it("KEY=value 形式解析全部字段", () => {
-    const s = cardTextToPtrac("PTRAC FILE=ASC WRITE=ALL MAX=500 TYPE=N P NPS=100 CELL=1 2 SURFACE=5 VALUE=0.5 EVENT=TER");
+    const s = cardTextToPtrac("PTRAC FILE=ASC WRITE=ALL MAX=500 TYPE=N P NPS=100 CELL=1 2 SURFACE=5 VALUE=0.5 EVENT=TER BUFFER=2 FILTER=1,8,erg TALLY=14,24 MEPH=10");
     expect(s.enabled).toBe(true);
     expect(s.file).toBe("ASC");
     expect(s.write).toBe("ALL");
@@ -73,6 +81,10 @@ describe("cardTextToPtrac（卡体 → 状态）", () => {
     expect(s.surface).toBe("5");
     expect(s.value).toBe("0.5");
     expect(s.event).toBe("TER");
+    expect(s.buffer).toBe("2");
+    expect(s.filter).toBe("1,8,erg");
+    expect(s.tally).toBe("14,24");
+    expect(s.meph).toBe("10");
   });
 
   it("空格分隔（KEY value）形式同样解析", () => {
@@ -105,7 +117,7 @@ describe("cardTextToPtrac（卡体 → 状态）", () => {
 
 describe("round-trip（状态 → 卡体 → 状态）", () => {
   it("全字段往返稳定", () => {
-    const s = { ...emptyPtracState(), enabled: true, file: "BIN", write: "POS", max: "10", types: ["N", "E"], nps: "5", cell: "1", surface: "2", value: "1e-3", event: "SRC COL" };
+    const s = { ...emptyPtracState(), enabled: true, file: "BIN", write: "POS", max: "10", types: ["N", "E"], nps: "5", cell: "1", surface: "2", value: "1e-3", event: "SRC COL", buffer: "20", filter: "1,8,erg", tally: "14,24", meph: "10" };
     const back = cardTextToPtrac(ptracToCardText(s));
     expect(back.enabled).toBe(true);
     expect(back.file).toBe("BIN");
@@ -117,6 +129,10 @@ describe("round-trip（状态 → 卡体 → 状态）", () => {
     expect(back.surface).toBe("2");
     expect(back.value).toBe("1e-3");
     expect(back.event).toBe("SRC COL");
+    expect(back.buffer).toBe("20");
+    expect(back.filter).toBe("1,8,erg");
+    expect(back.tally).toBe("14,24");
+    expect(back.meph).toBe("10");
   });
 
   it("enabled=false 往返：空卡体 → disabled（不残留）", () => {
@@ -127,7 +143,7 @@ describe("round-trip（状态 → 卡体 → 状态）", () => {
 
 describe("ptracFromDict（后端 parse 返回 dict → 状态，缺 key 容忍）", () => {
   it("完整 dict 映射 + 归一化", () => {
-    const s = ptracFromDict({ enabled: true, file: "asc", write: "all", max: 500, types: ["n", "p"], nps: 10, cell: 1, surface: 2, value: "0.5", event: "TER" });
+    const s = ptracFromDict({ enabled: true, file: "asc", write: "all", max: 500, types: ["n", "p"], nps: 10, cell: 1, surface: 2, value: "0.5", event: "TER", buffer: "2", filter: "1,8,erg", tally: 14, meph: "10" });
     expect(s.enabled).toBe(true);
     expect(s.file).toBe("ASC");
     expect(s.write).toBe("ALL");
@@ -135,6 +151,10 @@ describe("ptracFromDict（后端 parse 返回 dict → 状态，缺 key 容忍�
     expect(s.types).toEqual(["N", "P"]);
     expect(s.nps).toBe("10");
     expect(s.cell).toBe("1");
+    expect(s.buffer).toBe("2");
+    expect(s.filter).toBe("1,8,erg");
+    expect(s.tally).toBe("14");
+    expect(s.meph).toBe("10");
   });
 
   it("undefined → 默认禁用状态", () => {

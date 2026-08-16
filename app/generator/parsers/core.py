@@ -882,19 +882,21 @@ def parse_cut(parts: list[str], tally_dict: dict):
         tally_dict[name.format(d)] = expanded[i]
 
 
-# PTRAC 结构化关键字（契约 ptrac-visualization.md v2 §4.5）。
-# 单值 KEY=value 与多值 KEY（后随空格分隔裸值）分开处理；未识别关键字 → other_cards。
+# PTRAC 结构化关键字（契约 ptrac-visualization.md v2 §4.5；C810 Table I.2 全 13 关键字）。
+# 单值 KEY=value 与多值 KEY（后随空格分隔裸值）分开处理；未识别关键字（如 CONIC=）→ other_cards。
 _PTRAC_SINGLE_KEYS = {"FILE": "file", "WRITE": "write", "MAX": "max",
-                      "VALUE": "value", "EVENT": "event"}
-_PTRAC_MULTI_KEYS = {"TYPE": "types", "NPS": "nps", "CELL": "cell", "SURFACE": "surface"}
+                      "VALUE": "value", "EVENT": "event",
+                      "BUFFER": "buffer", "MEPH": "meph"}
+_PTRAC_MULTI_KEYS = {"TYPE": "types", "NPS": "nps", "CELL": "cell", "SURFACE": "surface",
+                     "TALLY": "tally", "FILTER": "filter"}
 
 
 def _parse_ptrac_card(parts: list[str]) -> PTRACSettings | None:
     """PTRAC 卡 parts（首词 "PTRAC"）→ PTRACSettings；无法结构化 → None（回 other_cards）。
 
     口径（契约 §4.5 + D-10 回归）：仅含结构化关键字（FILE=/WRITE=/MAX=/TYPE=/NPS=/
-    CELL=/SURFACE=/VALUE=/EVENT=）才进 tally.ptrac；裸卡/行内 $ 注释/未识别关键字
-    （CONIC=/TALLY=/FILTER=/BUFFER=/MEPH=）→ None → other_cards 保留原文。
+    CELL=/SURFACE=/VALUE=/EVENT=/BUFFER=/FILTER=/TALLY=/MEPH=）才进 tally.ptrac；
+    裸卡/行内 $ 注释/未识别关键字（CONIC= 等）→ None → other_cards 保留原文。
     """
     ptrac = PTRACSettings(enabled=True)
     last_multi = None
@@ -916,7 +918,7 @@ def _parse_ptrac_card(parts: list[str]) -> PTRACSettings | None:
                 last_multi = fname
                 recognized_any = True
             else:
-                return None  # 未识别关键字（CONIC/TALLY/FILTER/BUFFER/MEPH…）→ other_cards
+                return None  # 未识别关键字（CONIC 等）→ other_cards
         else:
             # 裸值：归属上一个多值关键字（TYPE=N P / NPS=1 50 / CELL=3 4）
             if last_multi is None:

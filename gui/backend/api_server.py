@@ -450,6 +450,10 @@ def _ptrac_from_dict(d) -> PTRACSettings | None:
         surface=str(d.get("surface", "") or ""),
         value=str(d.get("value", "") or ""),
         event=str(d.get("event", "") or ""),
+        buffer=str(d.get("buffer", "") or ""),
+        filter=str(d.get("filter", "") or ""),
+        tally=str(d.get("tally", "") or ""),
+        meph=str(d.get("meph", "") or ""),
     )
 
 def _tally_from_dict(d: dict) -> TallySettings:

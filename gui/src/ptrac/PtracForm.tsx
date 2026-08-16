@@ -2,7 +2,7 @@
  * PtracForm — 计数标签页「粒子径迹（PTRAC）」小节表单（契约 ptrac-visualization.md §4.5）
  *
  * 状态 deck.tally.ptrac（PtracState）：勾选启用 → 生成 PTRAC 卡。
- * 常用 7 项平铺（FILE/WRITE/MAX/TYPE/NPS/CELL/SURFACE）+ 高级折叠（VALUE/EVENT）。
+ * 常用 7 项平铺（FILE/WRITE/MAX/TYPE/NPS/CELL/SURFACE）+ 高级折叠（EVENT/FILTER/TALLY/VALUE/BUFFER/MEPH，13 关键字全集）。
  * 纯状态读写，往返由 ptracState.ts 纯函数保证（round-trip 测试）。
  */
 import React, { useState } from "react";
@@ -81,18 +81,30 @@ export default function PtracForm({ value, onChange }: Props) {
             </Field>
           </div>
 
-          {/* 高级折叠 */}
+          {/* 高级折叠（13 关键字全集：其余 6 项） */}
           <div style={{ padding: "0 14px 8px", borderTop: "1px solid rgba(255,255,255,0.04)" }}>
             <button className="btn btn-ghost btn-xs" style={{ fontSize: 11 }} onClick={() => setAdvancedOpen((v) => !v)}>
-              {advancedOpen ? "▾ 高级（VALUE / EVENT）" : "▸ 高级（VALUE / EVENT）"}
+              {advancedOpen ? "▾ 高级（EVENT / FILTER / TALLY / VALUE / BUFFER / MEPH）" : "▸ 高级（EVENT / FILTER / TALLY / VALUE / BUFFER / MEPH）"}
             </button>
             {advancedOpen && (
-              <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
+              <div style={{ display: "flex", gap: 12, marginTop: 8, flexWrap: "wrap" }}>
+                <Field label="EVENT">
+                  <input className="form-input" value={s.event} onChange={(e) => set({ event: e.target.value })} placeholder="src/bnk/sur/col/ter" style={{ height: 28, fontSize: 12, width: 130 }} />
+                </Field>
                 <Field label="VALUE">
                   <input className="form-input" value={s.value} onChange={(e) => set({ value: e.target.value })} placeholder="tally 截止值" style={{ height: 28, fontSize: 12, width: 130 }} />
                 </Field>
-                <Field label="EVENT">
-                  <input className="form-input" value={s.event} onChange={(e) => set({ event: e.target.value })} placeholder="src/bnk/sur/col/ter" style={{ height: 28, fontSize: 12, width: 130 }} />
+                <Field label="FILTER">
+                  <input className="form-input" value={s.filter} onChange={(e) => set({ filter: e.target.value })} placeholder="如 1,8,erg" style={{ height: 28, fontSize: 12, width: 130 }} />
+                </Field>
+                <Field label="TALLY">
+                  <input className="form-input" value={s.tally} onChange={(e) => set({ tally: e.target.value })} placeholder="如 14,24" style={{ height: 28, fontSize: 12, width: 130 }} />
+                </Field>
+                <Field label="BUFFER">
+                  <input className="form-input" value={s.buffer} onChange={(e) => set({ buffer: e.target.value })} placeholder="缓冲大小" style={{ height: 28, fontSize: 12, width: 90 }} />
+                </Field>
+                <Field label="MEPH">
+                  <input className="form-input" value={s.meph} onChange={(e) => set({ meph: e.target.value })} placeholder="每历史事件数" style={{ height: 28, fontSize: 12, width: 110 }} />
                 </Field>
               </div>
             )}

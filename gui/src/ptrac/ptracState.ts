@@ -30,6 +30,14 @@ export interface PtracState {
   value: string;
   /** EVENT=src/bnk/sur/col/ter（高级折叠；控制写哪些事件——想看全部粒子用 src） */
   event: string;
+  /** BUFFER=整数（高级折叠；事件缓冲大小） */
+  buffer: string;
+  /** FILTER=过滤条件（高级折叠；如 1,8,erg） */
+  filter: string;
+  /** TALLY=计数号（高级折叠；如 14,24） */
+  tally: string;
+  /** MEPH=整数（高级折叠；每历史最大事件数） */
+  meph: string;
 }
 
 export const PTRAC_FILE_OPTIONS = ["ASC", "BIN"];
@@ -50,6 +58,10 @@ export function emptyPtracState(): PtracState {
     surface: "",
     value: "",
     event: "",
+    buffer: "",
+    filter: "",
+    tally: "",
+    meph: "",
   };
 }
 
@@ -62,6 +74,10 @@ const KEY_FIELDS: Record<string, keyof PtracState> = {
   SURFACE: "surface",
   VALUE: "value",
   EVENT: "event",
+  BUFFER: "buffer",
+  FILTER: "filter",
+  TALLY: "tally",
+  MEPH: "meph",
 };
 
 /** token 是否为已知 PTRAC 关键字（KEY / KEY=value，大小写不敏感） */
@@ -89,7 +105,7 @@ export function ptracFromDict(d: Record<string, any> | undefined): PtracState {
       .map((t: any) => String(t).trim().toUpperCase())
       .filter((t: string) => PTRAC_TYPE_OPTIONS.includes(t));
   }
-  for (const k of ["nps", "cell", "surface", "value", "event"] as const) {
+  for (const k of ["nps", "cell", "surface", "value", "event", "buffer", "filter", "tally", "meph"] as const) {
     if (d[k] != null) s[k] = String(d[k]).trim();
   }
   return s;
@@ -109,6 +125,10 @@ export function ptracToCardText(state: PtracState): string {
   if ((state.surface || "").trim()) parts.push(`SURFACE=${state.surface.trim()}`);
   if ((state.value || "").trim()) parts.push(`VALUE=${state.value.trim()}`);
   if ((state.event || "").trim()) parts.push(`EVENT=${state.event.trim()}`);
+  if ((state.buffer || "").trim()) parts.push(`BUFFER=${state.buffer.trim()}`);
+  if ((state.filter || "").trim()) parts.push(`FILTER=${state.filter.trim()}`);
+  if ((state.tally || "").trim()) parts.push(`TALLY=${state.tally.trim()}`);
+  if ((state.meph || "").trim()) parts.push(`MEPH=${state.meph.trim()}`);
   return parts.join(" ");
 }
 
