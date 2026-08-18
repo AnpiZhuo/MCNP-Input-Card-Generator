@@ -142,6 +142,7 @@ export default function QuickCellDialog({ surfacesText, trCardsText, cellNumbers
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0d0d22);
     const camera = new THREE.PerspectiveCamera(45, w / h, 0.01, 1e5);
+    camera.up.set(0, 0, 1); // Z 朝上（数学/物理/MCNP 惯例，与主 3D 预览/体积窗口一致）
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     renderer.setSize(w, h, false);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));

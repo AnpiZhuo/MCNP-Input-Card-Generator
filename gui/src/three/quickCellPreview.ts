@@ -31,6 +31,30 @@ function addLoop(group: THREE.Group, pts: THREE.Vector3[], color: number, opacit
   addLine(group, closed, color, opacity);
 }
 
+/** 轴端点文字标签（X/Y/Z）；无 DOM（node 测试）时跳过 */
+function makeLabel(text: string, color: number, pos: THREE.Vector3, scale: number): THREE.Sprite | null {
+  try {
+    if (typeof document === "undefined") return null;
+    const c = document.createElement("canvas");
+    c.width = 64;
+    c.height = 64;
+    const ctx = c.getContext("2d");
+    if (!ctx) return null;
+    ctx.fillStyle = "#" + color.toString(16).padStart(6, "0");
+    ctx.font = "Bold 44px Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, 32, 34);
+    const tex = new THREE.CanvasTexture(c);
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+    sprite.position.copy(pos);
+    sprite.scale.set(scale, scale, 1);
+    return sprite;
+  } catch {
+    return null;
+  }
+}
+
 /** 以 normal 为法向、center 为圆心的圆环点列 */
 function circlePoints(center: THREE.Vector3, radius: number, normal: THREE.Vector3, segments = 48): THREE.Vector3[] {
   const n = normal.clone().normalize();
@@ -48,12 +72,15 @@ function circlePoints(center: THREE.Vector3, radius: number, normal: THREE.Vecto
 }
 
 function addAxes(group: THREE.Group, origin: THREE.Vector3, x: THREE.Vector3, y: THREE.Vector3, z: THREE.Vector3): void {
-  const mk = (dir: THREE.Vector3, color: number) => {
+  const mk = (dir: THREE.Vector3, color: number, label: string) => {
     addLine(group, [origin.clone(), origin.clone().add(dir)], color, 0.9);
+    const tip = origin.clone().add(dir);
+    const lbl = makeLabel(label, color, tip, Math.max(dir.length() * 0.55, 0.4));
+    if (lbl) group.add(lbl);
   };
-  mk(x, 0xff4444);
-  mk(y, 0x44ff44);
-  mk(z, 0x4488ff);
+  mk(x, 0xff4444, "X");
+  mk(y, 0x44ff44, "Y");
+  mk(z, 0x4488ff, "Z");
 }
 
 function buildRcc(group: THREE.Group, c: RccConfig): void {
@@ -163,7 +190,11 @@ export function buildQuickCellPreview(shape: QuickShape, config: RccConfig | Rpp
       group.traverse((obj) => {
         const anyObj = obj as any;
         anyObj.geometry?.dispose?.();
-        anyObj.material?.dispose?.();
+        const mat = anyObj.material;
+        if (mat) {
+          mat.map?.dispose?.();
+          mat.dispose?.();
+        }
       });
       group.clear();
     },
