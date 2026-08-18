@@ -1,14 +1,14 @@
 # 项目记忆文档（AI 速查手册）
-> 最后更新时间：2026-08-18（v1.7.1 + 快捷建栅元新功能（RCC/RPP/SPH 一键生成曲面+TR+栅元，**新功能版本待上级指定**）+ 3D 预览两 bug 修复批；**修复批版本恒 1.7.1，新功能升版由上级另行指定**）
+> 最后更新时间：2026-08-18（**v1.7.2 已打包部署**：快捷建栅元新功能，用户指定版本 1.7.2；3D 预览两 bug 修复批随包；commit 5941a04 未 push）
 >
-> **✅ 快捷建栅元已交付（2026-08-18，新功能，未 commit，版本待上级指定）**：几何标签页「曲面卡 & TR 变换」新增「⚡ 快捷建栅元」按钮 → 弹窗一次一种形状（圆柱 RCC / 六面体 RPP / 球 SPH），程序自动算曲面/TR/栅元卡：
+> **✅ 快捷建栅元已交付（2026-08-18，v1.7.2 用户指定，已打包部署 D:\MCNP\MCNP输入卡生成器，commit 5941a04，未 push）**：几何标签页「曲面卡 & TR 变换」新增「⚡ 快捷建栅元」按钮 → 弹窗一次一种形状（圆柱 RCC / 六面体 RPP / 球 SPH），程序自动算曲面/TR/栅元卡：
 > - RCC：底面中心+轴向量+半径，N 等距圆环 × M 等距轴段 → N 个 RCC + M-1 个轴向 P 平面 → N×M 栅元（最内环实心，首/末段靠 RCC 自带端盖）
 > - RPP：8 角点（v0..v3 底 + v4..v7 顶，程序校验平行六面体+三边正交）；轴对齐 → RPP 宏体 + 内部 PX/PY/PZ；斜向 → 6 局部平面 + TRn 旋转（**不用 RPP+TR**：FreeCAD worker 对带 Placement 的宏体半空间做补集布尔返回垃圾体积，实测 bound.cut(placed compound) 1.7e8 > 整盒 1.25e8）
 > - SPH：球心+半径，K 等距球壳 → K 个 SPH → K 个栅元（最内实心）
 > - 编号：曲面 101 起/用户最大+1；cell 1 起/最大+1；TR 同 cell；材料默认 M0 真空、选材料自动带出密度（无则留空）、imp:n/p/e 勾选才写 1；文本模式禁用+弹窗警告；其余高级参数留空
 > - 弹窗右侧实时线框预览（形状+切分线+局部轴，100ms 防抖+按需渲染，不卡）；生成结果追加到曲面/TR/栅元列表
 > - 模块化：gui/src/utils/quickCell.ts（纯函数，编号/校验/生成）+ gui/test/quickCell.test.ts 16 用例 + gui/src/three/quickCellPreview.ts（线框）+ QuickCellDialog.tsx + GeometryTab 接线；真实 FreeCAD 链路验证（RCC 六格 / 轴对齐四格 / 斜向 6 平面两半）bbox 全部正确
-> - 门禁 pytest **512/0** + vitest **326/0** + tsc EXIT 0；未打包
+> - 门禁 pytest **512/0** + vitest **326/0** + tsc EXIT 0；打包链路全过（vite 4.0s / PyInstaller 25,114,215B / tauri 40.6s / **6.2 命中增量坑已手动覆盖** / 部署完成）；冒烟：xsdir loaded:true 7621 条 + preview-3d RCC 环段卡 count=2 + cross-section 2 栅元 3 多边形 + 斜向 RPP+TR1 count=1 全过
 >
 > **✅ 3D 预览两 bug 已修复（2026-08-18，未 commit，版本恒 1.7.1）**：① 坐标轴显示：`axisDirs` 写成 [X,Z,Y] 而标签/颜色按 [X,Y,Z] 配 → 绿线沿 Z 标 "Y"、蓝线沿 Y 标 "Z"；新建 `gui/src/three/axisConfig.ts` 单一事实来源（X 红/Y 绿/Z 蓝），Preview3D 轴/标签/刻度全部派生自它。② 切截面部分实体切错：后端 `slice_stl_segments` 对恰在平面上的顶点直接 continue → 切割面与实体面重合（模型底面 z=0、相邻栅元共享面）返回 0 环/错环，多环截面被最近点贪心串接；修复为 on-plane 顶点作交点 + 共面三角面贡献外轮廓边 + `_join_loops` 改容差吸附邻接表走环；前端预览把 STL 平移到模型中心显示但平面原样发后端（原始系）→ 中心偏离原点时全部切位偏移，新建 `gui/src/three/planeOffset.ts`（D_raw=D_disp+n·center）并在 fetchCrossSection 与独立截面窗口步进（数据桥传 center）统一换算。门禁 pytest **512/0** + vitest **310/0** + tsc EXIT 0；真实 FreeCAD STL 联调全过（盒面 X=1 出面轮廓 / 带孔盒顶面出外方框+内圆 / 相邻共享面两栅元各得正确方环）。未打包，待用户排期。
 >
@@ -31,7 +31,7 @@
 
 ## 1. 项目身份
 - **名称**：MCNP 输入卡生成器（MCNP Input Card Generator）
-- **版本**：1.7.1（最终统一版，commit ae6ab5b；**bug 修复批严禁升版，恒 1.7.1**；网格计数可视化随 1.7.0 发布）
+- **版本**：1.7.2（快捷建栅元新功能，用户 2026-08-18 指定；**bug 修复批严禁升版**；升版由上级另行指定）
 - **技术栈**：
   - 前端 UI：React 18 + TypeScript + Vite（端口 1420，表单化标签页界面）
   - 3D 渲染：Three.js（3D 预览 + 体积可视化）/ SVG（平面截面）
@@ -44,9 +44,9 @@
 
 
 ## 2. 当前状态快照
-- **开发阶段**：已交付 v1.7.1（2026-08-15 重打包部署，含用户实测修复批）；后续功能（#7 重合检查）待用户排期
-- **当前分支**：`experiment/geouned`（主分支 `main`）
-- **工作区**：本批（用户实测修复，20 文件）已统一提交（单 commit，未 push）；历史批 commit ae6ab5b（v1.7.1 最终统一版，未 push）；版本恒 1.7.1
+- **开发阶段**：已交付 v1.7.2（2026-08-18 打包部署，含快捷建栅元新功能 + 3D 预览修复批）；后续功能（#7 重合检查）待用户排期
+- **当前分支**：`feat/meshtal-volume`（主分支 `main`）
+- **工作区**：快捷建栅元批（12 文件）已提交 commit 5941a04（未 push）；3D 预览修复批在 65266fe（未 push）；版本 1.7.2
 - **已完成功能**：
   - 8 标签页表单编辑（基本/材料/几何/源/计数/高级/输出）
   - INP 生成/导入（含拖拽）、工作区自动保存/恢复、4 套主题
@@ -143,7 +143,7 @@
 
 ## 5. 核心业务规则（必读）
 
-- **版本号锁定 1.7.1（上级硬规则，2026-08-15）**：网格计数可视化功能（FMESH/TMESH 3D 体积可视化）交付版本统一为 **1.7.1**；**任何 bug 修复批次严禁提升版本号**（改多少轮 bug，文件版本号恒为 1.7.1；PM 曾擅自升到 1.7.2/1.7.3 属违规，已回退并记此规则）。仅**实际新功能**上线才由上级重新指定版本号。打包时版本四处+锁文件（tauri.conf.json / package.json / Cargo.toml / README 徽章 / Cargo.lock）一律填 1.7.1。
+- **版本号规则（上级硬规则）**：**任何 bug 修复批次严禁提升版本号**（改多少轮 bug，文件版本号恒为当前版本；PM 曾擅自升到 1.7.2/1.7.3 属违规，已回退并记此规则）。仅**实际新功能**上线才由上级重新指定版本号——快捷建栅元新功能用户指定 **1.7.2**（2026-08-18）。打包时版本四处+锁文件（tauri.conf.json / package.json / Cargo.toml / README 徽章 / Cargo.lock）必须一致。
 - **依赖红线（上级 2026-08-14 更新）**：默认零新依赖；有更好的库须**先提出、批准后安装**；**严禁自动运行 npm install / npm ci / pip install**（用户高度敏感，违反即打回）；测试不得 import gui.backend.api_server（模块级 pyvista/FreeCAD 探测污染）。
 - **DeckData 是聚合根**：前端 DeckContext ↔ 后端 generate/parse 全走 DeckData 单对象，避免参数膨胀。
 - **密度写在栅元卡（CELL）上**，材料卡（Mm）只含 ZAID+份额，不含密度。
@@ -166,7 +166,7 @@
 - **meshtal-parse 元数据缓存**：已闭环（`_mode_parse` 先 `get_manifest` 命中即返回，实测二次 0.23s）；`meshtal_cache._MANIFEST_VERSION=2` 使旧磁盘缓存失效。
 - **P0/P1 技术债全清偿（2026-08-12，commit 链见 git log）**：引擎缺陷 F-A~F-H（banners.py 节头拦截 / validate_deck 解包 CellRow / 多粒子正则 / options 上移 / 剥尾 & / ksrc 强转 / EFF 分支 / 小写 m）+ F#1~F#7（raw_overrides 收敛 / _build_sdef_parts / SDEF_FIELD_SPECS / import 顶部化等）全修，R1-R4 不动点成立；测试网 **pytest 465 绿**（tests/）+ **vitest 252 绿**（gui/test/；colorize 128³ 计时用例负载偶发 >50ms 为已知 flaky，隔离跑即绿）。
 - **契约文档**：docs/contracts/api.yaml 覆盖全部端点；漂移闸门 `tests/integration/test_api_contract.py` AST 断言 handlers ↔ api.yaml 双向一致（含真实 HTTP）。
-- **Cargo.toml 版本隐患**：v1.6.4 曾漏改（停在 1.6.3）；Tauri 以 tauri.conf.json 为权威不影响出包，但**版本四处+锁文件**（tauri.conf.json/package.json/Cargo.toml/README 徽章/Cargo.lock）必须一致（现恒 1.7.1）。
+- **Cargo.toml 版本隐患**：v1.6.4 曾漏改（停在 1.6.3）；Tauri 以 tauri.conf.json 为权威不影响出包，但**版本四处+锁文件**（tauri.conf.json/package.json/Cargo.toml/README 徽章/Cargo.lock）必须一致（现恒 1.7.2）。
 - **打包注意**：Tauri build 需要 `RUSTUP_HOME/CARGO_HOME` 指向 D:\rust；sidecar 用 PyInstaller（spec：`gui/mcnp_sidecar.spec`，产物名 "python"）；**6.2 时效校验**（tauri 增量编译不刷新 target/release 的 sidecar，必须手动核对 mtime/覆盖）；后端窗口关闭时经 Rust `close_window` 命令一起退出。：Tauri build 需要 `RUSTUP_HOME/CARGO_HOME` 指向 D:\rust；sidecar 用 PyInstaller（spec：`gui/mcnp_sidecar.spec`，产物名 "python"）；后端窗口关闭时经 Rust `close_window` 命令一起退出。
 
 
@@ -181,7 +181,8 @@
 
 | 日期 | 变更类型 | 改动描述 | 涉及 Agent |
 | :--- | :--- | :--- | :--- |
-| 2026-08-18 | 新增/前端 | **快捷建栅元（几何标签页「曲面卡 & TR 变换」⚡ 按钮，新功能版本待上级指定，未 commit）**：弹窗一次一种形状（RCC 圆柱/RPP 六面体/SPH 球），程序自动算曲面+TR+栅元。RCC=N 等距环×M 等距段（N 个 RCC + M-1 轴向 P 平面，N×M 栅元）；RPP=8 角点校验平行六面体+三边正交（v0..v3 底+v4..v7 顶），轴对齐 → RPP 宏体+内部 PX/PY/PZ，斜向 → 6 局部平面+TRn（行=局部轴方向余弦；**规避 worker 旋转宏体补集布尔缺陷**）；SPH=K 等距球壳（K 个 SPH，K 栅元）。编号：曲面 101 起/用户最大+1、cell 1 起/最大+1、TR 同 cell；材料默认 M0 真空、选材料自动带出密度（无则留空）、imp:n/p/e 勾选才写 1；文本模式禁用+弹窗警告；其余高级参数留空。弹窗右侧实时线框预览（形状+切分线+局部轴，100ms 防抖+按需渲染不卡）。模块化：gui/src/utils/quickCell.ts 纯函数 + gui/src/three/quickCellPreview.ts + QuickCellDialog.tsx + GeometryTab 接线；vitest quickCell 16 用例先红后绿；真实 FreeCAD 链路验证 RCC 六格/轴对齐四格/斜向 6 平面两半 bbox 全对。门禁 pytest **512/0** + vitest **326/0** + tsc EXIT 0；未打包 | 前端 |
+| 2026-08-18 | 管理/构建 | **v1.7.2 打包部署（快捷建栅元新功能进包，用户指定版本）**：版本四处+锁文件同步 1.7.2（tauri.conf.json/package.json/Cargo.toml/README 徽章/Cargo.lock）；门禁 pytest **512/0** + vitest **326/0** + tsc EXIT 0；vite build 4.0s；PyInstaller sidecar python.exe 25,114,215B（自检 preview_cache.py/vendor/geouned 在位）；binaries 替换；tauri build 40.6s（Compiling mcnp-ui v1.7.2）；**6.2 时效坑命中**：target\release python.exe 仍旧版 23,707,414B/08-04，手动覆盖为新 sidecar（25,114,215B/20:03）后复核；部署 D:\MCNP\MCNP输入卡生成器（exe 6,436,352B/20:05 + python.exe + _internal 全套，preview_cache.py/vendor/geouned 在位）；**冒烟全过**：xsdir-check loaded:true 7621 条 / preview-3d RCC 环段快捷卡 count=2（cell 1,4）/ cross-section X=0 得 2 栅元 3 多边形 / 斜向 RPP+TR1 快捷卡 count=1；环境已清理（app+sidecar 杀净、5001 释放）。commit **5941a04**（12 文件 +1214/-10，未 push） | 构建 |
+| 2026-08-18 | 新增/前端 | **快捷建栅元（几何标签页「曲面卡 & TR 变换」⚡ 按钮，v1.7.2 新功能）**：弹窗一次一种形状（RCC 圆柱/RPP 六面体/SPH 球），程序自动算曲面+TR+栅元。RCC=N 等距环×M 等距段（N 个 RCC + M-1 轴向 P 平面，N×M 栅元）；RPP=8 角点校验平行六面体+三边正交（v0..v3 底+v4..v7 顶），轴对齐 → RPP 宏体+内部 PX/PY/PZ，斜向 → 6 局部平面+TRn（行=局部轴方向余弦；**规避 worker 旋转宏体补集布尔缺陷**）；SPH=K 等距球壳（K 个 SPH，K 栅元）。编号：曲面 101 起/用户最大+1、cell 1 起/最大+1、TR 同 cell；材料默认 M0 真空、选材料自动带出密度（无则留空）、imp:n/p/e 勾选才写 1；文本模式禁用+弹窗警告；其余高级参数留空。弹窗右侧实时线框预览（形状+切分线+局部轴，100ms 防抖+按需渲染不卡）。模块化：gui/src/utils/quickCell.ts 纯函数 + gui/src/three/quickCellPreview.ts + QuickCellDialog.tsx + GeometryTab 接线；vitest quickCell 16 用例先红后绿 + sidebarVersion 改动态读 package.json（升版不再破）；真实 FreeCAD 链路验证 RCC 六格/轴对齐四格/斜向 6 平面两半 bbox 全对。门禁 pytest **512/0** + vitest **326/0** + tsc EXIT 0 | 前端 |
 | 2026-08-18 | 修复/前端 | **3D 预览坐标轴 Y/Z 互换（用户实测）**：`axisDirs` 写成 [X,Z,Y] 而标签/颜色按 [X,Y,Z] 配 → 绿色线画在 Z 方向标 "Y"、蓝色线画在 Y 方向标 "Z"。修复：新建 `gui/src/three/axisConfig.ts`（AXIS_CONFIG 单一事实来源：X 红/Y 绿/Z 蓝），Preview3D 的轴线/标签/刻度全部改由其派生；vitest `gui/test/axisConfig.test.ts` +2 先红后绿。版本恒 1.7.1，未 commit | 前端 |
 | 2026-08-18 | 修复/后端+前端 | **3D 预览切截面部分实体切错（用户实测）**：两层根因——① 后端 `slice_stl_segments` 对恰在平面上的顶点 `sg[a]==0: continue` 直接跳过 → 切割平面与实体面重合（模型底面 z=0、相邻栅元共享面）时该实体返回 0 环/错环，穿过内部的实体正常；多环截面还会被最近点贪心串接成错误折线。修复 `app/stl_cross_section.py`：on-plane 顶点作交点、共面三角面贡献出现 1 次的外轮廓边、`_join_loops` 改容差吸附邻接表走环（环不串接、开放链丢弃）；② 预览把 STL 平移到模型中心显示，但截面请求把用户输入平面（显示系）原样发给后端（原始系）→ 模型中心偏离原点时全部切位偏移。修复：新建 `gui/src/three/planeOffset.ts`（`offsetPlaneForStl` D_raw=D_disp+n·center）+ Preview3D 记录 `modelCenter`，fetchCrossSection 与独立截面窗口步进（`windows.ts` 数据桥传 center）统一换算。回归：`tests/unit/test_stl_cross_section.py` 6 用例（面重合/多环/双盒/带孔顶面，合成 STL 不依赖 FreeCAD）先红后绿；vitest `planeOffset.test.ts` +3；真实 FreeCAD STL 联调：盒面 X=1 返回面轮廓、带孔盒顶面返回外方框+内圆、相邻共享面两栅元各得正确方环。全量 pytest **512/0** + vitest **310/0** + tsc EXIT 0。版本恒 1.7.1，未 commit | 后端+前端 |
 | 2026-08-16 | 修复/前端 | **PTRAC 视图"是中子还是电子 + 取消勾选不消失"（用户实测 Practice3 改卡后）**：数据核实=全是中子（parser stats {n:48,p:0,e:0}，卡 type=n）；两个观感/真 bug——① 铅盖板外壳颜色 #00E5FF 青色与径迹蓝 #3b82f6 撞色，用户把外壳当径迹，而粒子勾选框不管外壳（归外壳开关）；② 单点云 pointMesh 无视粒子勾选（真 bug）。修复：trackColors 导出 `particleGroup`；PtracRenderer 单点云按 n/p/e/other 分组建 4 个 Points 网格、applyVisibility 尊重粒子勾选；PtracWindow 统计区新增「中子 N · 光子 N · 电子 N」色点计数 + 粒子区块提示「勾选只控径迹；外壳是材料色，由外壳开关控」。测试 trackColors +2（particleGroup）先红后绿；vitest 304/0 全量（flaky colorize 隔离 44/44 绿）+ tsc EXIT 0；当日重打包部署 v1.7.1（仅前端 exe 6,430,208B/23:49）；冒烟探活 loaded:true；新窗口留桌面。未 commit | 前端 |
