@@ -252,7 +252,7 @@ function initScene(
   /* 创建栅元几何体（带 LOD 动态细节） */
   // 不创建模拟几何，等 STL 数据到达后由 loadStlMeshes 加载
   var meshes: THREE.Object3D[] = [];
-  // 原始 STL 坐标系的模型中心（loadStlMeshes 归一化平移时记录，供截面平面坐标换算）
+  // 模型不再归一化：显示坐标系 = 原始 STL 坐标系，截面平面无需换算（center 恒 0，offsetPlaneForStl 恒等）
   const modelCenter = { x: 0, y: 0, z: 0 };
 
   function loadStlMeshes(stlData: any, cellViews: CellView[]) {
@@ -265,7 +265,6 @@ function initScene(
     meshes.length = 0;
     var loader = new STLLoader();
     var stlCount = 0;
-    var rawBounds: THREE.Box3[] = [];
     // 按栅元号查找 cellViews 中的索引
     function cellIndex(cellNum: string): number {
       for (var ci = 0; ci < cellViews.length; ci++) { if (cellViews[ci].num === cellNum) return ci; }
@@ -286,26 +285,15 @@ function initScene(
         mesh.userData.color = cv.color;
         scene.add(mesh);
         meshes.push(mesh);
-        geo.computeBoundingBox();   // 归一化前先算原始 bbox（用于求总中心）
-        if (geo.boundingBox) rawBounds.push(geo.boundingBox.clone());
+        geo.computeBoundingBox();
         stlCount++;
       } catch(e) { console.error("STL load error for cell", key, e); }
     }
 
-    /* 几何归一化：先把全部栅元平移到总中心 → 相机靶心在原点、轴线/刻度天然对齐。
-       顺序关键：geometry.translate 必须先于 computeBoundingBox，否则 renderOrder 排序用旧 bbox。 */
-    if (rawBounds.length > 0) {
-      var totalBox = new THREE.Box3();
-      for (var _b of rawBounds) totalBox.union(_b);
-      var c = totalBox.getCenter(new THREE.Vector3());
-      modelCenter.x = c.x;
-      modelCenter.y = c.y;
-      modelCenter.z = c.z;
-      for (var _m of meshes) {
-        // 平移先于 computeBoundingBox（顺序关键：renderOrder 排序用平移后的 bbox）
-        (_m as THREE.Mesh).geometry.translate(-c.x, -c.y, -c.z);
-        (_m as THREE.Mesh).geometry.computeBoundingBox();
-      }
+    /* 保留真实世界坐标（不归一化）：坐标轴固定在原点 (0,0,0)，模型显示在真实位置。
+       仅重新计算 bbox 供 renderOrder 排序与取景使用，不平移几何。 */
+    for (var _m of meshes) {
+      (_m as THREE.Mesh).geometry.computeBoundingBox();
     }
 
     // 按体积排序：外层（大）先渲染，内层（小）后渲染，嵌套时内层可见
@@ -318,16 +306,20 @@ function initScene(
       meshes[mi].renderOrder = mi;
     }
 
-    // 根据归一化后的实际几何重新定位相机（far/near 收紧，target=center≈原点）
+    // 根据真实几何重新定位相机：取景框 = 模型 ∪ 原点（坐标轴在原点，须一并入画）；
+    // target = 模型中心（旋转围绕模型），far/near 按取景框收紧。
     if (meshes.length > 0) {
-      var normBox = new THREE.Box3();
+      var modelBox = new THREE.Box3();
       for (var _m3 of meshes) {
         var bb = (_m3 as THREE.Mesh).geometry?.boundingBox;
-        if (bb) normBox.union(bb);
+        if (bb) modelBox.union(bb);
       }
-      var nC = normBox.getCenter(new THREE.Vector3());
-      var nS = normBox.getSize(new THREE.Vector3());
-      var cp = computeCameraParams([nC.x, nC.y, nC.z], [nS.x, nS.y, nS.z]);
+      var nC = modelBox.getCenter(new THREE.Vector3());
+      var nS = modelBox.getSize(new THREE.Vector3());
+      var frameBox = modelBox.clone();
+      frameBox.expandByPoint(new THREE.Vector3(0, 0, 0)); // 坐标轴在原点
+      var fS = frameBox.getSize(new THREE.Vector3());
+      var cp = computeCameraParams([nC.x, nC.y, nC.z], [fS.x, fS.y, fS.z]);
       camera.near = cp.near;
       camera.far = cp.far;
       camera.position.set(cp.position[0], cp.position[1], cp.position[2]);

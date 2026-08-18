@@ -39,4 +39,15 @@ describe("computeCameraParams", () => {
     expect(cp.position[1]).toBeCloseTo(200 + viewDist * 0.6);
     expect(cp.position[2]).toBeCloseTo(300 + viewDist * 0.5);
   });
+
+  it("取景框含原点时相机能看到原点（坐标轴在原点）", () => {
+    // 主 3D 预览：模型中心 (10,0,0)、尺寸 2，取景框 = 模型 ∪ 原点 → 尺寸需覆盖 2*|center|
+    const cp = computeCameraParams([10, 0, 0], [20, 20, 20]);
+    const distToOrigin = Math.hypot(cp.position[0], cp.position[1], cp.position[2]);
+    expect(distToOrigin).toBeLessThan(cp.far);
+    expect(distToOrigin).toBeGreaterThan(cp.near);
+    // far/near 仍受限（远离 2^24 深度极限）
+    expect(cp.farNear).toBeLessThanOrEqual(1e4);
+    expect(cp.target).toEqual([10, 0, 0]); // 旋转围绕模型中心
+  });
 });
