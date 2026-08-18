@@ -107,7 +107,7 @@ def test_r2_basic_fields_survive():
 
 
 def test_r2_cell_content_fields_survive():
-    """除已知泄漏的 comment 与 & 续行符污染外，栅元内容字段应逐字段保留。"""
+    """除已知泄漏/已知归一化外，栅元内容字段应逐字段保留。"""
     from tests.conftest import kitchen_sink_deck
     deck = kitchen_sink_deck.__wrapped__()
     g1, deck2, _g2 = roundtrip_generations(deck)
@@ -118,6 +118,11 @@ def test_r2_cell_content_fields_survive():
         f1, f2 = _cell_fields(cell), _cell_fields(c2[num])
         # 容忍 _wrap_long_lines 附加的尾 &（KNOWN_LEAK）
         f2["surface_expr"] = _strip_wrap_artifact(f2["surface_expr"])
+        # 容忍 IMP 归一化（KNOWN_NORMALIZATION）：任一栅元显式写了某粒子 IMP，
+        # 生成器会给其余结构化栅元补齐该粒子默认重要性 1 → 回读后原空字段变 "1"。
+        for imp_f in ("imp_n", "imp_p", "imp_e"):
+            if f1[imp_f] == "" and f2[imp_f] == "1":
+                f2[imp_f] = ""
         assert f1 == f2, f"栅元 {num} 内容字段不一致: {f1} vs {f2}"
 
 

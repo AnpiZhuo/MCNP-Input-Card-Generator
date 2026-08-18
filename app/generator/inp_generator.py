@@ -38,6 +38,14 @@ def _dist_json_nonempty(dist_json: str) -> bool:
 def _generate_cells(cells: list[CellRow]) -> list[str]:
     """生成栅元卡 — 空值不输出；CellRow 可为 cell 或 raw 条件行"""
     lines = []
+    # ── IMP 归一化（MCNP 硬规则：某粒子只要出现 IMP 卡，条目数必须等于栅元数）──
+    # 任一结构化栅元显式写了 imp_n/imp_p/imp_e → 所有结构化栅元补齐该粒子条目，
+    # 缺省值用 MCNP 默认重要性 1（0/0.5 等显式值保留）；全部没写则不输出（MCNP 默认全 1）。
+    # raw 条件行按原文透传，不参与归一化。
+    structured_cells = [row.cell for row in cells if getattr(row, 'kind', 'cell') != "raw"]
+    imp_kws = (("imp_n", "IMP:N"), ("imp_p", "IMP:P"), ("imp_e", "IMP:E"))
+    need_imp = {attr: any(getattr(c, attr, "") for c in structured_cells)
+                for attr, _ in imp_kws}
     for row in cells:
         if getattr(row, 'kind', 'cell') == "raw":
             lines.append(row.text)  # 原样条件行（#ifdef/#else/#endif…）
@@ -53,12 +61,9 @@ def _generate_cells(cells: list[CellRow]) -> list[str]:
 
         # 只输出用户明确设置的参数
         params_parts = []
-        if cell.imp_n:
-            params_parts.append(f"IMP:N={cell.imp_n}")
-        if cell.imp_p:
-            params_parts.append(f"IMP:P={cell.imp_p}")
-        if cell.imp_e:
-            params_parts.append(f"IMP:E={cell.imp_e}")
+        for attr, kw in imp_kws:
+            if need_imp[attr]:
+                params_parts.append(f"{kw}={getattr(cell, attr, '') or '1'}")
         if cell.vol:
             params_parts.append(f"VOL={cell.vol}")
         if cell.pwt:

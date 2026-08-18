@@ -908,3 +908,11 @@ dims ni=1 nj=2 nk=2 / grid_bounds [49,-10,90]~[51,10,110]；texture 同样 ok（
 **修复 2 — sdef_extra API 往返丢失**：`_sources_from_list` / `_adv_from_dict`（`gui/backend/api_server.py`）未映射 `sdef_extra` → 导入含未知 SDEF 参数（如 `EFF=1`）的卡经 HTTP 往返后丢失。补两处 `sdef_extra=s.get(...)` / `d.get(...)`。
 
 **回归测试（先红后绿）**：`tests/unit/test_generator_sdef.py` +4（表单字段生成 / sources 优先级 / 空表单不输出 / _source_from_adv）；`tests/integration/test_api_contract.py` +2（HTTP 表单 SDEF 生成 / HTTP sdef_extra 往返）。全量 pytest **518/0** + vitest **320/0**（已知 flaky colorize 128³ 计时单跑绿）+ tsc EXIT 0。已随 V1.7.2.2 批次重打包部署。
+
+## §S. IMP 归一化：部分栅元写 IMP 导致 MCNP fatal（2026-08-19，用户实测「1 entries not equal to number of cells = 2」）
+
+**根因**：快捷建栅元「勾选才写 1」（quickCell.ts），栅元 1 勾了 imp:n/p/e、栅元 2 没勾 → 生成的 INP 只有 1 条 IMP 却对应 2 个栅元，MCNP 硬规则（某粒子只要出现 IMP 卡，条目数必须等于栅元数）报 `fatal error. 1 entries not equal to number of cells = 2.`（imp:n/p/e 各一次）。
+
+**修复（`app/generator/inp_generator.py _generate_cells`）**：生成时按粒子归一化——任一结构化栅元显式写了 imp_n/imp_p/imp_e，则所有结构化栅元补齐该粒子条目，缺省值用 MCNP 默认重要性 1（0/0.5 等显式值保留）；全部没写则不输出（MCNP 默认全 1）。raw 条件行按原文透传不参与。生成器层单一权威，表单/导入→再生成/快捷建栅元全路径生效，无需前端改。
+
+**回归测试**：`tests/unit/test_generator_cells.py` +3（混用补齐 / 显式值保留+缺省补 1 / 全空不输出）；`tests/integration/test_roundtrip.py` R2 增加 KNOWN_NORMALIZATION 容忍（原空 imp 字段回读为 "1" 属有意归一化，与 & 续行同级）。全量 pytest **521/0** + vitest **320/0** + tsc EXIT 0。已随 V1.7.2.2 批次重打包部署。

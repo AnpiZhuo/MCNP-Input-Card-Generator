@@ -77,6 +77,45 @@ def test_raw_condition_line_passthrough():
     assert lines == ["#ifdef ENDF7"]
 
 
+def test_imp_normalized_to_all_cells():
+    """任一栅元显式写 IMP → 全部结构化栅元补齐该粒子条目（缺省补 1）。"""
+    rows = [
+        CellRow(kind="cell", cell=_cell(number=1, material="1", density="-1.0",
+                                        surface_expr="-1", imp_n="1", imp_p="1", imp_e="1")),
+        CellRow(kind="cell", cell=_cell(number=2, material="0", density="",
+                                        surface_expr="-2")),
+    ]
+    lines = _generate_cells(rows)
+    assert "IMP:N=1  IMP:P=1  IMP:E=1" in lines[0]
+    assert "IMP:N=1  IMP:P=1  IMP:E=1" in lines[1]
+
+
+def test_imp_explicit_values_preserved_missing_filled_with_one():
+    """显式 0/0.5 保留；同粒子缺省栅元补 1；没人写的粒子不输出。"""
+    rows = [
+        CellRow(kind="cell", cell=_cell(number=1, material="1", density="-1.0",
+                                        surface_expr="-1", imp_p="0")),
+        CellRow(kind="cell", cell=_cell(number=2, material="0", density="",
+                                        surface_expr="-2", imp_p="0.5")),
+    ]
+    lines = _generate_cells(rows)
+    assert "IMP:P=0" in lines[0]
+    assert "IMP:P=0.5" in lines[1]
+    assert "IMP:N" not in " ".join(lines)  # 没人写 N → 不输出
+
+
+def test_imp_absent_everywhere_no_output():
+    """全部栅元都没写 IMP → 不输出任何 IMP（MCNP 默认全 1）。"""
+    rows = [
+        CellRow(kind="cell", cell=_cell(number=1, material="0", density="",
+                                        surface_expr="-1")),
+        CellRow(kind="cell", cell=_cell(number=2, material="0", density="",
+                                        surface_expr="-2")),
+    ]
+    lines = _generate_cells(rows)
+    assert all("IMP" not in line for line in lines)
+
+
 def test_surfaces_passthrough_strips_blank_lines():
     out = _generate_surfaces("1  rcc  0 0 0  0 10 0  2\n\n\n2  pz  10\n")
     assert out == ["1  rcc  0 0 0  0 10 0  2", "2  pz  10"]
