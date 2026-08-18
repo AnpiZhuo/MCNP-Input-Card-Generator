@@ -1074,3 +1074,11 @@ ormalizeImportedMaterials（核素行 zaid 剥后缀，raw 行原样，rows/nucl
   - `DeckContext.tsx`：textMode key 注释补 sdef。
 - 回归测试：`gui/test/rawOverrides.test.ts` 3 用例先红后绿（textMode.sdef + rawOverrides.sdef → 载荷带 sdef 原文；非文本模式不带 sdef；materials/cells/tally 原有行为不回归）。
 - 验收：全量 pytest **512/0**；vitest **337/0**（已知 flaky colorize 128³ 计时单跑 18/18 绿）；tsc EXIT 0。未 commit。
+
+## 输出页解析/绘图/导出 CSV 修复（2026-08-19，用户实测「输出里解析按钮、绘图/导出CSV按钮」）
+
+- **解析按钮**：原实现「点解析 → 重新打开文件选择器」，不解析已显示的文件；改为保存所选 File，解析按钮直接对当前文件重新解析（未选文件才弹选择器），选择文件后立即解析。
+- **绘图按钮**：原为 alert 占位（"建议使用 Excel/Matplotlib"）；新增真实 SVG 折线图弹窗——`gui/src/utils/tallyChart.ts` 纯函数 `buildFluxChartSvg`（无图表依赖，折线+数据点+1σ 误差棒+网格，通量跨 >100 倍自动对数 y 轴），OutputTab 弹窗渲染。
+- **导出 CSV**：加 UTF-8 BOM（Excel 直接打开不乱码）。
+- **本地兜底解析器**：`utils/outputParser.ts` 重构——tally 头正则容错、支持 MCNP6.1 紧凑布局（cell 行后两列 flux/error）、energy 表头+total 行布局、tally type 提取。
+- 测试：`gui/test/outputParser.test.ts` +2、`gui/test/tallyChart.test.ts` +3；vitest **325/0** + tsc EXIT 0。

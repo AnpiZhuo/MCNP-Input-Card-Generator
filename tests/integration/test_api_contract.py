@@ -256,3 +256,15 @@ def test_http_sdef_extra_survives_roundtrip(backend_base_url):
     g = _post(backend_base_url, "/api/generate", p.get("deck", {}))
     assert g.get("status") == "ok", g
     assert "EFF=1" in g.get("inp", "")
+
+
+def test_http_parse_outp_compact_mcnp61(backend_base_url):
+    """/api/parse-outp：MCNP6.1 紧凑 tally 布局（无 energy 列/total 行）→ 正常解析（用户实测 1.o）。"""
+    outp = (PROJECT_DIR / "tests" / "fixtures" / "simple_tally.outp").read_text(encoding="utf-8")
+    resp = _post(backend_base_url, "/api/parse-outp", {"outp": outp})
+    assert resp.get("status") == "ok", resp
+    assert resp.get("nps") == 10000
+    assert "4" in resp.get("tallies", {})
+    t = resp["tallies"]["4"]
+    assert t["type"] == 4
+    assert t["rows"] == [{"energy": "", "flux": "3.36115E-03", "error": "0.0071"}]

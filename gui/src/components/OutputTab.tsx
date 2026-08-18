@@ -7,12 +7,15 @@ import { workflowStep, noFileMessage, type MeshWorkflowState } from "../volume/w
 import { decideResolution, DEFAULT_RESOLUTION, MAX_RESOLUTION, OVER_BUDGET_POPUP_COPY } from "../volume/downsampleRequest";
 import { openVolume3DWindow, readOutputDir } from "../volume/openVolume3DWindow";
 import { openPtrac3DWindow } from "../ptrac/openPtracWindow";
+import { buildFluxChartSvg } from "../utils/tallyChart";
 
 export default function OutputTab() {
   const [doc, setDoc] = useState<{path:string;title:string}|null>(null);
   const [parsed, setParsed] = useState<ParsedOutput | null>(null);
   const [filePath, setFilePath] = useState("");
   const [selectedTally, setSelectedTally] = useState("1");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [chartTally, setChartTally] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { deck } = useDeck();
 
@@ -20,10 +23,7 @@ export default function OutputTab() {
     fileInputRef.current?.click();
   };
 
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setFilePath(file.name);
+  const parseFileContent = async (file: File) => {
     try {
       const text = await file.text();
       // 先尝试后端 pymcnp 解析
@@ -43,6 +43,14 @@ export default function OutputTab() {
     }
   };
 
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFilePath(file.name);
+    setSelectedFile(file);
+    await parseFileContent(file);
+  };
+
   const handleExportCsv = () => {
     if (!parsed) return;
     const tallyNum = Number(selectedTally);
@@ -54,7 +62,7 @@ export default function OutputTab() {
     }
     const total = tally.total;
     csv += `total,${total.flux},${total.error}\n`;
-    const blob = new Blob([csv], { type: "text/csv" });
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `tally_${selectedTally}.csv`;
@@ -266,8 +274,8 @@ export default function OutputTab() {
                 value={filePath} readOnly placeholder="选择 MCNP 输出文件..." />
               <button className="btn btn-ghost btn-sm" onClick={handleBrowse}>浏览</button>
               <button className="btn btn-primary btn-sm" onClick={() => {
-                if (!filePath) { alert("请先选择输出文件"); return; }
-                // 如果文件路径有效，直接解析（通过 fileInput 触发）
+                if (selectedFile) { parseFileContent(selectedFile); return; }
+                alert("请先选择输出文件");
                 fileInputRef.current?.click();
               }}>解析</button>
             </div>
@@ -288,10 +296,8 @@ export default function OutputTab() {
             <button className="btn btn-ghost btn-xs" onClick={() => {
               if (!parsed) { alert("请先解析输出文件"); return; }
               const tally = parsed.tallies[Number(selectedTally)];
-              if (!tally) return;
-              const labels = tally.rows.map(r => r.energy);
-              const values = tally.rows.map(r => parseFloat(r.flux));
-              alert(`绘图功能 (Tally ${selectedTally}): ${values.length} 个数据点\n建议使用 Excel/Matplotlib 等工具绘图`);
+              if (!tally || !tally.rows.length) { alert("该计数无数据"); return; }
+              setChartTally(selectedTally);
             }}>绘图</button>
             <button className="btn btn-ghost btn-xs" onClick={handleExportCsv}>导出 CSV</button>
           </div>
@@ -442,6 +448,23 @@ export default function OutputTab() {
           </div>
         )}
       </div>
+
+      {/* 绘图弹窗：Tally 通量 SVG 折线图 */}
+      {chartTally !== null && parsed && parsed.tallies[Number(chartTally)] && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 1300, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div className="glass-card" style={{ maxWidth: 640, padding: 16, width: "92%" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>Tally {chartTally} 通量图</span>
+              <button className="btn btn-ghost btn-xs" onClick={() => setChartTally(null)}>✕ 关闭</button>
+            </div>
+            <div style={{ overflowX: "auto" }}
+              dangerouslySetInnerHTML={{ __html: buildFluxChartSvg(parsed.tallies[Number(chartTally)].rows) }} />
+            <div style={{ fontSize: 10, color: "var(--text-tertiary)", marginTop: 8 }}>
+              红短线为相对误差（1σ）；通量跨 100 倍以上时 y 轴自动切换对数刻度。
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* F3 超预算弹窗：要更流畅，还是要更精细？ */}
       {meshBudget && (

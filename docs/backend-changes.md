@@ -916,3 +916,20 @@ dims ni=1 nj=2 nk=2 / grid_bounds [49,-10,90]~[51,10,110]；texture 同样 ok（
 **修复（`app/generator/inp_generator.py _generate_cells`）**：生成时按粒子归一化——任一结构化栅元显式写了 imp_n/imp_p/imp_e，则所有结构化栅元补齐该粒子条目，缺省值用 MCNP 默认重要性 1（0/0.5 等显式值保留）；全部没写则不输出（MCNP 默认全 1）。raw 条件行按原文透传不参与。生成器层单一权威，表单/导入→再生成/快捷建栅元全路径生效，无需前端改。
 
 **回归测试**：`tests/unit/test_generator_cells.py` +3（混用补齐 / 显式值保留+缺省补 1 / 全空不输出）；`tests/integration/test_roundtrip.py` R2 增加 KNOWN_NORMALIZATION 容忍（原空 imp 字段回读为 "1" 属有意归一化，与 & 续行同级）。全量 pytest **521/0** + vitest **320/0** + tsc EXIT 0。已随 V1.7.2.2 批次重打包部署。
+
+## §T. OUTP 输出解析修复：pymcnp 误用 + MCNP6.1 紧凑布局兜底（2026-08-19，用户实测「解析按钮」）
+
+**根因（三处叠加）**：
+1. `_handle_parse_outp` 调 `pymcnp.Outp(text)`——`Outp.__init__(header, blocks)` 是构造函数不是解析入口，恒抛 `TypeError: missing 1 required positional argument: 'blocks'`（正确入口是 `Outp.from_mcnp(text).to_dataframe()`）。
+2. 内置 pymcnp 0.9.1.dev4（editable 安装自 D:\MCNP\PyMCNP\src，与打包同体）的 `Tally_4._REGEX` 只认 MCNP6.2 系布局（`cell N` + `energy` 表头 + `total` 行）；MCNP6.1 单栅元单能仓是紧凑布局（`cell N` 后直接两列 `flux error`，无 energy 列、无 total 行）→ `Outp.from_mcnp(1.o).to_dataframe()` 返回空。已用 pymcnp 自带 example_02.outp 做阳性对照（能解析），确认是格式兼容问题而非 pymcnp 失效。
+3. 前端本地兜底 `parseOutp` 同样只认 energy 表头 + total 行。
+
+**修复**：
+| # | 改动 | 文件 |
+| :--- | :--- | :--- |
+| 1 | 新增 `app/outp_parser.py`：纯 stdlib 容错解析（tally 头 / 有无 energy 列 / 有无 total 行 / 多栅元扁平 / nps 提取 / fatal 警告收集） | 新增 |
+| 2 | `_handle_parse_outp` 重写：先 `pymcnp.Outp.from_mcnp(text).to_dataframe()`（正确 API，pymcnp 支持时用它），空结果回退 `outp_parser.parse_outp` | `gui/backend/api_server.py` |
+| 3 | 新增 `_fmt_num`（pandas 数值 → 显示字符串） | `gui/backend/api_server.py` |
+| 4 | `mcnp_sidecar.spec` `_keep_py` 加 `outp_parser.py`（否则打包缺模块） | `gui/mcnp_sidecar.spec` |
+
+**回归测试**：`tests/unit/test_outp_parser.py` 4 用例（紧凑两列 / 能量仓+total / 多栅元 / fatal 警告）；`tests/integration/test_api_contract.py` +1（HTTP 紧凑格式，fixture `tests/fixtures/simple_tally.outp`）；前端 `gui/test/outputParser.test.ts` +2、`gui/test/tallyChart.test.ts` +3。全量 pytest **526/0** + vitest **325/0** + tsc EXIT 0。

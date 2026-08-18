@@ -594,6 +594,19 @@ def _deck_to_frontend_dict(deck: DeckData) -> dict:
     return deck_dict
 
 
+def _fmt_num(v) -> str:
+    """pandas 数值 → 显示字符串（None/NaN → 空串）。"""
+    if v is None:
+        return ""
+    try:
+        if v != v:  # NaN
+            return ""
+    except Exception:
+        pass
+    s = str(v).strip()
+    return "" if s in ("", "nan", "None") else s
+
+
 # ===== HTTP 服务 =====
 
 class MCNPHandler(BaseHTTPRequestHandler):
@@ -1629,18 +1642,54 @@ class MCNPHandler(BaseHTTPRequestHandler):
     def _handle_parse_outp(self):
         try:
             data = self._read_body()
-            import pymcnp
-            result = pymcnp.Outp(data.get("outp", ""))
-            tallies = {}
-            for tnum, td in result.tallies.items():
-                df = td.dataframe
-                rows = []
-                for _, row in df.iterrows():
-                    rows.append({"energy": str(row.iloc[0]), "flux": str(row.iloc[1]), "error": str(row.iloc[2]) if len(row) > 2 else ""})
-                tallies[str(tnum)] = {"type": td.type, "rows": rows, "total": {"energy": "total", "flux": str(df.iloc[:, 1].sum()), "error": ""}}
-            self._ok({"nps": result.nps, "tallies": tallies, "warnings": []})
-        except ImportError:
-            self._ok({"error": True, "message": "pymcnp not installed"})
+            text = data.get("outp", "")
+
+            # 优先用内置 pymcnp（正确入口：Outp.from_mcnp(text).to_dataframe()）。
+            # 注意：pymcnp.Outp(...) 是构造函数（header, blocks），不是解析入口；
+            # 旧代码误用导致该接口恒报错。pymcnp 只覆盖 MCNP6.2 系布局。
+            try:
+                import pymcnp
+
+                result = pymcnp.Outp.from_mcnp(text)
+                df_map = result.to_dataframe()
+                if df_map:
+                    tallies = {}
+                    nps = None
+                    for tnum, df in df_map.items():
+                        rows = []
+                        flux_sum = 0.0
+                        for _, row in df.iterrows():
+                            try:
+                                flux_sum += float(row.get("counts"))
+                            except (TypeError, ValueError):
+                                pass
+                            rows.append({
+                                "energy": _fmt_num(row.get("bins")),
+                                "flux": _fmt_num(row.get("counts")),
+                                "error": _fmt_num(row.get("errors")),
+                            })
+                        nps = int(df["nps"].iloc[0]) if len(df) else None
+                        ttype = str(df["type"].iloc[0]) if len(df) else ""
+                        tm = re.match(r"^\s*(\d+)", ttype)
+                        tallies[str(tnum)] = {
+                            "type": int(tm.group(1)) if tm else 0,
+                            "rows": rows,
+                            "total": {
+                                "energy": "total",
+                                "flux": "" if not rows else f"{flux_sum:.6e}",
+                                "error": "",
+                            },
+                        }
+                    self._ok({"nps": nps or 0, "tallies": tallies, "warnings": [], "parser": "pymcnp"})
+                    return
+            except Exception:
+                pass  # pymcnp 缺失或布局不兼容 → 走自研容错解析
+
+            # 兜底：格式容错解析（MCNP6.1 紧凑布局等 pymcnp 未覆盖格式）
+            from outp_parser import parse_outp
+
+            tallies, nps, warnings = parse_outp(text)
+            self._ok({"nps": nps or 0, "tallies": tallies, "warnings": warnings, "parser": "builtin"})
         except Exception as e:
             self._err(str(e))
 

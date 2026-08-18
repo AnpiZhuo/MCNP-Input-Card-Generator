@@ -18,6 +18,7 @@ _keep_py = [
     "models.py", "preview_cache.py", "freecad_preview.py", "_freecad_csg_worker.py",
     "freecad_locator.py", "step_importer_geouned.py", "geouned_worker.py",
     "xsdir_db.py", "step_importer.py",
+    "outp_parser.py",
     "_cross_section_helper.py",
     "_freecad_cross_section_worker.py",
     "stl_cross_section.py",
