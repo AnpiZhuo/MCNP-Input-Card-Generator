@@ -1,0 +1,61 @@
+import { describe, it, expect } from "vitest";
+import * as THREE from "three";
+import type { Line } from "three";
+import { buildQuickCellPreview } from "../src/three/quickCellPreview";
+import { computeCameraParams } from "../src/three/cameraParams";
+
+function frame(shape: any, config: any): void {
+  const prev = buildQuickCellPreview(shape, config);
+  const box = new THREE.Box3().setFromObject(prev.group);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const ext = Math.max(size.x, size.y, size.z, 1e-3);
+  const cp = computeCameraParams([center.x, center.y, center.z], [ext, ext, ext]);
+  expect(cp.far).toBeGreaterThan(cp.near);
+  prev.dispose();
+}
+
+function collectLines(shape: any, config: any): [number, number, number][][] {
+  const prev = buildQuickCellPreview(shape, config);
+  const segs: [number, number, number][][] = [];
+  prev.group.traverse((obj) => {
+    const pos = (obj as Line).geometry?.getAttribute?.("position");
+    if (!pos) return;
+    const pts: [number, number, number][] = [];
+    for (let i = 0; i < pos.count; i++) pts.push([pos.getX(i), pos.getY(i), pos.getZ(i)]);
+    segs.push(pts);
+  });
+  prev.dispose();
+  return segs;
+}
+
+describe("快捷建栅元线框预览（RPP）", () => {
+  it("各种配置取景正常（不抛错、far>near）", () => {
+    frame("rpp", { size: [2, 2, 2], center: [0, 0, 0], angles: [0, 0, 0], nx: 2, ny: 2, nz: 2 });
+    frame("rpp", { size: [2, 2, 2], center: [10, 0, 0], angles: [0, 0, Math.PI / 2], nx: 2, ny: 1, nz: 1 });
+    frame("rpp", { size: [2, 4, 6], center: [0, 0, 5], angles: [0, Math.PI / 6, Math.PI / 4], nx: 2, ny: 3, nz: 4 });
+  });
+
+  it("2×2×2 切分矩形跨满截面（回归：曾只画中心象限，看不出 8 个立方体）", () => {
+    const segs = collectLines("rpp", { size: [2, 2, 2], center: [0, 0, 0], angles: [0, 0, 0], nx: 2, ny: 2, nz: 2 });
+    const has = (p: [number, number, number]) => segs.some((s) => s.some((q) => q.every((v, k) => Math.abs(v - p[k]) < 1e-6)));
+    // x=0 截面：整条 y∈[-1,1]、z∈[-1,1] 的矩形四角
+    expect(has([0, -1, -1])).toBe(true);
+    expect(has([0, 1, 1])).toBe(true);
+    // y=0 截面
+    expect(has([-1, 0, -1])).toBe(true);
+    expect(has([1, 0, 1])).toBe(true);
+    // z=0 截面
+    expect(has([-1, -1, 0])).toBe(true);
+    expect(has([1, 1, 0])).toBe(true);
+  });
+
+  it("坐标轴固定为世界 X/Y/Z（倾斜时不随体旋转）", () => {
+    const all = collectLines("rpp", { size: [2, 2, 2], center: [10, 0, 0], angles: [0, 0, Math.PI / 2], nx: 1, ny: 1, nz: 1 }).flat();
+    const has = (p: [number, number, number]) => all.some((q) => q.every((v, k) => Math.abs(v - p[k]) < 1e-6));
+    // 世界轴端点（s = max(2,2,2)*0.5 = 1，从中心 (10,0,0) 出发）
+    expect(has([11, 0, 0])).toBe(true); // +X 红
+    expect(has([10, 1, 0])).toBe(true); // +Y 绿
+    expect(has([10, 0, 1])).toBe(true); // +Z 蓝
+  });
+});

@@ -136,17 +136,20 @@ function buildRpp(group: THREE.Group, c: RppConfig): void {
   const u = new THREE.Vector3(R[0][0], R[1][0], R[2][0]);
   const v = new THREE.Vector3(R[0][1], R[1][1], R[2][1]);
   const w = new THREE.Vector3(R[0][2], R[1][2], R[2][2]);
+  // 切分平面矩形：以切分位置为中心，跨整个截面（e1×e2 全尺寸）
   const rect = (origin: THREE.Vector3, e1: THREE.Vector3, e2: THREE.Vector3) => {
+    const o = origin.clone().sub(e1.clone().multiplyScalar(0.5)).sub(e2.clone().multiplyScalar(0.5));
     addLoop(group, [
-      origin, origin.clone().add(e1), origin.clone().add(e1).add(e2), origin.clone().add(e2),
-    ], 0x66ccff, 0.5);
+      o, o.clone().add(e1), o.clone().add(e1).add(e2), o.clone().add(e2),
+    ], 0x66ccff, 0.7);
   };
   for (let i = 1; i < c.nx; i++) rect(center.clone().addScaledVector(u, -L / 2 + (L * i) / c.nx), v.clone().multiplyScalar(W), w.clone().multiplyScalar(H));
   for (let j = 1; j < c.ny; j++) rect(center.clone().addScaledVector(v, -W / 2 + (W * j) / c.ny), u.clone().multiplyScalar(L), w.clone().multiplyScalar(H));
   for (let k = 1; k < c.nz; k++) rect(center.clone().addScaledVector(w, -H / 2 + (H * k) / c.nz), u.clone().multiplyScalar(L), v.clone().multiplyScalar(W));
 
-  const s = Math.max(L, W, H, 0.3) * 0.35;
-  addAxes(group, center, u.clone().multiplyScalar(s), v.clone().multiplyScalar(s), w.clone().multiplyScalar(s));
+  // 世界固定轴（X 红 / Y 绿 / Z 蓝），不随体旋转，便于看倾斜姿态
+  const s = Math.max(L, W, H, 0.3) * 0.5;
+  addAxes(group, center, AXIS_X.clone().multiplyScalar(s), AXIS_Y.clone().multiplyScalar(s), AXIS_Z.clone().multiplyScalar(s));
 }
 
 export function buildQuickCellPreview(shape: QuickShape, config: RccConfig | RppConfig | SphConfig): QuickCellPreview {
