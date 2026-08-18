@@ -1,5 +1,5 @@
 # 项目记忆文档（AI 速查手册）
-> 最后更新时间：2026-08-18（**v1.7.2 五次打包部署**：预览坐标轴固定在原点进包；commit 5941a04 + 20e7fd5 + 749feb1 + a62a3cf + 06c63bb 未 push）
+> 最后更新时间：2026-08-18（**v1.7.2 六次打包部署**：主 3D 预览去归一化、坐标轴固定真实世界原点进包；commit 5941a04 + 20e7fd5 + 749feb1 + a62a3cf + 06c63bb + 389374c 未 push）
 >
 > **✅ 快捷建栅元已交付（2026-08-18，v1.7.2 用户指定，**五次打包部署** D:\MCNP\MCNP输入卡生成器，commit 5941a04 + 20e7fd5 + 749feb1 + a62a3cf + 06c63bb，未 push）**：几何标签页「曲面卡 & TR 变换」新增「⚡ 快捷建栅元」按钮 → 弹窗一次一种形状（圆柱 RCC / 六面体 RPP / 球 SPH），程序自动算曲面/TR/栅元卡：
 > - RCC：底面中心+轴向量+半径，N 等距圆环 × M 等距轴段 → N 个 RCC + M-1 个轴向 P 平面 → N×M 栅元（最内环实心，首/末段靠 RCC 自带端盖）
@@ -8,6 +8,7 @@
 > - 编号：曲面 101 起/用户最大+1；cell 1 起/最大+1；TR 同 cell；材料默认 M0 真空、选材料自动带出密度（无则留空）、imp:n/p/e 勾选才写 1；文本模式禁用+弹窗警告；其余高级参数留空
 > - 弹窗右侧实时线框预览（形状+切分线+**固定在原点 (0,0,0) 的世界 XYZ 轴（X 红/Y 绿/Z 蓝，带标签，Z 朝上）**，100ms 防抖+按需渲染，不卡）；生成结果追加到曲面/TR/栅元列表
 > - **RPP 预览修复（用户实测）**：① 切分矩形曾从体中心往 +Y/+Z 只画一个象限（2×2×2 看不出 8 个立方体）→ 改为以切分位置为中心、跨整个截面；② 坐标轴曾画随体旋转的局部轴 → 改为**世界固定轴**（X 红/Y 绿/Z 蓝）+ **端点 X/Y/Z 标签**；③ 相机曾用 Three.js 默认 **Y 朝上**（电脑建模惯例）→ 改 **Z 朝上**（数学/物理/MCNP 惯例，与主 3D 预览/体积/PTRAC 窗口一致）；④ 坐标轴曾画在**体中心** → 改**固定在原点 (0,0,0)**（轴长按体尺寸/到原点距离自适应）
+> - **主 3D 预览根因修复（用户实测）**：坐标轴之所以穿过体中心，根因在**上层 Preview3D 的几何归一化**——`loadStlMeshes` 把全部 STL 平移到模型中心，轴画在场景原点即等效于体中心。修复：**去掉归一化平移**，模型显示在真实世界坐标，轴固定在真实原点 (0,0,0)；取景框=模型∪原点（轴须入画），target=模型中心（旋转围绕模型），far/near 按取景框收紧；截面平面坐标换算随之恒等（modelCenter 恒 0）
 > - 模块化：gui/src/utils/quickCell.ts（纯函数，编号/校验/生成）+ gui/test/quickCell.test.ts **20** 用例 + gui/src/three/quickCellPreview.ts（线框）+ gui/test/quickCellPreview.test.ts 3 用例 + QuickCellDialog.tsx + GeometryTab 接线；真实 FreeCAD 链路验证：RCC 六格 / 轴对齐四格 / 斜向 6 平面两半 / **Yaw90°+平移(10,0,0) bbox 精确 / Yaw45°+Pitch30° 切 2 两半相等** 全部正确
 > - 门禁 pytest **512/0** + vitest **333/0** + tsc EXIT 0；打包链路五次全过（vite ~3.2s / PyInstaller 25,114,215B / tauri ~11s / **6.2 增量坑每次命中、手动覆盖**）；冒烟：xsdir loaded:true 7621 条 + RPP 角度卡 preview-3d 出 STL 全过
 >
@@ -160,7 +161,7 @@
 
 - **vite dev 在本机挂死（2026-08-15 实测定位）**：node 24.18 + vite 5.4.21 + @vitejs/plugin-react 4.7.0 组合下 vite dev 接收请求后零响应（最小空项目正常，加载项目配置即挂）→ 浏览器白屏/转圈。**启动 bat 已改为 vite build + python http.server 静态服务 dist**，不再依赖 vite dev；浏览器模式功能本身正常（SSR 渲染探针验证过）。
 - **5001 端口劫持（2026-08-15 实测）**：Windows SO_REUSEADDR 允许多进程同绑 5001——打包版 sidecar 与 bat 起的 api_server 可同时"监听"，请求被劫持分流，表现为后端时好时坏。bat 已加 netstat 占用检测（有后端就复用）；诊断用 `Get-NetTCPConnection -LocalPort 5001` 查 OwningProcess。
-- **3D 预览截面"部分实体切错"（2026-08-18 实测定位）**：① 切割平面恰与实体面重合（模型底面 z=0、相邻栅元共享面）时旧 `slice_stl_segments` 对 on-plane 顶点直接 continue → 0 环/错环，而穿过内部的实体正常；共面三角面须贡献出现 1 次的外轮廓边（内部共享边出现 2 次丢弃）。② 预览把 STL 平移到模型中心显示，截面平面必须先经 `offsetPlaneForStl` 换算回原始 STL 系（D_raw=D_disp+n·center），否则模型中心偏离原点时全部切位偏移。③ 坐标轴配置单一事实来源 `gui/src/three/axisConfig.ts`（X 红/Y 绿/Z 蓝），不要再内联写 dirs。
+- **3D 预览截面"部分实体切错"（2026-08-18 实测定位）**：① 切割平面恰与实体面重合（模型底面 z=0、相邻栅元共享面）时旧 `slice_stl_segments` 对 on-plane 顶点直接 continue → 0 环/错环，而穿过内部的实体正常；共面三角面须贡献出现 1 次的外轮廓边（内部共享边出现 2 次丢弃）。② 预览曾把 STL 平移到模型中心显示（归一化），截面平面须经 `offsetPlaneForStl` 换算回原始 STL 系；**2026-08-18 起主预览已去掉归一化**（显示系=原始系，modelCenter 恒 0 → 换算恒等，机制保留防回归）。③ 坐标轴配置单一事实来源 `gui/src/three/axisConfig.ts`（X 红/Y 绿/Z 蓝），不要再内联写 dirs。
 - **FreeCAD 对「旋转宏体半空间」补集布尔失效（2026-08-18 实测）**：`RPP ... *TRn` 正侧 = bound.cut(内盒) 再 apply_trn（带 Placement 的复合体），对 `-曲面` 求 `bound.cut(operand)` 返回体积 1.7e8 > 整盒 1.25e8 的垃圾（栅元显示整盒/错几何）。斜向六面体一律改用 6 个局部 PX/PY/PZ + `*TRn`（普通平面布尔可靠）；轴对齐 RPP 宏体无 TR 正常。quickCell.ts 已按此实现。
 - **大网格零通量背景涂蓝（2026-08-15 用户实测）**：±2000 全域网格 4000 体素中 3576 个精确 0，色阶下限=0 时 0 值也被涂蓝、整块体积遮住模型。已修：色阶下限**自适应** = `minPositive×0.5`（min=0 时只隐零背景、正结构全保留；曾用 sqrt 规则切太狠致"只显示一个面"，已按用户反馈改）；注意纹理是线性归一化 u8，微小值会被量化成 0（minPositive 从 u8 字节重建，勿用原始文件最小值）。
 - **测试笔误陷阱（fixtures 实测）**：① valid_39.meshtal 的 tally number 是 **4 不是 1**（tallyNumber 须取自 parse 响应 `tallies[].number`，传错 → 500+hint 是 F4 守卫非 bug）；② preview-3d 单栅元 material="0" 是 void → `include_void=False` 跳过 → 空 stl_files（冒烟 deck 须用非 0 material）。
@@ -182,6 +183,8 @@
 
 | 日期 | 变更类型 | 改动描述 | 涉及 Agent |
 | :--- | :--- | :--- | :--- |
+| 2026-08-18 | 修复/前端 | **主 3D 预览坐标轴根因修复：去掉模型归一化（用户实测，commit 389374c，已随 v1.7.2 六次打包）**：用户报告“轴原点仍在体中心”且怀疑上层定义——根因确认在 `Preview3D.loadStlMeshes` 的**几何归一化**（`geometry.translate(-c.x,-c.y,-c.z)` 把模型平移到中心，轴画在场景原点=体中心）。修复：保留真实世界坐标不平移；取景框=模型∪原点（`frameBox.expandByPoint(0,0,0)`，坐标轴在原点须入画），`computeCameraParams(模型中心, 取景框尺寸)` 使相机同时看到模型与原点、target=模型中心（旋转围绕模型）；`modelCenter` 恒 0 → 截面平面坐标换算恒等（显示系=原始系）。cameraParams.test.ts +1（取景框含原点时相机能看到原点）。vitest 全量 **334/0** + tsc EXIT 0 | 前端 |
+| 2026-08-18 | 管理/构建 | **v1.7.2 六次打包部署（主预览去归一化进包，版本恒 1.7.2）**：门禁 pytest **512/0** + vitest **334/0** + tsc EXIT 0；vite build 3.12s；PyInstaller sidecar 25,114,215B；binaries 替换；tauri build 10.67s；**6.2 时效坑第六次命中**：手动覆盖 sidecar（21:31）后复核；部署 D:\MCNP\MCNP输入卡生成器（exe 6,436,352B/21:31 + python.exe + _internal 全套）；**冒烟**：xsdir-check loaded:true 7621 条 / RPP 角度卡 preview-3d count=1；⚠️ 冒烟窗口曾误被用户关闭（窗口关闭=后端一起退出，中断请求属正常）→ 改**直接跑 sidecar python.exe**（不弹 GUI）完成冒烟；环境已清理。commit **389374c**（2 文件 +27/-24，未 push） | 构建 |
 | 2026-08-18 | 修复/前端 | **快捷建栅元预览坐标轴固定在原点（用户实测，commit 06c63bb，已随 v1.7.2 五次打包）**：轴此前画在体中心（六面体=盒心、圆柱=底面心、球=球心）→ 数学/物理坐标系轴固定在世界原点 (0,0,0)；轴长按 `max(体尺寸/2, 体到原点距离×0.35, 0.5)` 自适应，体偏离原点时原点处的轴仍清晰可见。回归测试更新：体中心 (10,0,0) 时轴起点仍在原点、端点 (3.5,0,0)/(0,3.5,0)/(0,0,3.5)。vitest 全量 **333/0** + tsc EXIT 0 | 前端 |
 | 2026-08-18 | 管理/构建 | **v1.7.2 五次打包部署（坐标轴固定原点进包，版本恒 1.7.2）**：门禁 pytest **512/0** + vitest **333/0** + tsc EXIT 0；vite build 3.18s；PyInstaller sidecar 25,114,215B；binaries 替换；tauri build 11.94s；**6.2 时效坑第五次命中**：手动覆盖 sidecar 后复核；部署 D:\MCNP\MCNP输入卡生成器（exe 6,436,352B/21:21 + python.exe + _internal 全套）；部署前关闭运行中的旧版（用户打开测试中，文件锁目录）；**冒烟全过**：xsdir-check loaded:true 7621 条；环境已清理。commit **06c63bb**（2 文件 +19/-11，未 push） | 构建 |
 | 2026-08-18 | 修复/前端 | **快捷建栅元预览坐标轴标 X/Y/Z + 相机 Z 朝上（用户实测，commit a62a3cf，已随 v1.7.2 四次打包）**：① `quickCellPreview.addAxes` 在轴端点挂 X（红）/Y（绿）/Z（蓝）canvas 精灵标签（`makeLabel`，无 DOM 的 node 测试环境自动跳过；dispose 补贴图释放）。② 预览相机此前用 Three.js 默认 **Y 朝上**（电脑建模惯例）→ 改 `camera.up=(0,0,1)` **Z 朝上**，与主 3D 预览/体积窗口/PTRAC 窗口一致（数学/物理/MCNP 坐标系）。vitest 全量 **333/0**（已知 colorize 128³ 计时 flaky，隔离 18/18 绿）+ tsc EXIT 0 | 前端 |
