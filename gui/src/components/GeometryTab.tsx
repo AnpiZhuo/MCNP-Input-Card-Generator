@@ -6,6 +6,7 @@ import TextModeSection from "./TextModeSection";
 import DocViewer from "./DocViewer";
 import Preview3D from "./Preview3D";
 import StepImportDialog from "./StepImportDialog";
+import QuickCellDialog from "./QuickCellDialog";
 import FloatingDialog from "./FloatingDialog";
 import { useDeck } from "../utils/DeckContext";
 import { useFreecadStatus } from "../utils/useFreecadStatus";
@@ -14,6 +15,7 @@ import { openPreview3D, onMaterialChange } from "../utils/windows";
 import { apiUrl } from "../utils/api";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
 import { textToSection } from "../utils/sectionConvert";
+import type { QuickCellResult } from "../utils/quickCell";
 
 /** 下拉右缘防溢出：x 超过视口右缘时 clamp 到 viewportWidth - dropdownWidth - 20。
  *  对齐现行为（现 220 = 200 宽 + 20 边距）。viewportWidth 为 0/负数时 Math.min 自然兜底（返回 min(x, 负数)）。 */
@@ -48,6 +50,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const [trText, setTrText] = useState("");
   const [show3D, setShow3D] = useState(false);
   const [showStepDlg, setShowStepDlg] = useState(false);
+  const [quickCellOpen, setQuickCellOpen] = useState(false);
   // 栅元表材料列点击下拉：i=正在编辑材料号的栅元行索引，x/y=按钮位置（用于 portal 定点浮层）
   const [matPicker, setMatPicker] = useState<{ i: number; x: number; y: number } | null>(null);
   const fc = useFreecadStatus();
@@ -177,6 +180,31 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   };
   const handleRawCells = (t: string) => patch({ rawOverrides: { ...deck.rawOverrides, cells: t } });
 
+  // 快捷建栅元：文本模式禁用（弹窗警告）；生成结果追加到曲面卡/TR 卡/栅元列表
+  const openQuickCell = () => {
+    if (cellRawMode) {
+      alert("栅元当前处于文本模式。请先切回表单模式并检查内容，再使用「快捷建栅元」。");
+      return;
+    }
+    setQuickCellOpen(true);
+  };
+  const handleQuickCellGenerate = (result: QuickCellResult) => {
+    setSurfText((prev) => (prev.trim() ? prev.replace(/\s*$/, "") + "\n" : "") + result.surfacesText);
+    setTrText((prev) => (result.trCardsText ? (prev.trim() ? prev.replace(/\s*$/, "") + "\n" : "") + result.trCardsText : prev));
+    setCells((prev) => [
+      ...prev,
+      ...result.cells.map((c) => ({
+        kind: "cell" as const,
+        cell: {
+          num: c.num, mat: c.mat, density: c.density, surfaces: c.surfaces,
+          impN: c.impN, impP: c.impP, impE: c.impE,
+          vol: "", pwt: "", ext: "", fcl: "", u: "", fill: "", lat: "", trcl: "", tmp: "", otherParams: "",
+          render: true, comment: c.comment,
+        },
+      })),
+    ]);
+  };
+
   // 3D 预览里点击材料号改材料 → 更新本地 cells，local→deck 同步自动 patch
   const handleCellMaterialChange = (cellNum: string, newMat: string) => {
     setCells(prev => prev.map(c => c.kind === "cell" && c.cell.num === cellNum ? { ...c, cell: { ...c.cell, mat: newMat } } : c));
@@ -252,11 +280,20 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   return (
     <>
       {editCell !== null && cells[editCell]?.kind === "cell" && <CellEditDialog cell={cells[editCell].cell} onSave={(d) => { const c = [...cells]; c[editCell] = { kind: "cell", cell: d }; setCells(c); setEditCell(null); }} onClose={() => setEditCell(null)} availableMats={deck.materials} />}
+      {quickCellOpen && <QuickCellDialog
+        surfacesText={surfText}
+        trCardsText={trText}
+        cellNumbers={cells.filter((c) => c.kind === "cell").map((c) => parseInt(c.cell.num, 10) || 0)}
+        materials={(deck.materials || []).map((m) => ({ number: m.number, comment: m.comment, density: m.density }))}
+        onClose={() => setQuickCellOpen(false)}
+        onGenerate={handleQuickCellGenerate}
+      />}
       <div className="glass-card">
         <div className="card-header">
           <span className="card-title" style={{ flexShrink: 0 }}>曲面卡 &amp; TR 变换</span>
           <div style={{ flex: 1, display: "flex", justifyContent: "center" }}>
             <button className="btn btn-ghost btn-xs" onClick={() => setDoc({path:"/docs/MCNP6_曲面卡格式参考.md",title:"曲面卡格式参考"})}>📖 曲面参考</button>
+            <button className="btn btn-primary btn-xs" style={{ marginLeft: 8 }} onClick={openQuickCell}>⚡ 快捷建栅元</button>
           </div>
         </div>
         <div style={{display:"flex", gap:12}}>
