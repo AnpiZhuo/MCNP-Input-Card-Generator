@@ -78,4 +78,23 @@ describe("computeFramingBox（外壳≫体积时以体积为主）", () => {
     expect(box.min).toEqual([-1, -10, 0]);
     expect(box.max).toEqual([51, 10, 110]);
   });
+
+  it("退化体积盒（单点，min==max）不得劫持取景 → 并集（外壳可见）", () => {
+    // 用户实测 bug：点源 + PTRAC EVENT=src → 10 万事件全在 (0,0,10) 一点，
+    // 体积盒尺寸 0 → 比例 0<0.25 → 以单点盒取景 → 相机怼在点上、外壳被剔除、
+    // 拖动永远围着屏幕中央一个点转。
+    const shell: AABB = { min: [-350, -350, 0], max: [350, 350, 528] };
+    const point: AABB = { min: [0, 0, 10], max: [0, 0, 10] };
+    const box = computeFramingBox(shell, point);
+    expect(box.min).toEqual(shell.min);
+    expect(box.max).toEqual(shell.max);
+  });
+
+  it("退化体积盒（单轴线段，尺寸 0×0×L）不得劫持取景 → 并集", () => {
+    const shell: AABB = { min: [-100, -100, -100], max: [100, 100, 100] };
+    const line: AABB = { min: [0, 0, 0], max: [0, 0, 50] };
+    const box = computeFramingBox(shell, line);
+    expect(box.min).toEqual(shell.min);
+    expect(box.max).toEqual(shell.max);
+  });
 });

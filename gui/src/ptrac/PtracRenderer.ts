@@ -18,7 +18,7 @@ import {
   unionBoxes, boxCenter, boxSize, translateToCenter, computeFramingBox, applyOffsetToBox,
   type AABB, type Vec3, type Translatable,
 } from "../volume/alignWorld";
-import { trackColor, trackShade, normalizeEnergy01, energyRangeOfTracks } from "./trackColors";
+import { trackColor, trackShade, normalizeEnergy01, energyRangeOfTracks, particleGroup } from "./trackColors";
 import type { PtracTrack } from "../utils/api";
 
 export interface PtracCellView {
@@ -46,11 +46,6 @@ export interface PtracRendererHandle {
 
 function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v));
-}
-
-/** 粒子类型 → 显隐分组 key（n/p/e/other） */
-function particleGroup(particle: string): string {
-  return particle === "n" || particle === "p" || particle === "e" ? particle : "other";
 }
 
 /** 单条径迹 → LineSegments 几何（顶点色 = 类型色 × 能量深浅；世界坐标，待统一 offset） */
@@ -160,7 +155,7 @@ export function createPtracRenderer(canvas: HTMLCanvasElement, opts: PtracRender
 
   /* ── 径迹 LineSegments ── */
   const trackLines: THREE.LineSegments[] = [];
-  let pointMesh: THREE.Points | null = null; // 单点径迹（<2 点无法连线）→ 圆点
+  const pointMeshes: { mesh: THREE.Points; group: string }[] = []; // 单点径迹（<2 点无法连线）→ 按粒子分组圆点云
   let worldBox: AABB | null = null;
   let trackOpacity = 1;
   const particleVisible: Record<string, boolean> = { n: true, p: true, e: true, other: true };
@@ -174,8 +169,9 @@ export function createPtracRenderer(canvas: HTMLCanvasElement, opts: PtracRender
         l.visible = particleVisible[particleGroup(l.userData.particle)];
       }
     }
-    if (pointMesh) {
-      pointMesh.visible = highlightNps == null; // 单点云不做高亮（点极少，保持可见）
+    for (const pm of pointMeshes) {
+      // 单点云同样尊重粒子勾选（用户实测：取消勾选后点云仍显示）
+      pm.mesh.visible = highlightNps == null && particleVisible[pm.group];
     }
     markDirty();
   }
@@ -187,36 +183,44 @@ export function createPtracRenderer(canvas: HTMLCanvasElement, opts: PtracRender
       (l.material as THREE.Material).dispose();
     }
     trackLines.length = 0;
-    if (pointMesh) {
-      scene.remove(pointMesh);
-      pointMesh.geometry.dispose();
-      (pointMesh.material as THREE.Material).dispose();
-      pointMesh = null;
+    for (const pm of pointMeshes) {
+      scene.remove(pm.mesh);
+      pm.mesh.geometry.dispose();
+      (pm.mesh.material as THREE.Material).dispose();
     }
+    pointMeshes.length = 0;
   }
 
-  /** 单点径迹（<2 点）→ 圆点云几何；无则 null */
-  function buildPointGeometry(list: PtracTrack[]): THREE.BufferGeometry | null {
-    const singles: { x: number; y: number; z: number; particle: string }[] = [];
+  /** 单点径迹（<2 点）→ 按粒子显隐分组（n/p/e/other）的圆点云几何；无则 [] */
+  function buildPointGroups(list: PtracTrack[]): { group: string; geo: THREE.BufferGeometry }[] {
+    const buckets: Record<string, { x: number; y: number; z: number; particle: string }[]> = {};
     for (const t of list) {
       const pts = t.points || [];
-      if (pts.length === 1) {
-        singles.push({ x: Number(pts[0][0]), y: Number(pts[0][1]), z: Number(pts[0][2]), particle: t.particle });
-      }
+      if (pts.length !== 1) continue;
+      const p = pts[0];
+      const g = particleGroup(t.particle);
+      (buckets[g] = buckets[g] || []).push({
+        x: Number(p[0]), y: Number(p[1]), z: Number(p[2]), particle: t.particle,
+      });
     }
-    if (singles.length === 0) return null;
-    const positions = new Float32Array(singles.length * 3);
-    const colors = new Float32Array(singles.length * 3);
-    const fallback = trackShade(trackColor("other"), 0.5);
-    singles.forEach((s, i) => {
-      positions[i * 3] = s.x; positions[i * 3 + 1] = s.y; positions[i * 3 + 2] = s.z;
-      const c = new THREE.Color(trackShade(trackColor(s.particle), 0.2) || fallback);
-      colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
-    });
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-    return geo;
+    const out: { group: string; geo: THREE.BufferGeometry }[] = [];
+    for (const g of ["n", "p", "e", "other"] as const) {
+      const singles = buckets[g] || [];
+      if (singles.length === 0) continue;
+      const positions = new Float32Array(singles.length * 3);
+      const colors = new Float32Array(singles.length * 3);
+      const fallback = trackShade(trackColor("other"), 0.5);
+      singles.forEach((s, i) => {
+        positions[i * 3] = s.x; positions[i * 3 + 1] = s.y; positions[i * 3 + 2] = s.z;
+        const c = new THREE.Color(trackShade(trackColor(s.particle), 0.2) || fallback);
+        colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+      });
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+      out.push({ group: g, geo });
+    }
+    return out;
   }
 
   /* ── 统一归一化对齐（alignWorld 复用）：外壳与径迹共 offset ──
@@ -243,7 +247,7 @@ export function createPtracRenderer(canvas: HTMLCanvasElement, opts: PtracRender
       ...shellMeshes.map((m) => m.geometry),
       ...trackLines.map((l) => l.geometry),
     ];
-    if (pointMesh) geos.push(pointMesh.geometry);
+    for (const pm of pointMeshes) geos.push(pm.mesh.geometry);
     const offset = translateToCenter(geos, union);
     // A2.1 同款自动取景：外壳≫径迹时以径迹为主；相机用 offset 后的场景坐标
     const framing = computeFramingBox(shellBox, worldBox ?? shellBox!);
@@ -327,9 +331,8 @@ export function createPtracRenderer(canvas: HTMLCanvasElement, opts: PtracRender
         scene.add(line);
         trackLines.push(line);
       }
-      // 单点径迹（<2 点无法连线）→ 圆点云，避免文件稀疏时画布空白（用户实测反馈）
-      const pGeo = buildPointGeometry(list);
-      if (pGeo) {
+      // 单点径迹（<2 点无法连线）→ 按粒子分组圆点云，避免文件稀疏时画布空白（用户实测反馈）
+      for (const pg of buildPointGroups(list)) {
         const pMat = new THREE.PointsMaterial({
           vertexColors: true,
           size: 6,
@@ -338,15 +341,18 @@ export function createPtracRenderer(canvas: HTMLCanvasElement, opts: PtracRender
           opacity: trackOpacity,
           depthTest: true,
         });
-        pointMesh = new THREE.Points(pGeo, pMat);
-        scene.add(pointMesh);
+        const mesh = new THREE.Points(pg.geo, pMat);
+        scene.add(mesh);
+        pointMeshes.push({ mesh, group: pg.group });
       }
       // 已对齐（首帧后）→ 新径迹直接用已存 offset 平移；否则首帧统一对齐
       if (alignedOffset) {
         for (const l of trackLines) {
           l.geometry.translate(alignedOffset[0], alignedOffset[1], alignedOffset[2]);
         }
-        pointMesh?.geometry.translate(alignedOffset[0], alignedOffset[1], alignedOffset[2]);
+        for (const pm of pointMeshes) {
+          pm.mesh.geometry.translate(alignedOffset[0], alignedOffset[1], alignedOffset[2]);
+        }
       } else {
         alignAndFrame();
       }
@@ -379,6 +385,12 @@ export function createPtracRenderer(canvas: HTMLCanvasElement, opts: PtracRender
         mat.opacity = trackOpacity;
         mat.needsUpdate = true;
       }
+      for (const pm of pointMeshes) {
+        const mat = pm.mesh.material as THREE.PointsMaterial;
+        mat.transparent = trackOpacity < 1;
+        mat.opacity = trackOpacity;
+        mat.needsUpdate = true;
+      }
       markDirty();
     },
     setParticleVisible(particle: string, vis: boolean) {
@@ -401,6 +413,10 @@ export function createPtracRenderer(canvas: HTMLCanvasElement, opts: PtracRender
       trackLines.forEach((l) => {
         l.geometry.dispose();
         (l.material as THREE.Material).dispose();
+      });
+      pointMeshes.forEach((pm) => {
+        pm.mesh.geometry.dispose();
+        (pm.mesh.material as THREE.Material).dispose();
       });
       scene.clear();
     },

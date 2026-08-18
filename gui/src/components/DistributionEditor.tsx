@@ -69,6 +69,10 @@ export default function DistributionEditor({ entry, onChange, onDelete }: Props)
       React.createElement("span", { style: { flex: 1 } }),
       React.createElement("button", { className: "btn btn-danger btn-xs", onClick: onDelete, title: "删除分布" }, "×"),
     ),
+    // SCn 源注释（只读展示，随条目往返保留）
+    entry.sc
+      ? React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", margin: "4px 0 2px" } }, "📝 " + entry.sc)
+      : null,
     // SI
     secTitle("SI 源信息"),
     React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-start" } },

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   TRACK_COLORS, TRACK_FALLBACK_COLOR, TRACK_PARTICLE_LABELS, TRACK_LEGEND,
   SHADE_LIGHT, SHADE_DARK,
-  trackColor, trackShade, normalizeEnergy01,
+  trackColor, trackShade, normalizeEnergy01, allPointsCoincident, particleGroup,
 } from "../../src/ptrac/trackColors";
 
 /**
@@ -83,5 +83,41 @@ describe("能量归一化（normalizeEnergy01）", () => {
     expect(normalizeEnergy01(-5, { min: 0, max: 1 })).toBe(0);
     expect(normalizeEnergy01(5, { min: 5, max: 5 })).toBe(0);
     expect(normalizeEnergy01(NaN, { min: 0, max: 1 })).toBe(0);
+  });
+});
+
+describe("allPointsCoincident（全部径迹点重合检测）", () => {
+  const mk = (points: number[][]): { points: number[][] }[] => [{ points }];
+
+  it("所有点同一位置 → 返回该坐标（点源 + EVENT=src 场景）", () => {
+    const tracks = [
+      { points: [[0, 0, 10, 0.6, 0.2, 0.5, 1, 1, 0]] },
+      { points: [[0, 0, 10, -0.2, 0.8, 0.1, 1, 1, 0]] },
+    ];
+    expect(allPointsCoincident(tracks as any)).toEqual([0, 0, 10]);
+  });
+
+  it("存在不同位置 → null", () => {
+    const tracks = mk([[0, 0, 10], [0, 0, 11]]);
+    expect(allPointsCoincident(tracks as any)).toBeNull();
+  });
+
+  it("空列表 / 无点 → null", () => {
+    expect(allPointsCoincident([])).toBeNull();
+    expect(allPointsCoincident([{ points: [] }] as any)).toBeNull();
+  });
+});
+
+describe("particleGroup（粒子 → 显隐分组，含 unknown → other）", () => {
+  it("n/p/e 归各自分组", () => {
+    expect(particleGroup("n")).toBe("n");
+    expect(particleGroup("p")).toBe("p");
+    expect(particleGroup("e")).toBe("e");
+  });
+
+  it("未知/空/数字码 → other（无勾选框的兜底组）", () => {
+    expect(particleGroup("")).toBe("other");
+    expect(particleGroup("2")).toBe("other");
+    expect(particleGroup("photon")).toBe("other");
   });
 });

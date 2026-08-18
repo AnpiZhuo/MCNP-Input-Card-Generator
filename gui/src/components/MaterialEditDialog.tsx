@@ -70,6 +70,36 @@ export function resolveZaid(ed: { el: string; mass: string }): string | null {
   return buildZaid(el, ed.mass);
 }
 
+/**
+ * 剥 ZAID 截面库后缀（所见即所得：导入时在【数据层】剥掉，而不是只剥显示层）。
+ * 规则：表单只表示 元素+质量数；后缀一律丢弃（用户手填截面库走材料卡「其他」框 nlib=）。
+ */
+export function stripZaidSuffix(zaid: string): string {
+  if (!zaid) return zaid;
+  var i = zaid.indexOf(".");
+  return i >= 0 ? zaid.slice(0, i) : zaid;
+}
+
+/**
+ * 导入材料归一化：核素行 zaid 剥后缀（.50d/.40c/.60c → 裸 ZAID），
+ * raw 行（#ifdef 等）原样；rows/nuclides 两个别名键同步归一。
+ * 保证「表单里看到什么，生成就出什么」。
+ */
+export function normalizeImportedMaterials(materials: any[]): any[] {
+  return (materials || []).map((m: any) => {
+    const out: any = { ...m };
+    for (const key of ["rows", "nuclides"]) {
+      if (Array.isArray(m[key])) {
+        out[key] = m[key].map((r: any) =>
+          r && r.kind === "nuclide" && typeof r.zaid === "string"
+            ? { ...r, zaid: stripZaidSuffix(r.zaid) }
+            : r);
+      }
+    }
+    return out;
+  });
+}
+
 /** 化学式份额模式：weight=质量份额（负号），atomic=原子份额（正号） */
 export type ShareMode = "weight" | "atomic";
 /** 全部合法份额模式（UI 切换与测试穷举共用） */

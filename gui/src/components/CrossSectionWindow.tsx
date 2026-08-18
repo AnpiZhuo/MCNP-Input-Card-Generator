@@ -8,6 +8,7 @@ import React, { useState } from "react";
 import CrossSectionView from "./CrossSectionView";
 import { readCrossSectionData, closeCurrentWindow } from "../utils/windows";
 import { apiUrl } from "../utils/api";
+import { offsetPlaneForStl } from "../three/planeOffset";
 
 export default function CrossSectionWindow() {
   const [init] = useState(() => readCrossSectionData());
@@ -23,10 +24,12 @@ export default function CrossSectionWindow() {
       : (init.cells || [])
           .filter((c: any) => String(c.mat).split(" ")[0] !== "0")
           .map((c: any) => parseInt(c.num) || 0);
+    // 预览显示坐标系 → 后端原始 STL 坐标系（与 3D 预览主窗口同一换算，防切位偏移）
+    const planeRaw = offsetPlaneForStl(newPlane, init.center ?? { x: 0, y: 0, z: 0 });
     fetch(apiUrl("/api/cross-section"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cellNums: cellNums, plane: newPlane }),
+      body: JSON.stringify({ cellNums: cellNums, plane: planeRaw }),
     }).then((r) => r.json()).then((j) => {
       if (j.slices && j.slices.length > 0) setSlices(j.slices);
       else setSlices(null);

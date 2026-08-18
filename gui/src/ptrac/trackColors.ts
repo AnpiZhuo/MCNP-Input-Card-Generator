@@ -41,6 +41,11 @@ export function trackColor(particle: string): string {
   return TRACK_COLORS[particle] ?? TRACK_FALLBACK_COLOR;
 }
 
+/** 粒子类型 → 显隐分组 key（n/p/e/other；unknown 归 other） */
+export function particleGroup(particle: string): "n" | "p" | "e" | "other" {
+  return particle === "n" || particle === "p" || particle === "e" ? particle : "other";
+}
+
 /** 能量归一化到 [0,1]（全局 min/max；退化区间/非有限值 → 0） */
 export function normalizeEnergy01(energy: number, range: { min: number; max: number }): number {
   if (!Number.isFinite(energy) || !Number.isFinite(range.min) || !Number.isFinite(range.max)) return 0;
@@ -67,6 +72,29 @@ export function energyRangeOfTracks(tracks: { points: number[][] }[]): { min: nu
   }
   if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return { min: 0, max: 1 };
   return { min, max };
+}
+
+/**
+ * 全体径迹点是否完全重合于同一坐标：是 → 返回 [x, y, z]，否 → null。
+ * 点源 + PTRAC EVENT=src 的典型产物：10 万事件全在出生点，视图只剩一个点——
+ * 供 PtracWindow 统计区出提示（建议 EVENT=sur,col 或体源）。
+ */
+export function allPointsCoincident(tracks: { points: number[][] }[]): [number, number, number] | null {
+  let anchor: [number, number, number] | null = null;
+  for (const t of tracks || []) {
+    for (const p of t.points || []) {
+      const x = Number(p[0]);
+      const y = Number(p[1]);
+      const z = Number(p[2]);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+      if (anchor == null) {
+        anchor = [x, y, z];
+        continue;
+      }
+      if (x !== anchor[0] || y !== anchor[1] || z !== anchor[2]) return null;
+    }
+  }
+  return anchor;
 }
 
 /** hex（#rrggbb）→ { h, s, l }（0..1） */

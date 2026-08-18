@@ -74,6 +74,8 @@ export async function openCrossSection(data: {
   cells: { num: string; mat: string; comment?: string }[];
   /** 勾选且非真空的栅元号（截面窗口步进时复用） */
   cellNums: number[];
+  /** 原始 STL 坐标系模型中心（截面窗口步进时做显示系→原始系平面换算） */
+  center?: { x: number; y: number; z: number };
 }): Promise<boolean> {
   try {
     localStorage.setItem(KEY_CROSS, JSON.stringify(data));
@@ -149,6 +151,7 @@ export function readCrossSectionData(): {
   slices: any[]; plane: { A: number; B: number; C: number; D: number };
   cells: { num: string; mat: string; comment?: string }[];
   cellNums?: number[];
+  center?: { x: number; y: number; z: number };
 } | null {
   try {
     const raw = localStorage.getItem(KEY_CROSS);

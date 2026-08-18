@@ -1052,3 +1052,15 @@ three r160 的 WebGLProgram 对 **RawShaderMaterial 会前置 `#define SHADER_TY
 ## 侧边栏版本号显示（2026-08-16，用户需求）
 
 - `Sidebar.tsx` 悬停展开时应用图标右侧显示 `v{package.json 版本}`（单一来源，与打包四处版本同步）；`gui/test/sidebarVersion.test.tsx` +2。
+
+## 材料导入所见即所得：数据层剥 ZAID 库后缀（2026-08-16，用户规则"丢后缀是对的，除非手填"）
+- 问题：导入后材料表单显示 元素+质量数（无后缀），但 deck 数据里 MaterialRow.zaid 仍带 .50d/.40c → 生成输出带后缀 → 所见非所得。
+- 修法（MaterialEditDialog.tsx）：新增纯函数 stripZaidSuffix（截到第一个 "." 前）+ 
+ormalizeImportedMaterials（核素行 zaid 剥后缀，raw 行原样，rows/nuclides 双键同步）；App.tsx importInpText 导入映射处套用（文件对话框/拖放/粘贴三条路径同一点收敛）。
+- 规则固化：表单只表示 元素+质量数；手填截面库走材料卡「其他」框 nlib=（现状即正确，不新增后缀输入框）。后端解析器不动（引擎保真不变）。
+- 测试：gui/test/zaidSplit.test.ts +5（stripZaidSuffix 2 + normalizeImportedMaterials 3），先红后绿；vitest **298/0** + tsc EXIT 0；当日重打包部署 v1.7.1（仅前端，sidecar 未重打），部署冒烟探活 loaded:true。
+
+## PTRAC 视图退化取景修复（2026-08-16，用户实测 Practice3「一个蓝点 + 拖动围点转」）
+- 根因：点源 + PTRAC EVENT=src → 全部事件重合于出生点（数据层，非 bug）；但 computeFramingBox 对零尺寸体积盒比例恒 0<0.25 → 以单点盒取景 → 相机怼点、外壳被剔除、OrbitControls 围点转（渲染层真 bug）。
+- 修复：alignWorld.computeFramingBox 退化盒守卫（volMaxDim<=0 → 并集取景）；trackColors 新增 allPointsCoincident 纯函数；PtracWindow 统计区新增重合点橙色提示（建议 EVENT=sur,col 或体源）。
+- 测试：framingBox.test.ts +2（单点/单线段退化盒不劫持取景）、trackColors.test.ts +3（allPointsCoincident）；vitest 303/0 + tsc EXIT 0；当日重打包部署 v1.7.1。

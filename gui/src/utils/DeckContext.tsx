@@ -36,6 +36,7 @@ export interface DistEntry {
   sp: SpEntry;
   sb: SbEntry | null;
   ds: DsEntry | null;
+  sc?: string;               // SCn 源注释卡文字（可选，导入自 inp 时携带）
   auto: boolean;
 }
 export type SourceTemplateType =

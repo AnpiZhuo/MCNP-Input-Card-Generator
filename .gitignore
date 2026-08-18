@@ -33,6 +33,9 @@ gui/src-tauri/python-x86_64-pc-windows-msvc.exe
 Thumbs.db
 .DS_Store
 
+# Scratch
+.tmp/
+
 # IDE
 .vscode/
 .idea/

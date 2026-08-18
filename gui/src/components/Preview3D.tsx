@@ -44,6 +44,8 @@ import { computeCameraParams } from "../three/cameraParams";
 import { buildCellMaterial, type TransparentMode } from "../three/cellMaterial";
 import { createRenderLoop } from "../three/renderGate";
 import { createTickGrid } from "../three/TickGrid";
+import { AXIS_CONFIG } from "../three/axisConfig";
+import { offsetPlaneForStl } from "../three/planeOffset";
 
 /* ---- plane eq formatting/parsing ---- */
 function planeToStr(plane: any): string {
@@ -133,18 +135,15 @@ function initScene(
   scene.add(dirlight2);
 
   /* ---- 动态数轴线（正负双向无限延伸） ---- */
-  const AXIS_COLORS = [0xff4444, 0x44ff44, 0x4488ff];
-  const AXIS_LABELS = ["X", "Y", "Z"];
+  // 轴顺序单一事实来源 = AXIS_CONFIG（X 红 / Y 绿 / Z 蓝；2026-08-18 修复 Y/Z 互换）
+  const AXIS_COLORS = AXIS_CONFIG.map((a) => a.color);
+  const AXIS_LABELS = AXIS_CONFIG.map((a) => a.label);
   const AXIS_EXTENT = sceneExtent * 3;
 
   // 三条彩色轴线（从 -extent 到 +extent）；标签存数组以便 updateAxes 重定位
   const axisLines: THREE.Line[] = [];
   const axisLabels: { sprite: THREE.Sprite; dir: THREE.Vector3; sign: number }[] = [];
-  const axisDirs = [
-    new THREE.Vector3(1, 0, 0),
-    new THREE.Vector3(0, 0, 1),
-    new THREE.Vector3(0, 1, 0),
-  ];
+  const axisDirs = AXIS_CONFIG.map((a) => new THREE.Vector3(...a.dir));
   axisDirs.forEach((dir, ai) => {
     const pts = [dir.clone().multiplyScalar(-AXIS_EXTENT), dir.clone().multiplyScalar(AXIS_EXTENT)];
     const geo = new THREE.BufferGeometry().setFromPoints(pts);
@@ -253,6 +252,8 @@ function initScene(
   /* 创建栅元几何体（带 LOD 动态细节） */
   // 不创建模拟几何，等 STL 数据到达后由 loadStlMeshes 加载
   var meshes: THREE.Object3D[] = [];
+  // 原始 STL 坐标系的模型中心（loadStlMeshes 归一化平移时记录，供截面平面坐标换算）
+  const modelCenter = { x: 0, y: 0, z: 0 };
 
   function loadStlMeshes(stlData: any, cellViews: CellView[]) {
     // 清掉旧网格，避免重复加载产生副本（否则 setVisible 只隐藏第一个，副本残留）
@@ -297,6 +298,9 @@ function initScene(
       var totalBox = new THREE.Box3();
       for (var _b of rawBounds) totalBox.union(_b);
       var c = totalBox.getCenter(new THREE.Vector3());
+      modelCenter.x = c.x;
+      modelCenter.y = c.y;
+      modelCenter.z = c.z;
       for (var _m of meshes) {
         // 平移先于 computeBoundingBox（顺序关键：renderOrder 排序用平移后的 bbox）
         (_m as THREE.Mesh).geometry.translate(-c.x, -c.y, -c.z);
@@ -398,6 +402,7 @@ function initScene(
   return {
     loadStlMeshes: loadStlMeshes,
     updateAxes: updateAxes,
+    modelCenter: modelCenter,
     setVisible(index: number, vis: boolean) {
       for (var _mi = 0; _mi < meshes.length; _mi++) {
         if (meshes[_mi].userData.index === index) { meshes[_mi].visible = vis; markDirty(); return; }
@@ -487,12 +492,15 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       .filter(function(_: any, i: number) { return cellViews[i]?.visible !== false; })
       .filter(function(c: any) { return String(c.mat).split(" ")[0] !== "0"; })  // 排除真空
       .map(function(c: any) { return parseInt(c.num) || 0; });
+    // 预览显示坐标系 → 后端原始 STL 坐标系（模型中心平移的逆变换）
+    var center = ctrlRef.current?.modelCenter ?? { x: 0, y: 0, z: 0 };
+    var planeRaw = offsetPlaneForStl(newPlane, center);
     fetch(apiUrl("/api/cross-section"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         cellNums: cellNums,
-        plane: newPlane,
+        plane: planeRaw,
       }),
     }).then(function(r: Response) { return r.json(); }).then(function(j: any) {
       if (j.slices && j.slices.length > 0) {
@@ -504,6 +512,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
             return { num: c.num, mat: c.mat, comment: c.comment || "" };
           }),
           cellNums: cellNums,
+          center: center,
         }).then(function(opened) {
           if (!opened) setCsSlices(j.slices);
         });

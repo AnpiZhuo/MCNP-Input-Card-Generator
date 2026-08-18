@@ -10,6 +10,7 @@ import { generateInp } from "./utils/dataCollector";
 import { currentWindowLabel, clearStlSession } from "./utils/windows";
 
 import { DeckProvider, useDeck } from "./utils/DeckContext";
+import { normalizeImportedMaterials } from "./components/MaterialEditDialog";
 import { buildGridsFromTally, buildTallyFromGrids } from "./utils/gridState";
 import { buildFmeshPayload, fmeshDefsToRows } from "./volume/fmeshState";
 import { startPythonBackend, stopPythonBackend } from "./utils/backend";
@@ -163,7 +164,7 @@ function AppInner() {
       const d = j.deck;
       loadDeck({
         basic: d.basic || {}, surfaces: d.surfaces || '', tr_cards: d.tr_cards || '',
-        cells: d.cells || [], materials: d.materials || [],
+        cells: d.cells || [], materials: normalizeImportedMaterials(d.materials || []),
         sources: d.sources || [], tallies: d.tallies || [],
         tally: {
           ...(d.tally || {}),

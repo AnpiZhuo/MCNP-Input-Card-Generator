@@ -111,13 +111,13 @@ def _parse_sisp_structured(sisp_lines: list[str]) -> list[dict]:
         if "$" in s:
             s = s.split("$", 1)[0].strip()
         upper = s.split()[0].upper() if s.split() else ""
-        m = re.match(r'^(SI|SP|SB|DS)(\d+)', upper)
+        m = re.match(r'^(SI|SP|SB|DS|SC)(\d+)', upper)
         if not m:
             continue
         kind, num = m.group(1), int(m.group(2))
         rest = s[m.end():].strip()
         if num not in entries:
-            entries[num] = {"id": num, "paramRef": "", "si": None, "sp": None, "sb": None, "ds": None, "auto": False}
+            entries[num] = {"id": num, "paramRef": "", "si": None, "sp": None, "sb": None, "ds": None, "sc": None, "auto": False}
             order.append(num)
         e = entries[num]
         toks = rest.split()
@@ -153,6 +153,9 @@ def _parse_sisp_structured(sisp_lines: list[str]) -> list[dict]:
                 ds["param"] = toks[0]
                 ds["distributionIds"] = toks[1:]
             e["ds"] = ds
+        elif kind == "SC":
+            # SCn 源注释卡（源分布卡说明.md §三）——挂到对应分布条目，生成器回放 SC{idx}
+            e["sc"] = rest
     return [entries[n] for n in order]
 
 
@@ -171,7 +174,7 @@ def _merge_sisp_entry(existing_json: str, new_entry: dict) -> str:
             acc = {}
     eid = new_entry.get("id")
     if eid in acc:
-        for k in ("si", "sp", "sb", "ds"):
+        for k in ("si", "sp", "sb", "ds", "sc"):
             if new_entry.get(k) is not None:
                 acc[eid][k] = new_entry[k]
     else:
@@ -391,9 +394,14 @@ def _parse_material(parts: list[str], m_str: str) -> MaterialData:
             i += 1
             continue
 
-        # 单独的关键词（无 =）
+        # 单独的关键词（无 =）：MCNP 允许空格写法 `nlib .03d`（inp02.i m3 实卡），
+        # 其后 token 若非 ZAID 形态（3 位以上数字开头）则作为该关键词的值一并收入
+        # options；否则（关键词后直接跟核素对）只收关键词本身，防止吞掉真 ZAID。
         if upper in ("GAS", "PLIB", "ESTEP", "COND", "HLIB", "NLIB", "ELIB"):
             options_parts.append(token)
+            if i + 1 < len(parts) and not re.match(r'^\d{3,}', parts[i + 1]):
+                options_parts.append(parts[i + 1])
+                i += 1
             i += 1
             continue
 
@@ -736,7 +744,21 @@ def parse_sdef_fields(parts: list[str]) -> dict:
                 if len(vals) >= 3: result["sdef_pos_z"] = vals[2]
                 ti += len(vals)
                 continue
-            elif upper in ("PAR", "SUR", "NRM", "TR", "CCC", "ARA", "RATE"):
+            elif upper in ("X", "Y", "Z"):
+                # 裸 X/Y/Z：1~3 值或 D 引用（inp02.i `x d1` 实卡）——遇已知 SDEF 关键字停靠
+                ti += 1
+                cont = _collect_multi_val(tokens, ti)
+                real = []
+                for c in cont[:3]:
+                    if c.upper() in field_map or c.upper() in ("EFF", "POS"):
+                        break
+                    real.append(c)
+                if real:
+                    result[field_map[upper]] = " ".join(real)
+                    ti += len(real)
+                continue
+            elif upper in ("PAR", "SUR", "NRM", "TR", "CCC", "ARA", "RATE",
+                           "CEL", "ERG", "WGT", "DIR", "TME", "RAD", "EXT"):
                 ti += 1
                 if ti < len(tokens) and upper in field_map:
                     result[field_map[upper]] = tokens[ti]
@@ -1125,13 +1147,14 @@ def parse_data_cards(data_lines: list[str]) -> dict:
             # 解析分布源字段
             sdef_dict = parse_sdef_fields(parts)
             result.update(sdef_dict)
-            # 收集后续 SI/SP/SB/DS 行
+            # 收集后续 SI/SP/SB/DS/SC 行（SCn 源注释卡属于分布家族，不得断链）
             i += 1
             sisp_lines = []
             while i < len(data):
                 next_first = data[i].strip().split()[0].upper() if data[i].strip().split() else ""
                 if (next_first.startswith("SI") or next_first.startswith("SP")
-                        or next_first.startswith("SB") or next_first.startswith("DS")):
+                        or next_first.startswith("SB") or next_first.startswith("DS")
+                        or next_first.startswith("SC")):
                     sisp_lines.append(data[i].strip())
                     i += 1
                 else:
@@ -1391,6 +1414,24 @@ def parse_data_cards(data_lines: list[str]) -> dict:
             else:
                 result["other_cards"].append(raw_line)
             i += 1
+        elif first == "THTME":
+            # THTME 热中子时间截止卡：主体 + 紧随的 `#` 表头行 + 数值表行
+            # （首列=材料号的缩进行）按原文整块保留进 other_cards。
+            # 若无本分支，`#` 行会被条件编译分支塞进 current_mat、数值行会被
+            # 裸核素行分支当 ZAID/份额吸收 → round-trip 表被拆散进材料块。
+            result["other_cards"].append(raw_line)
+            i += 1
+            while i < len(data):
+                ln = data[i].strip()
+                if not ln or re.match(r'^C\s', ln, re.IGNORECASE):
+                    break
+                if (ln.startswith("#")
+                        or ln.split()[0].isdigit()
+                        or len(data[i]) - len(data[i].lstrip()) >= 5):
+                    result["other_cards"].append(data[i].rstrip())
+                    i += 1
+                else:
+                    break
         elif first in _KNOWN_OTHER_CARDS or _TALLY_MODIFIER_RE.match(first):
             # 标准 MCNP 卡片但无对应 UI，保留原样到 other_cards
             result["other_cards"].append(raw_line)

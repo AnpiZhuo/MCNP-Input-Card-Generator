@@ -14,7 +14,7 @@ import { getMatColor } from "../utils/materialColors";
 import { DEFAULT_SHELL_OPACITY } from "../three/cellMaterial";
 import { createPtracRenderer, type PtracRendererHandle } from "./PtracRenderer";
 import { sampleTracks } from "./decimateTracks";
-import { TRACK_LEGEND, energyRangeOfTracks } from "./trackColors";
+import { TRACK_LEGEND, TRACK_COLORS, TRACK_PARTICLE_LABELS, energyRangeOfTracks, allPointsCoincident } from "./trackColors";
 
 interface BridgeData {
   stlData: Record<string, string>;
@@ -125,6 +125,7 @@ export default function PtracWindow() {
   }
 
   const displayedCount = sampleTracks(tracksRef.current, SAMPLE_STEPS[sampleIdx]).length;
+  const coincidentPos = tracksRef.current.length > 0 ? allPointsCoincident(tracksRef.current) : null;
 
   return (
     <div style={containerStyle}>
@@ -156,6 +157,16 @@ export default function PtracWindow() {
             <div style={{ color: "var(--text-tertiary)" }}>解析中…</div>
           )}
           <div style={{ color: "var(--text-tertiary)" }}>显示 {displayedCount}/{trackCount} 条径迹</div>
+          {stats && stats.particles && (
+            <div style={{ display: "flex", gap: 10, marginTop: 3 }}>
+              {(["n", "p", "e"] as const).map((k) => (
+                <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 2, background: TRACK_COLORS[k], display: "inline-block", flexShrink: 0 }} />
+                  <span style={{ color: "var(--text-secondary)" }}>{TRACK_PARTICLE_LABELS[k]} {stats.particles[k]}</span>
+                </span>
+              ))}
+            </div>
+          )}
           {trackCount === 0 && stats && (
             <div style={{ marginTop: 4, padding: "6px 8px", background: "rgba(255,152,0,0.12)", borderRadius: 6, color: "#ff9800", lineHeight: 1.5 }}>
               ⚠ 该 PTRAC 文件没有径迹（0 个事件）。通常是 PTRAC 卡的 TYPE 与问题 MODE 不匹配（如 MODE P 却写 TYPE=E/N），或 WRITE/MAX 过滤太严。检查输入卡后重新运行 MCNP。
@@ -164,6 +175,11 @@ export default function PtracWindow() {
           {trackCount > 0 && tracksRef.current.every((t) => (t.points?.length || 0) < 2) && (
             <div style={{ marginTop: 4, padding: "6px 8px", background: "rgba(255,152,0,0.12)", borderRadius: 6, color: "#ff9800", lineHeight: 1.5 }}>
               ⚠ 每条径迹仅 1 个点，无法连线（可能 PTRAC 卡过滤过严：TYPE 与 MODE 冲突、MAX 过小或运行在 nps=1 提前终止）。检查输入卡后重新运行 MCNP。
+            </div>
+          )}
+          {coincidentPos && (
+            <div style={{ marginTop: 4, padding: "6px 8px", background: "rgba(255,152,0,0.12)", borderRadius: 6, color: "#ff9800", lineHeight: 1.5 }}>
+              ⚠ 所有径迹点重合于 ({coincidentPos.map((v) => fmt(v)).join(", ")})：点源 + EVENT=src 只记每粒子的出生点。想看到真实径迹，请把 PTRAC 卡改为 EVENT=sur,col（记录面穿越/碰撞）或把源改成体源，然后重新运行 MCNP。
             </div>
           )}
           {trackCount > 0 && stats && stats.events > trackCount * 2 && (
@@ -188,6 +204,9 @@ export default function PtracWindow() {
               <span style={{ color: "var(--text-secondary)" }}>{l.label}</span>
             </label>
           ))}
+          <div style={{ marginTop: 6, padding: "5px 8px", background: "rgba(255,255,255,0.05)", borderRadius: 6, color: "var(--text-tertiary)", lineHeight: 1.5 }}>
+            勾选只控制「粒子径迹」；几何外壳是材料色（如铅盖板为青色），由下方「显示几何外壳」开关控制。
+          </div>
         </div>
 
         {/* 能量深浅图例 */}

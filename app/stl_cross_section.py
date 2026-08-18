@@ -7,6 +7,12 @@
 
 STL 是三角网格：每个三角形与平面相交最多得一条线段；全部线段按端点
 相邻连接成闭合环（截面是封闭曲线）。真空/未勾选栅元的 STL 不传入。
+
+2026-08-18 修复（用户实测：3D 预览切截面部分实体切错）：
+1. 切割平面与实体面重合（face-coincident）时，on-plane 顶点不再被跳过，
+   共面三角面贡献其外轮廓边，返回正确的面轮廓环；
+2. 环连接改为容差吸附邻接表走环：多环截面（带孔/多连通实体）不会因
+   最近点贪心而被串接成错误折线。
 """
 import struct
 import numpy as np
@@ -30,10 +36,20 @@ def parse_stl_file(path: str) -> np.ndarray:
     return parse_binary_stl(data)
 
 
-def slice_stl_segments(tris: np.ndarray, A: float, B: float, C: float, D: float) -> list:
-    """平面 Ax+By+Cz=D 与每个三角形求交 → 线段列表 [(p0, p1), ...]
+def _scale_epsilon(tris: np.ndarray) -> float:
+    """按网格尺度取“在平面上”的容差（相对 1e-6，下限 1e-9）。"""
+    if tris.size == 0:
+        return 1e-9
+    return max(1e-9, 1e-6 * max(1.0, float(np.max(np.abs(tris)))))
 
-    每个三角形 3 条边，符号变化的边产生交点；0 或 2 个交点组成 1 条线段。
+
+def slice_stl_segments(tris: np.ndarray, A: float, B: float, C: float, D: float) -> list:
+    """平面 Ax+By+Cz=D 与三角形网格求交 → 线段列表 [(p0, p1), ...]
+
+    - 跨平面三角形：符号变化的边产生交点；恰在平面上的顶点也作为交点
+      （此前 `sg[a] == 0: continue` 会丢掉面重合切割的全部线段）；
+    - 整面落在平面上的共面三角形：只贡献出现 1 次的外轮廓边（内部共享
+      边出现 2 次，丢弃），再经 _join_loops 全局去重。
     """
     nrm = np.array([A, B, C], dtype=np.float64)
     nl = np.linalg.norm(nrm)
@@ -41,77 +57,118 @@ def slice_stl_segments(tris: np.ndarray, A: float, B: float, C: float, D: float)
         return []
     nv = nrm / nl
     dist = tris @ nv - (D / nl)  # (N,3) 有符号距离
-    sgn = np.sign(dist)
+    eps = _scale_epsilon(tris)
+    sgn = np.where(dist > eps, 1, np.where(dist < -eps, -1, 0))  # 1 / -1 / 0(on)
     segs: list = []
+    coplanar_edge_count: dict = {}
     for i in range(tris.shape[0]):
         d = dist[i]
         sg = sgn[i]
+        tri = tris[i]
+        if sg[0] == 0 and sg[1] == 0 and sg[2] == 0:
+            # 面整体落在切割平面上：累计共面边（外轮廓出现 1 次）
+            for a in range(3):
+                b = (a + 1) % 3
+                key = (tuple(tri[a]), tuple(tri[b]))
+                if key[0] > key[1]:
+                    key = (key[1], key[0])
+                coplanar_edge_count[key] = coplanar_edge_count.get(key, 0) + 1
+            continue
         ints = []
         for a in range(3):
             b = (a + 1) % 3
-            if sg[a] == 0:
-                continue
             if sg[a] == sg[b]:
                 continue
-            t = d[a] / (d[a] - d[b])
-            p = tris[i][a] + t * (tris[i][b] - tris[i][a])
-            ints.append((float(p[0]), float(p[1]), float(p[2])))
-        if len(ints) == 2:
-            segs.append((ints[0], ints[1]))
+            if sg[a] == 0:
+                p = tri[a]
+            elif sg[b] == 0:
+                p = tri[b]
+            else:
+                t = d[a] / (d[a] - d[b])
+                p = tri[a] + t * (tri[b] - tri[a])
+            ints.append(p)
+        # 三角形内容差去重（共享顶点/边交点可能重复收集）
+        uniq = []
+        for p in ints:
+            if not any(np.linalg.norm(p - q) < eps for q in uniq):
+                uniq.append(p)
+        if len(uniq) >= 2:
+            segs.append((tuple(uniq[0]), tuple(uniq[1])))
+    # 共面面外轮廓边（出现 1 次的边）
+    for (a, b), cnt in coplanar_edge_count.items():
+        if cnt == 1:
+            segs.append((a, b))
     return segs
 
 
-def _join_loops(segments):
+def _join_loops(segments, tol: float = None):
     """把线段连成闭合环。每段 (p,q)，按共享端点连接；返回环列表（各环为点列表）。
 
-    截面与封闭 STL 相交得到的是闭合折线。使用「最近未用端点优先」的贪心：
-    从任一线段出发，当前端点找未用线段中端点距离最近的接上（避免在共享
-    顶点/交叉处走错分支），延伸直到回到起点。
+    截面与封闭 STL 相交得到的是闭合折线。先把端点按容差吸附去重，再沿
+    邻接表走环：正常封闭网格中每个截面环上的端点度数恰为 2，从任一边
+    出发沿未用边走即可闭合，环与环互不串接。开放链（非水密 STL 或退化
+    输入）直接丢弃，不产出错误折线。
     """
     if not segments:
         return []
-    # 线段索引 → 两个端点
-    seg_ends = [list(s) for s in segments]
-    used_seg = [False] * len(segments)
-    loops = []
+    if tol is None:
+        scale = 0.0
+        for a, b in segments:
+            for p in (a, b):
+                for v in p:
+                    scale = max(scale, abs(v))
+        tol = max(1e-9, 1e-6 * max(1.0, scale))
 
-    def _dist(a, b):
-        return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2
+    snap_pts: dict = {}
 
-    for i in range(len(segments)):
-        if used_seg[i]:
+    def snap(p) -> tuple:
+        k = (round(p[0] / tol), round(p[1] / tol), round(p[2] / tol))
+        if k not in snap_pts:
+            snap_pts[k] = (float(p[0]), float(p[1]), float(p[2]))
+        return k
+
+    # 全局线段去重（端点无序）：共面外轮廓边与跨平面三角形可能重复贡献同一段
+    edge_map: dict = {}
+    for a, b in segments:
+        ka, kb = snap(a), snap(b)
+        if ka == kb:
             continue
-        used_seg[i] = True
-        chain = [seg_ends[i][0], seg_ends[i][1]]
-        cur = seg_ends[i][1]
-        start = seg_ends[i][0]
-        # 沿 cur 方向延伸
+        key = (ka, kb) if ka < kb else (kb, ka)
+        edge_map[key] = (ka, kb)
+    edges = list(edge_map.values())
+    if not edges:
+        return []
+
+    adj: dict = {}
+    for idx, (ka, kb) in enumerate(edges):
+        adj.setdefault(ka, []).append((idx, kb))
+        adj.setdefault(kb, []).append((idx, ka))
+
+    used = [False] * len(edges)
+    loops = []
+    for i in range(len(edges)):
+        if used[i]:
+            continue
+        ka, kb = edges[i]
+        used[i] = True
+        chain = [ka, kb]
         while True:
-            best = None
-            best_d = None
-            best_next = None
-            for j in range(len(segments)):
-                if used_seg[j]:
-                    continue
-                a, b = seg_ends[j]
-                for cand in (a, b):
-                    d = _dist(cand, cur)
-                    if best_d is None or d < best_d:
-                        best_d = d
-                        best = j
-                        best_next = b if cand is a else a
-            if best is None:
+            tail = chain[-1]
+            nxt = None
+            for ei, other in adj.get(tail, []):
+                if not used[ei]:
+                    nxt = (ei, other)
+                    break
+            if nxt is None:
                 break
-            used_seg[best] = True
-            cur = best_next
-            chain.append(cur)
-            if _dist(cur, start) < 1e-9:
+            used[nxt[0]] = True
+            chain.append(nxt[1])
+            if nxt[1] == chain[0]:
                 break
-        # 去重首尾
-        while len(chain) >= 3 and chain[0] == chain[-1]:
+        # 只保留闭合环（≥3 个不同点），开放链丢弃
+        if len(chain) >= 4 and chain[0] == chain[-1]:
             chain.pop()
-        if len(chain) >= 3:
-            loops.append(chain)
+            loops.append([snap_pts[k] for k in chain])
     return loops
 
 

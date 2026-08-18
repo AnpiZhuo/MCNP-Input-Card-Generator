@@ -107,6 +107,10 @@ export function computeFramingBox(shellBox: AABB | null, volumeBox: AABB): AABB 
   const union = unionBoxes([shellBox, volumeBox]);
   const unionMaxDim = Math.max(boxSize(union)[0], boxSize(union)[1], boxSize(union)[2]);
   const volMaxDim = Math.max(boxSize(volumeBox)[0], boxSize(volumeBox)[1], boxSize(volumeBox)[2]);
+  // 退化体积盒（单点 min==max 或单线段，最大边 0）不得劫持取景：
+  // 否则 0/并集 = 0 < 阈值 → 以零尺寸盒取景 → 相机怼在点上、外壳被剔除
+  // （用户实测：点源 + PTRAC EVENT=src → 10 万事件一点，视图中只剩一个点、拖动围着点转）。
+  if (volMaxDim <= 0) return union;
   const ratio = unionMaxDim > 0 ? volMaxDim / unionMaxDim : 1;
   return ratio < VOLUME_FRAMING_RATIO ? volumeBox : union;
 }

@@ -853,6 +853,10 @@ def _generate_structured_distributions(dist_json: str) -> list[str]:
         sp = entry.get("sp") or {}
         sb = entry.get("sb")
         ds = entry.get("ds")
+        # SC: SCn 源注释卡（源分布卡说明.md §三）——先于该分布卡族回放
+        sc = (entry.get("sc") or "").strip()
+        if sc:
+            lines.append(f"SC{idx}  {sc}")
         # SI: SIn type values (L/H/A/S)
         si_type = (si.get("type") or "L").upper()
         si_vals = [str(v) for v in (si.get("values") or []) if str(v).strip()]

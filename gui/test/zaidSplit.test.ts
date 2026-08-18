@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { splitZaid, buildZaid, resolveZaid } from "../src/components/MaterialEditDialog";
+import { splitZaid, buildZaid, resolveZaid, stripZaidSuffix, normalizeImportedMaterials } from "../src/components/MaterialEditDialog";
 
 /*
  * 材料编辑对话框核素 元素/质量数 拆组（MaterialEditDialog.tsx）—— 纯函数。
@@ -110,5 +110,52 @@ describe("resolveZaid（草稿 → ZAID，元素为空不提交）", () => {
 
   it("空白质量数按自然元素处理", () => {
     expect(resolveZaid({ el: " C ", mass: "  " })).toBe("6000");
+  });
+});
+
+describe("stripZaidSuffix（导入所见即所得：数据层剥库后缀）", () => {
+  it("数值 ZAID 带后缀 → 剥到小数点前", () => {
+    expect(stripZaidSuffix("92235.50d")).toBe("92235");
+    expect(stripZaidSuffix("92238.40c")).toBe("92238");
+    expect(stripZaidSuffix("5010.00")).toBe("5010");
+    expect(stripZaidSuffix("29000.02")).toBe("29000");
+  });
+
+  it("无后缀/空串 → 原样", () => {
+    expect(stripZaidSuffix("92235")).toBe("92235");
+    expect(stripZaidSuffix("")).toBe("");
+  });
+});
+
+describe("normalizeImportedMaterials（导入材料归一化）", () => {
+  it("核素行 zaid 剥后缀，raw 行与 fraction 不动", () => {
+    const ms = [{
+      number: 2, rows: [
+        { kind: "nuclide", zaid: "92235.50d", fraction: "-.70573" },
+        { kind: "nuclide", zaid: "92238.40c", fraction: "-.23821" },
+        { kind: "raw", text: "#ifdef ENDF7" },
+      ],
+    }];
+    const out = normalizeImportedMaterials(ms as any);
+    expect(out[0].rows[0]).toEqual({ kind: "nuclide", zaid: "92235", fraction: "-.70573" });
+    expect(out[0].rows[1]).toEqual({ kind: "nuclide", zaid: "92238", fraction: "-.23821" });
+    expect(out[0].rows[2]).toEqual({ kind: "raw", text: "#ifdef ENDF7" });
+  });
+
+  it("rows/nuclides 两个别名键同步归一（后端导入双键同数组）", () => {
+    const ms = [{
+      number: 1,
+      rows: [{ kind: "nuclide", zaid: "5011.40c", fraction: ".804" }],
+      nuclides: [{ kind: "nuclide", zaid: "5011.40c", fraction: ".804" }],
+    }];
+    const out = normalizeImportedMaterials(ms as any);
+    expect(out[0].rows[0].zaid).toBe("5011");
+    expect(out[0].nuclides[0].zaid).toBe("5011");
+  });
+
+  it("只有 nuclides 键（无 rows）时也不丢行", () => {
+    const ms = [{ number: 3, nuclides: [{ kind: "nuclide", zaid: "8016.60c", fraction: "1" }] }];
+    const out = normalizeImportedMaterials(ms as any);
+    expect(out[0].nuclides).toEqual([{ kind: "nuclide", zaid: "8016", fraction: "1" }]);
   });
 });

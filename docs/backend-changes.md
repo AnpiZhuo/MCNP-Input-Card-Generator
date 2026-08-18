@@ -871,3 +871,27 @@ dims ni=1 nj=2 nk=2 / grid_bounds [49,-10,90]~[51,10,110]；texture 同样 ok（
 - 新增端点 `/api/ptrac-parse`（端点总数 29）+ `docs/contracts/api.yaml` 同步 + 漂移闸门双向一致；`mcnp_bridge.py` 加 `--ptrac-worker` 分派；`mcnp_sidecar.spec` `_hidden`/`_keep_dirs` 补 ptrac（打包版 worker 实测通）。
 - §4.5 卡生成/解析 round-trip：`models.PTRACSettings` + `TallySettings.ptrac`；`_tally_from_dict` 透传；`inp_generator._generate_ptrac`（与前端 `ptracToCardText` 逐字对齐：FILE/WRITE/MAX 恒发、TYPE 大写多值空格、NPS/CELL/SURFACE/VALUE/EVENT 非空才发）；`parsers/core._parse_ptrac_card` 结构化吸收、裸卡/行内 `$ 注释`/未识别关键字（CONIC=/TALLY=/FILTER=/BUFFER=/MEPH=）回落 other_cards（D-10 不弱化）。
 - 测试（先红后绿）：`tests/unit/test_ptrac_parser.py` 12 + `tests/integration/test_ptrac_api.py` 6 + `tests/parser/test_ptrac_card.py` 6。**全量 pytest 490/0**（基线 465 + 25）。
+
+## §Q. inp02.i 实卡解析不全三修复（2026-08-16，用户反馈「这个卡解析不全」）
+
+**实卡**：`D:\MCNP\MCNP6\MCNP_CODE\MCNP6\Testing\REGRESSION\Inputs\inp02.i`（已入 `tests/fixtures/inp02.i`）。
+
+**修复 1 — SCn 源注释卡打断 SDEF 分布收集链（P0）**：
+根因：core.py SDEF 分支收集后继 SI/SP/SB/DS 的 while 循环遇 `SC2`（源注释卡，分布家族成员）即 break → SI2/SP2/SB2/SI3/SP3/SI4/SP4 全落 other_cards，sdef_distributions 只剩 id=1。
+| # | 改动 | 文件:行 | 逻辑 |
+| :--- | :--- | :--- | :--- |
+| 1 | 收集条件加 `startswith("SC")` | `parsers/core.py` SDEF 分支 | SCn 纳入分布收集链，不再断链 |
+| 2 | `_parse_sisp_structured` 正则加 SC + 新 `sc` 字段 | `parsers/core.py` | 条目 `{"sc": "注释文字"}`，与 si/sp/sb/ds 并列 |
+| 3 | `_merge_sisp_entry` 合并键加 `sc` | `parsers/core.py` | 面源合并路径同构 |
+| 4 | 回放 `SC{idx}  {sc}` | `inp_generator.py _generate_structured_distributions` | SCn 先于该分布卡族回放 |
+| 5 | 前端 `DistEntry.sc?` + 只读展示 | `gui/src/utils/DeckContext.tsx` + `DistributionEditor.tsx` | 导入/编辑往返不丢 sc |
+
+**修复 2 — THTME 卡表被材料吸收（P0）**：根因：无 THTME 分支 → `# tmp1...` 表头被 `line.startswith("#")` 条件编译分支塞进 current_mat（M3）rows；数值表行（首列=材料号）被「裸核素行」分支当 ZAID/份额吸收 → round-trip 后 THTME 卡与表分离、M3 被污染。修复：新增 THTME 分支——主体 + `#` 表头 + 数值表行（`#` 开头 / 首 token 纯数字 / ≥5 空格缩进）按原文整块进 other_cards，遇空行/C 注释/字母卡头即止。
+
+**修复 3 — 材料 options 空格写法重解析漂移（`nlib .03d`）**：根因：生成器把 options 发射在 M{n} 卡头，重解析拍平后 `.03d` 被当 ZAID 与 `5010.0` 配对 → 第二代输出漂移（options 变 `nlib .750`）。修复：`_parse_material` 独立关键词（GAS/PLIB/ESTEP/COND/HLIB/NLIB/ELIB）后下一 token 若非 ZAID 形态（3 位以上数字开头）则作为关键词值一并收入 options，防吞真 ZAID。
+
+**回归测试（先红后绿）**：`tests/parser/test_regress_sdef_sc_chain.py` 3 + `test_regress_thtme_table.py` 3 + `test_regress_material_spaced_options.py` 4 = 10 用例 + fixture inp02.i。**inp02.i 全文件不动点 g2==g1 达成**（THTME 卡表相邻、M3 rows 纯净、other_cards 零分布卡残留）。全量 pytest **479 通过 / 24 环境性 error**（5 个 cache/api 测试文件 tmp_path 建目录被沙箱拒，与改动无关；正常环境无此问题）+ tsc EXIT 0（vitest 因沙箱 spawn EPERM 未跑，前端改动为可选字段+只读展示，建议本地补跑）。
+
+**打包部署（2026-08-16，用户授权放行）**：v1.7.1 重打包——门禁 pytest **503/0** + vitest **293/0** + tsc EXIT 0；vite 3.3s；PyInstaller sidecar 25,112,062B；tauri build exit 0（增量 10.8s）；**6.2 时效坑命中**（增量编译未刷新 target\release sidecar，手动覆盖后 grep 确认 core.py 含 SC/THTME 修复）；部署 D:\MCNP\MCNP输入卡生成器；冒烟：探活 loaded:true 6s / parse-inp 实测 inp02.i → dist ids [1,2,3,4]+d2.sc 结构化+other_cards 零分布卡+THTME 表保留+M3 干净+warnings[] / mcnp-detect 命中 / bundle 含 1.7.1。
+
+**修复 4（用户实测"导入→运行"暴露）——SDEF 裸参数分布引用丢失（P0）**：根因：parse_sdef_fields 裸参数分支白名单只有 PAR/SUR/NRM/TR/CCC/ARA/RATE，`cel d4  x d1  y d2  z d3` 落 `ti += 1` 静默跳过 → 生成 SDEF 只剩 ERG=1 → MCNP 报 "source distribution 1/2/3/4 is not used" + "fatal error. v option on non-cell source distribution 4"。修复：裸 X/Y/Z 分支（1~3 值或 D 引用，遇已知 SDEF key 停靠）+ CEL/ERG/WGT/DIR/TME/RAD/EXT 进单值白名单（对齐 D-07 的 parse_sdef_simple）。回归测试 `tests/parser/test_regress_sdef_bare_dist_refs.py` 3 用例先红后绿；全量 pytest **506/0**；inp02 不动点保持。**当日二次重打包部署 v1.7.1**：sidecar 25,112,345B/20:55 + tauri exit 0 + 部署冒烟（部署版 parse sdefFields 四引用齐全、generate 输出 `SDEF X=d1 Y=d2 Z=d3 ERG=1 CEL=d4`）。
