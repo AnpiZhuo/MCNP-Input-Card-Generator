@@ -1,15 +1,15 @@
 # 项目记忆文档（AI 速查手册）
 > 最后更新时间：2026-08-18（**v1.7.2 五次打包部署**：预览坐标轴固定在原点进包；commit 5941a04 + 20e7fd5 + 749feb1 + a62a3cf + 06c63bb 未 push）
 >
-> **✅ 快捷建栅元已交付（2026-08-18，v1.7.2 用户指定，**二次打包部署** D:\MCNP\MCNP输入卡生成器，commit 5941a04 + 20e7fd5，未 push）**：几何标签页「曲面卡 & TR 变换」新增「⚡ 快捷建栅元」按钮 → 弹窗一次一种形状（圆柱 RCC / 六面体 RPP / 球 SPH），程序自动算曲面/TR/栅元卡：
+> **✅ 快捷建栅元已交付（2026-08-18，v1.7.2 用户指定，**五次打包部署** D:\MCNP\MCNP输入卡生成器，commit 5941a04 + 20e7fd5 + 749feb1 + a62a3cf + 06c63bb，未 push）**：几何标签页「曲面卡 & TR 变换」新增「⚡ 快捷建栅元」按钮 → 弹窗一次一种形状（圆柱 RCC / 六面体 RPP / 球 SPH），程序自动算曲面/TR/栅元卡：
 > - RCC：底面中心+轴向量+半径，N 等距圆环 × M 等距轴段 → N 个 RCC + M-1 个轴向 P 平面 → N×M 栅元（最内环实心，首/末段靠 RCC 自带端盖）
 > - RPP：用户输入**长×宽×高 + 体中心 + 倾斜角度（Roll(X)/Pitch(Y)/Yaw(Z)，DEG/RAD 可切换，RAD 带 π 快捷按钮）**，程序按坐标算栅元位置与 TR 卡（标准 Yaw-Pitch-Roll：R=Rz(Yaw)·Ry(Pitch)·Rx(Roll)，TR 卡行=局部轴方向余弦）；全 0 角度 → RPP 宏体 + 内部 PX/PY/PZ（无 TR）；非 0 → 6 局部平面 + TRn（**不用 RPP+TR**：FreeCAD worker 对带 Placement 的宏体半空间做补集布尔返回垃圾体积，实测 bound.cut(placed compound) 1.7e8 > 整盒 1.25e8）
 > - SPH：球心+半径，K 等距球壳 → K 个 SPH → K 个栅元（最内实心）
 > - 编号：曲面 101 起/用户最大+1；cell 1 起/最大+1；TR 同 cell；材料默认 M0 真空、选材料自动带出密度（无则留空）、imp:n/p/e 勾选才写 1；文本模式禁用+弹窗警告；其余高级参数留空
-> - 弹窗右侧实时线框预览（形状+切分线+局部轴，100ms 防抖+按需渲染，不卡）；生成结果追加到曲面/TR/栅元列表
+> - 弹窗右侧实时线框预览（形状+切分线+**固定在原点 (0,0,0) 的世界 XYZ 轴（X 红/Y 绿/Z 蓝，带标签，Z 朝上）**，100ms 防抖+按需渲染，不卡）；生成结果追加到曲面/TR/栅元列表
 > - **RPP 预览修复（用户实测）**：① 切分矩形曾从体中心往 +Y/+Z 只画一个象限（2×2×2 看不出 8 个立方体）→ 改为以切分位置为中心、跨整个截面；② 坐标轴曾画随体旋转的局部轴 → 改为**世界固定轴**（X 红/Y 绿/Z 蓝）+ **端点 X/Y/Z 标签**；③ 相机曾用 Three.js 默认 **Y 朝上**（电脑建模惯例）→ 改 **Z 朝上**（数学/物理/MCNP 惯例，与主 3D 预览/体积/PTRAC 窗口一致）；④ 坐标轴曾画在**体中心** → 改**固定在原点 (0,0,0)**（轴长按体尺寸/到原点距离自适应）
-> - 模块化：gui/src/utils/quickCell.ts（纯函数，编号/校验/生成）+ gui/test/quickCell.test.ts 16 用例 + gui/src/three/quickCellPreview.ts（线框）+ QuickCellDialog.tsx + GeometryTab 接线；真实 FreeCAD 链路验证（RCC 六格 / 轴对齐四格 / 斜向 6 平面两半）bbox 全部正确
-> - 门禁 pytest **512/0** + vitest **328/0** + tsc EXIT 0；打包链路全过（vite 4.0s / PyInstaller 25,114,215B / tauri 40.6s / **6.2 命中增量坑已手动覆盖** / 部署完成）；冒烟：xsdir loaded:true 7621 条 + preview-3d RCC 环段卡 count=2 + cross-section 2 栅元 3 多边形 + 斜向 RPP+TR1 count=1 全过
+> - 模块化：gui/src/utils/quickCell.ts（纯函数，编号/校验/生成）+ gui/test/quickCell.test.ts **20** 用例 + gui/src/three/quickCellPreview.ts（线框）+ gui/test/quickCellPreview.test.ts 3 用例 + QuickCellDialog.tsx + GeometryTab 接线；真实 FreeCAD 链路验证：RCC 六格 / 轴对齐四格 / 斜向 6 平面两半 / **Yaw90°+平移(10,0,0) bbox 精确 / Yaw45°+Pitch30° 切 2 两半相等** 全部正确
+> - 门禁 pytest **512/0** + vitest **333/0** + tsc EXIT 0；打包链路五次全过（vite ~3.2s / PyInstaller 25,114,215B / tauri ~11s / **6.2 增量坑每次命中、手动覆盖**）；冒烟：xsdir loaded:true 7621 条 + RPP 角度卡 preview-3d 出 STL 全过
 >
 > **✅ 3D 预览两 bug 已修复（2026-08-18，未 commit，版本恒 1.7.1）**：① 坐标轴显示：`axisDirs` 写成 [X,Z,Y] 而标签/颜色按 [X,Y,Z] 配 → 绿线沿 Z 标 "Y"、蓝线沿 Y 标 "Z"；新建 `gui/src/three/axisConfig.ts` 单一事实来源（X 红/Y 绿/Z 蓝），Preview3D 轴/标签/刻度全部派生自它。② 切截面部分实体切错：后端 `slice_stl_segments` 对恰在平面上的顶点直接 continue → 切割面与实体面重合（模型底面 z=0、相邻栅元共享面）返回 0 环/错环，多环截面被最近点贪心串接；修复为 on-plane 顶点作交点 + 共面三角面贡献外轮廓边 + `_join_loops` 改容差吸附邻接表走环；前端预览把 STL 平移到模型中心显示但平面原样发后端（原始系）→ 中心偏离原点时全部切位偏移，新建 `gui/src/three/planeOffset.ts`（D_raw=D_disp+n·center）并在 fetchCrossSection 与独立截面窗口步进（数据桥传 center）统一换算。门禁 pytest **512/0** + vitest **310/0** + tsc EXIT 0；真实 FreeCAD STL 联调全过（盒面 X=1 出面轮廓 / 带孔盒顶面出外方框+内圆 / 相邻共享面两栅元各得正确方环）。未打包，待用户排期。
 >
