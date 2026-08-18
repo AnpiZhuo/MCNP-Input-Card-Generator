@@ -1,5 +1,5 @@
 # 项目记忆文档（AI 速查手册）
-> 最后更新时间：2026-08-18（**v1.7.2 三次打包部署**：RPP 预览修复（切分矩形跨截面 + 世界固定轴）进包；commit 5941a04 + 20e7fd5 + 749feb1 未 push）
+> 最后更新时间：2026-08-18（**v1.7.2 四次打包部署**：预览轴 X/Y/Z 标签 + 相机 Z 朝上进包；commit 5941a04 + 20e7fd5 + 749feb1 + a62a3cf 未 push）
 >
 > **✅ 快捷建栅元已交付（2026-08-18，v1.7.2 用户指定，**二次打包部署** D:\MCNP\MCNP输入卡生成器，commit 5941a04 + 20e7fd5，未 push）**：几何标签页「曲面卡 & TR 变换」新增「⚡ 快捷建栅元」按钮 → 弹窗一次一种形状（圆柱 RCC / 六面体 RPP / 球 SPH），程序自动算曲面/TR/栅元卡：
 > - RCC：底面中心+轴向量+半径，N 等距圆环 × M 等距轴段 → N 个 RCC + M-1 个轴向 P 平面 → N×M 栅元（最内环实心，首/末段靠 RCC 自带端盖）
@@ -7,7 +7,7 @@
 > - SPH：球心+半径，K 等距球壳 → K 个 SPH → K 个栅元（最内实心）
 > - 编号：曲面 101 起/用户最大+1；cell 1 起/最大+1；TR 同 cell；材料默认 M0 真空、选材料自动带出密度（无则留空）、imp:n/p/e 勾选才写 1；文本模式禁用+弹窗警告；其余高级参数留空
 > - 弹窗右侧实时线框预览（形状+切分线+局部轴，100ms 防抖+按需渲染，不卡）；生成结果追加到曲面/TR/栅元列表
-> - **RPP 预览两 bug 已修（用户实测）**：① 切分矩形曾从体中心往 +Y/+Z 只画一个象限（2×2×2 看不出 8 个立方体）→ 改为以切分位置为中心、跨整个截面；② 坐标轴曾画随体旋转的局部轴 → 改为**世界固定轴**（X 红/Y 绿/Z 蓝，不随倾斜转），便于看姿态
+> - **RPP 预览修复（用户实测）**：① 切分矩形曾从体中心往 +Y/+Z 只画一个象限（2×2×2 看不出 8 个立方体）→ 改为以切分位置为中心、跨整个截面；② 坐标轴曾画随体旋转的局部轴 → 改为**世界固定轴**（X 红/Y 绿/Z 蓝）+ **端点 X/Y/Z 标签**；③ 相机曾用 Three.js 默认 **Y 朝上**（电脑建模惯例）→ 改 **Z 朝上**（数学/物理/MCNP 惯例，与主 3D 预览/体积/PTRAC 窗口一致）
 > - 模块化：gui/src/utils/quickCell.ts（纯函数，编号/校验/生成）+ gui/test/quickCell.test.ts 16 用例 + gui/src/three/quickCellPreview.ts（线框）+ QuickCellDialog.tsx + GeometryTab 接线；真实 FreeCAD 链路验证（RCC 六格 / 轴对齐四格 / 斜向 6 平面两半）bbox 全部正确
 > - 门禁 pytest **512/0** + vitest **328/0** + tsc EXIT 0；打包链路全过（vite 4.0s / PyInstaller 25,114,215B / tauri 40.6s / **6.2 命中增量坑已手动覆盖** / 部署完成）；冒烟：xsdir loaded:true 7621 条 + preview-3d RCC 环段卡 count=2 + cross-section 2 栅元 3 多边形 + 斜向 RPP+TR1 count=1 全过
 >
@@ -182,6 +182,8 @@
 
 | 日期 | 变更类型 | 改动描述 | 涉及 Agent |
 | :--- | :--- | :--- | :--- |
+| 2026-08-18 | 修复/前端 | **快捷建栅元预览坐标轴标 X/Y/Z + 相机 Z 朝上（用户实测，commit a62a3cf，已随 v1.7.2 四次打包）**：① `quickCellPreview.addAxes` 在轴端点挂 X（红）/Y（绿）/Z（蓝）canvas 精灵标签（`makeLabel`，无 DOM 的 node 测试环境自动跳过；dispose 补贴图释放）。② 预览相机此前用 Three.js 默认 **Y 朝上**（电脑建模惯例）→ 改 `camera.up=(0,0,1)` **Z 朝上**，与主 3D 预览/体积窗口/PTRAC 窗口一致（数学/物理/MCNP 坐标系）。vitest 全量 **333/0**（已知 colorize 128³ 计时 flaky，隔离 18/18 绿）+ tsc EXIT 0 | 前端 |
+| 2026-08-18 | 管理/构建 | **v1.7.2 四次打包部署（轴标签 + Z 朝上进包，版本恒 1.7.2）**：门禁 pytest **512/0** + vitest **333/0** + tsc EXIT 0；vite build 3.11s；PyInstaller sidecar python.exe 25,114,215B；binaries 替换；tauri build 11.65s；**6.2 时效坑第四次命中**：手动覆盖 sidecar（21:03）后复核；部署 D:\MCNP\MCNP输入卡生成器（exe 6,436,352B/21:03 + python.exe + _internal 全套）；**冒烟全过**：xsdir-check loaded:true 7621 条 / RPP 角度卡 preview-3d count=1；环境已清理。commit **a62a3cf**（2 文件 +37/-5，未 push） | 构建 |
 | 2026-08-18 | 修复/前端 | **快捷建栅元 RPP 预览两 bug（用户实测，commit 749feb1，已随 v1.7.2 三次打包）**：① 切分矩形此前从体中心往 +Y/+Z 只画一个象限（`rect(center+u*t, v*W, w*H)` 未居中）→ 2×2×2 切分看不出 8 个立方体；改为以切分位置为中心、跨整个截面（`origin - e1/2 - e2/2`），透明度 0.5→0.7。② 坐标轴此前画随体旋转的局部轴（u/v/w=R 列）→ 倾斜时 XYZ 跟着转；改为**世界固定轴**（X 红/Y 绿/Z 蓝，长度=0.5×max(L,W,H)），便于看倾斜姿态。回归测试 `gui/test/quickCellPreview.test.ts` 3 用例（切分矩形四角断言 + 世界轴端点断言 + 取景 sanity）；vitest 全量 **333/0** + tsc EXIT 0 | 前端 |
 | 2026-08-18 | 管理/构建 | **v1.7.2 三次打包部署（RPP 预览修复进包，版本恒 1.7.2）**：门禁 pytest **512/0** + vitest **333/0** + tsc EXIT 0；vite build 3.13s；PyInstaller sidecar python.exe 25,114,215B（自检 preview_cache.py/vendor/geouned 在位）；binaries 替换；tauri build 10.16s；**6.2 时效坑第三次命中**：target\release python.exe 仍旧版（20:39），手动覆盖为新 sidecar（20:51）后复核；部署 D:\MCNP\MCNP输入卡生成器（exe 6,436,352B/20:51 + python.exe + _internal 全套）；**冒烟全过**：xsdir-check loaded:true 7621 条 / RPP 角度卡 preview-3d count=1；环境已清理（app+sidecar 杀净、5001 释放）。commit **749feb1**（2 文件 +68/-4，未 push） | 构建 |
 | 2026-08-18 | 改进/前端 | **快捷建栅元 RPP 输入方式改版（用户指定，commit 20e7fd5，已随 v1.7.2 二次打包）**：六面体不再用 8 角点输入，改为 **长×宽×高 + 体中心 + 倾斜角度（Roll(X)/Pitch(Y)/Yaw(Z)）**；角度单位 **DEG（度）/RAD（弧度）可切换**，RAD 模式带 **π 快捷按钮**（往当前角度框插入 π，`parseAngleExpr` 支持 π/2、2π 表达式）。采用**标准 Yaw-Pitch-Roll 数学定义**：R=Rz(Yaw)·Ry(Pitch)·Rx(Roll)（依次绕 X→Y→Z 外旋），程序按坐标算栅元位置并生成 **TR 卡**（TR 卡行=局部轴方向余弦=R 的列；全 0 角度 → 轴对齐 RPP 宏体无 TR）。`eulerRotation`/`trBFromAngles`/`parseAngleExpr` 纯函数；**填入逻辑抽纯函数**：`appendCardText`（曲面/TR 文本追加，单换行拼接）+ `generatedCellToRow`（生成栅元→本地行，高级参数留空）；线框预览按旋转矩阵绘制；真实 FreeCAD 链路验证：Yaw90°+平移(10,0,0) bbox=[9,-1,-1]..[11,1,1] 精确、Yaw45°+Pitch30° 切 2 两半相等且整体外扩与手算一致。vitest quickCell **20** 用例（+2 角度解析/TR B 矩阵，+2 填入逻辑）+ 全量 **330/0** + tsc EXIT 0 | 前端 |
