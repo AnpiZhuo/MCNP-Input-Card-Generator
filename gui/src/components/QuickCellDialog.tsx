@@ -107,6 +107,8 @@ export default function QuickCellDialog({ surfacesText, trCardsText, cellNumbers
     const timer = setTimeout(() => {
       const scene = sceneRef.current;
       if (!scene) return;
+      // 只在线框首次出现时取景一次；后续参数变化保持用户当前视角（不再强制矫正摄像头）
+      const wasVisible = !!previewRef.current;
       if (previewRef.current) {
         scene.remove(previewRef.current.group);
         previewRef.current.dispose();
@@ -116,20 +118,22 @@ export default function QuickCellDialog({ surfacesText, trCardsText, cellNumbers
         const prev = buildQuickCellPreview(preview.shape, preview.config, wireColorForMaterial(preview.material));
         scene.add(prev.group);
         previewRef.current = prev;
-        const box = new THREE.Box3().setFromObject(prev.group);
-        const size = box.getSize(new THREE.Vector3());
-        const center = box.getCenter(new THREE.Vector3());
-        const ext = Math.max(size.x, size.y, size.z, 1e-3);
-        const cp = computeCameraParams([center.x, center.y, center.z], [ext, ext, ext]);
-        const camera = cameraRef.current;
-        const controls = controlsRef.current;
-        if (camera && controls) {
-          camera.position.set(cp.position[0], cp.position[1], cp.position[2]);
-          camera.near = cp.near;
-          camera.far = cp.far;
-          camera.updateProjectionMatrix();
-          controls.target.set(cp.target[0], cp.target[1], cp.target[2]);
-          controls.update();
+        if (!wasVisible) {
+          const box = new THREE.Box3().setFromObject(prev.group);
+          const size = box.getSize(new THREE.Vector3());
+          const center = box.getCenter(new THREE.Vector3());
+          const ext = Math.max(size.x, size.y, size.z, 1e-3);
+          const cp = computeCameraParams([center.x, center.y, center.z], [ext, ext, ext]);
+          const camera = cameraRef.current;
+          const controls = controlsRef.current;
+          if (camera && controls) {
+            camera.position.set(cp.position[0], cp.position[1], cp.position[2]);
+            camera.near = cp.near;
+            camera.far = cp.far;
+            camera.updateProjectionMatrix();
+            controls.target.set(cp.target[0], cp.target[1], cp.target[2]);
+            controls.update();
+          }
         }
       }
       dirtyRef.current = true;

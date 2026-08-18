@@ -618,6 +618,8 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
     const timer = setTimeout(() => {
       const ctrl = ctrlRef.current;
       if (!ctrl) return;
+      // 只在线框首次出现时取景一次；后续参数变化保持用户当前视角
+      const wasVisible = !!wirePreviewRef.current;
       if (wirePreviewRef.current) {
         ctrl.scene.remove(wirePreviewRef.current.group);
         wirePreviewRef.current.dispose();
@@ -627,9 +629,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         const prev = buildQuickCellPreview(wireSpec.shape, wireSpec.config, wireColorForMaterial(wireSpec.material));
         ctrl.scene.add(prev.group);
         wirePreviewRef.current = prev;
-        ctrl.frameCamera(prev.group);
-      } else if (quickAddOpen) {
-        ctrl.frameCamera();
+        if (!wasVisible) ctrl.frameCamera(prev.group);
       }
       ctrl.markDirty();
     }, 100);
