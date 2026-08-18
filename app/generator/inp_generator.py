@@ -249,6 +249,36 @@ def _generate_sdef(sources: list[SourceData]) -> list[str]:
         return _generate_multi_source(sources)
 
 
+# ── SDEF 表单字段（前端 sdefFields → adv.sdef_*）────────────────
+# 表单模式（SDEF 通用源）填的字段只落在 adv.sdef_*；无分布/无多点源时，
+# 需要合成单源走 _generate_sdef（与导入 round-trip 同路径，字节一致）。
+_SDEF_FORM_FIELDS = (
+    "sdef_par", "sdef_erg", "sdef_pos_x", "sdef_pos_y", "sdef_pos_z",
+    "sdef_wgt", "sdef_dir", "sdef_cel", "sdef_tme", "sdef_vec", "sdef_axs",
+    "sdef_rad", "sdef_ext", "sdef_sur", "sdef_nrm", "sdef_tr",
+    "sdef_ccc", "sdef_ara", "sdef_rate", "sdef_extra",
+)
+
+
+def _sdef_form_has_values(adv: AdvancedSettings) -> bool:
+    """SDEF 表单是否填了任何字段。"""
+    return any(getattr(adv, f, "") for f in _SDEF_FORM_FIELDS)
+
+
+def _source_from_adv(adv: AdvancedSettings) -> SourceData:
+    """表单模式回退：adv.sdef_* → 单源 SourceData（与 parse_sdef_fields 反向对应）。"""
+    return SourceData(
+        number=1,
+        par=adv.sdef_par, erg=adv.sdef_erg,
+        pos_x=adv.sdef_pos_x, pos_y=adv.sdef_pos_y, pos_z=adv.sdef_pos_z,
+        wgt=adv.sdef_wgt, dir_=adv.sdef_dir, cel=adv.sdef_cel, tme=adv.sdef_tme,
+        vec=adv.sdef_vec, axs=adv.sdef_axs, rad=adv.sdef_rad, ext=adv.sdef_ext,
+        sur=adv.sdef_sur, nrm=adv.sdef_nrm, tr=adv.sdef_tr,
+        ccc=adv.sdef_ccc, ara=adv.sdef_ara, rate=adv.sdef_rate,
+        sdef_extra=adv.sdef_extra,
+    )
+
+
 def _is_d_ref(val: str) -> bool:
     """检查值是否为 Dn 分布引用（如 D1、D2）"""
     return bool(re.match(r'^D\d+$', val.strip().upper())) if val else False
@@ -1294,8 +1324,15 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
     # sdef 分派（distribution/kcode/surface/fixed 四分支，封进闭包）
     def _sdef_dispatch():
         _has_dist = bool(adv.sdef_raw_text) or bool(_dist_json_nonempty(adv.sdef_distributions))
-        if adv.source_mode in ("distribution", "sdef") and _has_dist:
-            return _generate_distribution_sdef(adv)
+        if adv.source_mode in ("distribution", "sdef"):
+            if _has_dist:
+                return _generate_distribution_sdef(adv)
+            if sources:
+                return _generate_sdef(sources)
+            # 表单模式（无分布、无多点源）：SDEF 源参数字段有值 → 合成单源生成
+            if _sdef_form_has_values(adv):
+                return _generate_sdef([_source_from_adv(adv)])
+            return []
         elif adv.source_mode == "kcode" and adv.kcode_nsrc:
             return _generate_kcode(adv)
         elif adv.source_mode == "surface":

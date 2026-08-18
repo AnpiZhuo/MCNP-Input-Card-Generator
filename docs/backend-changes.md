@@ -895,3 +895,16 @@ dims ni=1 nj=2 nk=2 / grid_bounds [49,-10,90]~[51,10,110]；texture 同样 ok（
 **打包部署（2026-08-16，用户授权放行）**：v1.7.1 重打包——门禁 pytest **503/0** + vitest **293/0** + tsc EXIT 0；vite 3.3s；PyInstaller sidecar 25,112,062B；tauri build exit 0（增量 10.8s）；**6.2 时效坑命中**（增量编译未刷新 target\release sidecar，手动覆盖后 grep 确认 core.py 含 SC/THTME 修复）；部署 D:\MCNP\MCNP输入卡生成器；冒烟：探活 loaded:true 6s / parse-inp 实测 inp02.i → dist ids [1,2,3,4]+d2.sc 结构化+other_cards 零分布卡+THTME 表保留+M3 干净+warnings[] / mcnp-detect 命中 / bundle 含 1.7.1。
 
 **修复 4（用户实测"导入→运行"暴露）——SDEF 裸参数分布引用丢失（P0）**：根因：parse_sdef_fields 裸参数分支白名单只有 PAR/SUR/NRM/TR/CCC/ARA/RATE，`cel d4  x d1  y d2  z d3` 落 `ti += 1` 静默跳过 → 生成 SDEF 只剩 ERG=1 → MCNP 报 "source distribution 1/2/3/4 is not used" + "fatal error. v option on non-cell source distribution 4"。修复：裸 X/Y/Z 分支（1~3 值或 D 引用，遇已知 SDEF key 停靠）+ CEL/ERG/WGT/DIR/TME/RAD/EXT 进单值白名单（对齐 D-07 的 parse_sdef_simple）。回归测试 `tests/parser/test_regress_sdef_bare_dist_refs.py` 3 用例先红后绿；全量 pytest **506/0**；inp02 不动点保持。**当日二次重打包部署 v1.7.1**：sidecar 25,112,345B/20:55 + tauri exit 0 + 部署冒烟（部署版 parse sdefFields 四引用齐全、generate 输出 `SDEF X=d1 Y=d2 Z=d3 ERG=1 CEL=d4`）。
+
+## §R. SDEF 表单模式漏生成 + sdef_extra API 往返丢失（2026-08-19，用户实测「在 sdef 卡中定义了但还是未进入生成」）
+
+**修复 1 — 表单模式 SDEF 漏生成（用户实测）**：前端「SDEF 通用源」表单把字段写 `deck.sdefFields` → `adv.sdef_*`，但生成器 `_sdef_dispatch` 只在 `_has_dist`（sdef_raw_text/sdef_distributions 非空）时走 `_generate_distribution_sdef(adv)`；无分布时落到 `_generate_sdef(sources)`，而表单模式 `sources` 为空 → 生成的 INP 无 SDEF 卡。修复（`app/generator/inp_generator.py`）：
+| # | 改动 | 逻辑 |
+| :--- | :--- | :--- |
+| 1 | 新增 `_SDEF_FORM_FIELDS` + `_sdef_form_has_values(adv)` | 表单字段（18 个 sdef_* + sdef_extra）是否有值 |
+| 2 | 新增 `_source_from_adv(adv)` | adv.sdef_* → 单源 SourceData（与 parse_sdef_fields 反向对应） |
+| 3 | `_sdef_dispatch` 增回退分支 | distribution/sdef 且无分布时：sources 优先（R1 不动点不回归）→ 表单字段有值则 `_generate_sdef([_source_from_adv(adv)])` → 全空则 `[]` |
+
+**修复 2 — sdef_extra API 往返丢失**：`_sources_from_list` / `_adv_from_dict`（`gui/backend/api_server.py`）未映射 `sdef_extra` → 导入含未知 SDEF 参数（如 `EFF=1`）的卡经 HTTP 往返后丢失。补两处 `sdef_extra=s.get(...)` / `d.get(...)`。
+
+**回归测试（先红后绿）**：`tests/unit/test_generator_sdef.py` +4（表单字段生成 / sources 优先级 / 空表单不输出 / _source_from_adv）；`tests/integration/test_api_contract.py` +2（HTTP 表单 SDEF 生成 / HTTP sdef_extra 往返）。全量 pytest **518/0** + vitest **320/0**（已知 flaky colorize 128³ 计时单跑绿）+ tsc EXIT 0。已随 V1.7.2.2 批次重打包部署。

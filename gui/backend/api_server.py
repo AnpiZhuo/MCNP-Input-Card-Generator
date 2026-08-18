@@ -411,6 +411,7 @@ def _sources_from_list(arr: list) -> list[SourceData]:
         axs=s.get("axs", ""), rad=s.get("rad", ""), ext=s.get("ext", ""),
         sur=s.get("sur", ""), nrm=s.get("nrm", ""), tr=s.get("tr", ""),
         ccc=s.get("ccc", ""), ara=s.get("ara", ""), rate=s.get("rate", ""),
+        sdef_extra=s.get("sdef_extra", ""),
     ) for s in arr]
 
 def _fmesh_from_list(arr: list) -> list[FmeshDefinition]:
@@ -524,6 +525,7 @@ def _adv_from_dict(d: dict) -> AdvancedSettings:
         sdef_nrm=d.get("sdef_nrm", ""), sdef_tr=d.get("sdef_tr", ""),
         sdef_ccc=d.get("sdef_ccc", ""), sdef_ara=d.get("sdef_ara", ""),
         sdef_rate=d.get("sdef_rate", ""), sdef_raw_text=d.get("sdef_raw_text", ""),
+        sdef_extra=d.get("sdef_extra", ""),
         kcode_nsrc=d.get("kcode_nsrc", ""), kcode_rkk=d.get("kcode_rkk", ""),
         kcode_ikz=d.get("kcode_ikz", ""), kcode_kct=d.get("kcode_kct", ""),
         kcode_knrm=d.get("kcode_knrm", ""), ksrc_points=d.get("ksrc_points", ""),

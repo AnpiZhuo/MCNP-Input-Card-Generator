@@ -218,3 +218,41 @@ def test_http_generate_then_parse_roundtrip(backend_base_url):
     p = _post(backend_base_url, "/api/parse-inp", {"inp": g["inp"]})
     assert p["status"] == "ok"
     assert len(p["deck"].get("cells", [])) >= 1
+
+
+FORM_SDEF_DECK = {
+    "basic": {"title": "form sdef", "mode_n": True, "nps": "1000"},
+    "surfaces": "", "cells": [], "materials": [], "sources": [],
+    "tally": {},
+    "adv": {
+        "source_mode": "distribution",
+        "sdef_erg": "14",
+        "sdef_pos_x": "0", "sdef_pos_y": "0", "sdef_pos_z": "0",
+    },
+}
+
+
+def test_http_form_sdef_generate(backend_base_url):
+    """表单模式 SDEF（sources 空、adv.sdef_* 有值）→ 输出含 SDEF 卡（用户实测漏源卡回归）。"""
+    resp = _post(backend_base_url, "/api/generate", FORM_SDEF_DECK)
+    assert resp.get("status") == "ok", resp
+    assert "SDEF" in resp.get("inp", "")
+    assert "ERG=14" in resp["inp"]
+    assert "POS=0 0 0" in resp["inp"]
+
+
+def test_http_sdef_extra_survives_roundtrip(backend_base_url):
+    """导入带未知 SDEF 参数（EFF=）→ 再生成仍保留（sdef_extra API 往返不丢）。"""
+    inp_text = (
+        "form sdef extra\n"
+        "1 0 -1\n\n"
+        "1 sph 0 0 0 1\n\n"
+        "mode n\n"
+        "sdef erg=14 eff=1\n"
+        "nps 100\n"
+    )
+    p = _post(backend_base_url, "/api/parse-inp", {"inp": inp_text})
+    assert p.get("status") == "ok", p
+    g = _post(backend_base_url, "/api/generate", p.get("deck", {}))
+    assert g.get("status") == "ok", g
+    assert "EFF=1" in g.get("inp", "")

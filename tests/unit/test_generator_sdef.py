@@ -4,8 +4,9 @@ import json
 from app.generator.inp_generator import (
     _is_d_ref, _generate_sdef, _generate_single_source,
     _generate_distribution_sdef, _generate_structured_distributions,
+    generate_inp_from_deck, _sdef_form_has_values, _source_from_adv,
 )
-from app.models import SourceData, AdvancedSettings
+from app.models import SourceData, AdvancedSettings, DeckData
 
 
 def _src(**kw):
@@ -143,3 +144,44 @@ def test_structured_distributions_fn_code():
 def test_structured_distributions_empty_json():
     assert _generate_structured_distributions("") == []
     assert _generate_structured_distributions("not-json") == []
+
+
+# ── 表单模式（前端 sdefFields → adv.sdef_*，无分布/无多点源）──
+def test_form_mode_sdef_fields_generate():
+    """用户填 SDEF 源参数字段（表单模式）→ 生成单源 SDEF 卡（回归：漏源卡）。"""
+    deck = DeckData(adv=AdvancedSettings(
+        source_mode="distribution",
+        sdef_erg="14", sdef_pos_x="0", sdef_pos_y="0", sdef_pos_z="0",
+    ))
+    out = generate_inp_from_deck(deck, {})
+    assert "SDEF  ERG=14  POS=0 0 0" in out
+
+
+def test_form_mode_sources_take_precedence():
+    """sources 非空时优先走多点源路径，adv.sdef_* 不叠加（R1 不动点守卫）。"""
+    deck = DeckData(
+        adv=AdvancedSettings(source_mode="distribution", sdef_par="1", sdef_erg="99"),
+        sources=[_src(erg="14.0", pos_x="0", pos_y="0", pos_z="0")],
+    )
+    out = generate_inp_from_deck(deck, {})
+    assert "SDEF  ERG=14.0  POS=0 0 0" in out
+    assert "PAR=1" not in out
+    assert "ERG=99" not in out
+
+
+def test_form_mode_empty_no_sdef():
+    """表单全空（无字段/无分布/无源）→ 不输出 SDEF（原有空源行为不回归）。"""
+    deck = DeckData(adv=AdvancedSettings(source_mode="distribution"))
+    out = generate_inp_from_deck(deck, {})
+    assert "SDEF" not in out
+
+
+def test_sdef_form_has_values_and_source_from_adv():
+    assert not _sdef_form_has_values(AdvancedSettings())
+    assert _sdef_form_has_values(AdvancedSettings(sdef_erg="14"))
+    src = _source_from_adv(AdvancedSettings(
+        sdef_erg="14", sdef_pos_x="0", sdef_pos_y="0", sdef_pos_z="0",
+        sdef_dir="1", sdef_wgt="1.0", sdef_extra="EFF=1",
+    ))
+    assert src.erg == "14" and src.pos_z == "0"
+    assert src.dir_ == "1" and src.wgt == "1.0" and src.sdef_extra == "EFF=1"
