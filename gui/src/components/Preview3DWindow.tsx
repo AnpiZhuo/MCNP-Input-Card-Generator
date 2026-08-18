@@ -7,15 +7,30 @@
 import React, { useEffect, useState } from "react";
 import Preview3D from "./Preview3D";
 import { readPreview3DData, closeCurrentWindow, clearStlSession } from "../utils/windows";
+import { appendCardText, type QuickCellResult } from "../utils/quickCell";
 
 export default function Preview3DWindow() {
   const [data] = useState(() => readPreview3DData());
+  // 快捷建栅元需在窗口内追加曲面/TR/栅元并重拉 STL（deck 由主窗口回写同步）
+  const [deckCells, setDeckCells] = useState<any[]>(() => data?.cells || []);
+  const [surfaces, setSurfaces] = useState(() => data?.surfaces || "");
+  const [trCards, setTrCards] = useState(() => data?.trCards || "");
 
   // 材料改号 → 通过 storage 事件回写主窗口
   const handleMaterialChange = (cellNum: string, newMat: string) => {
     // 宿主层：先回写主窗口（emitMaterialChange），Preview3D 自身 onMaterialChange
     // 已处理窗口内视觉。主窗口通过 storage 事件收到后 patch deck。
     import("../utils/windows").then((m) => m.emitMaterialChange(cellNum, newMat));
+  };
+
+  const handleQuickCellGenerate = (result: QuickCellResult) => {
+    setSurfaces((prev) => appendCardText(prev, result.surfacesText));
+    setTrCards((prev) => appendCardText(prev, result.trCardsText));
+    setDeckCells((prev) => [
+      ...prev,
+      ...result.cells.map((c) => ({ num: c.num, mat: c.mat, comment: c.comment, surfaces: c.surfaces })),
+    ]);
+    import("../utils/windows").then((m) => m.emitQuickCellGenerate(result));
   };
 
   // 独立窗口容器样式：无主界面外壳，纯预览
@@ -34,12 +49,13 @@ export default function Preview3DWindow() {
 
   return React.createElement("div", { style: containerStyle },
     React.createElement(Preview3D, {
-      cells: data.cells,
-      surfaces: data.surfaces,
-      trCards: data.trCards,
+      cells: deckCells,
+      surfaces,
+      trCards,
       materials: data.materials,
       onClose: () => { clearStlSession(); closeCurrentWindow(); },
       onMaterialChange: handleMaterialChange,
+      onQuickCellGenerate: handleQuickCellGenerate,
     }),
   );
 }

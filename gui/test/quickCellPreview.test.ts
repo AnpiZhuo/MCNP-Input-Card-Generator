@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import * as THREE from "three";
 import type { Line } from "three";
-import { buildQuickCellPreview } from "../src/three/quickCellPreview";
+import { buildQuickCellPreview, wireColorForMaterial } from "../src/three/quickCellPreview";
 import { computeCameraParams } from "../src/three/cameraParams";
 
 function frame(shape: any, config: any): void {
@@ -30,6 +30,12 @@ function collectLines(shape: any, config: any): [number, number, number][][] {
 }
 
 describe("快捷建栅元线框预览（RPP）", () => {
+  it("wireColorForMaterial：M0 白线，其余用材料色", () => {
+    expect(wireColorForMaterial("0")).toBe(0xffffff);
+    // getMatColor("1") = COLORS[1] = "#00C853"
+    expect(wireColorForMaterial("1")).toBe(0x00c853);
+  });
+
   it("各种配置取景正常（不抛错、far>near）", () => {
     frame("rpp", { size: [2, 2, 2], center: [0, 0, 0], angles: [0, 0, 0], nx: 2, ny: 2, nz: 2 });
     frame("rpp", { size: [2, 2, 2], center: [10, 0, 0], angles: [0, 0, Math.PI / 2], nx: 2, ny: 1, nz: 1 });

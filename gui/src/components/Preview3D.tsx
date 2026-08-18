@@ -11,6 +11,7 @@
  */
 import React, { useRef, useEffect, useState, useCallback } from "react";
 import CrossSectionView from "./CrossSectionView";
+import QuickCellForm from "./QuickCellForm";
 
 /* ---- 类型定义 ---- */
 interface CellView {
@@ -30,6 +31,8 @@ interface Preview3DProps {
   onMaterialChange?: (cellNum: string, newMat: string) => void;
   /** 独立窗口模式：由宿主传入材料列表（{number, comment}），替代 useDeck() */
   materials?: { number: number; comment?: string }[];
+  /** 快捷建栅元生成结果回调（宿主把曲面/TR/栅元写回 deck） */
+  onQuickCellGenerate?: (result: QuickCellResult) => void;
 }
 
 /* ---- 色板（10 色，按材料号取模） ---- */
@@ -46,6 +49,8 @@ import { createRenderLoop } from "../three/renderGate";
 import { createTickGrid } from "../three/TickGrid";
 import { AXIS_CONFIG } from "../three/axisConfig";
 import { offsetPlaneForStl } from "../three/planeOffset";
+import { buildQuickCellPreview, wireColorForMaterial } from "../three/quickCellPreview";
+import type { QuickCellResult, QuickShape } from "../utils/quickCell";
 
 /* ---- plane eq formatting/parsing ---- */
 function planeToStr(plane: any): string {
@@ -306,32 +311,40 @@ function initScene(
       meshes[mi].renderOrder = mi;
     }
 
-    // 根据真实几何重新定位相机：取景框 = 模型 ∪ 原点（坐标轴在原点，须一并入画）；
-    // target = 模型中心（旋转围绕模型），far/near 按取景框收紧。
     if (meshes.length > 0) {
-      var modelBox = new THREE.Box3();
-      for (var _m3 of meshes) {
-        var bb = (_m3 as THREE.Mesh).geometry?.boundingBox;
-        if (bb) modelBox.union(bb);
-      }
-      var nC = modelBox.getCenter(new THREE.Vector3());
-      var nS = modelBox.getSize(new THREE.Vector3());
-      var frameBox = modelBox.clone();
-      frameBox.expandByPoint(new THREE.Vector3(0, 0, 0)); // 坐标轴在原点
-      var fS = frameBox.getSize(new THREE.Vector3());
-      var cp = computeCameraParams([nC.x, nC.y, nC.z], [fS.x, fS.y, fS.z]);
-      camera.near = cp.near;
-      camera.far = cp.far;
-      camera.position.set(cp.position[0], cp.position[1], cp.position[2]);
-      controls.target.set(cp.target[0], cp.target[1], cp.target[2]);
-      controls.minDistance = cp.minDistance;
-      controls.maxDistance = cp.maxDistance;
-      camera.updateProjectionMatrix();
-      controls.update();
-      updateAxes(Math.max(nS.x, nS.y, nS.z, 1) * 0.5);  // 轴线随实际几何范围伸缩，呈现"无限长"效果
+      frameCamera();  // 取景框 = 模型 ∪ 原点；target=模型中心
     }
     markDirty();
     return stlCount;
+  }
+
+  // 相机取景：模型 ∪（可选线框预览）∪ 原点（坐标轴在原点），target=模型中心
+  function frameCamera(extra?: THREE.Object3D) {
+    if (meshes.length === 0) return;
+    var modelBox = new THREE.Box3();
+    for (var _m4 of meshes) {
+      var bb4 = (_m4 as THREE.Mesh).geometry?.boundingBox;
+      if (bb4) modelBox.union(bb4);
+    }
+    if (modelBox.isEmpty()) return;
+    var frameBox = modelBox.clone();
+    if (extra) {
+      try { frameBox.union(new THREE.Box3().setFromObject(extra)); } catch (e) { /* 忽略线框取景异常 */ }
+    }
+    frameBox.expandByPoint(new THREE.Vector3(0, 0, 0));
+    var target = modelBox.getCenter(new THREE.Vector3());
+    var fSize = frameBox.getSize(new THREE.Vector3());
+    var cp = computeCameraParams([target.x, target.y, target.z], [Math.max(fSize.x, 1e-3), Math.max(fSize.y, 1e-3), Math.max(fSize.z, 1e-3)]);
+    camera.near = cp.near;
+    camera.far = cp.far;
+    camera.position.set(cp.position[0], cp.position[1], cp.position[2]);
+    controls.target.set(cp.target[0], cp.target[1], cp.target[2]);
+    controls.minDistance = cp.minDistance;
+    controls.maxDistance = cp.maxDistance;
+    camera.updateProjectionMatrix();
+    controls.update();
+    var mSize = modelBox.getSize(new THREE.Vector3());
+    updateAxes(Math.max(mSize.x, mSize.y, mSize.z, 1) * 0.5);  // 轴线随模型范围伸缩
   }
 
   /* ---- 按需渲染门（renderGate）---- */
@@ -395,6 +408,9 @@ function initScene(
     loadStlMeshes: loadStlMeshes,
     updateAxes: updateAxes,
     modelCenter: modelCenter,
+    scene: scene,
+    markDirty: markDirty,
+    frameCamera: frameCamera,
     setVisible(index: number, vis: boolean) {
       for (var _mi = 0; _mi < meshes.length; _mi++) {
         if (meshes[_mi].userData.index === index) { meshes[_mi].visible = vis; markDirty(); return; }
@@ -445,7 +461,7 @@ function initScene(
 }
 
 /* ---- React 组件 ---- */
-export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose, onMaterialChange, materials }: Preview3DProps) {
+export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose, onMaterialChange, materials, onQuickCellGenerate }: Preview3DProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const ctrlRef = useRef<ReturnType<typeof initScene> | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -475,6 +491,14 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   const [csSlices, setCsSlices] = useState<any[] | null>(null);
   // 材料选择浮层：i=cellViews 索引, x/y=点击屏幕坐标
   const [matPicker, setMatPicker] = useState<{ i: number; x: number; y: number } | null>(null);
+
+  // 快捷建栅元（3D 预览侧栏）：表单覆盖层 + 场景内线框预览 + 生成后重拉
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [genTick, setGenTick] = useState(0);
+  const [wireSpec, setWireSpec] = useState<{ shape: QuickShape; config: any; material: string } | null>(null);
+  const wirePreviewRef = useRef<ReturnType<typeof buildQuickCellPreview> | null>(null);
+  const propsRef = useRef({ cells: rawCells, surfaces: surfaces || "", trCards: trCards || "" });
+  propsRef.current = { cells: rawCells, surfaces: surfaces || "", trCards: trCards || "" };
 
   // 截面请求 → 结果写入数据桥并开独立截面窗口；非 Tauri 环境回退内嵌覆盖层
   // 只传勾选且非真空的栅元号 + plane（后端从 3D 预览保留的 STL 切，真空/未勾选不参与）
@@ -519,22 +543,23 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   useEffect(function() { setEqInput(planeToStr(csPlane)); }, [csPlane]);
 
   useEffect(() => {
-    // 用实际曲面和栅元数据调用后端生成 STL；fetch 期间显示加载遮罩
+    // 用最新曲面/栅元/TR 调用后端生成 STL；生成新栅元后 genTick++ 重拉
     setLoading(true);
-    var cellsForBackend = rawCells.map(function(c) {
+    var p = propsRef.current;
+    var cellsForBackend = p.cells.map(function(c) {
       return { number: parseInt(c.num) || 0, material: c.mat, density: (c as any).density || "", surface_expr: (c as any).surfaces || (c as any).surface_expr || "" };
     });
     fetch(apiUrl("/api/preview-3d"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        surfaces: surfaces || "",
+        surfaces: p.surfaces,
         cells: cellsForBackend,
-        tr_cards: trCards || "",
+        tr_cards: p.trCards,
       }),
     }).then(function(r) { return r.json(); }).then(function(j) {
       if (j.stl_data && Object.keys(j.stl_data).length > 0) {
-              setStlData(j.stl_data);
+        setStlData(j.stl_data);
         setFreecadStatus(" " + j.count + " ");
       } else if (j.message) {
         setFreecadStatus("  " + j.message);
@@ -542,7 +567,22 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         setFreecadStatus("  ");
       }
     }).catch(function() { setFreecadStatus("  "); }).finally(function() { setLoading(false); });
-  }, []);
+  }, [genTick]);
+
+  // 宿主追加新栅元后，把 cellViews 同步补齐（可见性/颜色）
+  useEffect(() => {
+    setCellViews(prev => {
+      if (rawCells.length <= prev.length) return prev;
+      const extra = rawCells.slice(prev.length).map(c => ({
+        num: c.num,
+        mat: c.mat,
+        comment: c.comment || "",
+        visible: c.mat !== "0",
+        color: getColor(c.mat),
+      }));
+      return [...prev, ...extra];
+    });
+  }, [rawCells]);
 
   // 初始化 Three.js 场景
   const [initErr, setInitErr] = useState("");
@@ -572,6 +612,56 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       ctrlRef.current.selectAll(true);
     }
   }, [stlData]);
+
+  /* 侧栏表单配置变化 → 防抖在场景里画线框（颜色随材料，M0 白线） */
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const ctrl = ctrlRef.current;
+      if (!ctrl) return;
+      if (wirePreviewRef.current) {
+        ctrl.scene.remove(wirePreviewRef.current.group);
+        wirePreviewRef.current.dispose();
+        wirePreviewRef.current = null;
+      }
+      if (wireSpec && quickAddOpen) {
+        const prev = buildQuickCellPreview(wireSpec.shape, wireSpec.config, wireColorForMaterial(wireSpec.material));
+        ctrl.scene.add(prev.group);
+        wirePreviewRef.current = prev;
+        ctrl.frameCamera(prev.group);
+      } else if (quickAddOpen) {
+        ctrl.frameCamera();
+      }
+      ctrl.markDirty();
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [wireSpec, quickAddOpen]);
+
+  const onQuickConfigChange = (shape: QuickShape, config: any, valid: boolean, material: string) => {
+    setWireSpec(valid ? { shape, config, material } : null);
+  };
+
+  const handleQuickCellGenerate = (result: QuickCellResult) => {
+    onQuickCellGenerate?.(result);
+    // 移除本次线框（新栅元由重拉 STL 渲染）
+    const ctrl = ctrlRef.current;
+    if (ctrl && wirePreviewRef.current) {
+      ctrl.scene.remove(wirePreviewRef.current.group);
+      wirePreviewRef.current.dispose();
+      wirePreviewRef.current = null;
+    }
+    setGenTick(t => t + 1);
+  };
+
+  const restoreQuickCellPanel = () => {
+    const ctrl = ctrlRef.current;
+    if (ctrl && wirePreviewRef.current) {
+      ctrl.scene.remove(wirePreviewRef.current.group);
+      wirePreviewRef.current.dispose();
+      wirePreviewRef.current = null;
+    }
+    if (ctrl) ctrl.frameCamera();
+    setQuickAddOpen(false);
+  };
 
   // 半透明查看开关：切换全栅元 opaque / see-through
   const toggleSeeThrough = useCallback(() => {
@@ -699,7 +789,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
           width: 300, borderLeft: "1px solid rgba(255,255,255,0.08)",
           background: "rgba(10,10,30,0.6)",
           display: "flex", flexDirection: "column", overflow: "hidden",
-          flexShrink: 0,
+          flexShrink: 0, position: "relative",
         } as React.CSSProperties,
       },
         /* 标题：🎨 栅元渲染控制 */
@@ -712,6 +802,11 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
           React.createElement("span", {
             style: { fontSize: 13, fontWeight: 700, color: "rgba(241,241,249,0.8)" },
           }, "🎨 栅元渲染控制"),
+          React.createElement("button", {
+            className: "btn btn-primary btn-xs",
+            style: { fontSize: 10 },
+            onClick: () => setQuickAddOpen(true),
+          }, "⚡ 快捷建栅元"),
         ),
         /* 提示 */
         React.createElement("div", {
@@ -827,6 +922,41 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
             className: "btn btn-primary btn-xs",
             onClick: onClose,
           }, "关闭"),
+        ),
+        /* 快捷建栅元覆盖层（替代侧栏显示；线框直接画进主场景） */
+        quickAddOpen && React.createElement("div", {
+          style: {
+            position: "absolute", inset: 0, zIndex: 20,
+            background: "rgba(10,10,30,0.98)",
+            display: "flex", flexDirection: "column", overflow: "hidden",
+          } as React.CSSProperties,
+        },
+          React.createElement("div", {
+            style: {
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.08)",
+            } as React.CSSProperties,
+          },
+            React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: "rgba(241,241,249,0.85)" } }, "⚡ 快捷建栅元"),
+            React.createElement("button", {
+              className: "btn btn-ghost btn-xs",
+              onClick: restoreQuickCellPanel,
+            }, "恢复栅元控制"),
+          ),
+          React.createElement("div", {
+            style: { flex: 1, overflowY: "auto", padding: "12px 14px" } as React.CSSProperties,
+          },
+            React.createElement(QuickCellForm, {
+              surfacesText: surfaces || "",
+              trCardsText: trCards || "",
+              cellNumbers: rawCells.map(c => parseInt(c.num) || 0),
+              materials: (matList || []).map(m => ({ number: m.number, comment: (m as any).comment, density: (m as any).density })),
+              onGenerate: handleQuickCellGenerate,
+              onConfigChange: onQuickConfigChange,
+              onCancel: restoreQuickCellPanel,
+              keepOpenAfterGenerate: true,
+            }),
+          ),
         ),
       ),
    ),

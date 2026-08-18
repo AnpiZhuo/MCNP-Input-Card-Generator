@@ -6,11 +6,19 @@
  */
 import * as THREE from "three";
 import { eulerRotation, type RccConfig, type RppConfig, type SphConfig, type QuickShape } from "../utils/quickCell";
+import { getMatColor } from "../utils/materialColors";
 
 const AXIS_X = new THREE.Vector3(1, 0, 0);
 const AXIS_Y = new THREE.Vector3(0, 1, 0);
 const AXIS_Z = new THREE.Vector3(0, 0, 1);
 const ORIGIN = new THREE.Vector3(0, 0, 0);
+
+/** 线框颜色随所选材料（M0 真空 → 白线）；materialColors 的 M0 是透明，须特判 */
+export function wireColorForMaterial(mat: string): number {
+  const hex = mat === "0" ? "#ffffff" : getMatColor(mat);
+  const h = parseInt(hex.replace("#", ""), 16);
+  return Number.isFinite(h) ? h : 0xffffff;
+}
 
 export interface QuickCellPreview {
   group: THREE.Group;
@@ -89,7 +97,7 @@ function axisLenFor(center: THREE.Vector3, extent: number): number {
   return Math.max(extent * 0.5, center.length() * 0.35, 0.5);
 }
 
-function buildRcc(group: THREE.Group, c: RccConfig): void {
+function buildRcc(group: THREE.Group, c: RccConfig, color: number): void {
   const base = new THREE.Vector3(...c.center);
   const ax = new THREE.Vector3(...c.axis);
   const top = base.clone().add(ax);
@@ -97,8 +105,8 @@ function buildRcc(group: THREE.Group, c: RccConfig): void {
   const R = c.radius;
 
   // 外形：两端圆 + 轴向母线
-  addLoop(group, circlePoints(base, R, n), 0x88aaff, 0.9);
-  addLoop(group, circlePoints(top, R, n), 0x88aaff, 0.9);
+  addLoop(group, circlePoints(base, R, n), color, 0.9);
+  addLoop(group, circlePoints(top, R, n), color, 0.9);
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2;
     const u = new THREE.Vector3();
@@ -106,31 +114,30 @@ function buildRcc(group: THREE.Group, c: RccConfig): void {
     u.normalize();
     const v = new THREE.Vector3().crossVectors(n, u).normalize();
     const p0 = base.clone().addScaledVector(u, Math.cos(a) * R).addScaledVector(v, Math.sin(a) * R);
-    addLine(group, [p0, p0.clone().add(ax)], 0x88aaff, 0.7);
+    addLine(group, [p0, p0.clone().add(ax)], color, 0.7);
   }
 
   // 环切分：每个半径在每个轴段边界（含两端）画一圈
   for (let li = 0; li <= c.segments; li++) {
     const pos = base.clone().addScaledVector(n, (len(c.axis) * li) / c.segments);
     for (let k = 1; k <= c.rings; k++) {
-      addLoop(group, circlePoints(pos, (R * k) / c.rings, n), 0x66ccff, 0.55);
+      addLoop(group, circlePoints(pos, (R * k) / c.rings, n), color, 0.55);
     }
   }
   // 轴向切分平面（半径 R 的圆）
   for (let k = 1; k < c.segments; k++) {
     const pos = base.clone().addScaledVector(n, (len(c.axis) * k) / c.segments);
-    addLoop(group, circlePoints(pos, R, n), 0x66ccff, 0.55);
+    addLoop(group, circlePoints(pos, R, n), color, 0.55);
   }
 
   const alen = axisLenFor(base, Math.max(R * 2, len(c.axis)));
   addAxes(group, ORIGIN, AXIS_X.clone().multiplyScalar(alen), AXIS_Y.clone().multiplyScalar(alen), AXIS_Z.clone().multiplyScalar(alen));
 }
 
-function buildSph(group: THREE.Group, c: SphConfig): void {
+function buildSph(group: THREE.Group, c: SphConfig, color: number): void {
   const center = new THREE.Vector3(...c.center);
   for (let k = 1; k <= c.shells; k++) {
     const r = (c.radius * k) / c.shells;
-    const color = k === c.shells ? 0x88aaff : 0x66ccff;
     const op = k === c.shells ? 0.9 : 0.55;
     addLoop(group, circlePoints(center, r, AXIS_X), color, op);
     addLoop(group, circlePoints(center, r, AXIS_Y), color, op);
@@ -140,7 +147,7 @@ function buildSph(group: THREE.Group, c: SphConfig): void {
   addAxes(group, ORIGIN, AXIS_X.clone().multiplyScalar(alen), AXIS_Y.clone().multiplyScalar(alen), AXIS_Z.clone().multiplyScalar(alen));
 }
 
-function buildRpp(group: THREE.Group, c: RppConfig): void {
+function buildRpp(group: THREE.Group, c: RppConfig, color: number): void {
   const [L, W, H] = c.size;
   const [cx0, cy0, cz0] = c.center;
   const R = eulerRotation(c.angles);
@@ -164,7 +171,7 @@ function buildRpp(group: THREE.Group, c: RppConfig): void {
     [4, 5], [5, 6], [6, 7], [7, 4],
     [0, 4], [1, 5], [2, 6], [3, 7],
   ];
-  edges.forEach(([a, b]) => addLine(group, [P[a], P[b]], 0x88aaff, 0.9));
+  edges.forEach(([a, b]) => addLine(group, [P[a], P[b]], color, 0.9));
 
   // 局部轴全局方向 = R 的列
   const u = new THREE.Vector3(R[0][0], R[1][0], R[2][0]);
@@ -175,7 +182,7 @@ function buildRpp(group: THREE.Group, c: RppConfig): void {
     const o = origin.clone().sub(e1.clone().multiplyScalar(0.5)).sub(e2.clone().multiplyScalar(0.5));
     addLoop(group, [
       o, o.clone().add(e1), o.clone().add(e1).add(e2), o.clone().add(e2),
-    ], 0x66ccff, 0.7);
+    ], color, 0.55);
   };
   for (let i = 1; i < c.nx; i++) rect(center.clone().addScaledVector(u, -L / 2 + (L * i) / c.nx), v.clone().multiplyScalar(W), w.clone().multiplyScalar(H));
   for (let j = 1; j < c.ny; j++) rect(center.clone().addScaledVector(v, -W / 2 + (W * j) / c.ny), u.clone().multiplyScalar(L), w.clone().multiplyScalar(H));
@@ -186,11 +193,11 @@ function buildRpp(group: THREE.Group, c: RppConfig): void {
   addAxes(group, ORIGIN, AXIS_X.clone().multiplyScalar(alen), AXIS_Y.clone().multiplyScalar(alen), AXIS_Z.clone().multiplyScalar(alen));
 }
 
-export function buildQuickCellPreview(shape: QuickShape, config: RccConfig | RppConfig | SphConfig): QuickCellPreview {
+export function buildQuickCellPreview(shape: QuickShape, config: RccConfig | RppConfig | SphConfig, color = 0x66ccff): QuickCellPreview {
   const group = new THREE.Group();
-  if (shape === "rcc") buildRcc(group, config as RccConfig);
-  else if (shape === "sph") buildSph(group, config as SphConfig);
-  else buildRpp(group, config as RppConfig);
+  if (shape === "rcc") buildRcc(group, config as RccConfig, color);
+  else if (shape === "sph") buildSph(group, config as SphConfig, color);
+  else buildRpp(group, config as RppConfig, color);
   return {
     group,
     dispose() {

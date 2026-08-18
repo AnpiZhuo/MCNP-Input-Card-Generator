@@ -11,7 +11,7 @@ import FloatingDialog from "./FloatingDialog";
 import { useDeck } from "../utils/DeckContext";
 import { useFreecadStatus } from "../utils/useFreecadStatus";
 import { useRowDrag } from "../utils/useRowDrag";
-import { openPreview3D, onMaterialChange } from "../utils/windows";
+import { openPreview3D, onMaterialChange, onQuickCellGenerate } from "../utils/windows";
 import { apiUrl } from "../utils/api";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
 import { textToSection } from "../utils/sectionConvert";
@@ -230,9 +230,12 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
 
   // 独立 3D 窗口里改材料号 → storage 事件回写主窗口（双向同步）
   useEffect(() => {
-    return onMaterialChange((cellNum, newMat) => {
+    const offMat = onMaterialChange((cellNum, newMat) => {
       setCells(prev => prev.map(c => c.kind === "cell" && c.cell.num === cellNum ? { ...c, cell: { ...c.cell, mat: newMat } } : c));
     });
+    // 独立 3D 窗口里快捷建栅元 → storage 事件回写主窗口（追加曲面/TR/栅元）
+    const offQuick = onQuickCellGenerate(handleQuickCellGenerate);
+    return () => { offMat(); offQuick(); };
   }, []);
 
   // local → deck（只推 cells，曲面/TR 由 DOM 采集，避免频闪）
@@ -378,7 +381,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
         </>)}
       </div>
       {doc && <DocViewer path={doc.path} title={doc.title} onClose={() => setDoc(null)} />}
-      {show3D && <Preview3D cells={cells.filter(c => c.kind === "cell").map(c => ({ num: c.cell.num, mat: c.cell.mat, density: c.cell.density, surfaces: c.cell.surfaces, comment: c.cell.comment, render: c.cell.render }))} surfaces={surfText} trCards={trText} onClose={() => setShow3D(false)} onMaterialChange={handleCellMaterialChange} />}
+      {show3D && <Preview3D cells={cells.filter(c => c.kind === "cell").map(c => ({ num: c.cell.num, mat: c.cell.mat, density: c.cell.density, surfaces: c.cell.surfaces, comment: c.cell.comment, render: c.cell.render }))} surfaces={surfText} trCards={trText} onClose={() => setShow3D(false)} onMaterialChange={handleCellMaterialChange} onQuickCellGenerate={handleQuickCellGenerate} />}
       {showStepDlg && <StepImportDialog onImport={handleStepImport} onClose={() => setShowStepDlg(false)} />}
       {fc.showDialog && <FloatingDialog title="⚠ 需要 FreeCAD" onClose={fc.closeDialog} width={460}
         footer={React.createElement("button", { className: "btn btn-primary btn-sm", onClick: fc.closeDialog }, "知道了")}>

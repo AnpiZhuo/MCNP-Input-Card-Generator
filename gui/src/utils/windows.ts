@@ -14,6 +14,7 @@ const KEY_CROSS = "mcnp_win_cross";
 const KEY_VOLUME3D = "mcnp_win_volume3d";
 const KEY_MAT_CHANGE = "mcnp_win_material_change";
 const KEY_PTRAC = "mcnp_win_ptrac";
+const KEY_QUICK_CELL = "mcnp_win_quick_cell";
 
 /** 当前是否运行在 Tauri 环境（浏览器模式回退主窗口覆盖层） */
 export async function isTauri(): Promise<boolean> {
@@ -189,6 +190,28 @@ export function onMaterialChange(cb: (cellNum: string, newMat: string) => void):
 /** 独立窗口：关闭自身（复用 Rust close_window 命令） */
 export async function closeCurrentWindow(): Promise<boolean> {
   return invoke("close_window");
+}
+
+/** 独立 3D 预览窗口 → 主窗口：快捷建栅元生成结果回写（localStorage + storage 事件） */
+export function emitQuickCellGenerate(result: any): void {
+  try {
+    localStorage.setItem(KEY_QUICK_CELL, JSON.stringify({ result, ts: Date.now() }));
+  } catch (e) {
+    console.warn("quick-cell emit failed", e);
+  }
+}
+
+/** 主窗口：监听独立 3D 预览窗口发来的快捷建栅元结果 */
+export function onQuickCellGenerate(cb: (result: any) => void): () => void {
+  const handler = (e: StorageEvent) => {
+    if (e.key !== KEY_QUICK_CELL || !e.newValue) return;
+    try {
+      const j = JSON.parse(e.newValue);
+      if (j && j.result) cb(j.result);
+    } catch {}
+  };
+  window.addEventListener("storage", handler);
+  return () => window.removeEventListener("storage", handler);
 }
 
 /** 通知后端删除 STL 会话目录（关 3D 预览窗口 / 主界面清空时调用） */
