@@ -1,5 +1,5 @@
 # 项目记忆文档（AI 速查手册）
-> 最后更新时间：2026-08-18（**v1.7.2 七次打包部署**：快捷建栅元三新特性（材料0确认/输入默认空/主 3D 预览侧栏+蓝线）进包；commit 5941a04 + 20e7fd5 + 749feb1 + a62a3cf + 06c63bb + 389374c + d9e9a94 未 push）
+> 最后更新时间：2026-08-18（**v1.7.2 八次打包部署**：线框预览不再强制矫正摄像头进包；commit 5941a04 + 20e7fd5 + 749feb1 + a62a3cf + 06c63bb + 389374c + d9e9a94 + 083deb3 未 push）
 >
 > **✅ 快捷建栅元已交付（2026-08-18，v1.7.2 用户指定，**五次打包部署** D:\MCNP\MCNP输入卡生成器，commit 5941a04 + 20e7fd5 + 749feb1 + a62a3cf + 06c63bb，未 push）**：几何标签页「曲面卡 & TR 变换」新增「⚡ 快捷建栅元」按钮 → 弹窗一次一种形状（圆柱 RCC / 六面体 RPP / 球 SPH），程序自动算曲面/TR/栅元卡：
 > - RCC：底面中心+轴向量+半径，N 等距圆环 × M 等距轴段 → N 个 RCC + M-1 个轴向 P 平面 → N×M 栅元（最内环实心，首/末段靠 RCC 自带端盖）
@@ -10,6 +10,7 @@
 > - **RPP 预览修复（用户实测）**：① 切分矩形曾从体中心往 +Y/+Z 只画一个象限（2×2×2 看不出 8 个立方体）→ 改为以切分位置为中心、跨整个截面；② 坐标轴曾画随体旋转的局部轴 → 改为**世界固定轴**（X 红/Y 绿/Z 蓝）+ **端点 X/Y/Z 标签**；③ 相机曾用 Three.js 默认 **Y 朝上**（电脑建模惯例）→ 改 **Z 朝上**（数学/物理/MCNP 惯例，与主 3D 预览/体积/PTRAC 窗口一致）；④ 坐标轴曾画在**体中心** → 改**固定在原点 (0,0,0)**（轴长按体尺寸/到原点距离自适应）
 > - **主 3D 预览根因修复（用户实测）**：坐标轴之所以穿过体中心，根因在**上层 Preview3D 的几何归一化**——`loadStlMeshes` 把全部 STL 平移到模型中心，轴画在场景原点即等效于体中心。修复：**去掉归一化平移**，模型显示在真实世界坐标，轴固定在真实原点 (0,0,0)；取景框=模型∪原点（轴须入画），target=模型中心（旋转围绕模型），far/near 按取景框收紧；截面平面坐标换算随之恒等（modelCenter 恒 0）
 > - **快捷建栅元三新特性（用户指定）**：① **材料 0 确认弹窗**——材料为 M0 真空时生成需自定义确认（玻璃拟态+橙色光晕，贴合主题，非系统 confirm）；② **所有数值输入默认空**——空按 0（分块环/段/份/壳按 1）处理；③ **主 3D 预览侧栏加 ⚡ 快捷建栅元**——点开后侧栏切换为同布局表单，**蓝色线框直接画进主场景**（毫秒级，颜色随所选材料、M0 白线），确认生成后写回 deck 并整模重拉 STL，表单保持、有「恢复栅元控制」按钮；独立 3D 预览窗口同样支持（结果经 localStorage 桥回写主窗口）
+> - **线框预览不再强制矫正摄像头（用户实测）**：弹窗画布与 3D 预览侧栏线框此前每次参数变化都重算相机取景；改为**仅线框首次出现时取景一次**，后续输入保持用户当前视角
 > - 模块化：gui/src/utils/quickCell.ts（纯函数，编号/校验/生成）+ gui/test/quickCell.test.ts **20** 用例 + gui/src/three/quickCellPreview.ts（线框）+ gui/test/quickCellPreview.test.ts 3 用例 + QuickCellDialog.tsx + GeometryTab 接线；真实 FreeCAD 链路验证：RCC 六格 / 轴对齐四格 / 斜向 6 平面两半 / **Yaw90°+平移(10,0,0) bbox 精确 / Yaw45°+Pitch30° 切 2 两半相等** 全部正确
 > - 门禁 pytest **512/0** + vitest **333/0** + tsc EXIT 0；打包链路五次全过（vite ~3.2s / PyInstaller 25,114,215B / tauri ~11s / **6.2 增量坑每次命中、手动覆盖**）；冒烟：xsdir loaded:true 7621 条 + RPP 角度卡 preview-3d 出 STL 全过
 >
@@ -184,6 +185,8 @@
 
 | 日期 | 变更类型 | 改动描述 | 涉及 Agent |
 | :--- | :--- | :--- | :--- |
+| 2026-08-18 | 修复/前端 | **线框预览不再强制矫正摄像头（用户实测，commit 083deb3，已随 v1.7.2 八次打包）**：QuickCellDialog 画布与 Preview3D 侧栏线框此前在每次参数变化时都重算相机取景（`computeCameraParams`/`frameCamera`），用户一边打字一边被拽视角；改为**仅当线框从无到有（首次出现）时取景一次**（`wasVisible = !!previewRef.current` 前置判断），后续参数变化保持用户当前视角，参数临时非法时也不取景。vitest **335/0**（已知 colorize 128³ 计时 flaky 隔离 18/18 绿）+ tsc EXIT 0 | 前端 |
+| 2026-08-18 | 管理/构建 | **v1.7.2 八次打包部署（相机取景修复进包，版本恒 1.7.2）**：门禁 pytest **512/0** + vitest **335/0**（colorize 计时 flaky 隔离绿）+ tsc EXIT 0；vite build 3.38s；PyInstaller sidecar 25,114,215B；binaries 替换；tauri build 11.39s；**6.2 时效坑第八次命中**：手动覆盖 sidecar 后复核；部署前需先杀主程序 + 残留 sidecar python.exe（用户测试中打开，双进程锁目录）；部署 D:\MCNP\MCNP输入卡生成器（exe **6,437,376B**/23:42 + python.exe + _internal 全套）；**冒烟**（sidecar 直跑）：xsdir loaded:true 7621 条 / RPP 角度卡 preview-3d count=1；环境已清理。commit **083deb3**（2 文件 +21/-17，未 push） | 构建 |
 | 2026-08-18 | 新增/前端 | **快捷建栅元三新特性（用户指定，commit d9e9a94，已随 v1.7.2 七次打包）**：① **材料 0 确认弹窗**——生成材料为 M0 真空时弹自定义确认（玻璃拟态卡片+⚠ 橙色光晕，贴合主题，非 window.confirm），取消不生成。② **所有数值输入默认空**——空值按 0（分块类环数/段数/份数/壳数按 1）处理。③ **主 3D 预览侧栏加「⚡ 快捷建栅元」**——点开后侧栏切换为同布局表单（QuickCellForm 共享组件），**蓝色线框直接画进主场景**（100ms 防抖，毫秒级；`wireColorForMaterial`：线色随所选材料、M0 白线），确认生成后写回 deck（GeometryTab 追加曲面/TR/栅元）并 `genTick++` 整模重拉 STL，表单保持打开、顶部「恢复栅元控制」按钮还原侧栏；独立 3D 预览窗口同样支持（Preview3DWindow 本地追加 + `emitQuickCellGenerate` localStorage 桥回写主窗口，GeometryTab `onQuickCellGenerate` 监听）。Preview3D 控制器新增暴露 `scene/markDirty/frameCamera`（取景=模型∪线框∪原点）。vitest **335/0**（+wireColorForMaterial）+ tsc EXIT 0 + pytest **512/0** | 前端 |
 | 2026-08-18 | 管理/构建 | **v1.7.2 七次打包部署（三新特性进包，版本恒 1.7.2）**：门禁 pytest **512/0** + vitest **335/0** + tsc EXIT 0；vite build 3.73s；PyInstaller sidecar 25,114,215B；binaries 替换；tauri build 36.88s；**6.2 时效坑第七次命中**：手动覆盖 sidecar（23:26）后复核；部署 D:\MCNP\MCNP输入卡生成器（exe **6,437,888B**/23:27，前端组件新增致体积变化 + python.exe + _internal 全套）；**冒烟**（sidecar 直跑不弹窗）：xsdir loaded:true 7621 条 / RPP 角度卡 preview-3d count=1；环境已清理。commit **d9e9a94**（8 文件 +570/-300，未 push） | 构建 |
 | 2026-08-18 | 修复/前端 | **主 3D 预览坐标轴根因修复：去掉模型归一化（用户实测，commit 389374c，已随 v1.7.2 六次打包）**：用户报告“轴原点仍在体中心”且怀疑上层定义——根因确认在 `Preview3D.loadStlMeshes` 的**几何归一化**（`geometry.translate(-c.x,-c.y,-c.z)` 把模型平移到中心，轴画在场景原点=体中心）。修复：保留真实世界坐标不平移；取景框=模型∪原点（`frameBox.expandByPoint(0,0,0)`，坐标轴在原点须入画），`computeCameraParams(模型中心, 取景框尺寸)` 使相机同时看到模型与原点、target=模型中心（旋转围绕模型）；`modelCenter` 恒 0 → 截面平面坐标换算恒等（显示系=原始系）。cameraParams.test.ts +1（取景框含原点时相机能看到原点）。vitest 全量 **334/0** + tsc EXIT 0 | 前端 |
