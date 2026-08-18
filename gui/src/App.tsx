@@ -15,6 +15,7 @@ import { buildGridsFromTally, buildTallyFromGrids } from "./utils/gridState";
 import { buildFmeshPayload, fmeshDefsToRows } from "./volume/fmeshState";
 import { startPythonBackend, stopPythonBackend } from "./utils/backend";
 import { apiUrl } from "./utils/api";
+import { buildRawOverrides } from "./utils/rawOverrides";
 
 const TABS = [
   { key: "basic", label: "基本" },
@@ -352,15 +353,7 @@ function AppInner() {
           ksrc_points: deck.ksrcPoints || "",
         },
         // 文本模式：当前处于文本模式的 section 用文本数据，表单模式的用表单数据
-        raw_overrides: (() => {
-          const ro: Record<string, string> = {};
-          const tm = deck.textMode || {};
-          const raw = deck.rawOverrides || {};
-          for (const sec of ["materials", "cells", "tally"] as const) {
-            if (tm[sec] && raw[sec]) ro[sec] = raw[sec];
-          }
-          return ro;
-        })(),
+        raw_overrides: buildRawOverrides(deck),
       };
       const inp = await generateInp(body);
       setPreview(inp);

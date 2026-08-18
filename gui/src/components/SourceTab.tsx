@@ -39,7 +39,9 @@ export default function SourceTab() {
   const { deck, patch } = useDeck();
   // fixed 模式已并入 SDEF 多点源模板
   const [mode, setMode] = useState<"sdef" | "surface" | "kcode" | "text">(
-    deck.sourceMode === "surface" ? "surface" : deck.sourceMode === "kcode" ? "kcode" : "sdef"
+    deck.textMode?.sdef
+      ? "text"
+      : deck.sourceMode === "surface" ? "surface" : deck.sourceMode === "kcode" ? "kcode" : "sdef"
   );
   const template = deck.sourceTemplate || "free";
   const sdefFields = deck.sdefFields || {};
@@ -197,8 +199,17 @@ export default function SourceTab() {
             <button key={opt.k} className={"btn btn-sm " + (mode === opt.k ? "btn-primary" : "btn-ghost")}
               onClick={() => {
                 setMode(opt.k as any);
-                // 切回表单模式时清掉 raw_overrides.sdef，让表单接管
-                if (opt.k !== "text") patch({ sourceMode: opt.k as any, rawOverrides: { ...deck.rawOverrides, sdef: "" } });
+                if (opt.k === "text") {
+                  // 进入源卡文本模式：标记 textMode.sdef，生成时 raw_overrides 才会带上 sdef 原文
+                  patch({ textMode: { ...deck.textMode, sdef: true } });
+                } else {
+                  // 切回表单模式时清掉 raw_overrides.sdef + textMode.sdef，让表单接管
+                  patch({
+                    sourceMode: opt.k as any,
+                    rawOverrides: { ...deck.rawOverrides, sdef: "" },
+                    textMode: { ...deck.textMode, sdef: false },
+                  });
+                }
               }}>
               {opt.l}
             </button>
@@ -214,7 +225,13 @@ export default function SourceTab() {
             <div style={{ flex: 1, display: "flex", justifyContent: "center" }}>
               <span style={{ fontSize: 10, color: "var(--text-tertiary)" }}>手动输入整个源段，生成时原样输出（SDEF/SI/SP/SB/DS/KCODE/KSRC/SSW/SSR）</span>
             </div>
-            <button className="btn btn-ghost btn-xs" onClick={() => { setMode("sdef"); patch({ rawOverrides: { ...deck.rawOverrides, sdef: "" } }); }} style={{ whiteSpace: "nowrap" }}>← 返回表单</button>
+            <button className="btn btn-ghost btn-xs" onClick={() => {
+              setMode("sdef");
+              patch({
+                rawOverrides: { ...deck.rawOverrides, sdef: "" },
+                textMode: { ...deck.textMode, sdef: false },
+              });
+            }} style={{ whiteSpace: "nowrap" }}>← 返回表单</button>
           </div>
           <textarea className="form-input" value={deck.rawOverrides?.sdef || ""}
             onChange={e => patch({ rawOverrides: { ...deck.rawOverrides, sdef: e.target.value } })}

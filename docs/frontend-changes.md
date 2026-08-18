@@ -1064,3 +1064,13 @@ ormalizeImportedMaterials（核素行 zaid 剥后缀，raw 行原样，rows/nucl
 - 根因：点源 + PTRAC EVENT=src → 全部事件重合于出生点（数据层，非 bug）；但 computeFramingBox 对零尺寸体积盒比例恒 0<0.25 → 以单点盒取景 → 相机怼点、外壳被剔除、OrbitControls 围点转（渲染层真 bug）。
 - 修复：alignWorld.computeFramingBox 退化盒守卫（volMaxDim<=0 → 并集取景）；trackColors 新增 allPointsCoincident 纯函数；PtracWindow 统计区新增重合点橙色提示（建议 EVENT=sur,col 或体源）。
 - 测试：framingBox.test.ts +2（单点/单线段退化盒不劫持取景）、trackColors.test.ts +3（allPointsCoincident）；vitest 303/0 + tsc EXIT 0；当日重打包部署 v1.7.1。
+
+## 源卡文本模式生成漏源卡修复（2026-08-19，用户实测「在源卡中键入后，生成时漏掉源卡」）
+
+- 根因（两处叠加）：① App.tsx handleGenerate 构造 `raw_overrides` 载荷的循环只遍历 `["materials","cells","tally"]`，漏掉 `sdef`；② SourceTab 的「文本模式」从未置 `deck.textMode.sdef`——即使把 sdef 加进循环，也会被 `tm[sec] && raw[sec]` 门控挡掉。后端 `generate_inp_from_deck(deck, raw_overrides)` 收到空 overrides 后走结构化源分支（空 sources）→ `_generate_sdef([])` 返回空 → 生成的 INP 没有源卡。
+- 修复：
+  - 新增 `gui/src/utils/rawOverrides.ts`：`buildRawOverrides` 纯函数 + `RAW_OVERRIDE_SECTIONS`（含 sdef），App.tsx 改调（单一事实来源，不再内联）。
+  - `SourceTab.tsx`：进入源卡文本模式置 `textMode.sdef=true`（工作区恢复后据此回显文本模式）；切回表单（含「← 返回表单」）清 `rawOverrides.sdef` + `textMode.sdef=false`。
+  - `DeckContext.tsx`：textMode key 注释补 sdef。
+- 回归测试：`gui/test/rawOverrides.test.ts` 3 用例先红后绿（textMode.sdef + rawOverrides.sdef → 载荷带 sdef 原文；非文本模式不带 sdef；materials/cells/tally 原有行为不回归）。
+- 验收：全量 pytest **512/0**；vitest **337/0**（已知 flaky colorize 128³ 计时单跑 18/18 绿）；tsc EXIT 0。未 commit。
