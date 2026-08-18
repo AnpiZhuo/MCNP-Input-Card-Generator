@@ -15,6 +15,7 @@ import { computeCameraParams } from "../three/cameraParams";
 import { buildQuickCellPreview } from "../three/quickCellPreview";
 import {
   generateQuickCell,
+  parseAngleExpr,
   quickCellCounts,
   validateQuickCell,
   type QuickCellResult,
@@ -66,9 +67,13 @@ export default function QuickCellDialog({ surfacesText, trCardsText, cellNumbers
   const [rcc, setRcc] = useState({ cx: "0", cy: "0", cz: "0", hx: "0", hy: "0", hz: "10", r: "2", rings: "2", segments: "3" });
   const [sph, setSph] = useState({ x: "0", y: "0", z: "0", r: "5", shells: "3" });
   const [rpp, setRpp] = useState({
-    pts: Array.from({ length: 8 }, () => ["0", "0", "0"]),
+    L: "2", W: "2", H: "2",
+    cx: "0", cy: "0", cz: "0",
+    roll: "0", pitch: "0", yaw: "0",
     nx: "2", ny: "2", nz: "2",
   });
+  const [unit, setUnit] = useState<"deg" | "rad">("deg");
+  const angleFocusRef = useRef<"roll" | "pitch" | "yaw">("roll");
   const [material, setMaterial] = useState("0");
   const [impN, setImpN] = useState(false);
   const [impP, setImpP] = useState(false);
@@ -97,16 +102,21 @@ export default function QuickCellDialog({ surfacesText, trCardsText, cellNumbers
         },
       };
     }
+    const ang = (s: string) => parseAngleExpr(s) ?? 0;
+    const raw = [ang(rpp.roll), ang(rpp.pitch), ang(rpp.yaw)];
+    const angles = (unit === "deg" ? raw.map((d) => (d * Math.PI) / 180) : raw) as [number, number, number];
     return {
       shape,
       config: {
-        points: rpp.pts.map((p) => [num(p[0]), num(p[1]), num(p[2])]),
+        size: [num(rpp.L), num(rpp.W), num(rpp.H)],
+        center: [num(rpp.cx), num(rpp.cy), num(rpp.cz)],
+        angles,
         nx: intPos(rpp.nx),
         ny: intPos(rpp.ny),
         nz: intPos(rpp.nz),
       },
     };
-  }, [shape, rcc, sph, rpp]);
+  }, [shape, rcc, sph, rpp, unit]);
 
   const error = useMemo(() => validateQuickCell(config.shape as QuickShape, config.config as any), [config]);
   const counts = useMemo(() => quickCellCounts(config.shape as QuickShape, config.config as any), [config]);
@@ -217,13 +227,6 @@ export default function QuickCellDialog({ surfacesText, trCardsText, cellNumbers
     return () => clearTimeout(timer);
   }, [cfgKey, error]);
 
-  const setRppPt = (i: number, j: number, v: string) => {
-    setRpp((prev) => {
-      const pts = prev.pts.map((p, pi) => (pi === i ? p.map((q, qi) => (qi === j ? v : q)) : p));
-      return { ...prev, pts };
-    });
-  };
-
   const matDensity = material !== "0" && material !== "" ? materials.find((m) => String(m.number) === material)?.density ?? "" : "";
 
   const handleGenerate = () => {
@@ -276,15 +279,44 @@ export default function QuickCellDialog({ surfacesText, trCardsText, cellNumbers
         numRow("半径 / 壳数", [{ key: "r", ph: "半径" }, { key: "shells", ph: "壳数 K" }], sph, (k, v) => setSph((p) => ({ ...p, [k]: v }))),
       );
     }
+    const angleFields: { key: "roll" | "pitch" | "yaw"; ph: string }[] = [
+      { key: "roll", ph: "Roll(X)" },
+      { key: "pitch", ph: "Pitch(Y)" },
+      { key: "yaw", ph: "Yaw(Z)" },
+    ];
     return React.createElement(React.Fragment, null,
-      React.createElement("div", { style: { fontSize: 10, color: "var(--text-tertiary)", marginBottom: 4 } },
-        "8 个角点：v0..v3 底面一圈，v4..v7 顶面对应（程序校验平行六面体；斜向自动算 TR 旋转）"),
-      rpp.pts.map((p, i) =>
-        numRow(`点${i + 1}`, [{ key: "0", ph: "X" }, { key: "1", ph: "Y" }, { key: "2", ph: "Z" }], { "0": p[0], "1": p[1], "2": p[2] }, (j, v) => setRppPt(i, parseInt(j, 10), v)),
+      numRow("尺寸", [{ key: "L", ph: "长 L" }, { key: "W", ph: "宽 W" }, { key: "H", ph: "高 H" }], rpp, (k, v) => setRpp((p) => ({ ...p, [k]: v }))),
+      numRow("中心", [{ key: "cx", ph: "X" }, { key: "cy", ph: "Y" }, { key: "cz", ph: "Z" }], rpp, (k, v) => setRpp((p) => ({ ...p, [k]: v }))),
+      React.createElement("div", { style: style.row },
+        React.createElement("div", { style: { ...style.grp, maxWidth: 64 } },
+          React.createElement("label", { style: style.lbl }, "倾斜角"),
+        ),
+        angleFields.map((f) =>
+          React.createElement("div", { key: f.key, style: { ...style.grp, maxWidth: 70 } },
+            React.createElement("label", { style: style.lbl }, f.ph),
+            React.createElement("input", {
+              style: style.inp,
+              value: rpp[f.key],
+              onFocus: () => { angleFocusRef.current = f.key; },
+              onChange: (e: React.ChangeEvent<HTMLInputElement>) => setRpp((p) => ({ ...p, [f.key]: e.target.value })),
+            }),
+          ),
+        ),
       ),
-      numRow("切分", [{ key: "nx", ph: "X 份" }, { key: "ny", ph: "Y 份" }, { key: "nz", ph: "Z 份" }],
-        { nx: rpp.nx, ny: rpp.ny, nz: rpp.nz },
-        (k, v) => setRpp((p) => ({ ...p, [k]: v }))),
+      React.createElement("div", { style: { ...style.row, alignItems: "center" } },
+        React.createElement("label", { style: { ...style.lbl, flexShrink: 0 } }, "角度单位"),
+        React.createElement("button", { type: "button", style: unit === "deg" ? style.segOn : style.seg, onClick: () => setUnit("deg") }, "DEG（度）"),
+        React.createElement("button", { type: "button", style: unit === "rad" ? style.segOn : style.seg, onClick: () => setUnit("rad") }, "RAD（弧度）"),
+        unit === "rad" && React.createElement("button", {
+          type: "button",
+          style: { ...style.seg, flex: 0, padding: "5px 10px" },
+          title: "在当前角度框插入 π（支持 π/2、2π）",
+          onClick: () => setRpp((p) => ({ ...p, [angleFocusRef.current]: p[angleFocusRef.current] + "π" })),
+        }, "插入 π"),
+      ),
+      React.createElement("div", { style: { fontSize: 10, color: "var(--text-tertiary)", marginBottom: 4 } },
+        "倾斜角依次绕 X→Y→Z（外旋 = Roll→Pitch→Yaw），R = Rz(Yaw)·Ry(Pitch)·Rx(Roll)；全 0 时轴对齐（RPP 宏体，无 TR），非 0 时程序自动生成 TR 卡"),
+      numRow("切分", [{ key: "nx", ph: "X 份" }, { key: "ny", ph: "Y 份" }, { key: "nz", ph: "Z 份" }], rpp, (k, v) => setRpp((p) => ({ ...p, [k]: v }))),
     );
   };
 

@@ -5,7 +5,7 @@
  * 不请求后端、不加载 STL；配合弹窗的按需渲染，实时跟手不卡。
  */
 import * as THREE from "three";
-import type { RccConfig, RppConfig, SphConfig, QuickShape } from "../utils/quickCell";
+import { eulerRotation, type RccConfig, type RppConfig, type SphConfig, type QuickShape } from "../utils/quickCell";
 
 const AXIS_X = new THREE.Vector3(1, 0, 0);
 const AXIS_Y = new THREE.Vector3(0, 1, 0);
@@ -16,21 +16,8 @@ export interface QuickCellPreview {
   dispose(): void;
 }
 
-function sub(a: number[], b: number[]): number[] {
-  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-}
-
-function add(a: number[], b: number[]): number[] {
-  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
-}
-
 function len(a: number[]): number {
   return Math.hypot(a[0], a[1], a[2]);
-}
-
-function unit(a: number[]): number[] {
-  const l = len(a);
-  return l > 1e-12 ? [a[0] / l, a[1] / l, a[2] / l] : [0, 0, 0];
 }
 
 function addLine(group: THREE.Group, pts: THREE.Vector3[], color: number, opacity = 1): void {
@@ -120,36 +107,46 @@ function buildSph(group: THREE.Group, c: SphConfig): void {
 }
 
 function buildRpp(group: THREE.Group, c: RppConfig): void {
-  const [v0, v1, v2, v3, v4, v5, v6, v7] = c.points;
-  const a = sub(v1, v0);
-  const b = sub(v3, v0);
-  const cc = sub(v4, v0);
-  const la = len(a), lb = len(b), lc = len(cc);
-  const u = unit(a), v = unit(b), w = unit(cc);
-  const P = (arr: number[]) => new THREE.Vector3(arr[0], arr[1], arr[2]);
+  const [L, W, H] = c.size;
+  const [cx0, cy0, cz0] = c.center;
+  const R = eulerRotation(c.angles);
+  const center = new THREE.Vector3(cx0, cy0, cz0);
 
-  // 12 条棱
-  const edges: [THREE.Vector3, THREE.Vector3][] = [
-    [P(v0), P(v1)], [P(v1), P(v2)], [P(v2), P(v3)], [P(v3), P(v0)],
-    [P(v4), P(v5)], [P(v5), P(v6)], [P(v6), P(v7)], [P(v7), P(v4)],
-    [P(v0), P(v4)], [P(v1), P(v5)], [P(v2), P(v6)], [P(v3), P(v7)],
+  // 局部角点 → 全局：p_global = center + R·p_local（R 行主序）
+  const toGlobal = (p: number[]) => new THREE.Vector3(
+    cx0 + R[0][0] * p[0] + R[0][1] * p[1] + R[0][2] * p[2],
+    cy0 + R[1][0] * p[0] + R[1][1] * p[1] + R[1][2] * p[2],
+    cz0 + R[2][0] * p[0] + R[2][1] * p[1] + R[2][2] * p[2],
+  );
+  const local = [
+    [-L / 2, -W / 2, -H / 2], [L / 2, -W / 2, -H / 2], [L / 2, W / 2, -H / 2], [-L / 2, W / 2, -H / 2],
+    [-L / 2, -W / 2, H / 2], [L / 2, -W / 2, H / 2], [L / 2, W / 2, H / 2], [-L / 2, W / 2, H / 2],
   ];
-  edges.forEach(([p, q]) => addLine(group, [p, q], 0x88aaff, 0.9));
+  const P = local.map(toGlobal);
 
-  // 切分平面（沿三条边方向）
-  const rect = (origin: THREE.Vector3, e1: THREE.Vector3, e2: THREE.Vector3, color: number) => {
+  // 12 条棱（底面 0-1-2-3、顶面 4-5-6-7、竖棱 0-4 等）
+  const edges: [number, number][] = [
+    [0, 1], [1, 2], [2, 3], [3, 0],
+    [4, 5], [5, 6], [6, 7], [7, 4],
+    [0, 4], [1, 5], [2, 6], [3, 7],
+  ];
+  edges.forEach(([a, b]) => addLine(group, [P[a], P[b]], 0x88aaff, 0.9));
+
+  // 局部轴全局方向 = R 的列
+  const u = new THREE.Vector3(R[0][0], R[1][0], R[2][0]);
+  const v = new THREE.Vector3(R[0][1], R[1][1], R[2][1]);
+  const w = new THREE.Vector3(R[0][2], R[1][2], R[2][2]);
+  const rect = (origin: THREE.Vector3, e1: THREE.Vector3, e2: THREE.Vector3) => {
     addLoop(group, [
       origin, origin.clone().add(e1), origin.clone().add(e1).add(e2), origin.clone().add(e2),
-    ], color, 0.5);
+    ], 0x66ccff, 0.5);
   };
-  const uVec = P(u), vVec = P(v), wVec = P(w);
-  const baseP = P(v0);
-  for (let i = 1; i < c.nx; i++) rect(baseP.clone().addScaledVector(uVec, (la * i) / c.nx), vVec.clone().multiplyScalar(lb), wVec.clone().multiplyScalar(lc), 0x66ccff);
-  for (let j = 1; j < c.ny; j++) rect(baseP.clone().addScaledVector(vVec, (lb * j) / c.ny), uVec.clone().multiplyScalar(la), wVec.clone().multiplyScalar(lc), 0x66ccff);
-  for (let k = 1; k < c.nz; k++) rect(baseP.clone().addScaledVector(wVec, (lc * k) / c.nz), uVec.clone().multiplyScalar(la), vVec.clone().multiplyScalar(lb), 0x66ccff);
+  for (let i = 1; i < c.nx; i++) rect(center.clone().addScaledVector(u, -L / 2 + (L * i) / c.nx), v.clone().multiplyScalar(W), w.clone().multiplyScalar(H));
+  for (let j = 1; j < c.ny; j++) rect(center.clone().addScaledVector(v, -W / 2 + (W * j) / c.ny), u.clone().multiplyScalar(L), w.clone().multiplyScalar(H));
+  for (let k = 1; k < c.nz; k++) rect(center.clone().addScaledVector(w, -H / 2 + (H * k) / c.nz), u.clone().multiplyScalar(L), v.clone().multiplyScalar(W));
 
-  const s = Math.max(la, lb, lc, 0.3) * 0.35;
-  addAxes(group, baseP, uVec.clone().multiplyScalar(s), vVec.clone().multiplyScalar(s), wVec.clone().multiplyScalar(s));
+  const s = Math.max(L, W, H, 0.3) * 0.35;
+  addAxes(group, center, u.clone().multiplyScalar(s), v.clone().multiplyScalar(s), w.clone().multiplyScalar(s));
 }
 
 export function buildQuickCellPreview(shape: QuickShape, config: RccConfig | RppConfig | SphConfig): QuickCellPreview {

@@ -1,10 +1,14 @@
 import { describe, it, expect } from "vitest";
 import {
+  appendCardText,
+  generatedCellToRow,
   generateQuickCell,
   nextCellNumber,
   nextSurfaceNumber,
   nextTrNumber,
   quickCellCounts,
+  parseAngleExpr,
+  trBFromAngles,
   validateQuickCell,
   densityForMaterial,
   type RccConfig,
@@ -46,26 +50,15 @@ describe("校验", () => {
     expect(validateQuickCell("sph", { center: [0, 0, 0], radius: 5, shells: 0 })).toMatch(/球壳数/);
   });
 
-  it("RPP 顶点数量/平行六面体/正交/份数校验", () => {
-    const pts = [
-      [0, 0, 0], [2, 0, 0], [2, 2, 0], [0, 2, 0],
-      [0, 0, 3], [2, 0, 3], [2, 2, 3], [0, 2, 3],
-    ] as [number, number, number][];
-    expect(validateQuickCell("rpp", { points: pts.slice(0, 7) as any, nx: 1, ny: 1, nz: 1 })).toMatch(/8 个角点/);
-    const bad = [...pts] as [number, number, number][];
-    bad[5] = [2.5, 0, 3]; // v5 不在正确位置
-    expect(validateQuickCell("rpp", { points: bad, nx: 1, ny: 1, nz: 1 })).toMatch(/平行六面体/);
-    const skew = [
-      [0, 0, 0], [2, 0, 0], [2, 2, 0], [0, 2, 0],
-      [0, 0, 3], [2, 0, 3], [2, 2, 3], [0, 2, 3],
-    ] as [number, number, number][];
-    skew[5] = [2, 1, 3]; // 顶面斜移 → 三边不再正交（保持平行六面体但非直角）
-    skew[6] = [2, 3, 3];
-    skew[7] = [0, 3, 3];
-    skew[4] = [0, 1, 3];
-    expect(validateQuickCell("rpp", { points: skew, nx: 1, ny: 1, nz: 1 })).toMatch(/两两垂直/);
-    expect(validateQuickCell("rpp", { points: pts, nx: 0, ny: 1, nz: 1 })).toMatch(/X 方向/);
-    expect(validateQuickCell("rpp", { points: pts, nx: 1, ny: 1, nz: 1 })).toBeNull();
+  it("RPP 尺寸/中心/角度/份数校验", () => {
+    const good = { size: [2, 2, 2] as [number, number, number], center: [0, 0, 0] as [number, number, number], angles: [0, 0, 0] as [number, number, number], nx: 1, ny: 1, nz: 1 };
+    expect(validateQuickCell("rpp", { ...good, size: [0, 2, 2] } as any)).toMatch(/长\/宽\/高/);
+    expect(validateQuickCell("rpp", { ...good, size: [2, -1, 2] } as any)).toMatch(/长\/宽\/高/);
+    expect(validateQuickCell("rpp", { ...good, center: [NaN, 0, 0] } as any)).toMatch(/中心坐标/);
+    expect(validateQuickCell("rpp", { ...good, angles: [0, Infinity, 0] } as any)).toMatch(/倾斜角度/);
+    expect(validateQuickCell("rpp", { ...good, nx: 0 } as any)).toMatch(/X 方向/);
+    expect(validateQuickCell("rpp", { ...good, ny: 1.5 } as any)).toMatch(/Y 方向/);
+    expect(validateQuickCell("rpp", good)).toBeNull();
   });
 });
 
@@ -127,16 +120,11 @@ describe("SPH 生成", () => {
 });
 
 describe("RPP 生成", () => {
-  const box: [number, number, number][] = [
-    [0, 0, 0], [2, 0, 0], [2, 3, 0], [0, 3, 0],
-    [0, 0, 4], [2, 0, 4], [2, 3, 4], [0, 3, 4],
-  ];
-
   it("轴对齐：RPP + 内部 PX/PY/PZ，无 TR", () => {
-    const r = generateQuickCell("rpp", { points: box as any, nx: 2, ny: 2, nz: 1 }, emptyCtx);
-    expect(r.surfacesText).toContain("101 rpp 0 2 0 3 0 4");
-    expect(r.surfacesText).toContain("102 px 1");
-    expect(r.surfacesText).toContain("103 py 1.5");
+    const r = generateQuickCell("rpp", { size: [2, 2, 2], center: [0, 0, 0], angles: [0, 0, 0], nx: 2, ny: 2, nz: 1 }, emptyCtx);
+    expect(r.surfacesText).toContain("101 rpp -1 1 -1 1 -1 1");
+    expect(r.surfacesText).toContain("102 px 0");
+    expect(r.surfacesText).toContain("103 py 0");
     expect(r.trCardsText).toBe("");
     expect(r.cells.map((c) => c.surfaces)).toEqual([
       "-101 -102 -103",
@@ -153,22 +141,17 @@ describe("RPP 生成", () => {
     expect(r.cellCount).toBe(4);
   });
 
-  it("斜向：6 个局部平面 + *TRn 后缀 + TR 卡（B 矩阵行=局部轴方向余弦）", () => {
-    // 绕 Z 转 45° 的正方体：a=(1,1,0) b=(-1,1,0) c=(0,0,1)
-    const rotated: [number, number, number][] = [
-      [0, 0, 0], [1, 1, 0], [0, 2, 0], [-1, 1, 0],
-      [0, 0, 1], [1, 1, 1], [0, 2, 1], [-1, 1, 1],
-    ];
-    const r = generateQuickCell("rpp", { points: rotated, nx: 2, ny: 1, nz: 1 }, emptyCtx);
-    expect(validateQuickCell("rpp", { points: rotated, nx: 2, ny: 1, nz: 1 })).toBeNull();
-    expect(r.trCardsText).toContain("TR1 0 0 0 0.707107 0.707107 0 -0.707107 0.707107 0 0 0 1");
-    expect(r.surfacesText).toContain("101 px 0 *TR1");
-    expect(r.surfacesText).toContain("102 px 1.414214 *TR1");
-    expect(r.surfacesText).toContain("103 py 0 *TR1");
-    expect(r.surfacesText).toContain("104 py 1.414214 *TR1");
-    expect(r.surfacesText).toContain("105 pz 0 *TR1");
+  it("倾斜（Yaw 90°）：6 个局部平面 + *TRn + TR 卡（B 矩阵行=局部轴方向余弦）", () => {
+    const r = generateQuickCell("rpp", { size: [2, 2, 2], center: [10, 0, 0], angles: [0, 0, Math.PI / 2], nx: 2, ny: 1, nz: 1 }, emptyCtx);
+    expect(validateQuickCell("rpp", { size: [2, 2, 2], center: [10, 0, 0], angles: [0, 0, Math.PI / 2], nx: 2, ny: 1, nz: 1 })).toBeNull();
+    expect(r.trCardsText).toContain("TR1 10 0 0 0 1 0 -1 0 0 0 0 1");
+    expect(r.surfacesText).toContain("101 px -1 *TR1");
+    expect(r.surfacesText).toContain("102 px 1 *TR1");
+    expect(r.surfacesText).toContain("103 py -1 *TR1");
+    expect(r.surfacesText).toContain("104 py 1 *TR1");
+    expect(r.surfacesText).toContain("105 pz -1 *TR1");
     expect(r.surfacesText).toContain("106 pz 1 *TR1");
-    expect(r.surfacesText).toContain("107 px 0.707107 *TR1");
+    expect(r.surfacesText).toContain("107 px 0 *TR1");
     expect(r.surfacesText).not.toContain("rpp");
     expect(r.cells.map((c) => c.surfaces)).toEqual([
       "+101 -107 +103 -104 +105 -106",
@@ -179,14 +162,32 @@ describe("RPP 生成", () => {
   });
 
   it("用户已有 TR 时编号顺延", () => {
-    const rotated: [number, number, number][] = [
-      [0, 0, 0], [1, 1, 0], [0, 2, 0], [-1, 1, 0],
-      [0, 0, 1], [1, 1, 1], [0, 2, 1], [-1, 1, 1],
-    ];
-    const r = generateQuickCell("rpp", { points: rotated, nx: 1, ny: 1, nz: 1 }, {
+    const r = generateQuickCell("rpp", { size: [2, 2, 2], center: [0, 0, 0], angles: [0, 0, 1], nx: 1, ny: 1, nz: 1 }, {
       surfacesText: "", trCardsText: "TR4 1 0 0 0 1 0 0 0 1 0 0 0", cellNumbers: [],
     });
     expect(r.trCardsText).toContain("TR5 ");
+  });
+});
+
+describe("角度解析与 TR B 矩阵", () => {
+  it("parseAngleExpr：支持 π 表达式与普通数字", () => {
+    expect(parseAngleExpr("π/2")).toBeCloseTo(Math.PI / 2);
+    expect(parseAngleExpr("2π")).toBeCloseTo(2 * Math.PI);
+    expect(parseAngleExpr("π")).toBeCloseTo(Math.PI);
+    expect(parseAngleExpr("45")).toBe(45);
+    expect(parseAngleExpr("1.5")).toBe(1.5);
+    expect(parseAngleExpr("")).toBeNull();
+    expect(parseAngleExpr("abc")).toBeNull();
+    expect(parseAngleExpr("π/")).toBeNull();
+  });
+
+  it("trBFromAngles：行 = 局部轴方向余弦（R 的列）", () => {
+    const round = (v: number[]) => v.map((x) => Math.round(x * 1e9) / 1e9);
+    expect(round(trBFromAngles([0, 0, 0]))).toEqual([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+    // Yaw 90°（绕 Z）：局部 X→全局 Y，局部 Y→全局 −X
+    expect(round(trBFromAngles([0, 0, Math.PI / 2]))).toEqual([0, 1, 0, -1, 0, 0, 0, 0, 1]);
+    // Roll 90°（绕 X）：局部 Y→全局 Z，局部 Z→全局 −Y
+    expect(round(trBFromAngles([Math.PI / 2, 0, 0]))).toEqual([1, 0, 0, 0, 0, 1, 0, -1, 0]);
   });
 });
 
@@ -218,7 +219,41 @@ describe("数量预览", () => {
       .toEqual({ surfaceCount: 6, cellCount: 12 });
     expect(quickCellCounts("sph", { center: [0, 0, 0], radius: 1, shells: 5 }))
       .toEqual({ surfaceCount: 5, cellCount: 5 });
-    expect(quickCellCounts("rpp", { points: [] as any, nx: 2, ny: 3, nz: 4 }))
+    expect(quickCellCounts("rpp", { size: [2, 2, 2], center: [0, 0, 0], angles: [0, 0, 0], nx: 2, ny: 3, nz: 4 }))
       .toEqual({ surfaceCount: 1 + 1 + 2 + 3, cellCount: 24 });
+    expect(quickCellCounts("rpp", { size: [2, 2, 2], center: [0, 0, 0], angles: [0, 0, 1], nx: 2, ny: 3, nz: 4 }))
+      .toEqual({ surfaceCount: 6 + 1 + 2 + 3, cellCount: 24 });
+  });
+});
+
+describe("填入逻辑（曲面/TR 文本追加 + 栅元行映射）", () => {
+  it("appendCardText：两块之间只保留一个换行，空块不追加", () => {
+    expect(appendCardText("", "101 px 0\n")).toBe("101 px 0\n");
+    expect(appendCardText("101 px 0\n", "TR1 0 0 0 1 0 0 0 1 0 0 0 1\n"))
+      .toBe("101 px 0\nTR1 0 0 0 1 0 0 0 1 0 0 0 1\n");
+    expect(appendCardText("101 px 0", "102 py 1\n")).toBe("101 px 0\n102 py 1\n");
+    expect(appendCardText("101 px 0", "")).toBe("101 px 0");
+    expect(appendCardText("101 px 0\n\n", "102 py 1\n")).toBe("101 px 0\n102 py 1\n");
+  });
+
+  it("generatedCellToRow：映射为本地行（高级参数留空、render true）", () => {
+    const row = generatedCellToRow({
+      num: "3", mat: "1", density: "-7.87", surfaces: "-101 +102",
+      impN: "1", impP: "", impE: "1", comment: "RPP 1/1 1/1 1/1",
+    });
+    expect(row.kind).toBe("cell");
+    expect(row.cell.num).toBe("3");
+    expect(row.cell.mat).toBe("1");
+    expect(row.cell.density).toBe("-7.87");
+    expect(row.cell.surfaces).toBe("-101 +102");
+    expect(row.cell.impN).toBe("1");
+    expect(row.cell.impP).toBe("");
+    expect(row.cell.impE).toBe("1");
+    expect(row.cell.comment).toBe("RPP 1/1 1/1 1/1");
+    expect(row.cell.render).toBe(true);
+    expect(row.cell.vol).toBe("");
+    expect(row.cell.pwt).toBe("");
+    expect(row.cell.trcl).toBe("");
+    expect(row.cell.otherParams).toBe("");
   });
 });

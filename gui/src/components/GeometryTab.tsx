@@ -15,7 +15,7 @@ import { openPreview3D, onMaterialChange } from "../utils/windows";
 import { apiUrl } from "../utils/api";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
 import { textToSection } from "../utils/sectionConvert";
-import type { QuickCellResult } from "../utils/quickCell";
+import { appendCardText, generatedCellToRow, type QuickCellResult } from "../utils/quickCell";
 
 /** 下拉右缘防溢出：x 超过视口右缘时 clamp 到 viewportWidth - dropdownWidth - 20。
  *  对齐现行为（现 220 = 200 宽 + 20 边距）。viewportWidth 为 0/负数时 Math.min 自然兜底（返回 min(x, 负数)）。 */
@@ -189,20 +189,9 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     setQuickCellOpen(true);
   };
   const handleQuickCellGenerate = (result: QuickCellResult) => {
-    setSurfText((prev) => (prev.trim() ? prev.replace(/\s*$/, "") + "\n" : "") + result.surfacesText);
-    setTrText((prev) => (result.trCardsText ? (prev.trim() ? prev.replace(/\s*$/, "") + "\n" : "") + result.trCardsText : prev));
-    setCells((prev) => [
-      ...prev,
-      ...result.cells.map((c) => ({
-        kind: "cell" as const,
-        cell: {
-          num: c.num, mat: c.mat, density: c.density, surfaces: c.surfaces,
-          impN: c.impN, impP: c.impP, impE: c.impE,
-          vol: "", pwt: "", ext: "", fcl: "", u: "", fill: "", lat: "", trcl: "", tmp: "", otherParams: "",
-          render: true, comment: c.comment,
-        },
-      })),
-    ]);
+    setSurfText((prev) => appendCardText(prev, result.surfacesText));
+    setTrText((prev) => appendCardText(prev, result.trCardsText));
+    setCells((prev) => [...prev, ...result.cells.map(generatedCellToRow)]);
   };
 
   // 3D 预览里点击材料号改材料 → 更新本地 cells，local→deck 同步自动 patch
