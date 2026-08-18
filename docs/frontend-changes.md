@@ -1082,3 +1082,5 @@ ormalizeImportedMaterials（核素行 zaid 剥后缀，raw 行原样，rows/nucl
 - **导出 CSV**：加 UTF-8 BOM（Excel 直接打开不乱码）。
 - **本地兜底解析器**：`utils/outputParser.ts` 重构——tally 头正则容错、支持 MCNP6.1 紧凑布局（cell 行后两列 flux/error）、energy 表头+total 行布局、tally type 提取。
 - 测试：`gui/test/outputParser.test.ts` +2、`gui/test/tallyChart.test.ts` +3；vitest **325/0** + tsc EXIT 0。
+
+> 追加：本地兜底解析器数据块标记泛化为 `(cell|surface|detector) N`（F1/F2/F4/F5/F7/F8 等），`outputParser.test.ts` +2（F1 surface / F5 detector），vitest **327/0**。

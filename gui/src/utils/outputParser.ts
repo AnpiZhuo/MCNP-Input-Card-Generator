@@ -38,8 +38,8 @@ export function parseOutp(text: string): ParsedOutput {
     if (currentTally) {
       var tm = l.match(/tally type\s+(\d+)/i);
       if (tm) { currentType = parseInt(tm[1]); continue; }
-      // 数据段标记：无冒号的 "cell N"（volumes 段的 "cell: N" 带冒号不算）
-      if (/^cell\s+\d+\s*$/i.test(l.trim())) { inTable = true; continue; }
+      // 数据段标记：无冒号的 cell/surface/detector 块（cell:/surfaces: 带冒号不算）
+      if (/^(cell|surface|detector)\s+\S+\s*$/i.test(l.trim())) { inTable = true; continue; }
       if (l.includes('energy') && l.includes('flux')) { inTable = true; continue; }
     }
     if (inTable && currentTally) {

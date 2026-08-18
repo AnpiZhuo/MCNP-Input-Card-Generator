@@ -84,3 +84,46 @@ def test_fatal_error_collected_as_warning():
     assert nps == 100
     assert tallies["4"]["rows"] == [{"energy": "1.0", "flux": "2.0", "error": "0.1"}]
     assert any("fatal error" in w for w in warnings)
+
+
+def test_f1_surface_layout():
+    """F1（面电流）：surface 块标记 + 两列数值（MCNP6.1 紧凑布局）。"""
+    text = """1tally        1        nps =       10000
+           tally type 1    number of particles crossing a surface.      units   1
+           particle(s): neutrons
+
+           surfaces:                       2
+     2.1    0.00    2.2    1.00
+
+ surface  2.1
+                 1.234E-03 0.0050
+
+ ===================================================================================================================================
+"""
+    tallies, _, _ = parse_outp(text)
+    assert "1" in tallies
+    assert tallies["1"]["type"] == 1
+    assert tallies["1"]["rows"] == [{"energy": "", "flux": "1.234E-03", "error": "0.0050"}]
+
+
+def test_f5_detector_layout():
+    """F5（点探测器）：detector 块标记 + energy/flux/error 三列 + total。"""
+    text = """1tally        5        nps =       10000
+           tally type 5    point detector tally.      units   1/cm**2
+           particle(s): neutrons
+           detector  1
+      energy     flux     error
+   1.0000E-01   1.234E-03   0.0050
+   2.0000E-01   2.345E-03   0.0060
+      total       3.579E-03   0.0040
+ ===================================================================================================================================
+"""
+    tallies, _, _ = parse_outp(text)
+    assert "5" in tallies
+    t = tallies["5"]
+    assert t["type"] == 5
+    assert t["rows"] == [
+        {"energy": "1.0000E-01", "flux": "1.234E-03", "error": "0.0050"},
+        {"energy": "2.0000E-01", "flux": "2.345E-03", "error": "0.0060"},
+    ]
+    assert t["total"]["flux"] == "3.579E-03"

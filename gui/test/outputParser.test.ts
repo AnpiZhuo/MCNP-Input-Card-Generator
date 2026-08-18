@@ -40,4 +40,32 @@ describe("parseOutp（本地兜底 OUTP 解析）", () => {
     ]);
     expect(r.tallies[4].total).toEqual({ energy: "total", flux: "3.579E-03", error: "0.0040" });
   });
+
+  it("F1 面电流：surface 块 + 两列数值（MCNP6.1 紧凑布局）", () => {
+    const text = [
+      "1tally        1        nps =       10000",
+      "           tally type 1    number of particles crossing a surface.",
+      "           surfaces:                       2",
+      " surface  2.1",
+      "                 1.234E-03 0.0050",
+      " =======",
+    ].join("\n");
+    const r = parseOutp(text);
+    expect(r.tallies[1].rows).toEqual([{ energy: "", flux: "1.234E-03", error: "0.0050" }]);
+  });
+
+  it("F5 点探测器：detector 块 + 三列 + total", () => {
+    const text = [
+      "1tally        5        nps =       10000",
+      "           tally type 5    point detector tally.",
+      "           detector  1",
+      "      energy     flux     error",
+      "   1.0000E-01   1.234E-03   0.0050",
+      "      total       3.579E-03   0.0040",
+      " =======",
+    ].join("\n");
+    const r = parseOutp(text);
+    expect(r.tallies[5].rows).toEqual([{ energy: "1.0000E-01", flux: "1.234E-03", error: "0.0050" }]);
+    expect(r.tallies[5].total).toEqual({ energy: "total", flux: "3.579E-03", error: "0.0040" });
+  });
 });

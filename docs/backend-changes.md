@@ -933,3 +933,5 @@ dims ni=1 nj=2 nk=2 / grid_bounds [49,-10,90]~[51,10,110]；texture 同样 ok（
 | 4 | `mcnp_sidecar.spec` `_keep_py` 加 `outp_parser.py`（否则打包缺模块） | `gui/mcnp_sidecar.spec` |
 
 **回归测试**：`tests/unit/test_outp_parser.py` 4 用例（紧凑两列 / 能量仓+total / 多栅元 / fatal 警告）；`tests/integration/test_api_contract.py` +1（HTTP 紧凑格式，fixture `tests/fixtures/simple_tally.outp`）；前端 `gui/test/outputParser.test.ts` +2、`gui/test/tallyChart.test.ts` +3。全量 pytest **526/0** + vitest **325/0** + tsc EXIT 0。
+
+**§T 追加（2026-08-19）——泛化到全部常见 F 卡布局**：兜底解析器数据块标记从仅 `cell N` 泛化为 `(cell|surface|detector) N`（无冒号）——`surface` 块覆盖 F1/F2（面电流/面通量）、`detector` 块覆盖 F5（点探测器）、`cell` 块覆盖 F4/F6/F7/F8 等；`surfaces:`/`cell:`（冒号）不匹配，避免误进 volumes/surfaces 段。新增单测 `test_f1_surface_layout`、`test_f5_detector_layout`（+2）与前端 `outputParser.test.ts` +2。已知边界：F1/F2 角度分仓等多维表按前 3 列 best-effort 映射；MCNP6.2 系输出优先走内置 pymcnp。全量 pytest **528/0** + vitest **327/0** + tsc EXIT 0。

@@ -5,17 +5,22 @@ D:\\MCNP\\PyMCNP\\src）的 Tally_4 正则只认 MCNP6.2 系布局（`cell  N` +
 + `total` 行），不认 MCNP6.1 单栅元单能仓的紧凑布局——`cell  N` 后直接两列数值
 （`flux error`，无 energy 列、无 total 行）。本解析器对两类布局都容错：
 
-- tally 块头 `1tally 4 nps = N`（块号可任意）
-- 数据表有/无 energy 列（3 列 = energy/flux/error，2 列 = flux/error）
+- tally 块头 `1tally 4 nps = N`（块号可任意，不区分 tally 类型）
+- 数据块标记泛化：`cell N`（F4/F6/F7/F8 等）、`surface N`（F1/F2）、`detector N`（F5）
+  （volumes/surfaces 段的 `cell:`/`surfaces:` 带冒号不匹配）
+- 数据表有/无 energy 列（3 列 = energy/通量/error，2 列 = 通量/error）
 - 有/无 total 行；多栅元扁平收集，total 取最后一行（MCNP 总 total 在末尾）
 - nps 优先取 problem summary 的 "run terminated when N particle histories were done"
+
+已知边界：F1/F2 的角度分仓等多维表按前 3 列 best-effort 映射；
+MCNP6.2 系输出优先走内置 pymcnp（Outp.from_mcnp().to_dataframe()）。
 """
 
 import re
 
 _TALLY_HEAD_RE = re.compile(r'^\d+tally\s+(\d+)\s+nps\s*=\s*(\d+)', re.IGNORECASE)
 _TALLY_TYPE_RE = re.compile(r'tally type\s+(\d+)', re.IGNORECASE)
-_CELL_DATA_RE = re.compile(r'^cell\s+\d+\s*$', re.IGNORECASE)  # 无冒号=数据段（volumes 的 cell: 带冒号不匹配）
+_BLOCK_DATA_RE = re.compile(r'^(cell|surface|detector)\s+\S+\s*$', re.IGNORECASE)  # 无冒号=数据段（cell:/surfaces: 带冒号不匹配）
 _NUM_RE = re.compile(r'^[+-]?(?:\d+\.?\d*|\.\d+)(?:[Ee][+-]?\d+)?$')
 _HEADER_RE = re.compile(r'^(energy|flux|value|counts|errors|cell)\b', re.IGNORECASE)
 _NPS_DONE_RE = re.compile(r'run terminated when\s+(\d+)\s+particle histories were done', re.IGNORECASE)
@@ -63,7 +68,7 @@ def parse_outp(text: str) -> tuple[dict, int | None, list[str]]:
                 tally_type = int(tm.group(1))
                 i += 1
                 continue
-            if _CELL_DATA_RE.match(s):
+            if _BLOCK_DATA_RE.match(s):
                 in_cell_data = True
                 i += 1
                 continue
