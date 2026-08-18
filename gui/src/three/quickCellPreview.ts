@@ -10,6 +10,7 @@ import { eulerRotation, type RccConfig, type RppConfig, type SphConfig, type Qui
 const AXIS_X = new THREE.Vector3(1, 0, 0);
 const AXIS_Y = new THREE.Vector3(0, 1, 0);
 const AXIS_Z = new THREE.Vector3(0, 0, 1);
+const ORIGIN = new THREE.Vector3(0, 0, 0);
 
 export interface QuickCellPreview {
   group: THREE.Group;
@@ -83,6 +84,11 @@ function addAxes(group: THREE.Group, origin: THREE.Vector3, x: THREE.Vector3, y:
   mk(z, 0x4488ff, "Z");
 }
 
+/** 轴长：兼顾体尺寸与体到原点的距离，保证原点处的轴在取景里清晰可见 */
+function axisLenFor(center: THREE.Vector3, extent: number): number {
+  return Math.max(extent * 0.5, center.length() * 0.35, 0.5);
+}
+
 function buildRcc(group: THREE.Group, c: RccConfig): void {
   const base = new THREE.Vector3(...c.center);
   const ax = new THREE.Vector3(...c.axis);
@@ -116,7 +122,8 @@ function buildRcc(group: THREE.Group, c: RccConfig): void {
     addLoop(group, circlePoints(pos, R, n), 0x66ccff, 0.55);
   }
 
-  addAxes(group, base, new THREE.Vector3(1, 0, 0).multiplyScalar(Math.max(R, 0.3)), AXIS_Y.clone().multiplyScalar(Math.max(R, 0.3)), AXIS_Z.clone().multiplyScalar(Math.max(R, 0.3)));
+  const alen = axisLenFor(base, Math.max(R * 2, len(c.axis)));
+  addAxes(group, ORIGIN, AXIS_X.clone().multiplyScalar(alen), AXIS_Y.clone().multiplyScalar(alen), AXIS_Z.clone().multiplyScalar(alen));
 }
 
 function buildSph(group: THREE.Group, c: SphConfig): void {
@@ -129,8 +136,8 @@ function buildSph(group: THREE.Group, c: SphConfig): void {
     addLoop(group, circlePoints(center, r, AXIS_Y), color, op);
     addLoop(group, circlePoints(center, r, AXIS_Z), color, op);
   }
-  const r = Math.max(c.radius, 0.3);
-  addAxes(group, center, AXIS_X.clone().multiplyScalar(r), AXIS_Y.clone().multiplyScalar(r), AXIS_Z.clone().multiplyScalar(r));
+  const alen = axisLenFor(center, c.radius * 2);
+  addAxes(group, ORIGIN, AXIS_X.clone().multiplyScalar(alen), AXIS_Y.clone().multiplyScalar(alen), AXIS_Z.clone().multiplyScalar(alen));
 }
 
 function buildRpp(group: THREE.Group, c: RppConfig): void {
@@ -174,9 +181,9 @@ function buildRpp(group: THREE.Group, c: RppConfig): void {
   for (let j = 1; j < c.ny; j++) rect(center.clone().addScaledVector(v, -W / 2 + (W * j) / c.ny), u.clone().multiplyScalar(L), w.clone().multiplyScalar(H));
   for (let k = 1; k < c.nz; k++) rect(center.clone().addScaledVector(w, -H / 2 + (H * k) / c.nz), u.clone().multiplyScalar(L), v.clone().multiplyScalar(W));
 
-  // 世界固定轴（X 红 / Y 绿 / Z 蓝），不随体旋转，便于看倾斜姿态
-  const s = Math.max(L, W, H, 0.3) * 0.5;
-  addAxes(group, center, AXIS_X.clone().multiplyScalar(s), AXIS_Y.clone().multiplyScalar(s), AXIS_Z.clone().multiplyScalar(s));
+  // 世界固定轴（X 红 / Y 绿 / Z 蓝）固定在原点 (0,0,0)，不随体旋转/移动，便于看体的真实位置与倾斜姿态
+  const alen = axisLenFor(center, Math.max(L, W, H));
+  addAxes(group, ORIGIN, AXIS_X.clone().multiplyScalar(alen), AXIS_Y.clone().multiplyScalar(alen), AXIS_Z.clone().multiplyScalar(alen));
 }
 
 export function buildQuickCellPreview(shape: QuickShape, config: RccConfig | RppConfig | SphConfig): QuickCellPreview {

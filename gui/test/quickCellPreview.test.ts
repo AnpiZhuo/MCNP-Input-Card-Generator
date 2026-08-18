@@ -50,12 +50,13 @@ describe("快捷建栅元线框预览（RPP）", () => {
     expect(has([1, 1, 0])).toBe(true);
   });
 
-  it("坐标轴固定为世界 X/Y/Z（倾斜时不随体旋转）", () => {
+  it("坐标轴固定在原点 (0,0,0) 的世界 X/Y/Z（不随体移动/旋转）", () => {
     const all = collectLines("rpp", { size: [2, 2, 2], center: [10, 0, 0], angles: [0, 0, Math.PI / 2], nx: 1, ny: 1, nz: 1 }).flat();
     const has = (p: [number, number, number]) => all.some((q) => q.every((v, k) => Math.abs(v - p[k]) < 1e-6));
-    // 世界轴端点（s = max(2,2,2)*0.5 = 1，从中心 (10,0,0) 出发）
-    expect(has([11, 0, 0])).toBe(true); // +X 红
-    expect(has([10, 1, 0])).toBe(true); // +Y 绿
-    expect(has([10, 0, 1])).toBe(true); // +Z 蓝
+    // 体中心在 (10,0,0) 时轴仍在原点：alen = max(1, 10*0.35=3.5, 0.5) = 3.5
+    expect(has([0, 0, 0])).toBe(true);   // 轴起点在原点
+    expect(has([3.5, 0, 0])).toBe(true); // +X 红
+    expect(has([0, 3.5, 0])).toBe(true); // +Y 绿
+    expect(has([0, 0, 3.5])).toBe(true); // +Z 蓝
   });
 });
