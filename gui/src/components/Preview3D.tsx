@@ -504,6 +504,8 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   const [stlData, setStlData] = useState<Record<string, string> | null>(null);
   const [loading, setLoading] = useState(true);
   const [seeThrough, setSeeThrough] = useState(false);  // 半透明查看（默认关 → opaque）
+  const seeThroughRef = useRef(false);
+  useEffect(() => { seeThroughRef.current = seeThrough; }, [seeThrough]);
   const [csPlane, setCsPlane] = useState({A:0,B:0,C:1,D:0});
   const [dbgLog, setDbgLog] = useState<string[]>([]);
   const log = (msg: string) => { console.log('[3Ddbg]', msg); setDbgLog(p => [...p, msg]); };
@@ -679,6 +681,13 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       setCellViews(prev => prev.map(c => c.mat === "0" ? c : { ...c, visible: true }));
       ctrlRef.current.selectAll(true);
       runOverlapCheck();  // 异步自动重合检测（渲染完成后）
+      setTimeout(() => {
+        // STL 加载成功后 0.5s 自动勾选半透明查看（用户要求）
+        if (!seeThroughRef.current && ctrlRef.current) {
+          setSeeThrough(true);
+          ctrlRef.current.setTransparentMode("see-through");
+        }
+      }, 500);
     }
   }, [stlData, runOverlapCheck]);
 
@@ -1062,6 +1071,9 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
               trCardsText: trCards || "",
               cellNumbers: rawCells.map(c => parseInt(c.num) || 0),
               materials: (matList || []).map(m => ({ number: m.number, comment: (m as any).comment, density: (m as any).density })),
+              modeN: !!(deck.basic as any)?.mode_n,
+              modeP: !!(deck.basic as any)?.mode_p,
+              modeE: !!(deck.basic as any)?.mode_e,
               onGenerate: handleQuickCellGenerate,
               onConfigChange: onQuickConfigChange,
               onCancel: restoreQuickCellPanel,

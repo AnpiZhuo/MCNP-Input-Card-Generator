@@ -28,6 +28,10 @@ interface QuickCellFormProps {
   onCancel?: () => void;
   /** 生成后是否保持表单打开（3D 预览侧栏 true；弹窗 false） */
   keepOpenAfterGenerate?: boolean;
+  /** 基础页启用的粒子模式（N/P/E）——imp 不勾选时按此填 1 */
+  modeN?: boolean;
+  modeP?: boolean;
+  modeE?: boolean;
 }
 
 const style: Record<string, React.CSSProperties> = {
@@ -64,6 +68,7 @@ function intPos(s: string, d = 1): number {
 export default function QuickCellForm({
   surfacesText, trCardsText, cellNumbers, materials,
   onGenerate, onConfigChange, onCancel, keepOpenAfterGenerate,
+  modeN, modeP, modeE,
 }: QuickCellFormProps) {
   const [shape, setShape] = useState<QuickShape>("rcc");
   // 所有数值输入默认空：空按 0（分块按 1）处理
@@ -79,6 +84,7 @@ export default function QuickCellForm({
   const [impN, setImpN] = useState(false);
   const [impP, setImpP] = useState(false);
   const [impE, setImpE] = useState(false);
+  const [checkOverlap, setCheckOverlap] = useState(true);
   const [confirmVoid, setConfirmVoid] = useState(false);
 
   const config = useMemo(() => {
@@ -132,8 +138,10 @@ export default function QuickCellForm({
 
   const doGenerate = () => {
     const result = generateQuickCell(config.shape as QuickShape, config.config as any, {
-      surfacesText, trCardsText, cellNumbers, materials, material, impN, impP, impE,
+      surfacesText, trCardsText, cellNumbers, materials, material,
+      impN, impP, impE, modeN, modeP, modeE,
     });
+    result.checkOverlap = checkOverlap;
     onGenerate(result);
     if (!keepOpenAfterGenerate) onCancel?.();
   };
@@ -241,7 +249,7 @@ export default function QuickCellForm({
         ),
       ),
       React.createElement("div", { style: { ...style.grp, maxWidth: 130 } },
-        React.createElement("label", { style: style.lbl }, "IMP"),
+        React.createElement("label", { style: style.lbl }, "IMP（勾选=0，不勾选按基础页填1）"),
         React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", height: 28 } },
           React.createElement("label", { style: { fontSize: 11, color: "var(--text-secondary)", display: "flex", gap: 3, alignItems: "center" } },
             React.createElement("input", { type: "checkbox", checked: impN, onChange: (e) => setImpN(e.target.checked) }), "N"),
@@ -249,6 +257,14 @@ export default function QuickCellForm({
             React.createElement("input", { type: "checkbox", checked: impP, onChange: (e) => setImpP(e.target.checked) }), "P"),
           React.createElement("label", { style: { fontSize: 11, color: "var(--text-secondary)", display: "flex", gap: 3, alignItems: "center" } },
             React.createElement("input", { type: "checkbox", checked: impE, onChange: (e) => setImpE(e.target.checked) }), "E"),
+        ),
+      ),
+      React.createElement("div", { style: { ...style.grp, maxWidth: 170 } },
+        React.createElement("label", { style: style.lbl }, "重合检测"),
+        React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", height: 28 } },
+          React.createElement("label", { style: { fontSize: 11, color: "var(--text-secondary)", display: "flex", gap: 3, alignItems: "center" } },
+            React.createElement("input", { type: "checkbox", checked: checkOverlap, onChange: (e) => setCheckOverlap(e.target.checked) }),
+            "添加时检测与已有栅元重合"),
         ),
       ),
     ),

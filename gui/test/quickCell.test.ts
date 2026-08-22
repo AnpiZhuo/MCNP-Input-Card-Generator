@@ -203,13 +203,26 @@ describe("材料/密度/imp", () => {
     expect(densityForMaterial("2", ctx.materials)).toBe("");
   });
 
-  it("imp 勾选才写 1", () => {
+  it("imp 勾选写 0（杀粒子），不勾选按基础页模式填 1", () => {
     const r = generateQuickCell("sph", { center: [0, 0, 0], radius: 1, shells: 1 }, {
-      ...emptyCtx, material: "0", impN: true, impE: true,
+      ...emptyCtx, material: "0", impN: true, impP: false, impE: true,
+      modeN: false, modeP: true, modeE: true,
+    });
+    // 勾选 → 0
+    expect(r.cells[0].impN).toBe("0");
+    expect(r.cells[0].impE).toBe("0");
+    // 不勾选 + 基础页启用该粒子 → 1
+    expect(r.cells[0].impP).toBe("1");
+  });
+
+  it("imp 不勾选且基础页未启用该粒子 → 留空", () => {
+    const r = generateQuickCell("sph", { center: [0, 0, 0], radius: 1, shells: 1 }, {
+      ...emptyCtx, material: "0", impN: false, impP: false, impE: false,
+      modeN: true, modeP: false, modeE: false,
     });
     expect(r.cells[0].impN).toBe("1");
     expect(r.cells[0].impP).toBe("");
-    expect(r.cells[0].impE).toBe("1");
+    expect(r.cells[0].impE).toBe("");
   });
 });
 

@@ -17,7 +17,8 @@
  * - TR：与 cell 同理（无则 1 起；有则取最大 TR 编号 + 1）
  *
  * 生成的 cell 卡：材料号（默认 0 真空）、密度（材料卡有则自动带出）、
- * imp:n/p/e（勾选才写 1）、注释；其余高级参数留空。
+ * imp:n/p/e（勾选写 0=杀粒子；不勾选按基础页粒子模式填 1，未启用模式留空）、
+ * 注释；其余高级参数留空。
  */
 
 export type QuickShape = "rcc" | "rpp" | "sph";
@@ -60,6 +61,10 @@ export interface QuickCellContext {
   impN?: boolean;
   impP?: boolean;
   impE?: boolean;
+  /** 基础页启用的粒子模式（N/P/E）——不勾选 imp 时按此填 1 */
+  modeN?: boolean;
+  modeP?: boolean;
+  modeE?: boolean;
 }
 
 export interface GeneratedCell {
@@ -81,6 +86,8 @@ export interface QuickCellResult {
   cells: GeneratedCell[];
   surfaceCount: number;
   cellCount: number;
+  /** 添加后是否做重合检测（GeometryTab 据此决定是否弹补集决策） */
+  checkOverlap?: boolean;
 }
 
 /** GeometryTab 本地栅元行（camelCase，与 CellEditDialog.CellData 一致） */
@@ -277,9 +284,9 @@ function cellBase(ctx: QuickCellContext, num: number, surfaces: string, comment:
     mat,
     density: mat === "0" ? "" : densityForMaterial(mat, ctx.materials),
     surfaces,
-    impN: ctx.impN ? "1" : "",
-    impP: ctx.impP ? "1" : "",
-    impE: ctx.impE ? "1" : "",
+    impN: ctx.impN ? "0" : (ctx.modeN ? "1" : ""),
+    impP: ctx.impP ? "0" : (ctx.modeP ? "1" : ""),
+    impE: ctx.impE ? "0" : (ctx.modeE ? "1" : ""),
     comment,
   };
 }

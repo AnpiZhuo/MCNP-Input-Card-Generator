@@ -21,6 +21,9 @@ interface Props {
   trCardsText: string;
   cellNumbers: number[];
   materials: { number: number; comment?: string; density?: string }[];
+  modeN?: boolean;
+  modeP?: boolean;
+  modeE?: boolean;
   onClose: () => void;
   onGenerate: (result: QuickCellResult) => void;
 }
@@ -32,7 +35,7 @@ interface PreviewState {
   material: string;
 }
 
-export default function QuickCellDialog({ surfacesText, trCardsText, cellNumbers, materials, onClose, onGenerate }: Props) {
+export default function QuickCellDialog({ surfacesText, trCardsText, cellNumbers, materials, modeN, modeP, modeE, onClose, onGenerate }: Props) {
   /* ── 预览画布：场景/相机/渲染（按需渲染） ── */
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -154,6 +157,7 @@ export default function QuickCellDialog({ surfacesText, trCardsText, cellNumbers
       React.createElement("div", { style: { width: 360, flexShrink: 0, overflowY: "auto", paddingRight: 4 } },
         React.createElement(QuickCellForm, {
           surfacesText, trCardsText, cellNumbers, materials,
+          modeN, modeP, modeE,
           onGenerate, onCancel: onClose, onConfigChange,
         }),
       ),

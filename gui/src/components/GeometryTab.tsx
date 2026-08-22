@@ -195,9 +195,15 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     setQuickCellOpen(true);
   };
   const handleQuickCellGenerate = (result: QuickCellResult) => {
-    setSurfText((prev) => appendCardText(prev, result.surfacesText));
-    setTrText((prev) => appendCardText(prev, result.trCardsText));
+    const nextSurf = appendCardText(surfTextRef.current, result.surfacesText);
+    const nextTr = appendCardText(trTextRef.current, result.trCardsText);
+    setSurfText(nextSurf);
+    setTrText(nextTr);
     const newRows = result.cells.map(generatedCellToRow);
+    if (result.checkOverlap === false) {
+      setCells(prev => [...prev, ...newRows]);
+      return;
+    }
     // 快捷添加重合检查：新栅元 vs 已有 → 弹出 A/B/C 补集决策
     const newRow = newRows[0];
     if (!newRow || newRow.kind !== "cell") { setCells(prev => [...prev, ...newRows]); return; }
@@ -207,7 +213,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
       density: newRow.cell.density,
       surface_expr: newRow.cell.surfaces,
     };
-    const existingCells = cells.filter(c => c.kind === "cell").map(c => ({
+    const existingCells = cellsRef.current.filter(c => c.kind === "cell").map(c => ({
       kind: "cell",
       cell: {
         number: parseInt(c.cell.num, 10) || 0,
@@ -221,9 +227,9 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
         const r = await fetch(apiUrl("/api/quick-add-check"), {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            surfaces: appendCardText(surfText, result.surfacesText),
+            surfaces: nextSurf,
             cells: existingCells,
-            tr_cards: appendCardText(trText, result.trCardsText),
+            tr_cards: nextTr,
             new_cell: newCellJson,
           }),
           signal: AbortSignal.timeout(60000),
@@ -309,6 +315,11 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const lastCellsRef = useRef("");
   const lastSurfRef = useRef("");
   const lastTrRef = useRef("");
+  // 最新值 ref（快捷添加重合检测请求用，避免 state 未 flush 读到旧文本）
+  const surfTextRef = useRef(surfText);
+  const trTextRef = useRef(trText);
+  surfTextRef.current = surfText;
+  trTextRef.current = trText;
   useEffect(() => {
     // local → deck：cells（CellRow 判别联合）/ surfaces / tr 全部受控推送
     const curCells = JSON.stringify(cells.map(c => c.kind === "raw"
@@ -344,6 +355,9 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
         trCardsText={trText}
         cellNumbers={cells.filter((c) => c.kind === "cell").map((c) => parseInt(c.cell.num, 10) || 0)}
         materials={(deck.materials || []).map((m) => ({ number: m.number, comment: m.comment, density: m.density }))}
+        modeN={!!(deck.basic as any)?.mode_n}
+        modeP={!!(deck.basic as any)?.mode_p}
+        modeE={!!(deck.basic as any)?.mode_e}
         onClose={() => setQuickCellOpen(false)}
         onGenerate={handleQuickCellGenerate}
       />}
