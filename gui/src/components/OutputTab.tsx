@@ -8,6 +8,7 @@ import { decideResolution, DEFAULT_RESOLUTION, MAX_RESOLUTION, OVER_BUDGET_POPUP
 import { openVolume3DWindow, readOutputDir } from "../volume/openVolume3DWindow";
 import { openPtrac3DWindow } from "../ptrac/openPtracWindow";
 import { buildFluxChartSvg } from "../utils/tallyChart";
+import SweepDialog from "./SweepDialog";
 
 export default function OutputTab() {
   const [doc, setDoc] = useState<{path:string;title:string}|null>(null);
@@ -16,6 +17,7 @@ export default function OutputTab() {
   const [selectedTally, setSelectedTally] = useState("1");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [chartTally, setChartTally] = useState<string | null>(null);
+  const [sweepOpen, setSweepOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { deck } = useDeck();
 
@@ -265,6 +267,8 @@ export default function OutputTab() {
           <div style={{ flex: 1, display: "flex", justifyContent: "center" }}>
             <button className="btn btn-ghost btn-xs" onClick={() => setDoc({path:"/docs/MCNP6_输出卡结构参考.md",title:"输出卡结构参考"})}>📖</button>
           </div>
+          <button className="btn btn-ghost btn-xs" onClick={() => setSweepOpen(true)}
+            title="批量改参数（NPS/keff 等）跑 MCNP">⚙ 参数扫描</button>
         </div>
         <div className="form-row">
           <div className="form-group" style={{ flex: 1 }}>
@@ -282,6 +286,8 @@ export default function OutputTab() {
           </div>
         </div>
       </div>
+
+      {sweepOpen && <SweepDialog onClose={() => setSweepOpen(false)} />}
 
       <div className="glass-card">
         <div className="card-header">

@@ -162,9 +162,24 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
   for (const [, items] of PRESET_CATEGORIES) for (const item of items) flatPresets[item.key] = item;
   const handlePreset = (key: string) => {
     const p = flatPresets[key]; if (!p) return;
-    setComment(p.name); setFormulaText(p.formula); setMode("formula");
-    setParsed(null); parseFormula(p.formula);
+    setComment(p.name);
     if (p.density) setDensity(p.density);  // 预设密度自动填入密度栏
+    if (p.rows && p.rows.length > 0) {
+      // PNNL 精选：同位素级 ZAID 行直接填「手动 ZAID」模式（不走化学式展开）
+      setMode("manual");
+      setFormulaText("");
+      setParsed(null);
+      const rows: MaterialRow[] = p.rows.map(([zaid, fraction]) => ({
+        kind: "nuclide" as const, zaid, fraction,
+      }));
+      setNucs(rows);
+      setRowEdits({});
+      p.rows.forEach(([zaid], i) => { if (zaid) validateZaid(i, zaid); });
+    } else {
+      // 化学式预设：展开后填「手动 ZAID」模式；formulaText 保留供切回化学式查看
+      setFormulaText(p.formula); setMode("manual");
+      setParsed(null); parseFormula(p.formula);
+    }
   };
 
   // 对第 i 行核素调 /api/validate-zaid 并回写 zaidValid（载入/公式/手动失焦提交共用）

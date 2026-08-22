@@ -289,6 +289,29 @@ def build_cells_data(cell_list: list, include_void: bool = True) -> list:
     return cells_data
 
 
+def _deck_snapshot(surfs, cells_data, tr_cards) -> dict:
+    """把预览请求解析出的曲面/栅元/TR 序列化为截面解析切片可用的 deck 快照。
+
+    surfaces: [{number,type,params,transform}]（_pymcnp_surf_to_dict）
+    cells:    [{number,material,ast}]（ast 为 _geometry_ast_to_json JSON 列表）
+    tr_cards: parse_tr_cards 产出 dict
+    """
+    from freecad_preview import _pymcnp_surf_to_dict, _geometry_ast_to_json
+    return {
+        "surfaces": [_pymcnp_surf_to_dict(s) for s in surfs],
+        "cells": [
+            {
+                "number": c.get("number"),
+                "material": c.get("material", "0"),
+                "ast": _geometry_ast_to_json(c["ast"].ast)
+                if c.get("ast") is not None else None,
+            }
+            for c in cells_data
+        ],
+        "tr_cards": tr_cards,
+    }
+
+
 # ===== JSON → Dataclass 转换 =====
 
 def _find_mcnp_exe() -> str:
@@ -654,6 +677,10 @@ class MCNPHandler(BaseHTTPRequestHandler):
             "/api/meshtal-texture": self._handle_meshtal_texture,
             "/api/ptrac-detect": self._handle_ptrac_detect,
             "/api/ptrac-parse": self._handle_ptrac_parse,
+            "/api/sweep-plan": self._handle_sweep_plan,
+            "/api/sweep-run": self._handle_sweep_run,
+            "/api/check-overlap": self._handle_check_overlap,
+            "/api/quick-add-check": self._handle_quick_add_check,
         }
         handler = handlers.get(parsed.path)
         if handler:
@@ -661,6 +688,181 @@ class MCNPHandler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
+
+    # ── 参数扫描（sweep）──
+    def _handle_sweep_plan(self):
+        """参数扫描规划：笛卡尔组合 + 应用到 deck 文本（不执行 MCNP）。"""
+        try:
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
+            import sweep
+            data = self._read_body() or {}
+            deck_text = data.get("deck") or ""
+            parameters = data.get("parameters") or []
+            combos = sweep.cartesian(parameters)
+            previews = [
+                sweep.apply_parameters(deck_text, c, parameters)
+                for c in combos[:3]
+            ]
+            self._ok({"count": len(combos), "combos": combos, "previews": previews})
+        except Exception as e:
+            self._err(str(e))
+
+    def _handle_sweep_run(self):
+        """参数扫描执行：逐组合写 INP → 调 MCNP → 提取 keff → 汇总 TSV。"""
+        try:
+            import subprocess
+            import tempfile
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
+            import sweep
+            data = self._read_body() or {}
+            deck_text = data.get("deck") or ""
+            parameters = data.get("parameters") or []
+            combos = sweep.cartesian(parameters)
+            if len(combos) > 50:
+                self._ok({"status": "error",
+                          "message": f"组合数 {len(combos)} 超上限 50，请缩小参数范围"})
+                return
+            exe = _find_mcnp_exe()
+            if not exe:
+                self._ok({"status": "error", "message": "未检测到 MCNP 可执行文件"})
+                return
+            base_dir = tempfile.mkdtemp(prefix="mcnp_sweep_")
+            records = []
+            for i, combo in enumerate(combos, 1):
+                inp = sweep.apply_parameters(deck_text, combo, parameters)
+                run_dir = os.path.join(base_dir, sweep.run_dir_name(i))
+                os.makedirs(run_dir, exist_ok=True)
+                inp_path = os.path.join(run_dir, "sweep.i")
+                with open(inp_path, "w", encoding="utf-8") as f:
+                    f.write(inp)
+                rec = {"index": i, "parameters": combo, "inputFile": inp_path,
+                       "outputDir": run_dir, "exitCode": None, "keff": None}
+                try:
+                    proc = subprocess.run(
+                        [exe, "i=sweep.i"], cwd=run_dir,
+                        capture_output=True, text=True, timeout=300,
+                    )
+                    rec["exitCode"] = proc.returncode
+                    rec["keff"] = sweep.parse_keff(
+                        (proc.stdout or "") + "\n" + (proc.stderr or ""))
+                except subprocess.TimeoutExpired:
+                    pass
+                records.append(rec)
+            tsv = sweep.build_summary_tsv(parameters, records)
+            manifest = sweep.build_manifest("sweep.i", "mcnp", parameters, records)
+            self._ok({"status": "ok", "baseDir": base_dir, "records": records,
+                      "summaryTsv": tsv, "manifest": manifest})
+        except Exception as e:
+            self._err(str(e))
+
+    # ── 3D 重合检测（独立端点，不碰 preview-3d 契约）──
+    def _handle_check_overlap(self):
+        """重合检测：AABB 空间索引候选 + FreeCAD 精确布尔 + GQ/SQ 解析采样探针。
+
+        入参与 preview-3d 同（surfaces/cells/tr_cards）；真空栅元参与检测。
+        结果按 deck 指纹缓存（overlaps.json）。
+        """
+        try:
+            data = self._read_body()
+            surf_text = data.get("surfaces", "")
+            cell_list = data.get("cells", [])
+            tr_text = data.get("tr_cards", "")
+            fp = _PREVIEW_CACHE.fingerprint(surf_text, cell_list, tr_text)
+            cached = _PREVIEW_CACHE.get_overlaps(fp)
+            if cached is not None:
+                self._ok(cached)
+                return
+
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
+            from step_importer import StepImporter
+            from freecad_preview import FreeCADEngine
+            freecad_bin = StepImporter.detect_freecad()
+            if not freecad_bin:
+                self._ok({"status": "ok", "overlaps": [], "truncated": False,
+                          "unresolved": [],
+                          "message": "未检测到 FreeCAD，请安装后重试"})
+                return
+            surfs = parse_surfaces(surf_text)
+            if not surfs:
+                self._ok({"status": "ok", "overlaps": [], "truncated": False,
+                          "unresolved": [], "message": "未解析到有效曲面"})
+                return
+            tr_cards = parse_tr_cards(tr_text)
+            cells_data = build_cells_data(cell_list, include_void=True)
+            if not cells_data:
+                self._ok({"status": "ok", "overlaps": [], "truncated": False,
+                          "unresolved": [], "message": "没有可检测的栅元"})
+                return
+            engine = FreeCADEngine(freecad_bin)
+            engine.build_geometry(surfs, cells_data, tr_cards, fmt="stl",
+                                  check_overlaps=True)
+            engine.cleanup()
+            report = {"status": "ok", "overlaps": engine.overlaps,
+                      "truncated": engine.overlap_truncated,
+                      "unresolved": engine.overlap_unresolved}
+            _PREVIEW_CACHE.put_overlaps(fp, report)
+            self._ok(report)
+        except Exception as e:
+            import traceback
+            self._err(str(e) + " | " + traceback.format_exc())
+
+    def _handle_quick_add_check(self):
+        """快捷建栅元重合检查：新栅元 vs 已有栅元 → 重叠列表 + 推荐补集方向。
+
+        recommended ∈ "new_hole"（新 # 已有）| "existing_hole"（已有 # 新）。
+        """
+        try:
+            data = self._read_body()
+            surf_text = data.get("surfaces", "")
+            cell_list = data.get("cells", []) or []
+            tr_text = data.get("tr_cards", "")
+            new_cell = data.get("new_cell") or {}
+            new_num = int(new_cell.get("number", 0) or 0)
+            if not new_cell.get("surface_expr"):
+                self._ok({"status": "ok", "overlaps": [], "recommended": "new_hole",
+                          "message": "新栅元缺少几何表达式"})
+                return
+
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
+            from step_importer import StepImporter
+            from freecad_preview import FreeCADEngine
+            freecad_bin = StepImporter.detect_freecad()
+            if not freecad_bin:
+                self._ok({"status": "ok", "overlaps": [], "recommended": "new_hole",
+                          "message": "未检测到 FreeCAD，请安装后重试"})
+                return
+            surfs = parse_surfaces(surf_text)
+            tr_cards = parse_tr_cards(tr_text)
+            all_cells = list(cell_list) + [{"kind": "cell", "cell": new_cell}]
+            cells_data = build_cells_data(all_cells, include_void=True)
+            engine = FreeCADEngine(freecad_bin)
+            engine.build_geometry(surfs, cells_data, tr_cards, fmt="stl",
+                                  check_overlaps=True, focus_num=new_num)
+            engine.cleanup()
+            overlaps = engine.overlaps
+            new_vol = None
+            for o in overlaps:
+                if o["a"] == new_num:
+                    new_vol = float(o["vol_a"])
+                    break
+                if o["b"] == new_num:
+                    new_vol = float(o["vol_b"])
+                    break
+            recommended = "new_hole"
+            if new_vol and new_vol > 0:
+                fully_inside = any(
+                    (o["a"] == new_num and float(o["volume"]) / new_vol > 0.98)
+                    or (o["b"] == new_num and float(o["volume"]) / new_vol > 0.98)
+                    for o in overlaps)
+                if fully_inside:
+                    recommended = "existing_hole"
+            self._ok({"status": "ok", "overlaps": overlaps,
+                      "recommended": recommended,
+                      "truncated": engine.overlap_truncated,
+                      "unresolved": engine.overlap_unresolved})
+        except Exception as e:
+            import traceback
+            self._err(str(e) + " | " + traceback.format_exc())
 
     def _read_body(self) -> dict:
         content_len = int(self.headers.get("Content-Length", 0))
@@ -1407,6 +1609,15 @@ class MCNPHandler(BaseHTTPRequestHandler):
                     _clear_stl_session()  # 清上一会话（与命中缓存目录不同时）
                 # 缓存目录作为本会话 STL 源（供 serve-file/截面复用）
                 _STL_SESSION = {"dir": cached["dir"], "cells": cached["cells"]}
+                # deck 快照（GQ/SQ 解析截面用）：缓存不存 deck，从请求重建
+                try:
+                    surfs_c = parse_surfaces(surf_text)
+                    cells_c = build_cells_data(cell_list, include_void=False)
+                    if surfs_c and cells_c:
+                        _STL_SESSION["deck"] = _deck_snapshot(
+                            surfs_c, cells_c, parse_tr_cards(tr_text))
+                except Exception:
+                    pass
                 stl_files = {}
                 stl_data = {}
                 for num, info in cached["cells"].items():
@@ -1453,7 +1664,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
             # STL 复制到会话专用目录（engine 析构会删它自己的临时目录，必须复制走）
             _clear_stl_session()  # 覆盖上一轮预览
             session_dir = tempfile.mkdtemp(prefix="mcnp_stl_session_")
-            _STL_SESSION = {"dir": session_dir, "cells": {}}
+            _STL_SESSION = {"dir": session_dir, "cells": {},
+                            "deck": _deck_snapshot(surfs, cells_data, tr_cards)}
             # 会话路径 → base64（先读源文件，engine.cleanup() 之前）
             stl_files = {}
             stl_data = {}
@@ -1519,6 +1731,23 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 self._ok({"slices": [], "message": "请先生成 3D 预览（STL 会话为空）"})
                 return
 
+            # GQ/SQ 栅元走解析切片（精确轮廓，不依赖 STL 网格分辨率）；
+            # deck 快照由 preview-3d 写入会话，缺失时回退 STL 切。
+            deck = _STL_SESSION.get("deck") or {}
+            deck_surfs = {}
+            for s in deck.get("surfaces", []):
+                try:
+                    deck_surfs[int(s["number"])] = s
+                except (KeyError, TypeError, ValueError):
+                    continue
+            deck_cells = {}
+            for c in deck.get("cells", []):
+                try:
+                    deck_cells[int(c["number"])] = c
+                except (KeyError, TypeError, ValueError):
+                    continue
+            deck_tr = deck.get("tr_cards", {})
+
             slices = []
             for num in cell_nums:
                 num = int(num)
@@ -1528,10 +1757,34 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 material = info.get("material", "0")
                 if str(material).split()[0] == "0":
                     continue  # 真空 STL 不参与截面
-                path = info.get("path")
-                if not path or not os.path.isfile(path):
-                    continue
-                polys = cross_section_from_stl(path, A, B, C, D)
+
+                ast = (deck_cells.get(num) or {}).get("ast")
+                use_analytic = False
+                if ast:
+                    try:
+                        from voxel_csg import _ast_surf_nums
+                        use_analytic = any(
+                            str(deck_surfs.get(n, {}).get("type", "")).upper()
+                            in ("GQ", "SQ")
+                            for n in _ast_surf_nums(ast)
+                        )
+                    except Exception:
+                        use_analytic = False
+
+                polys = []
+                if use_analytic:
+                    try:
+                        from analytic_slice import analytic_cross_section
+                        polys = analytic_cross_section(
+                            ast, deck_surfs, deck_tr,
+                            {"A": A, "B": B, "C": C, "D": D}, bound=500.0)
+                    except Exception:
+                        polys = []
+                if not polys:
+                    # 非 GQ/SQ 或解析失败：回退 STL 切（原行为）
+                    path = info.get("path")
+                    if path and os.path.isfile(path):
+                        polys = cross_section_from_stl(path, A, B, C, D)
                 if polys:
                     slices.append({"number": num, "material": material, "polygons": polys})
             self._ok({"slices": slices, "count": len(slices)})

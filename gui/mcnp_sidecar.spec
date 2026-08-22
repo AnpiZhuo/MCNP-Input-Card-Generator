@@ -16,6 +16,9 @@ GUI_BACKEND = os.path.join(PROJECT, "gui", "backend")
 # ── 只保留后端需要的 app 顶层 .py（排除 Qt 死代码）──
 _keep_py = [
     "models.py", "preview_cache.py", "freecad_preview.py", "_freecad_csg_worker.py",
+    "quadric.py", "voxel_csg.py", "mc.py", "analytic_slice.py",
+    "mctal_parser.py", "sweep.py",
+    "overlap_classify.py", "spatial_index.py", "overlap_probe.py",
     "freecad_locator.py", "step_importer_geouned.py", "geouned_worker.py",
     "xsdir_db.py", "step_importer.py",
     "outp_parser.py",

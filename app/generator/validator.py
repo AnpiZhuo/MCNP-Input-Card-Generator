@@ -20,6 +20,65 @@ _SURFACE_TYPES = {
 }
 
 
+# ===== 材料级规则（交叉核对 OWEN src/language/rules.ts validateMCNP）=====
+_ZAID_RE = re.compile(r"^\d{4,6}(?:\.\d{2,}[a-zA-Z])?$")
+
+# S(α,β) 表前缀 → 必需的目标元素 Z（rules.ts SAB_TARGETS 映射的精简版）
+_SAB_Z_REQUIRED = {
+    "lwtr": 1, "hwtr": 1, "benz": 1, "poly": 1, "zrh": 1, "h": 1,      # 氢基
+    "grph": 6,                                                          # 石墨
+    "be": 4, "beo": 4,                                                  # 铍
+    "o": 8, "o2": 8, "ou": 8,                                          # 氧
+    "b": 5, "b4c": 5, "b4c2": 5,                                       # 硼
+    "zr": 40,                                                           # 锆
+    "al": 13,                                                           # 铝
+    "fe": 26, "fe56": 26,                                               # 铁
+    "u": 92, "uo2": 92,                                                 # 铀
+}
+
+
+def _zaid_z(zaid: str) -> int | None:
+    """从 ZAID（ZZZAAA 或 ZZZAAA.NNx）提取 Z（原子序数）；非法返回 None。"""
+    num = zaid.split(".")[0]
+    if not num.isdigit():
+        return None
+    n = len(num)
+    if n == 4:
+        return int(num[0])
+    if n == 5:
+        return int(num[:2])
+    if n == 6:
+        return int(num[:3])
+    return None
+
+
+def _check_sab_target(mat: MaterialData) -> str | None:
+    """S(α,β) 卡（mt_card）目标核素检查：表要求的元素必须在材料核素中。
+
+    对齐 OWEN rules.ts `mcnp.sab-no-target`：表目标核素不在材料里时，
+    该表会被 MCNP 忽略。
+    """
+    mt = (mat.mt_card or "").strip()
+    if not mt:
+        return None
+    present_z = set()
+    for row in mat.rows:
+        if row.kind == "nuclide" and row.zaid.strip():
+            z = _zaid_z(row.zaid.strip())
+            if z is not None:
+                present_z.add(z)
+    for tok in mt.split():
+        sab = tok.lower().split(".")[0]
+        sab = re.sub(r"\d+$", "", sab)
+        z_req = _SAB_Z_REQUIRED.get(sab)
+        if z_req is not None and z_req not in present_z:
+            return (
+                f"材料 M{mat.number}：S(α,β) 表 {tok} 需要 Z={z_req} "
+                "核素，但材料中不存在（MCNP 会忽略该表）"
+            )
+    return None
+
+
 def _check_surfaces_text(surfaces: str) -> list[str]:
     """
     逐行校验曲面卡文本。允许中文出现在 C 注释行和 $ 注释部分。
@@ -158,9 +217,36 @@ def validate_all(
             if not mat.rows:
                 errors.append(f"材料 M{mat.number}：至少添加一行 ZAID + 份额")
             else:
+                signs = set()
                 for row in mat.rows:
                     if not row.zaid.strip() or not row.fraction.strip():
                         errors.append(f"材料 M{mat.number}：ZAID 和份额不能为空")
+                        continue
+                    zaid = row.zaid.strip()
+                    frac = row.fraction.strip()
+                    if not _ZAID_RE.match(zaid):
+                        errors.append(
+                            f"材料 M{mat.number}：ZAID '{zaid}' 格式不正确"
+                            "（应为 ZZZAAA 或 ZZZAAA.NNx，如 92235.80c）"
+                        )
+                    try:
+                        fv = float(frac)
+                        if fv < 0:
+                            signs.add("-")
+                        elif fv > 0:
+                            signs.add("+")
+                    except ValueError:
+                        errors.append(
+                            f"材料 M{mat.number}：份额 '{frac}' 格式不正确（应为数字）"
+                        )
+                if len(signs) == 2:
+                    errors.append(
+                        f"材料 M{mat.number}：份额正负号混用"
+                        "（正=原子份额，负=质量份额），请保持一致"
+                    )
+                sab_err = _check_sab_target(mat)
+                if sab_err:
+                    errors.append(sab_err)
 
     # ----- SDEF / KCODE -----
     if adv and adv.source_mode == "distribution":

@@ -15,7 +15,12 @@ interface Props {
 }
 
 export default function FloatingDialog({ title, onClose, width = 600, maxHeight = "85vh", zIndex = 1000, children, footer }: Props) {
-  const [pos, setPos] = useState(() => ({ x: Math.max(10, (window.innerWidth - width) / 2), y: 60 }));
+  // SSR 安全：测试/服务端渲染无 window（浏览器行为不变）
+  const [pos, setPos] = useState(() => (
+    typeof window === "undefined"
+      ? { x: 60, y: 60 }
+      : { x: Math.max(10, (window.innerWidth - width) / 2), y: 60 }
+  ));
   const dragRef = useRef({ active: false, dx: 0, dy: 0 });
 
   const onDragStart = (e: React.MouseEvent) => {

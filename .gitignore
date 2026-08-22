@@ -8,6 +8,9 @@ build/
 dist/
 build_onedir/
 dist_onedir/
+
+# AgentTeams 内部工具数据（不提交）
+.agent-teams/
 sidecar_dist/
 *.spec
 !gui/mcnp_sidecar.spec

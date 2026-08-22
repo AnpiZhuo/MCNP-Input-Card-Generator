@@ -4,6 +4,8 @@
  * 已移除非天然同位素预设（重水 D₂O / 贫铀 / 富集⁶Li LiF），它们的 formula 展开是天然同位素、与名称不符
  */
 
+import { PNNL_CATEGORIES } from "../data/pnnlPresets";
+
 export interface PresetItem {
   key: string;
   name: string;
@@ -11,6 +13,8 @@ export interface PresetItem {
   desc: string;
   /** MCNP 质量密度 (g/cm³，负值)。用户预设可能没有，内置预设都有 */
   density?: string;
+  /** 同位素级 ZAID+份额（负号=质量份额）。有则选预设直接填「手动 ZAID」模式 */
+  rows?: [string, string][];
 }
 
 export const PRESET_CATEGORIES: [string, PresetItem[]][] = [
@@ -75,6 +79,7 @@ export const PRESET_CATEGORIES: [string, PresetItem[]][] = [
     { key: "cadmium", name: "镉 (Cd)", formula: "Cd: 1", desc: "镉 (热中子吸收体)，密度 ~8.65 g/cm³", density: "-8.65" },
     { key: "gd", name: "钆 (Gd)", formula: "Gd: 1", desc: "钆 (热中子吸收体)，密度 ~7.9 g/cm³", density: "-7.90" },
   ]],
+  ...PNNL_CATEGORIES,
 ];
 
 /** 拍平成 key→item 映射 */

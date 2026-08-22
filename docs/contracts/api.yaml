@@ -1213,6 +1213,151 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
+  /api/sweep-plan:
+    post:
+      operationId: sweepPlan
+      tags: [workflow]
+      summary: 参数扫描规划（笛卡尔组合 + 应用到 deck 文本，不执行 MCNP）
+      description: |
+        入参 {deck, parameters:[{name, pattern, values}]}；pattern 为正则，
+        组 1 为被替换的值（保留上下文）。响应 {count, combos, previews(前 3 组合文本)}。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deck: { type: string, description: INP 文本 }
+                parameters:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      pattern: { type: string, description: 正则，组1=被替换值 }
+                      values: { type: array, items: { type: [string, number] } }
+      responses:
+        '200':
+          description: 规划结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      count: { type: integer }
+                      combos: { type: array }
+                      previews: { type: array, items: { type: string } }
+  /api/sweep-run:
+    post:
+      operationId: sweepRun
+      tags: [workflow]
+      summary: 参数扫描执行（逐组合写 INP → 调 MCNP → 提取 keff → 汇总 TSV）
+      description: |
+        入参同 sweep-plan；组合数上限 50。无 MCNP → {status:"error", message}。
+        响应 {status, baseDir, records:[{index, parameters, inputFile, outputDir,
+        exitCode, keff}], summaryTsv, manifest}。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deck: { type: string }
+                parameters:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      pattern: { type: string }
+                      values: { type: array, items: { type: [string, number] } }
+      responses:
+        '200':
+          description: 执行结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      baseDir: { type: string }
+                      records: { type: array }
+                      summaryTsv: { type: string }
+                      manifest: { type: object }
+  /api/check-overlap:
+    post:
+      operationId: checkOverlap
+      tags: [geometry]
+      summary: 3D 重合检测（AABB 空间索引候选 + FreeCAD 精确布尔 + GQ/SQ 解析采样探针）
+      description: |
+        入参与 preview-3d 同（surfaces/cells/tr_cards）；真空栅元参与检测。
+        响应 {status, overlaps:[{a,b,volume,vol_a,vol_b,volumeFraction,severity,
+        method,suspected?}], truncated, unresolved, message?}；结果按 deck 指纹
+        缓存（overlaps.json）。GQ/SQ 对为采样证据，suspected:true 且 severity 降级。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                surfaces: { type: string }
+                cells: { type: array }
+                tr_cards: { type: string }
+      responses:
+        '200':
+          description: 检测结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      overlaps: { type: array }
+                      truncated: { type: boolean }
+                      unresolved: { type: array }
+  /api/quick-add-check:
+    post:
+      operationId: quickAddCheck
+      tags: [geometry]
+      summary: 快捷建栅元重合检查（新栅元 vs 已有栅元 → 重叠 + 推荐补集方向）
+      description: |
+        入参 {surfaces, cells(已有), tr_cards, new_cell:{number,surface_expr,material,
+        density}}。响应 {status, overlaps(含新栅元的对), recommended:
+        "new_hole"(新 # 已有) | "existing_hole"(已有 # 新), truncated, unresolved}。
+        新栅元几乎完全在某个已有栅元内时推荐 existing_hole，否则 new_hole。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                surfaces: { type: string }
+                cells: { type: array }
+                tr_cards: { type: string }
+                new_cell: { type: object }
+      responses:
+        '200':
+          description: 检测结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      overlaps: { type: array }
+                      recommended: { type: string }
+                      truncated: { type: boolean }
+                      unresolved: { type: array }
+
 components:
   schemas:
     OkEnvelope:

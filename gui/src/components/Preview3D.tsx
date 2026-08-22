@@ -288,6 +288,7 @@ function initScene(
         var mesh = new THREE.Mesh(geo, mat);
         mesh.userData.index = idx;
         mesh.userData.color = cv.color;
+        mesh.userData.num = key;
         scene.add(mesh);
         meshes.push(mesh);
         geo.computeBoundingBox();
@@ -426,6 +427,24 @@ function initScene(
         }
       }
     },
+    setHighlight(nums: string[]) {
+      var set = new Set(nums);
+      for (var _mi = 0; _mi < meshes.length; _mi++) {
+        var m = meshes[_mi];
+        var mat = (m as THREE.Mesh).material as THREE.MeshStandardMaterial;
+        if (set.has(String(m.userData.num))) {
+          mat.color.set("#ff3b30");
+          mat.emissive.set(0xff0000);
+          mat.emissiveIntensity = 0.4;
+        } else {
+          mat.color.set(m.userData.color);
+          mat.emissive.set(0x000000);
+          mat.emissiveIntensity = 0;
+        }
+        mat.needsUpdate = true;
+      }
+      markDirty();
+    },
     selectAll(vis: boolean) {
       meshes.forEach((m) => { m.visible = vis; });
       markDirty();
@@ -499,6 +518,55 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   const wirePreviewRef = useRef<ReturnType<typeof buildQuickCellPreview> | null>(null);
   const propsRef = useRef({ cells: rawCells, surfaces: surfaces || "", trCards: trCards || "" });
   propsRef.current = { cells: rawCells, surfaces: surfaces || "", trCards: trCards || "" };
+
+  /* ── 重合检测（异步自动触发 + 面板 + 点击高亮）── */
+  const [overlapResult, setOverlapResult] = useState<{
+    overlaps: any[]; truncated: boolean; unresolved: any[];
+  } | null>(null);
+  const [overlapBusy, setOverlapBusy] = useState(false);
+  const [highlightNums, setHighlightNums] = useState<string[]>([]);
+
+  const runOverlapCheck = useCallback(async () => {
+    setOverlapBusy(true);
+    try {
+      const p = propsRef.current;
+      const body = {
+        surfaces: p.surfaces || "",
+        cells: p.cells.map((c: any) => ({
+          kind: "cell",
+          cell: {
+            number: parseInt(c.num) || 0,
+            material: c.mat,
+            density: (c as any).density || "",
+            surface_expr: (c as any).surface_expr || (c as any).surfaces || "",
+          },
+        })),
+        tr_cards: p.trCards || "",
+      };
+      const r = await fetch(apiUrl("/api/check-overlap"), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body), signal: AbortSignal.timeout(60000),
+      });
+      const j = await r.json();
+      if (j.status === "error") throw new Error(j.message);
+      setOverlapResult(j);
+    } catch (e: any) {
+      // 检测失败静默降级：不影响预览
+      console.error("overlap check failed", e);
+    } finally {
+      setOverlapBusy(false);
+    }
+  }, []);
+
+  const highlightPair = useCallback((a: number, b: number) => {
+    setHighlightNums((prev) => {
+      const same = prev.length === 2
+        && prev.includes(String(a)) && prev.includes(String(b));
+      const next = same ? [] : [String(a), String(b)];
+      ctrlRef.current?.setHighlight(next);
+      return next;
+    });
+  }, []);
 
   // 截面请求 → 结果写入数据桥并开独立截面窗口；非 Tauri 环境回退内嵌覆盖层
   // 只传勾选且非真空的栅元号 + plane（后端从 3D 预览保留的 STL 切，真空/未勾选不参与）
@@ -610,8 +678,9 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       setFreecadStatus(n + " ");
       setCellViews(prev => prev.map(c => c.mat === "0" ? c : { ...c, visible: true }));
       ctrlRef.current.selectAll(true);
+      runOverlapCheck();  // 异步自动重合检测（渲染完成后）
     }
-  }, [stlData]);
+  }, [stlData, runOverlapCheck]);
 
   /* 侧栏表单配置变化 → 防抖在场景里画线框（颜色随材料，M0 白线） */
   useEffect(() => {
@@ -908,6 +977,48 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
           onToggle: toggleCell,
           onMaterialClick: (i: number, e: React.MouseEvent) => { setMatPicker({ i, x: e.clientX, y: e.clientY }); },
         }),
+        /* 重合检测面板（点击对 → 两栅元红色高亮） */
+        React.createElement("div", {
+          style: {
+            padding: "8px 14px", borderTop: "1px solid rgba(255,255,255,0.06)",
+            maxHeight: 160, overflowY: "auto",
+          } as React.CSSProperties,
+        },
+          React.createElement("div", {
+            style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 } as React.CSSProperties,
+          },
+            React.createElement("span", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" } },
+              overlapBusy ? "正在检测重合…"
+                : (overlapResult && overlapResult.overlaps.length > 0
+                  ? `重合检测：${overlapResult.overlaps.length} 对（点击高亮）`
+                  : (overlapResult ? "重合检测：未发现重合 ✓" : "重合检测待运行"))),
+            React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: runOverlapCheck, disabled: overlapBusy }, "重新检测"),
+          ),
+          overlapResult && overlapResult.truncated
+            ? React.createElement("div", { style: { fontSize: 10, color: "#e6a23c", marginBottom: 4 } }, "⚠ 已达上限，部分重合可能未检出")
+            : null,
+          overlapResult && overlapResult.overlaps.length > 0
+            ? overlapResult.overlaps.map((o, oi) => React.createElement("div", {
+                key: oi,
+                onClick: () => highlightPair(o.a, o.b),
+                style: {
+                  display: "flex", gap: 8, fontSize: 11, padding: "3px 4px",
+                  borderRadius: 4, cursor: "pointer", background: "rgba(255,255,255,0.03)",
+                  marginBottom: 2,
+                } as React.CSSProperties,
+              },
+                React.createElement("span", { style: { color: o.severity === "error" ? "#e53935" : o.severity === "warning" ? "#e6a23c" : "#9e9e9e" } },
+                  o.severity === "error" ? "●" : o.severity === "warning" ? "▲" : "·"),
+                React.createElement("span", null, `栅元 ${o.a} × 栅元 ${o.b}`),
+                React.createElement("span", { style: { color: "var(--text-tertiary)" } },
+                  `占比 ${(o.volumeFraction * 100).toFixed(0)}%${o.suspected ? "（疑似）" : ""}`),
+              ))
+            : null,
+          overlapResult && overlapResult.unresolved && overlapResult.unresolved.length > 0
+            ? React.createElement("div", { style: { fontSize: 10, color: "var(--text-tertiary)", marginTop: 4 } },
+                `${overlapResult.unresolved.length} 对检测不可靠（布尔/采样失败）`)
+            : null,
+        ),
         /* 底部：计数 + 关闭 */
         React.createElement("div", {
           style: {

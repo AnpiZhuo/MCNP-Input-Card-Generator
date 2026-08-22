@@ -5,11 +5,19 @@ import sys, json, math
 try:
     import FreeCAD
     import Part
+    import Mesh as FcMesh
+    import numpy as np
 except ImportError as e:
     print(json.dumps({"status":"error","message":f"FreeCAD: {e}"}))
     sys.exit(1)
 
-VTK = None
+try:
+    from quadric import sq_to_gq
+except ImportError:  # 测试/直接 import app 包时 quadric 在 app/ 下
+    from app.quadric import sq_to_gq
+
+# VTK 可选（用于 GQ/SQ 曲面）：惰性导入，见 _quadric_to_shape 的 native 回退分支。
+_HAVE_VTK = False
 
 def _vec(x, y, z):
     return FreeCAD.Vector(x, y, z)
@@ -294,6 +302,245 @@ def make_halfspace(surf_type: str, params: list[float], B: float = 500):
 
     else:
         raise ValueError(f"不支持的曲面类型: {surf_type}")
+
+
+
+# ============================================================
+# GQ / SQ → FreeCAD 原生曲面（精确，优先）或二值体素区域网格化（兜底）
+# ============================================================
+
+def _quadric_to_native(qtype: str, coeffs: list[float], B: float):
+    """GQ/SQ 系数 → FreeCAD 原生曲面（精确），返回正侧半空间；无法分类返回 None。
+
+    通过二次型矩阵特征值分解分类：
+      (0, λ, λ)          → 圆柱  Part.makeCylinder
+      (λ, λ, λ) / (λ1λ2λ3 同号) → 球 / 椭球  Part.makeSphere / makeEllipsoid
+    其余（平面/锥/椭圆柱/双曲面）→ None → 回退区域网格化。
+    """
+    if qtype == "sq":
+        # SQ → GQ 展开，共用同一套特征值分类（否则会忽略 D/E/F 交叉项导致旋转 SQ 出错）
+        A, Bb, C, D, E, F, G, x0, y0, z0 = coeffs
+        coeffs = [A, Bb, C, D, E, F,
+                  -2 * A * x0 - D * y0 - F * z0,
+                  -2 * Bb * y0 - D * x0 - E * z0,
+                  -2 * C * z0 - E * y0 - F * x0,
+                  A * x0 * x0 + Bb * y0 * y0 + C * z0 * z0
+                  + D * x0 * y0 + E * y0 * z0 + F * z0 * x0 + G]
+
+    a, b, c, d, e, f, g, h, j, k = coeffs
+    M = np.array([[a, d / 2, f / 2], [d / 2, b, e / 2], [f / 2, e / 2, c]], dtype=float)
+    w, V = np.linalg.eigh(M)  # w 升序，V 列 = 特征向量
+    L = np.array([g, h, j], dtype=float)
+    Lp = V.T @ L
+    scale = max(1.0, max(abs(x) for x in w))
+    # 系数可能被格式化成 3 位小数，圆柱的"零特征值"会有 ~1e-3 的舍入噪声，
+    # 用相对容差，否则圆柱会被误判成椭球
+    tol = 1e-3 * scale
+    nz = [i for i, x in enumerate(w) if abs(x) > tol]
+
+    if len(nz) == 2:
+        # ── 圆柱（两非零特征值相等）──
+        zi = [i for i in range(3) if i not in nz][0]
+        lam = w[nz]
+        if abs(Lp[zi]) > tol:
+            return None  # 轴方向有线性项 → 不是正圆柱
+        if abs(lam[0] - lam[1]) > 1e-3 * max(1.0, abs(lam[0])):
+            return None  # 椭圆圆柱暂不支持
+        lam0 = lam[0]
+        cp = np.zeros(3)
+        for idx in nz:
+            cp[idx] = -Lp[idx] / (2 * lam0)
+        r2 = (Lp[nz[0]] ** 2 + Lp[nz[1]] ** 2) / (4 * lam0 ** 2) - k / lam0
+        if r2 <= 0:
+            return None
+        r = math.sqrt(r2)
+        center_g = V @ cp
+        axis_g = V[:, zi]
+        # Part.makeCylinder 的 center 是底面端点，不是中心 → 用 center-2B*axis 作底面、4B 高，确保覆盖整个盒子
+        base = center_g - 2 * B * axis_g
+        cyl = Part.makeCylinder(r, 4 * B, _vec(*base), _vec(*axis_g))
+        return _make_box(-B, B, -B, B, -B, B).cut(cyl)  # 正侧 = 柱外
+
+    if len(nz) == 3 and all(x > 0 for x in w):
+        # ── 球 / 椭球 ──
+        return _quadric_ellipsoid(w.tolist(), None, (V, Lp, k), B)
+
+    if len(nz) == 3:
+        # ── 圆锥：两个正特征值相等 + 一个负（直圆锥）──
+        pos = [i for i in range(3) if w[i] > tol]
+        neg = [i for i in range(3) if w[i] < -tol]
+        if (len(pos) == 2 and len(neg) == 1
+                and abs(w[pos[0]] - w[pos[1]]) < 1e-3 * scale):
+            lam = w[pos[0]]
+            mu = -w[neg[0]]
+            axis = V[:, neg[0]]
+            cp = np.zeros(3)
+            for i in range(3):
+                cp[i] = -Lp[i] / (2 * w[i])
+            # 残差 K = k - Σwᵢcᵢ² ≈ 0 才是锥（否则是双曲面）
+            K = k - sum(w[i] * cp[i] ** 2 for i in range(3))
+            if abs(K) > 1e-2 * max(1.0, abs(k)):
+                return None
+            tan2 = mu / lam
+            if tan2 <= 0:
+                return None
+            L = 2 * B
+            r = math.sqrt(tan2) * L
+            apex = V @ cp
+            try:
+                c1 = Part.makeCone(0, r, L, _vec(*apex), _vec(*axis))
+                c2 = Part.makeCone(0, r, L, _vec(*apex), _vec(*(-axis)))
+                dc = c1.fuse(c2)
+            except Exception:
+                return None
+            return _make_box(-B, B, -B, B, -B, B).cut(dc)  # 正侧 = 锥外
+
+    return None
+
+
+def _quadric_ellipsoid(w, center, extra, B):
+    """由主轴特征值/中心生成椭球或球半空间（正侧 = 外部）。"""
+    if isinstance(extra, tuple):
+        V, Lp, k = extra
+        # 主轴系配方：Σ w_i (x_i-c_i)² = C，c_i=-Lp_i/(2w_i)
+        cp = np.zeros(3)
+        for i in range(3):
+            cp[i] = -Lp[i] / (2 * w[i])
+        C = sum(Lp[i] ** 2 / (4 * w[i]) for i in range(3)) - k
+        semi = [math.sqrt(C / w[i]) for i in range(3)]
+        cg = V @ cp
+    else:
+        # SQ 轴对齐形式
+        a, b, c = w
+        cx, cy, cz = center
+        C = -extra
+        semi = [math.sqrt(C / a), math.sqrt(C / b), math.sqrt(C / c)]
+        cg = np.array([cx, cy, cz])
+        V = None
+    if any(x <= 0 for x in semi):
+        return None
+    # 三半轴近似相等 → 球
+    if max(semi) - min(semi) < 1e-4 * max(1.0, max(semi)):
+        sph = Part.makeSphere(semi[0], _vec(*cg))
+        return _make_box(-B, B, -B, B, -B, B).cut(sph)
+    # 一般椭球：建球→非均匀缩放（transformShape 缩放矩阵）→旋转
+    try:
+        ell = Part.makeSphere(1.0)
+        scale_mat = FreeCAD.Matrix()
+        scale_mat.scale(*semi)
+        ell.transformShape(scale_mat)
+        if V is not None:
+            rot = FreeCAD.Matrix(V[0, 0], V[0, 1], V[0, 2], 0,
+                                 V[1, 0], V[1, 1], V[1, 2], 0,
+                                 V[2, 0], V[2, 1], V[2, 2], 0,
+                                 0, 0, 0, 1)
+            ell.Placement = FreeCAD.Placement(rot)
+        ell.translate(FreeCAD.Vector(*cg))
+        return _make_box(-B, B, -B, B, -B, B).cut(ell)
+    except Exception:
+        return None  # 非球椭球无法原生创建 → 回退区域网格化
+
+
+def _quadric_to_shape(qtype: str, coeffs: list[float], B: float, grid_res: int = 40):
+    """从二次曲面系数生成 Part.Shape（正侧 pos = F(x,y,z) > 0 的半空间）。
+
+    先试原生（球/椭球、正圆柱、正圆锥 —— 特征值分类精确原语），其余类型
+    回退到「二值体素区域 marching cubes」：对 {F>0} ∩ [-B,B]³ 加一层 0 padding
+    提取区域边界，天然水密、法线一致，覆盖全部二次曲面（含无界/退化）。
+
+    vtk 惰性导入：仅在 native 回退分支内按需 `import vtk`，成功置 _HAVE_VTK=True；
+    无 GQ/SQ 的 deck 子进程启动不加载 vtk。import 失败仍抛 RuntimeError("VTK 不可用...")。
+    """
+    global _HAVE_VTK
+    native = _quadric_to_native(qtype, coeffs, B)
+    if native is not None:
+        return native
+    if not _HAVE_VTK:
+        try:
+            import vtk
+            _HAVE_VTK = True
+        except ImportError:
+            _HAVE_VTK = False
+    if not _HAVE_VTK:
+        raise RuntimeError("VTK 不可用，无法处理 GQ/SQ 曲面")
+
+    # SQ → GQ 统一系数后走通用区域网格化
+    if qtype == "sq":
+        coeffs = sq_to_gq(coeffs)
+    return _quadric_region_solid(coeffs, B, grid_res)
+
+
+def _quadric_region_solid(coeffs: list[float], B: float, res: int = 40):
+    """{F(x,y,z) >= 0} ∩ [-B,B]³ 的半空间实体（水密）。
+
+    实现：在 [-B-δ, B+δ]³ 上构造二值体素（盒内 F>=0 记 1，padding 一层记 0），
+    vtkDiscreteMarchingCubes 提取区域边界 → FreeCAD Mesh → Part.Solid。
+    区域为空（正侧在盒内无点）→ RuntimeError，让该曲面在调用侧被跳过并告警。
+    """
+    import vtk
+    from vtk.util.numpy_support import numpy_to_vtk
+
+    pad = 1
+    n = res + 2 * pad
+    xs = np.linspace(-B, B, res)
+    d = xs[1] - xs[0]
+    xp = np.concatenate([[xs[0] - d], xs, [xs[-1] + d]])
+    X, Y, Z = np.meshgrid(xp, xp, xp, indexing="ij")
+    F = (coeffs[0] * X ** 2 + coeffs[1] * Y ** 2 + coeffs[2] * Z ** 2
+         + coeffs[3] * X * Y + coeffs[4] * Y * Z + coeffs[5] * Z * X
+         + coeffs[6] * X + coeffs[7] * Y + coeffs[8] * Z + coeffs[9])
+    in_box = (np.abs(X) <= B) & (np.abs(Y) <= B) & (np.abs(Z) <= B)
+    region = np.where(in_box & (F >= 0.0), 1, 0).astype(np.uint8)
+
+    img = vtk.vtkImageData()
+    img.SetDimensions(n, n, n)
+    img.SetSpacing(d, d, d)
+    img.SetOrigin(-B - d, -B - d, -B - d)
+    arr = numpy_to_vtk(region.ravel(order="F"), deep=True)  # vtk 布局 = x 最快
+    arr.SetName("region")
+    img.GetPointData().SetScalars(arr)
+
+    mc = vtk.vtkDiscreteMarchingCubes()
+    mc.SetInputData(img)
+    mc.SetValue(0, 1)
+    mc.Update()
+    polydata = mc.GetOutput()
+    if polydata.GetNumberOfPolys() == 0:
+        raise RuntimeError("GQ/SQ 曲面正侧在包围盒内为空")
+
+    mesh = FcMesh.Mesh()
+    polys = polydata.GetPolys().GetData()
+    for ti in range(polydata.GetNumberOfPolys()):
+        off = ti * 4
+        i1, i2, i3 = (polys.GetValue(off + 1), polys.GetValue(off + 2),
+                      polys.GetValue(off + 3))
+        p1, p2, p3 = (polydata.GetPoint(i1), polydata.GetPoint(i2),
+                      polydata.GetPoint(i3))
+        mesh.addFacet(_vec(*p1), _vec(*p2), _vec(*p3))
+
+    shape = Part.Shape()
+    shape.makeShapeFromMesh(mesh.Topology, 0.05)
+    if shape.isNull() or not shape.Shells:
+        raise RuntimeError("GQ/SQ 曲面区域网格无法转换为实体")
+    # 多连通分量（外盒 + 浮空孔）→ Compound 保留全部 shell，makeSolid 支持带空腔实体
+    solid = Part.makeSolid(Part.Compound(shape.Shells))
+    if not solid.isValid():
+        raise RuntimeError("GQ/SQ 曲面区域网格生成的实体无效")
+    # 方向校正：makeShapeFromMesh 对非凸壳的自动定向可能选反，采样区域点验证。
+    # 采样点须严格在盒内（离壁一个体素以上）且 F 尽量大（远离曲面），避免落在边界上歧义。
+    interior = ((np.abs(X) < B - d) & (np.abs(Y) < B - d)
+                & (np.abs(Z) < B - d) & (region == 1))
+    idx = np.argwhere(interior)
+    if idx.size == 0:
+        idx = np.argwhere(region == 1)
+    if idx.size == 0:
+        raise RuntimeError("GQ/SQ 曲面正侧在包围盒内为空")
+    flat_f = F[idx[:, 0], idx[:, 1], idx[:, 2]]
+    i, j, k = idx[int(np.argmax(flat_f))]
+    sample = _vec(float(xp[i]), float(xp[j]), float(xp[k]))
+    if not solid.isInside(sample, 1e-6, True):
+        solid.reverse()
+    return solid
 
 
 

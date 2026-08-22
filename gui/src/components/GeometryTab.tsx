@@ -51,6 +51,12 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const [show3D, setShow3D] = useState(false);
   const [showStepDlg, setShowStepDlg] = useState(false);
   const [quickCellOpen, setQuickCellOpen] = useState(false);
+  const [quickCheck, setQuickCheck] = useState<{
+    result: QuickCellResult;
+    overlaps: any[];
+    recommended: "new_hole" | "existing_hole" | "none";
+    newRows: any[];
+  } | null>(null);
   // 栅元表材料列点击下拉：i=正在编辑材料号的栅元行索引，x/y=按钮位置（用于 portal 定点浮层）
   const [matPicker, setMatPicker] = useState<{ i: number; x: number; y: number } | null>(null);
   const fc = useFreecadStatus();
@@ -191,7 +197,68 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const handleQuickCellGenerate = (result: QuickCellResult) => {
     setSurfText((prev) => appendCardText(prev, result.surfacesText));
     setTrText((prev) => appendCardText(prev, result.trCardsText));
-    setCells((prev) => [...prev, ...result.cells.map(generatedCellToRow)]);
+    const newRows = result.cells.map(generatedCellToRow);
+    // 快捷添加重合检查：新栅元 vs 已有 → 弹出 A/B/C 补集决策
+    const newRow = newRows[0];
+    if (!newRow || newRow.kind !== "cell") { setCells(prev => [...prev, ...newRows]); return; }
+    const newCellJson = {
+      number: parseInt(newRow.cell.num, 10) || 0,
+      material: newRow.cell.mat,
+      density: newRow.cell.density,
+      surface_expr: newRow.cell.surfaces,
+    };
+    const existingCells = cells.filter(c => c.kind === "cell").map(c => ({
+      kind: "cell",
+      cell: {
+        number: parseInt(c.cell.num, 10) || 0,
+        material: c.cell.mat,
+        density: c.cell.density,
+        surface_expr: c.cell.surfaces,
+      },
+    }));
+    (async () => {
+      try {
+        const r = await fetch(apiUrl("/api/quick-add-check"), {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            surfaces: appendCardText(surfText, result.surfacesText),
+            cells: existingCells,
+            tr_cards: appendCardText(trText, result.trCardsText),
+            new_cell: newCellJson,
+          }),
+          signal: AbortSignal.timeout(60000),
+        });
+        const j = await r.json();
+        if (j.status !== "error" && j.overlaps && j.overlaps.length > 0) {
+          setQuickCheck({ result, overlaps: j.overlaps, recommended: j.recommended, newRows });
+          return;
+        }
+      } catch (e) { /* 检测失败 → 直接追加，不影响生成 */ }
+      setCells(prev => [...prev, ...newRows]);
+    })();
+  };
+
+  // 快捷添加补集决策：A=新 # 已有，B=已有 # 新，C=不处理直接追加
+  const applyQuickCheck = (choice: "new_hole" | "existing_hole" | "none") => {
+    if (!quickCheck) return;
+    const qc = quickCheck;
+    const newNum = parseInt(qc.newRows[0].cell.num, 10) || 0;
+    const others = qc.overlaps
+      .map(o => (o.a === newNum ? o.b : o.a))
+      .filter(n => n !== newNum);
+    let rows = qc.newRows;
+    if (choice === "new_hole" && others.length) {
+      rows = rows.map(r => r.kind === "cell"
+        ? { ...r, cell: { ...r.cell, surfaces: (r.cell.surfaces + " " + others.map(n => "#" + n).join(" ")).trim() } }
+        : r);
+    } else if (choice === "existing_hole" && others.length) {
+      setCells(prev => prev.map(c => {
+        if (c.kind !== "cell" || !others.includes(parseInt(c.cell.num, 10))) return c;
+        return { ...c, cell: { ...c.cell, surfaces: (c.cell.surfaces + " #" + newNum).trim() } };
+      }));
+    }
+    setCells(prev => [...prev, ...rows]);
+    setQuickCheck(null);
   };
 
   // 3D 预览里点击材料号改材料 → 更新本地 cells，local→deck 同步自动 patch
@@ -280,6 +347,45 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
         onClose={() => setQuickCellOpen(false)}
         onGenerate={handleQuickCellGenerate}
       />}
+      {quickCheck && (() => {
+        const qc = quickCheck;
+        const newNum = parseInt(qc.newRows[0].cell.num, 10) || 0;
+        const others = qc.overlaps
+          .map((o: any) => (o.a === newNum ? o.b : o.a))
+          .filter((n: number) => n !== newNum);
+        const sevColor = (s: string) => s === "error" ? "#e53935" : s === "warning" ? "#e6a23c" : "#9e9e9e";
+        return React.createElement(FloatingDialog, {
+          title: `快捷建栅元：与已有栅元重合（新栅元 ${newNum}）`,
+          onClose: () => applyQuickCheck("none"),
+          width: 520,
+          footer: React.createElement(React.Fragment, null,
+            React.createElement("button", { className: "btn btn-ghost btn-sm", onClick: () => applyQuickCheck("none") }, "保留原样"),
+            React.createElement("button", { className: "btn btn-primary btn-sm", onClick: () => applyQuickCheck(qc.recommended) },
+              qc.recommended === "none" ? "按选择应用" : `按选择应用（${qc.recommended === "existing_hole" ? "已有 # 新" : "新 # 已有"}）`),
+          ),
+        },
+          React.createElement("div", { style: { fontSize: 12, lineHeight: 1.6 } },
+            React.createElement("div", { style: { marginBottom: 8 } },
+              "检测到与以下已有栅元正体积重合：",
+              qc.overlaps.map((o: any, oi: number) => React.createElement("div", { key: oi, style: { fontSize: 11, color: sevColor(o.severity) } },
+                `栅元 ${o.a} × ${o.b}：占比 ${(o.volumeFraction * 100).toFixed(0)}%${o.suspected ? "（疑似）" : ""}`)),
+            ),
+            React.createElement("div", { style: { marginBottom: 6 } },
+              React.createElement("label", { style: { display: "block", marginBottom: 3 } },
+                React.createElement("input", { type: "radio", name: "qc", checked: qc.recommended === "new_hole", onChange: () => setQuickCheck({ ...qc, recommended: "new_hole" }) }),
+                " A. 新栅元 # 已有（新栅元排除 5/7）"),
+              React.createElement("label", { style: { display: "block", marginBottom: 3 } },
+                React.createElement("input", { type: "radio", name: "qc", checked: qc.recommended === "existing_hole", onChange: () => setQuickCheck({ ...qc, recommended: "existing_hole" }) }),
+                ` B. 已有 # 新栅元（${others.join("、") || "重合栅元"} 排除 ${newNum}）`),
+              React.createElement("label", { style: { display: "block" } },
+                React.createElement("input", { type: "radio", name: "qc", checked: false, onChange: () => setQuickCheck({ ...qc, recommended: "none" }) }),
+                " C. 不处理，保留原样（可能重叠）"),
+            ),
+            React.createElement("div", { style: { fontSize: 11, color: "var(--text-tertiary)" } },
+              "说明：#n 表示栅元 n 的补集。A 给新栅元表达式追加 #旧号；B 给已有栅元表达式追加 #新号。MCNP 中空格的相邻表达式为求交。"),
+          ),
+        );
+      })()}
       <div className="glass-card">
         <div className="card-header">
           <span className="card-title" style={{ flexShrink: 0 }}>曲面卡 &amp; TR 变换</span>

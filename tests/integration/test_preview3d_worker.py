@@ -1,4 +1,4 @@
-"""§6.2 vtk 惰性化 —— AST 断言 worker 顶层无 import vtk，惰性 import 在 _quadric_to_shape 内。
+"""§6.2 vtk 依赖移除 —— AST 断言 worker 全文件无 import vtk / from vtk。
 
 不 import worker（其导入 FreeCAD，本机不可用）；读源码 ast.parse，仿 test_tech_debt.py。
 验收：模块顶层无 `import vtk`/`from vtk`；`import vtk` 出现在 `_quadric_to_shape`
@@ -56,14 +56,14 @@ def test_worker_module_top_has_no_vtk_import():
 def test_worker_vtk_lazily_imported_in_quadric_to_shape():
     """vtk 惰性 import 必须出现在 _quadric_to_shape 函数体内。"""
     hits = _function_vtk_imports(WORKER, "_quadric_to_shape")
-    assert hits, "vtk 惰性 import 未出现在 _quadric_to_shape 函数体内"
+    assert hits == [], "worker 全文件不得有 vtk 导入"
 
 
 def test_worker_vtk_import_after_native_fallback():
     """惰性 import 行必须位于 native 回退之后（marching cubes 分支执行前）。"""
     lines = WORKER.read_text(encoding="utf-8").splitlines()
     import_lines = [ln for ln, _ in _function_vtk_imports(WORKER, "_quadric_to_shape")]
-    assert import_lines
+    assert import_lines == [], "worker 全文件不得有 vtk 导入"
     # native 调用行（排除函数定义行）
     native_call = [i + 1 for i, l in enumerate(lines)
                    if "_quadric_to_native(qtype" in l and "def " not in l]
@@ -85,4 +85,35 @@ def test_worker_have_vtk_flag_initially_false():
                     assert isinstance(node.value, ast.Constant), "_HAVE_VTK 顶层须字面量赋值"
                     assert node.value.value is False, "_HAVE_VTK 顶层初值须为 False"
                     found = True
-    assert found, "模块顶层应初始化 _HAVE_VTK = False"
+    assert not found, "worker 不应再保留 _HAVE_VTK 惰性开关"
+
+
+
+def test_worker_imports_pure_numpy_marching_cubes():
+    """worker 必须接入 app/mc.py（FreeCAD 自带 Python 无 vtk）。"""
+    tree = ast.parse(WORKER.read_text(encoding="utf-8"))
+    imported_mc = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name == "mc":
+                    imported_mc = True
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == "app" and any(a.name == "mc" for a in node.names):
+                imported_mc = True
+    assert imported_mc, "worker 未导入 app/mc.py"
+
+
+def test_worker_has_no_vtk_import_anywhere():
+    """全文件（含函数体）不得出现 vtk import——已改为纯 numpy marching cubes。"""
+    tree = ast.parse(WORKER.read_text(encoding="utf-8"))
+    hits = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name == "vtk" or a.name.startswith("vtk."):
+                    hits.append((node.lineno, f"import {a.name}"))
+        elif isinstance(node, ast.ImportFrom):
+            if node.module and (node.module == "vtk" or node.module.startswith("vtk.")):
+                hits.append((node.lineno, f"from {node.module} import ..."))
+    assert hits == [], f"_freecad_csg_worker.py 仍含 vtk import: {hits}"

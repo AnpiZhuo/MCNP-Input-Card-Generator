@@ -105,6 +105,35 @@ class PreviewCache:
         self._touch(fp)
         self.evict_lru(self._max_entries)
 
+    def put_overlaps(self, fp: str, report: dict) -> None:
+        """把重合检测报告写入缓存目录（同指纹，随目录驱逐自动清理）。"""
+        entry = self._index.get(fp)
+        if entry is None:
+            return
+        cache_dir = entry.get("dir", "")
+        if not cache_dir or not os.path.isdir(cache_dir):
+            return
+        try:
+            with open(os.path.join(cache_dir, "overlaps.json"),
+                      "w", encoding="utf-8") as f:
+                json.dump(report, f, ensure_ascii=False)
+        except OSError:
+            pass
+
+    def get_overlaps(self, fp: str) -> dict | None:
+        """读取同指纹缓存目录里的 overlaps.json；无则 None。"""
+        entry = self._index.get(fp)
+        if entry is None:
+            return None
+        path = os.path.join(entry.get("dir", ""), "overlaps.json")
+        if not os.path.isfile(path):
+            return None
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+
     def get_or_build(self, fp: str, data=None) -> dict:
         """命中返回缓存；未命中用构造 seam builder(data) 构建并缓存。
 

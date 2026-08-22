@@ -27,9 +27,32 @@ except ImportError as e:
     print(json.dumps({"status": "error", "message": f"FreeCAD 导入失败: {e}"}))
     sys.exit(1)
 
-# VTK 可选（用于 GQ/SQ 曲面）：惰性导入，见 _quadric_to_shape 的 native 回退分支。
-# 模块顶层不 import vtk —— 无 GQ/SQ 的 deck 子进程启动不再白付 ~0.46s（~35% 子进程时长）。
-_HAVE_VTK = False
+try:
+    from quadric import sq_to_gq
+except ImportError:  # 测试/直接 import app 包时 quadric 在 app/ 下
+    from app.quadric import sq_to_gq
+
+try:
+    import voxel_csg
+except ImportError:  # 测试/直接 import app 包时 voxel_csg 在 app/ 下
+    from app import voxel_csg
+
+try:
+    import mc as _mc
+except ImportError:  # 测试/直接 import app 包时 mc 在 app/ 下
+    from app import mc as _mc
+
+try:
+    from spatial_index import grid_candidates
+    from overlap_classify import cap_by_bbox_volume, classify_overlaps
+    from overlap_probe import sample_overlap
+except ImportError:  # 测试/直接 import app 包时在 app/ 下
+    from app.spatial_index import grid_candidates
+    from app.overlap_classify import cap_by_bbox_volume, classify_overlaps
+    from app.overlap_probe import sample_overlap
+
+# GQ/SQ 曲面不再依赖 vtk：体素 marching cubes 由 app/mc.py 纯 numpy 实现。
+
 
 
 # ============================================================
@@ -44,6 +67,18 @@ def _make_box(xmin, xmax, ymin, ymax, zmin, zmax):
     """创建轴对齐长方体"""
     return Part.makeBox(xmax - xmin, ymax - ymin, zmax - zmin,
                         _vec(xmin, ymin, zmin))
+
+
+def _triangles_to_fcmesh(vertices, triangles):
+    """numpy 三角形数组 → FreeCAD Mesh（顶点/三角面直接写入）。"""
+    mesh = FcMesh.Mesh()
+    for tri in triangles:
+        i1, i2, i3 = (int(tri[0]), int(tri[1]), int(tri[2]))
+        p1, p2, p3 = vertices[i1], vertices[i2], vertices[i3]
+        mesh.addFacet(_vec(float(p1[0]), float(p1[1]), float(p1[2])),
+                      _vec(float(p2[0]), float(p2[1]), float(p2[2])),
+                      _vec(float(p3[0]), float(p3[1]), float(p3[2])))
+    return mesh
 
 
 # ============================================================
@@ -545,12 +580,12 @@ def _quadric_to_native(qtype: str, coeffs: list[float], B: float):
     """
     if qtype == "sq":
         # SQ → GQ 展开，共用同一套特征值分类（否则会忽略 D/E/F 交叉项导致旋转 SQ 出错）
-        A, B, C, D, E, F, G, x0, y0, z0 = coeffs
-        coeffs = [A, B, C, D, E, F,
+        A, Bb, C, D, E, F, G, x0, y0, z0 = coeffs
+        coeffs = [A, Bb, C, D, E, F,
                   -2 * A * x0 - D * y0 - F * z0,
-                  -2 * B * y0 - D * x0 - E * z0,
+                  -2 * Bb * y0 - D * x0 - E * z0,
                   -2 * C * z0 - E * y0 - F * x0,
-                  A * x0 * x0 + B * y0 * y0 + C * z0 * z0
+                  A * x0 * x0 + Bb * y0 * y0 + C * z0 * z0
                   + D * x0 * y0 + E * y0 * z0 + F * z0 * x0 + G]
 
     a, b, c, d, e, f, g, h, j, k = coeffs
@@ -649,10 +684,12 @@ def _quadric_ellipsoid(w, center, extra, B):
     if max(semi) - min(semi) < 1e-4 * max(1.0, max(semi)):
         sph = Part.makeSphere(semi[0], _vec(*cg))
         return _make_box(-B, B, -B, B, -B, B).cut(sph)
-    # 一般椭球：建球→非均匀缩放→旋转；此版本 scale(Vector) 不支持则回退 marching cubes
+    # 一般椭球：建球→非均匀缩放（transformShape 缩放矩阵）→旋转
     try:
         ell = Part.makeSphere(1.0)
-        ell.scale(FreeCAD.Vector(*semi))
+        scale_mat = FreeCAD.Matrix()
+        scale_mat.scale(*semi)
+        ell.transformShape(scale_mat)
         if V is not None:
             rot = FreeCAD.Matrix(V[0, 0], V[0, 1], V[0, 2], 0,
                                  V[1, 0], V[1, 1], V[1, 2], 0,
@@ -662,107 +699,104 @@ def _quadric_ellipsoid(w, center, extra, B):
         ell.translate(FreeCAD.Vector(*cg))
         return _make_box(-B, B, -B, B, -B, B).cut(ell)
     except Exception:
-        return None  # 非球椭球无法原生创建 → 回退 marching cubes
+        return None  # 非球椭球无法原生创建 → 回退区域网格化
 
 
-def _quadric_to_shape(qtype: str, coeffs: list[float], B: float, grid_res: int = 40):
-    """从二次曲面系数生成 Part.Shape (正侧 pos = 外部)。先试原生，再回退 marching cubes。
-
-    vtk 惰性导入：仅在 native 回退（marching cubes）分支内按需 `import vtk`，
-    成功置 _HAVE_VTK=True；无 GQ/SQ 的 deck 子进程启动不加载 vtk。import 失败
-    仍抛 RuntimeError("VTK 不可用...")。
-    """
-    global _HAVE_VTK
+def _legacy_quadric_to_shape(qtype: str, coeffs: list[float], B: float, grid_res: int = 40):
+    """旧实现（保留对照，勿调用）。"""
+    # 旧实现：native 优先，失败走 _quadric_region_solid（保留对照，勿调用）
     native = _quadric_to_native(qtype, coeffs, B)
     if native is not None:
         return native
-    if not _HAVE_VTK:
-        try:
-            import vtk
-            _HAVE_VTK = True
-        except ImportError:
-            _HAVE_VTK = False
-    if not _HAVE_VTK:
-        raise RuntimeError("VTK 不可用，无法处理 GQ/SQ 曲面")
+    # vtk 旧分支已删除
+    # （旧 vtk 惰性导入分支已整体删除）
+    # （旧占位）
+    # 占位（旧分支已删除）
 
-    # 构建采样网格
-    xs = np.linspace(-B, B, grid_res)
-    X, Y, Z = np.meshgrid(xs, xs, xs, indexing='ij')
+    pass  # （旧分支占位）
+    pass  # （旧分支占位）
+    # （旧占位）
+    pass  # （旧分支占位）
+    # 旧 vtk 守卫已移除（不再需要）
 
-    # 计算隐式函数 F(x,y,z) = 0
-    if qtype == "gq":
-        a, b, c, d, e, f, g, h, j, k = coeffs
-        F = (a * X ** 2 + b * Y ** 2 + c * Z ** 2 +
-             d * X * Y + e * Y * Z + f * Z * X +
-             g * X + h * Y + j * Z + k)
-    elif qtype == "sq":
-        a, b, c, d, e, f, g, cx, cy, cz = coeffs
-        x_, y_, z_ = X - cx, Y - cy, Z - cz
-        F = (a * x_ ** 2 + b * y_ ** 2 + c * z_ ** 2 +
-             d * x_ * y_ + e * y_ * z_ + f * z_ * x_ + g)
+    # SQ → GQ 统一系数后走通用区域网格化
+    if qtype == "sq":
+        coeffs = sq_to_gq(coeffs)
+    return _quadric_region_solid(coeffs, B, grid_res)
 
-    # VTK marching cubes
-    data = vtk.vtkImageData()
-    data.SetDimensions(grid_res, grid_res, grid_res)
-    data.SetSpacing(2 * B / (grid_res - 1),
-                    2 * B / (grid_res - 1),
-                    2 * B / (grid_res - 1))
-    data.SetOrigin(-B, -B, -B)
 
-    arr = vtk.vtkDoubleArray()
-    arr.SetNumberOfValues(grid_res ** 3)
-    flat = F.ravel()
-    for i in range(grid_res ** 3):
-        arr.SetValue(i, float(flat[i]))
-    data.GetPointData().SetScalars(arr)
+def _quadric_to_shape(qtype: str, coeffs: list[float], B: float, grid_res: int = 40):
+    """从二次曲面系数生成 Part.Shape（正侧 pos = F(x,y,z) > 0 的半空间）。
 
-    contour = vtk.vtkFlyingEdges3D()
-    contour.SetInputData(data)
-    contour.SetValue(0, 0.0)
-    contour.Update()
+    先试原生（球/椭球、正圆柱、正圆锥 —— 特征值分类精确原语），其余类型
+    回退到「二值体素区域 marching cubes」：对 {F>0} ∩ [-B,B]³ 加一层 0 padding
+    提取区域边界，天然水密、法线一致，覆盖全部二次曲面（含无界/退化）。
+    纯 numpy（app/mc.py），不再依赖 vtk。
+    """
+    native = _quadric_to_native(qtype, coeffs, B)
+    if native is not None:
+        return native
+    if qtype == "sq":
+        coeffs = sq_to_gq(coeffs)
+    return _quadric_region_solid(coeffs, B, grid_res)
 
-    polydata = contour.GetOutput()
-    n_pts = polydata.GetNumberOfPoints()
-    n_tri = polydata.GetNumberOfPolys()
 
-    if n_pts == 0 or n_tri == 0:
-        # 找不到等值面（特征太细/网格太粗）：报错让该曲面被跳过，而不是回退成整盒导致几何错/崩溃
-        raise RuntimeError("GQ/SQ 曲面 marching cubes 未提取到等值面（特征过细）")
 
-    # 转换为 FreeCAD Mesh
-    verts = [polydata.GetPoint(i) for i in range(n_pts)]
-    polys_arr = polydata.GetPolys().GetData()
-    face_data = [polys_arr.GetValue(i) for i in range(polys_arr.GetNumberOfTuples())]
+def _quadric_region_solid(coeffs: list[float], B: float, res: int = 40):
+    """{F(x,y,z) >= 0} ∩ [-B,B]³ 的半空间实体（水密）。
 
-    mesh = FcMesh.Mesh()
-    for ti in range(n_tri):
-        offset = ti * 4  # [3, i1, i2, i3]
-        i1, i2, i3 = face_data[offset + 1:offset + 4]
-        v1, v2, v3 = verts[i1], verts[i2], verts[i3]
-        mesh.addFacet(_vec(*v1), _vec(*v2), _vec(*v3))
+    实现：在 [-B-δ, B+δ]³ 上构造二值体素（盒内 F>=0 记 1，padding 一层记 0），
+    纯 numpy marching cubes（app/mc.py）提取区域边界 → FreeCAD Mesh → Part.Solid。
+    区域为空（正侧在盒内无点）→ RuntimeError，让该曲面在调用侧被跳过并告警。
+    """
 
-    # Mesh → Part.Shape via temporary STL file
-    # Note: VTK isosurface may not produce a watertight solid.
-    # For preview purposes, use the mesh to carve the box.
-    try:
-        stl_path = os.path.join(tempfile.gettempdir(), "_fcad_gq_mesh.stl")
-        mesh.write(stl_path)
-        shape = Part.Shape()
-        shape.read(stl_path)
-        os.remove(stl_path)
-        if shape.isNull():
-            return _make_box(-B, B, -B, B, -B, B)
-        # Try to make solid from shells
-        if not shape.isSolid() and shape.Shells:
-            try:
-                solid = Part.makeSolid(shape.Shells[0])
-                return _make_box(-B, B, -B, B, -B, B).cut(solid)
-            except Exception:
-                pass
-        # Fallback: if no solid, return box (will be skipped)
-        return _make_box(-B, B, -B, B, -B, B)
-    except Exception:
-        return _make_box(-B, B, -B, B, -B, B)
+    pad = 1
+    res = max(8, int(res))
+    xs = np.linspace(-B, B, res)
+    d = xs[1] - xs[0]
+    xp = np.concatenate([[xs[0] - d], xs, [xs[-1] + d]])
+    X, Y, Z = np.meshgrid(xp, xp, xp, indexing="ij")
+
+    def quadric_f(x, y, z):
+        return (coeffs[0] * x ** 2 + coeffs[1] * y ** 2 + coeffs[2] * z ** 2
+                + coeffs[3] * x * y + coeffs[4] * y * z + coeffs[5] * z * x
+                + coeffs[6] * x + coeffs[7] * y + coeffs[8] * z + coeffs[9])
+
+    F = quadric_f(X, Y, Z)
+    in_box = (np.abs(X) <= B) & (np.abs(Y) <= B) & (np.abs(Z) <= B)
+    region = np.where(in_box & (F >= 0.0), 1, 0).astype(np.uint8)
+
+    def inside_clipped(x, y, z):
+        return (np.abs(x) <= B) & (np.abs(y) <= B) & (np.abs(z) <= B) & (quadric_f(x, y, z) >= 0.0)
+
+    vertices, triangles = _mc.marching_cubes(region, xp, xp, xp, inside_fn=inside_clipped)
+    if len(triangles) == 0:
+        raise RuntimeError("GQ/SQ 曲面正侧在包围盒内为空")
+
+    mesh = _triangles_to_fcmesh(vertices, triangles)
+    shape = Part.Shape()
+    shape.makeShapeFromMesh(mesh.Topology, 0.05)
+    if shape.isNull() or not shape.Shells:
+        raise RuntimeError("GQ/SQ 曲面区域网格无法转换为实体")
+    # 多连通分量（外盒 + 浮空孔）→ Compound 保留全部 shell，makeSolid 支持带空腔实体
+    solid = Part.makeSolid(Part.Compound(shape.Shells))
+    if not solid.isValid():
+        raise RuntimeError("GQ/SQ 曲面区域网格生成的实体无效")
+    # 方向校正：makeShapeFromMesh 对非凸壳的自动定向可能选反，采样区域点验证。
+    # 采样点须严格在盒内（离壁一个体素以上）且 F 尽量大（远离曲面），避免落在边界上歧义。
+    interior = ((np.abs(X) < B - d) & (np.abs(Y) < B - d)
+                & (np.abs(Z) < B - d) & (region == 1))
+    idx = np.argwhere(interior)
+    if idx.size == 0:
+        idx = np.argwhere(region == 1)
+    if idx.size == 0:
+        raise RuntimeError("GQ/SQ 曲面正侧在包围盒内为空")
+    flat_f = F[idx[:, 0], idx[:, 1], idx[:, 2]]
+    i, j, k = idx[int(np.argmax(flat_f))]
+    sample = _vec(float(xp[i]), float(xp[j]), float(xp[k]))
+    if not solid.isInside(sample, 1e-6, True):
+        solid.reverse()
+    return solid
 
 
 # ============================================================
@@ -815,6 +849,30 @@ def apply_trn(shape, tr_data):
         0, 0, 0, 1
     )
     shape.Placement = FreeCAD.Placement(mat)
+    shape.Placement = FreeCAD.Placement(mat)
+
+
+def _fallback_box_mesh(ast, surfaces_by_num, tr_cards, B):
+    """GQ/SQ 体素网格化失败时的诚实降级：返回栅元 AABB 包围盒网格。
+
+    优先用 voxel_csg.cell_aabb（带 TR 曲面会保守全盒）；解析失败或退化
+    时退回整个 bound 盒。warnings 由调用方写入 `栅元 N: GQ/SQ 网格化失败`。
+    """
+    try:
+        aabb = voxel_csg.cell_aabb(ast, surfaces_by_num, B, tr_cards)
+        if aabb is not None:
+            lo = [float(x) for x in aabb[0]]
+            hi = [float(x) for x in aabb[1]]
+            lo = [max(min(v, B), -B) for v in lo]
+            hi = [max(min(v, B), -B) for v in hi]
+            if all(hi[i] > lo[i] for i in range(3)):
+                box = _make_box(lo[0], hi[0], lo[1], hi[1], lo[2], hi[2])
+                return FcMesh.Mesh(box.tessellate(1.0))
+    except Exception:
+        pass
+    box = _make_box(-B, B, -B, B, -B, B)
+    return FcMesh.Mesh(box.tessellate(1.0))
+
 
 
 # ============================================================
@@ -937,13 +995,103 @@ def main():
     # Step 3: 为每个栅元求值布尔表达式（所有栅元都求值，含真空/空气）
     results = {}
     cell_warnings = []
+    voxel_nums = set()
+    quadric_nums = {s["number"] for s in data.get("surfaces", [])
+                    if s.get("type") in ("GQ", "SQ")}
+    surfaces_by_num = {s["number"]: s for s in data.get("surfaces", [])}
+    tr_cards = data.get("tr_cards", {})
     for cell in data.get("cells", []):
         num = cell["number"]
+        ast = cell.get("ast")
+        use_voxel = (ast is not None and bool(quadric_nums)
+                     and bool(voxel_csg._ast_surf_nums(ast) & quadric_nums))
         try:
-            shape = eval_ast(cell["ast"], surfaces, bound_box)
-            results[str(num)] = shape
+            # 含 GQ/SQ 的栅元：OCC 对网格化二次曲面半空间的布尔不可靠，
+            # 走体素 CSG 直接出网格，绕开 OCC 布尔。
+            if use_voxel:
+                vertices, triangles = voxel_csg.mesh_cell_polydata(
+                    ast, surfaces_by_num, tr_cards, B)
+                if len(triangles) == 0:
+                    raise ValueError("体素网格为空（栅元在包围盒内无实体）")
+                results[str(num)] = _triangles_to_fcmesh(vertices, triangles)
+                voxel_nums.add(num)
+            else:
+                if ast is None:
+                    raise ValueError("几何 AST 不可解析")
+                shape = eval_ast(ast, surfaces, bound_box)
+                results[str(num)] = shape
         except Exception as e:
-            cell_warnings.append(f"栅元 {num}: {e}")
+            if use_voxel:
+                # 诚实降级：不静默、不拖垮整卡；该栅元回退为包围盒网格。
+                cell_warnings.append(f"栅元 {num}: GQ/SQ 网格化失败（{e}）")
+                results[str(num)] = _fallback_box_mesh(
+                    ast, surfaces_by_num, tr_cards, B)
+                voxel_nums.add(num)
+            else:
+                cell_warnings.append(f"栅元 {num}: {e}")
+
+    # Step 3.5: 重合检测（check_overlaps 时；只增不改现有行为）
+    overlaps = []
+    overlap_truncated = False
+    overlap_unresolved = []
+    if data.get("check_overlaps"):
+        focus_num = data.get("focus_num")
+        cells_by_num = {c["number"]: c for c in data.get("cells", [])}
+        aabbs = {}
+        for num_str, shape in results.items():
+            try:
+                bb = shape.BoundBox
+                aabbs[int(num_str)] = (
+                    (bb.XMin, bb.YMin, bb.ZMin), (bb.XMax, bb.YMax, bb.ZMax))
+            except Exception:
+                pass
+        candidates = grid_candidates(aabbs) if len(aabbs) >= 2 else []
+        if focus_num is not None:
+            candidates = [c for c in candidates
+                          if c["a"] == focus_num or c["b"] == focus_num]
+        top, overlap_truncated = cap_by_bbox_volume(candidates, max_ops=300)
+        results_raw = []
+        for cand in top:
+            a, b = cand["a"], cand["b"]
+            sa = results.get(str(a))
+            sb = results.get(str(b))
+            if sa is None or sb is None:
+                continue
+            if a in voxel_nums or b in voxel_nums:
+                # 含 GQ/SQ 或体素栅元 → 解析采样探针（采样证据，疑似）
+                ca = cells_by_num.get(a)
+                cb = cells_by_num.get(b)
+                if (ca is None or cb is None
+                        or ca.get("ast") is None or cb.get("ast") is None):
+                    overlap_unresolved.append({"a": a, "b": b,
+                                               "reason": "AST 缺失"})
+                    continue
+                try:
+                    r = sample_overlap(ca["ast"], cb["ast"], surfaces_by_num,
+                                       tr_cards, aabbs[a], aabbs[b])
+                    if r is None:
+                        continue
+                    r["a"], r["b"] = a, b
+                    results_raw.append(r)
+                except Exception as e:
+                    overlap_unresolved.append({"a": a, "b": b,
+                                               "reason": str(e)})
+            else:
+                # 普通 BRep 栅元对：精确布尔
+                try:
+                    common = sa.common(sb)
+                    results_raw.append({
+                        "a": a, "b": b, "volume": common.Volume,
+                        "vol_a": sa.Volume, "vol_b": sb.Volume,
+                        "method": "boolean",
+                    })
+                except Exception as e:
+                    overlap_unresolved.append({"a": a, "b": b,
+                                               "reason": str(e)})
+        cells_meta = {n: {"material": c.get("material", "0")}
+                      for n, c in cells_by_num.items()}
+        report = classify_overlaps(results_raw, cells_meta)
+        overlaps = report["overlaps"]
 
     # Step 4: 导出
     os.makedirs(out_dir, exist_ok=True)
@@ -980,13 +1128,17 @@ def main():
             path = os.path.join(out_dir, f"cell_{num_str}.{fmt}")
             try:
                 if fmt == "stl":
-                    mesh = FcMesh.Mesh(shape.tessellate(1.0))
+                    mesh = (shape if isinstance(shape, FcMesh.Mesh)
+                            else FcMesh.Mesh(shape.tessellate(1.0)))
                     mesh.write(path)
                 elif fmt == "step":
+                    if isinstance(shape, FcMesh.Mesh):
+                        raise ValueError("体素栅元不支持 STEP 导出")
                     shape.exportStep(path)
                 elif fmt == "mesh":
                     # 返回网格数据（顶点+三角面），不写文件
-                    mesh = FcMesh.Mesh(shape.tessellate(1.0))
+                    mesh = (shape if isinstance(shape, FcMesh.Mesh)
+                            else FcMesh.Mesh(shape.tessellate(1.0)))
                     verts = []
                     faces = []
                     for v in mesh.Points:
@@ -1007,6 +1159,10 @@ def main():
         output["warnings"] = warnings
     if cell_warnings:
         output["cell_warnings"] = cell_warnings
+    if data.get("check_overlaps"):
+        output["overlaps"] = overlaps
+        output["overlap_truncated"] = overlap_truncated
+        output["overlap_unresolved"] = overlap_unresolved
 
     print(json.dumps(output))
 

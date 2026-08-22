@@ -14,7 +14,7 @@
 2. **不碰 preview-3d 性能契约**：`/api/preview-3d` 响应结构（`stl_files`/`stl_data`/`freecad`/`count`）不变；preview-3d 冷/热路径零新增延迟；已有 KPI（缓存命中 ≤1s、冷启动 ≤3s）测试不得回归。
 3. **契约漂移闸门双向一致**：新增 `/api/check-overlap` 必须同时写入 `gui/backend/api_server.py` handlers dict（:505-524）与 `docs/contracts/api.yaml`，`tests/integration/test_api_contract.py` 7/7 绿。
 4. **测试铁律不变**：测试不 `import gui.backend.api_server`（模块级 pyvista/FreeCAD 探测污染）；不 `import FreeCAD`；新增纯逻辑测试走 `app/overlap_classify.py` seam（stdlib，无 FreeCAD）。
-5. **worker 协议只增不改**：`_freecad_csg_worker.py` 新增 `check_overlaps` / per-cell `export` 入参键与 `overlaps` / `overlap_truncated` / `overlap_unresolved` 出参键，均为可选；现有行为（无该键时）逐字节不变，vtk 惰性 AST 测试不回归。
+5. **worker 协议只增不改**：`_freecad_csg_worker.py` 新增 `check_overlaps` / per-cell `export` 入参键与 `overlaps` / `overlap_truncated` / `overlap_unresolved` 出参键，均为可选；现有行为（无该键时）逐字节不变，全文件无 vtk 依赖断言不回归（2026-08-22 起 worker 已改纯 numpy MC）。
 6. **禁止反向降级断言**（改断言/删断言/加 skip 骗绿一律打回；FreeCAD 依赖的集成测试仅允许整文件条件 skip，不算绿数）。
 7. 施工完成按 §10 重锚定文档并向 PM 汇报 commit 索引。
 
@@ -24,10 +24,10 @@
 
 ### 1.1 现有 3D 预览管线（检测复用的几何已在此构建）
 ```
-Preview3D.tsx → POST /api/preview-3d → api_server._handle_preview_3d (api_server.py:1014)
-→ build_cells_data(cell_list, include_void=False) (api_server.py:1066, 定义 :168)
-→ FreeCADEngine.build_geometry (freecad_preview.py:307)
-→ 子进程 _freecad_csg_worker.py main() (:_freecad_csg_worker.py:897)
+Preview3D.tsx → POST /api/preview-3d → api_server._handle_preview_3d (api_server.py:1391)
+→ build_cells_data(cell_list, include_void=False) (api_server.py:1443, 定义 :233)
+→ FreeCADEngine.build_geometry (freecad_preview.py:370)
+→ 子进程 _freecad_csg_worker.py main() (:_freecad_csg_worker.py:932)
    ├─ Step 2: 每曲面 make_halfspace → surfaces dict（bound box [-B,B]³ 内）
    ├─ Step 3: 逐栅元 eval_ast → results{num: Part.Shape} (:940-946)   ← 检测复用点
    └─ Step 4: 每栅元 tessellate → STL (:977-1002)
@@ -235,23 +235,23 @@ truncated = candidate_pairs 数 > max_boolean_ops
 
 ## 10. 施工完成后重锚定清单
 
-动工前基线行号（2026-08-13 已核验）：
+动工前基线行号（2026-08-22 GQ/SQ 3D 预览修复后重锚定）：
 
 | 符号 | 行号 |
 | :--- | :--- |
-| `build_cells_data`（include_void 参数） | api_server.py:168 |
-| `_STL_SESSION` / `_clear_stl_session` | api_server.py:44 / :47 |
-| handlers dict | api_server.py:505-524（preview-3d :519 / cross-section :521 / clear-stl :522） |
-| `_handle_preview_3d` | api_server.py:1014 |
-| `_handle_cross_section` | api_server.py:1125 |
-| `_handle_clear_stl` | api_server.py:1165 |
+| `build_cells_data`（include_void 参数） | api_server.py:233 |
+| `_STL_SESSION` / `_clear_stl_session` | api_server.py:71 / :74 |
+| handlers dict | api_server.py:626-657（preview-3d :646 / cross-section :648 / clear-stl :649） |
+| `_handle_preview_3d` | api_server.py:1391 |
+| `_handle_cross_section` | api_server.py:1502 |
+| `_handle_clear_stl` | api_server.py:1542 |
 | `resolve_cell_complements` | freecad_preview.py:85 |
 | `_compute_bound_from_surfaces` | freecad_preview.py:268 |
-| `build_geometry` | freecad_preview.py:307 |
-| worker `eval_ast`（complement :879） | _freecad_csg_worker.py:857 |
-| worker `main`（Step 3 results :940-946 / Step 4 导出 :977-1002 / 输出 :1005-1011） | _freecad_csg_worker.py:897 |
+| `build_geometry` | freecad_preview.py:370 |
+| worker `eval_ast`（complement :914） | _freecad_csg_worker.py:892 |
+| worker `main`（Step 3 results :972-1005 / Step 4 导出 :1007-1065 / 输出 :1067-1074） | _freecad_csg_worker.py:932 |
 | `PreviewCache.fingerprint/get/put/evict_dir/evict_lru` | preview_cache.py:43 / :56 / :70 / :124 / :133 |
-| api.yaml `/api/preview-3d` | api.yaml:718 |
+| api.yaml `/api/preview-3d` | api.yaml:733 |
 | 契约漂移闸门（双向一致） | test_api_contract.py:80-97 |
 
 施工完成后更新：`PROJECT_MEMORY.md`（§4 ADR + §8 变更日志）、`app/UI_ARCHITECTURE.md`（若涉及 preview 链路描述）。

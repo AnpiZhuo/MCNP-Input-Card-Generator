@@ -270,15 +270,20 @@ def _compute_bound_from_surfaces(surf_dicts: list, default: float = 500) -> floa
 
     只对位移类参数（空间坐标/偏移/半径）取 max-abs；宏体方向向量与基点合成
     角点后参与，避免把轴长/方向当坐标撑大 bound（shield_20m RCC h=(0,0,4000)
-    是轴长非坐标 → B 从 5300 修正为 2700）。GQ/SQ 参数是二次型系数非坐标，跳过。
+    是轴长非坐标 → B 从 5300 修正为 2700）。GQ/SQ 参数是二次型系数非坐标，
+    经二次曲面分类换算成真实空间范围后参与；无界/退化仍跳过。
     最终 max*1.3+100 与 default 取大，保证大几何不被 FreeCAD 的 [-B,B]³ 盒子裁剪。
     """
     max_coord = 0.0
     for s in surf_dicts:
-        # GQ/SQ 的参数是二次型系数（含大常数项），不是空间坐标，跳过
-        # 否则会把 bound 撑到上万，导致所有几何用巨大盒子渲染而失真
-        if s.get("type") in ("GQ", "SQ"):
+        # GQ/SQ：先经分类换算空间范围；系数本身（含大常数项）不是坐标，
+        # 直接取 max-abs 会把 bound 撑到上万，导致所有几何用巨大盒子渲染而失真
+        gq_vals = _gq_extent_values(s.get("type", ""), s.get("params", []) or [])
+        if gq_vals:
+            max_coord = max(max_coord, *(abs(float(v)) for v in gq_vals))
             continue
+        if s.get("type") in ("GQ", "SQ"):
+            continue  # 无界/退化 → 系数不是坐标，不参与 extent
         for v in _surface_extent_values(s.get("type", ""), s.get("params", []) or []):
             try:
                 f = float(v)
@@ -289,18 +294,54 @@ def _compute_bound_from_surfaces(surf_dicts: list, default: float = 500) -> floa
     return max(max_coord * 1.3 + 100, default)
 
 
+def _gq_extent_values(surf_type: str, params: list) -> list:
+    """GQ/SQ 有界曲面贡献的真实空间范围（AABB 有界轴的 lo/hi）。
+
+    系数不是坐标，须经二次曲面分类（quadric.gq_aabb）换算成空间范围；
+    无界/退化（如参数被误填成 1e6 的常数）→ []，不撑大 bound。
+    """
+    if surf_type not in ("GQ", "SQ"):
+        return []
+    try:
+        p = [float(v) for v in params]
+    except (TypeError, ValueError):
+        return []
+    if not p:
+        return []
+    try:
+        from quadric import gq_aabb, sq_to_gq
+    except ImportError:  # 测试/直接 import app 包时 quadric 在 app/ 下
+        from app.quadric import gq_aabb, sq_to_gq
+    if surf_type == "SQ":
+        p = sq_to_gq(p)
+    aabb = gq_aabb(p)
+    if not aabb:
+        return []
+    (lox, loy, loz), (hix, hiy, hiz), axes = aabb
+    vals = []
+    for lo, hi, b in ((lox, hix, axes[0]), (loy, hiy, axes[1]),
+                      (loz, hiz, axes[2])):
+        if b:
+            vals += [lo, hi]
+    return vals
+
+
 def model_extent_unpadded(surf_dicts: list) -> float:
     """A1.2 匹配检测用模型范围（无 padding、无 500 兜底）。
 
     与 _compute_bound_from_surfaces 的差异：匹配检测需要**真实**范围——
     _compute_bound 的 max*1.3+100 与 default=500 会把小模型（如 rpp -1 1 -1 1 0 1）
     撑成 ±500 盒子，导致「网格离模型上百厘米却判匹配」漏报错位（绝不静默错位）。
-    此处 max-abs 后原样返回；GQ/SQ 二次型系数跳过；空输入返回 0.0。
+    此处 max-abs 后原样返回；GQ/SQ 经分类取真实范围；空输入返回 0.0。
     """
     max_coord = 0.0
     for s in surf_dicts:
-        if s.get("type") in ("GQ", "SQ"):
+        gq_vals = _gq_extent_values(s.get("type", ""), s.get("params", []) or [])
+        if gq_vals:
+            max_coord = max(max_coord, *(abs(float(v)) for v in gq_vals))
             continue
+        if s.get("type") in ("GQ", "SQ"):
+            continue  # 无界/退化 → 系数不是坐标，不参与 extent
         for v in _surface_extent_values(s.get("type", ""), s.get("params", []) or []):
             try:
                 f = float(v)
@@ -325,10 +366,16 @@ class FreeCADEngine:
         """
         self._freecad_bin = freecad_bin
         self._tmpdir_obj = None
+        # 重合检测结果（build_geometry(check_overlaps=True) 时填充）
+        self.overlaps = []
+        self.overlap_truncated = False
+        self.overlap_unresolved = []
 
     def build_geometry(self, pymcnp_surfaces: list, cells_data: list,
                        tr_cards: dict, bound: float = 500,
-                       fmt: str = "stl", single_file: bool = False) -> dict[int, str]:
+                       fmt: str = "stl", single_file: bool = False,
+                       check_overlaps: bool = False,
+                       focus_num: int | None = None) -> dict[int, str]:
         """从 pymcnp 对象和栅元数据构建各栅元的 CSG 几何。
 
         Args:
@@ -379,6 +426,8 @@ class FreeCADEngine:
             "output_dir": tmp_dir,
             "format": fmt,
             "single_file": single_file,
+            "check_overlaps": check_overlaps,
+            "focus_num": focus_num,
         }
 
         # 4. 子进程调用 FreeCAD
@@ -386,6 +435,9 @@ class FreeCADEngine:
 
         # 5. 收集输出
         result = {}
+        self.overlaps = result_data.get("overlaps", []) or []
+        self.overlap_truncated = bool(result_data.get("overlap_truncated", False))
+        self.overlap_unresolved = result_data.get("overlap_unresolved", []) or []
         for cell_num_str, entry in result_data.get("files", {}).items():
             if isinstance(entry, dict) and "vertices" in entry:
                 # fmt="mesh": 直接返回顶点/三角面数据

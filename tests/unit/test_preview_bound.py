@@ -127,15 +127,30 @@ def test_box_far_corner_composition():
     assert abs(b - 1400) < 1e-9, f"BOX 方向向量不单独撑 bound，bound={b:.2f} 应=1400"
 
 
-# ── GQ/SQ 跳过（§6.3 验收）─────────────────────────────────
-def test_gq_sq_skipped_do_not_inflate_bound():
-    """GQ/SQ 二次型系数（含大常数项）不是坐标，必须跳过，不撑 bound。"""
+# ── GQ/SQ 有界范围（新契约：分类换算真实范围；无界/退化跳过）──
+def test_gq_sq_unbounded_or_degenerate_do_not_inflate_bound():
+    """GQ/SQ 无界/退化曲面（二次型系数含大常数项）不撑 bound。"""
     dicts = _parse_fixture_surfaces("preview_inp01_m100.inp")
     assert dicts, "inp01 应解析出曲面"
     dicts.append({"type": "GQ", "number": 999, "params": [1e6] * 10, "transform": None})
-    dicts.append({"type": "SQ", "number": 998, "params": [1e6] * 10, "transform": None})
+    # x² + y² - z² = 0 锥面 → 无界，跳过
+    dicts.append({"type": "SQ", "number": 998, "params": [1.0, 1.0, -1.0, 0, 0, 0, 0, 0, 0, 0], "transform": None})
     b = _compute_bound_from_surfaces(dicts)
-    assert abs(b - 13100) / 13100 <= 0.05, f"GQ/SQ 系数不应当撑大 bound，bound={b:.2f}"
+    assert abs(b - 13100) / 13100 <= 0.05, f"GQ/SQ 无界曲面不应撑大 bound，bound={b:.2f}"
+
+
+def test_gq_ellipsoid_contributes_real_extent():
+    """有界 GQ 椭球（1e-6·(x²+y²+z²)-1=0，半径 1000）→ bound = 1000*1.3+100 = 1400。"""
+    dicts = [{"type": "GQ", "number": 1, "params": [1e-6, 1e-6, 1e-6, 0, 0, 0, 0, 0, 0, -1], "transform": None}]
+    b = _compute_bound_from_surfaces(dicts)
+    assert abs(b - 1400) < 1e-9, f"GQ 椭球应贡献半径 1000，bound={b:.2f} 应为 1400"
+
+
+def test_sq_ellipsoid_contributes_real_extent():
+    """有界 SQ 球（(x-3)²+(y-4)²+(z-5)²=250000，半径 500）→ 最远坐标 505 → bound 756.5。"""
+    dicts = [{"type": "SQ", "number": 1, "params": [1, 1, 1, 0, 0, 0, -250000, 3, 4, 5], "transform": None}]
+    b = _compute_bound_from_surfaces(dicts)
+    assert abs(b - 756.5) < 1e-9, f"SQ 球应贡献半径 500@(3,4,5)，bound={b:.2f} 应为 756.5"
 
 
 # ── A1.2 匹配检测用模型范围（无 padding）────────────────────
@@ -149,11 +164,17 @@ def test_model_extent_unpadded_real_geometry_range():
 
 
 def test_model_extent_unpadded_skips_gq_sq_and_empty():
-    """GQ/SQ 系数跳过；空输入 → 0.0。"""
+    """GQ/SQ 无界/退化跳过；有界取真实范围；空输入 → 0.0。"""
     dicts = [
         {"type": "RPP", "number": 1, "params": [-1, 1, -1, 1, 0, 1], "transform": None},
         {"type": "GQ", "number": 999, "params": [1e6] * 10, "transform": None},
-        {"type": "SQ", "number": 998, "params": [1e6] * 10, "transform": None},
+        {"type": "SQ", "number": 998, "params": [1.0, 1.0, -1.0, 0, 0, 0, 0, 0, 0, 0], "transform": None},
     ]
     assert abs(model_extent_unpadded(dicts) - 1.0) < 1e-9
     assert model_extent_unpadded([]) == 0.0
+
+
+def test_model_extent_unpadded_gq_ellipsoid_real_extent():
+    """model_extent_unpadded 对 GQ 椭球取真实范围（半径 1000，无 padding）。"""
+    dicts = [{"type": "GQ", "number": 1, "params": [1e-6, 1e-6, 1e-6, 0, 0, 0, 0, 0, 0, -1], "transform": None}]
+    assert abs(model_extent_unpadded(dicts) - 1000.0) < 1e-9
