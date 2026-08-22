@@ -338,8 +338,11 @@ def cell_aabb(ast, surfaces_by_num, B, tr_cards=None):
     """
     tag = ast[0]
     if tag == "surf":
-        s = surfaces_by_num[ast[1]]
-        return surface_aabb(s["type"], s["params"], _surface_tr(s, tr_cards))
+        # MCNP 中裸曲面引用 = 曲面的正侧（无界区域，曲面本身是零测度集）。
+        # 不能返回曲面自身 AABB——否则会把「球外/壳」这类无界栅元裁到曲面
+        # 范围内，导致网格只覆盖角部、三角形数量爆炸（实测 288k 三角）。
+        # 返回 None 后由 _aabb_intersect 取有界伙伴的紧盒，或全盒兜底。
+        return None
     if tag == "unary":
         if ast[2] in ("neg", "complement"):
             child = ast[1]
@@ -349,7 +352,11 @@ def cell_aabb(ast, surfaces_by_num, B, tr_cards=None):
                 return _surface_negative_aabb(
                     s["type"], s["params"], _surface_tr(s, tr_cards))
             return None  # 补集无界（裁到盒）
-        return cell_aabb(ast[1], surfaces_by_num, B, tr_cards)
+        # 正侧：任何曲面的正侧在 R^3 中均无界（曲面本身是零测度集），
+        # 不能返回曲面自身 AABB——否则会把「球外/壳」这类无界栅元裁到
+        # 曲面范围内，导致网格只覆盖角部、三角形数量爆炸（实测 288k 三角）。
+        # 返回 None 后由 _aabb_intersect 取有界伙伴的紧盒，或全盒兜底。
+        return None
     if tag == "intersect":
         a = cell_aabb(ast[1], surfaces_by_num, B, tr_cards)
         b = cell_aabb(ast[2], surfaces_by_num, B, tr_cards)

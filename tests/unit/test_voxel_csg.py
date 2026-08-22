@@ -318,3 +318,46 @@ def test_union_falls_back_to_marching_cubes():
         f"union 应回退 MC：triangles={len(triangles)}"
     )
     _assert_watertight(vertices, triangles)
+
+
+# ---- regression: bare positive surface unbounded (2026-08-23 shell blowup) ----
+def test_bare_positive_surface_aabb_is_unbounded():
+    """MCNP bare surface ref = positive side (unbounded); cell_aabb must not return
+    the surface's own AABB, otherwise shell/outside cells get clipped (288k tris)."""
+    surfaces = _sphere_surface(1, 1.0)
+    assert voxel_csg.cell_aabb(["surf", 1], surfaces, 10.0) is None
+    assert voxel_csg.cell_aabb(_pos(1), surfaces, 10.0) is None
+
+
+def test_cell_aabb_shell_takes_outer_partner():
+    """shell '1 -3' (outside sphere1 & inside sphere3) tight box = outer [-2,2]."""
+    surfaces = {
+        1: {"type": "GQ", "number": 1,
+            "params": [1, 1, 1, 0, 0, 0, 0, 0, 0, -1.0], "transform": None},
+        3: {"type": "SQ", "number": 3,
+            "params": [1, 1, 1, 0, 0, 0, -4.0, 0.0, 0.0, 0.0], "transform": None},
+    }
+    ast = ["intersect", ["surf", 1], _neg(3)]
+    aabb = voxel_csg.cell_aabb(ast, surfaces, 10.0)
+    assert aabb is not None
+    lo, hi, axes = aabb
+    assert axes == (True, True, True)
+    assert np.allclose(lo, [-2.0, -2.0, -2.0], atol=1e-9), f"lo={lo}"
+    assert np.allclose(hi, [2.0, 2.0, 2.0], atol=1e-9), f"hi={hi}"
+
+
+def test_shell_mesh_covers_outer_extent():
+    """shell '1 -3' mesh must span [-2,2] and stay triangle-bounded."""
+    surfaces = {
+        1: {"type": "GQ", "number": 1,
+            "params": [1, 1, 1, 0, 0, 0, 0, 0, 0, -1.0], "transform": None},
+        3: {"type": "SQ", "number": 3,
+            "params": [1, 1, 1, 0, 0, 0, -4.0, 0.0, 0.0, 0.0], "transform": None},
+    }
+    ast = ["intersect", ["surf", 1], _neg(3)]
+    vertices, triangles = voxel_csg.mesh_cell_polydata(ast, surfaces, {}, B=500.0)
+    assert len(vertices) > 0 and len(triangles) > 0
+    hi = vertices.max(axis=0)
+    assert hi.min() > 1.8, f"outer shell clipped hi={hi}"
+    assert hi.max() < 2.5, f"outer shell out of bounds hi={hi}"
+    assert len(triangles) < 200000, f"triangle blowup {len(triangles)}"

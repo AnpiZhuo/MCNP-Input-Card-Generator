@@ -72,12 +72,17 @@ def _make_box(xmin, xmax, ymin, ymax, zmin, zmax):
 def _triangles_to_fcmesh(vertices, triangles):
     """numpy 三角形数组 → FreeCAD Mesh（顶点/三角面直接写入）。"""
     mesh = FcMesh.Mesh()
+    # bulk addFacets: 120k triangles 0.33s vs per-facet addFacet 45s (140x)
+    facets = []
     for tri in triangles:
         i1, i2, i3 = (int(tri[0]), int(tri[1]), int(tri[2]))
-        p1, p2, p3 = vertices[i1], vertices[i2], vertices[i3]
-        mesh.addFacet(_vec(float(p1[0]), float(p1[1]), float(p1[2])),
-                      _vec(float(p2[0]), float(p2[1]), float(p2[2])),
-                      _vec(float(p3[0]), float(p3[1]), float(p3[2])))
+        facets.append((
+            _vec(float(vertices[i1][0]), float(vertices[i1][1]), float(vertices[i1][2])),
+            _vec(float(vertices[i2][0]), float(vertices[i2][1]), float(vertices[i2][2])),
+            _vec(float(vertices[i3][0]), float(vertices[i3][1]), float(vertices[i3][2])),
+        ))
+    if facets:
+        mesh.addFacets(facets)
     return mesh
 
 
@@ -996,6 +1001,7 @@ def main():
     results = {}
     cell_warnings = []
     voxel_nums = set()
+    empty_nums = set()
     quadric_nums = {s["number"] for s in data.get("surfaces", [])
                     if s.get("type") in ("GQ", "SQ")}
     surfaces_by_num = {s["number"]: s for s in data.get("surfaces", [])}
@@ -1022,11 +1028,15 @@ def main():
                 results[str(num)] = shape
         except Exception as e:
             if use_voxel:
-                # 诚实降级：不静默、不拖垮整卡；该栅元回退为包围盒网格。
-                cell_warnings.append(f"栅元 {num}: GQ/SQ 网格化失败（{e}）")
-                results[str(num)] = _fallback_box_mesh(
-                    ast, surfaces_by_num, tr_cards, B)
-                voxel_nums.add(num)
+                if "体素网格为空" in str(e):
+                    cell_warnings.append(f"栅元 {num}: 空几何（零体积）")
+                    empty_nums.add(num)
+                else:
+                    # 诚实降级：不静默、不拖垮整卡；该栅元回退为包围盒网格。
+                    cell_warnings.append(f"栅元 {num}: GQ/SQ 网格化失败（{e}）")
+                    results[str(num)] = _fallback_box_mesh(
+                        ast, surfaces_by_num, tr_cards, B)
+                    voxel_nums.add(num)
             else:
                 cell_warnings.append(f"栅元 {num}: {e}")
 
@@ -1065,7 +1075,7 @@ def main():
                     vol = None
             if vol is not None and float(vol) <= 1e-6:
                 zero_volume.append(int(num_str))
-        zero_volume.sort()
+        zero_volume = sorted(set(zero_volume) | empty_nums)
         results_raw = []
         for cand in top:
             a, b = cand["a"], cand["b"]
