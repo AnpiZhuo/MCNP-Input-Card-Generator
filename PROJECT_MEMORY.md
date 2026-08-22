@@ -1,6 +1,6 @@
 # 项目记忆文档（AI 速查手册）
 
-> 最后更新时间：2026-08-22 —— **按人脑模型重组**（原「顶部横幅 + §8 流水混装」整理为「短期记忆 / 长期记忆」两区，完整流水外置 `docs/CHANGELOG.md`）。同日完成 **GQ/SQ 3D 预览修复 + 渲染后续增强 + OWEN 四项 + 参数扫描前端**：全部门禁绿（pytest **573/0** / vitest **358/0** / tsc EXIT 0）+ PyInstaller sidecar 重打包 + 打包版冒烟通过。
+> 最后更新时间：2026-08-23 —— **按人脑模型重组**（原「顶部横幅 + §8 流水混装」整理为「短期记忆 / 长期记忆」两区，完整流水外置 `docs/CHANGELOG.md`）。同日完成 **GQ/SQ 3D 预览修复 + 渲染后续增强 + OWEN 四项 + 参数扫描前端**：全部门禁绿（pytest **573/0** / vitest **358/0** / tsc EXIT 0）+ PyInstaller sidecar 重打包 + 打包版冒烟通过。
 >
 > **人脑模型组织说明**：
 > - **◉ 短期记忆（工作记忆）**：只放"现在正在处理的事"——当前批次 / 工作区 / 待办。**容量小、变化快、随批次刷新**（人脑工作记忆约 7±2 项）。
@@ -14,7 +14,16 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
-## S1 当前批次：GQ/SQ 3D 预览修复（2026-08-22，施工完成，未发版/未 commit）
+## S1 当前批次：v1.7.3 发布 + 重合检测超时修复 + 零体积检测（2026-08-23，已提交并部署）
+- 一句话状态：**v1.7.3 已发版并部署至 `D:\MCNP\MCNP输入卡生成器`**（版本四处+lock 均 1.7.3）；重合检测门禁 pytest **590/0** / vitest **363/0** / tsc EXIT 0；交接文档已更新。
+- **e5e09af（快捷添加补集决策完善）**：决策抽纯函数 `applyQuickAddChoice`（A=新#已有 / B=被侵占栅元（含真空）#新 / D=只占真空（真空让位#新，新#非真空） / C=不改）；支持一次性多栅元；后端 quick-add-check 接收 `new_cells` 数组 + worker `focus_nums` 多栅元过滤 + 零体积检测；48 个 PNNL 预设改中文名。
+- **698e7e2（重合检测超时根治，本批关键）**：
+  1. **cell_aabb 裸曲面正侧无界修复**：MCNP 裸 `["surf",n]` = 正侧（R³ 无界），不得返回曲面自身 AABB。旧 bug 将球壳栅元 '1 -3' 裁到内球 [-1,1]，网格只覆盖 8 角碎块、288k 三角形 → worker 120s 超时（check-overlap/quick-add-check 实测均报 error）。修复后紧盒取有界伙伴 [-2,2]，球壳网格 132k、4.0s 完成。
+  2. **_triangles_to_fcmesh 批量化**：逐面 `addFacet`（120k 三角 45s）→ 批量 `addFacets`（0.33s），140 倍提速。
+  3. **空栅元零体积检测**：体素网格为空的真实空几何不再 fallback 包围盒（否则伪造非零体积），改记 `empty_nums` → `zero_volume` 输出；零体积栅元不生成 STL。
+  - 测试：+3（裸正侧无界 / 球壳 AABB / 球壳网格外延）；部署版冒烟：check-overlap 检出 (1,6)+(3,7)、zero_volume [5]；quick-add-check 多栅元 8 对、zero_volume [5,12]、recommended existing_hole；preview-3d GQ+SQ+*TR1 出 1/6/7 号 STL。
+- 自动测试规则：所有测试/构建均加硬性超时（Start-Process + WaitForExit + Kill）；打包纪律：PyInstaller sidecar → 替换 src-tauri/binaries → 手动复制到 target/release（增量 tauri build 不刷新 sidecar）→ 杀进程部署。
+## S1b（上一批次）当前批次：GQ/SQ 3D 预览修复（2026-08-22，施工完成，未发版/未 commit）
 
 - **一句话状态**：GQ/SQ 曲面 3D 预览修复**施工完成**——纯 numpy marching cubes 去 vtk + TR 变换修复 + 动态测试发现的 3 个 bug 修复；全部门禁绿（pytest **544/0**、vitest **345/0**、tsc EXIT 0）；PyInstaller sidecar 重打包成功，**打包版 GQ/SQ preview-3d 冒烟通过**（GQ 椭球 + `*TR1` 平移 (5,0,0)：94272 三角形、bounds [2.97,7.03]×[±1]×[±1]、mid (5,0,0)、水密 0 异常边）。文件版本恒 **1.7.2**。
 - **动态测试发现的 3 个 bug**（细节见交接文档 `P:\dekstop\GQ-SQ_3D预览修复_交接文档.md`）：
@@ -279,3 +288,4 @@
 - bug 修复批**严禁升版**；升版仅限新功能且由上级指定。
 - 版本四处+锁文件同步：tauri.conf.json / package.json / Cargo.toml / README 徽章 / Cargo.lock。
 - 侧边栏版本号读 package.json（单一来源，升版不再破）。
+
