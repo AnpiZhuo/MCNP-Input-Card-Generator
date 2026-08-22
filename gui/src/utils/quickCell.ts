@@ -88,6 +88,10 @@ export interface QuickCellResult {
   cellCount: number;
   /** 添加后是否做重合检测（GeometryTab 据此决定是否弹补集决策） */
   checkOverlap?: boolean;
+  /** 已有栅元表达式补丁（方向 B：给这些栅元追加 #新号） */
+  existingExprPatch?: { num: string; surfaces: string }[];
+  /** 已由生成入口（如 3D 预览）处理过重合决策，接收方不再重复弹窗 */
+  overlapHandled?: boolean;
 }
 
 /** GeometryTab 本地栅元行（camelCase，与 CellEditDialog.CellData 一致） */

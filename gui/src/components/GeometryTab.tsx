@@ -199,11 +199,18 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     const nextTr = appendCardText(trTextRef.current, result.trCardsText);
     setSurfText(nextSurf);
     setTrText(nextTr);
-    const newRows = result.cells.map(generatedCellToRow);
-    if (result.checkOverlap === false) {
-      setCells(prev => [...prev, ...newRows]);
-      return;
-    }
+  const newRows = result.cells.map(generatedCellToRow);
+  // 生成入口（3D 预览）已处理重合决策：应用补丁后直接加入，不再重复弹窗
+  if (result.existingExprPatch && result.existingExprPatch.length) {
+    const patchMap = new Map(result.existingExprPatch.map(p => [p.num, p.surfaces]));
+    setCells(prev => prev.map(c => c.kind === "cell" && patchMap.has(c.cell.num)
+      ? { ...c, cell: { ...c.cell, surfaces: patchMap.get(c.cell.num)! } }
+      : c));
+  }
+  if (result.overlapHandled || result.checkOverlap === false) {
+    setCells(prev => [...prev, ...newRows]);
+    return;
+  }
     // 快捷添加重合检查：新栅元 vs 已有 → 弹出 A/B/C 补集决策
     const newRow = newRows[0];
     if (!newRow || newRow.kind !== "cell") { setCells(prev => [...prev, ...newRows]); return; }
@@ -244,8 +251,8 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     })();
   };
 
-  // 快捷添加补集决策：A=新 # 已有，B=已有 # 新，C=不处理直接追加
-  const applyQuickCheck = (choice: "new_hole" | "existing_hole" | "none") => {
+  // 快捷添加补集决策：A=新#已有 / B=已有#新 / D=只占真空 / C=不处理
+  const applyQuickCheck = (choice: "new_hole" | "existing_hole" | "void_only" | "none") => {
     if (!quickCheck) return;
     const qc = quickCheck;
     const newNum = parseInt(qc.newRows[0].cell.num, 10) || 0;
@@ -253,10 +260,18 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
       .map(o => (o.a === newNum ? o.b : o.a))
       .filter(n => n !== newNum);
     let rows = qc.newRows;
-    if (choice === "new_hole" && others.length) {
-      rows = rows.map(r => r.kind === "cell"
-        ? { ...r, cell: { ...r.cell, surfaces: (r.cell.surfaces + " " + others.map(n => "#" + n).join(" ")).trim() } }
-        : r);
+    if (choice === "new_hole" || choice === "void_only") {
+      const voidNums: number[] = [];
+      for (const c of cells) {
+        if (c.kind === "cell" && c.cell.mat === "0") voidNums.push(parseInt(c.cell.num, 10));
+      }
+      const voidSet = new Set(voidNums);
+      const nums = choice === "void_only" ? others.filter(n => !voidSet.has(n)) : others;
+      if (nums.length) {
+        rows = rows.map(r => r.kind === "cell"
+          ? { ...r, cell: { ...r.cell, surfaces: (r.cell.surfaces + " " + nums.map(n => "#" + n).join(" ")).trim() } }
+          : r);
+      }
     } else if (choice === "existing_hole" && others.length) {
       setCells(prev => prev.map(c => {
         if (c.kind !== "cell" || !others.includes(parseInt(c.cell.num, 10))) return c;
@@ -369,34 +384,24 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
           .filter((n: number) => n !== newNum);
         const sevColor = (s: string) => s === "error" ? "#e53935" : s === "warning" ? "#e6a23c" : "#9e9e9e";
         return React.createElement(FloatingDialog, {
-          title: `快捷建栅元：与已有栅元重合（新栅元 ${newNum}）`,
+          title: `新栅元 ${newNum} 与栅元 ${others.join("、")} 重合`,
           onClose: () => applyQuickCheck("none"),
-          width: 520,
-          footer: React.createElement(React.Fragment, null,
-            React.createElement("button", { className: "btn btn-ghost btn-sm", onClick: () => applyQuickCheck("none") }, "保留原样"),
-            React.createElement("button", { className: "btn btn-primary btn-sm", onClick: () => applyQuickCheck(qc.recommended) },
-              qc.recommended === "none" ? "按选择应用" : `按选择应用（${qc.recommended === "existing_hole" ? "已有 # 新" : "新 # 已有"}）`),
-          ),
+          width: 440,
         },
-          React.createElement("div", { style: { fontSize: 12, lineHeight: 1.6 } },
-            React.createElement("div", { style: { marginBottom: 8 } },
-              "检测到与以下已有栅元正体积重合：",
-              qc.overlaps.map((o: any, oi: number) => React.createElement("div", { key: oi, style: { fontSize: 11, color: sevColor(o.severity) } },
-                `栅元 ${o.a} × ${o.b}：占比 ${(o.volumeFraction * 100).toFixed(0)}%${o.suspected ? "（疑似）" : ""}`)),
-            ),
-            React.createElement("div", { style: { marginBottom: 6 } },
-              React.createElement("label", { style: { display: "block", marginBottom: 3 } },
-                React.createElement("input", { type: "radio", name: "qc", checked: qc.recommended === "new_hole", onChange: () => setQuickCheck({ ...qc, recommended: "new_hole" }) }),
-                " A. 新栅元 # 已有（新栅元排除 5/7）"),
-              React.createElement("label", { style: { display: "block", marginBottom: 3 } },
-                React.createElement("input", { type: "radio", name: "qc", checked: qc.recommended === "existing_hole", onChange: () => setQuickCheck({ ...qc, recommended: "existing_hole" }) }),
-                ` B. 已有 # 新栅元（${others.join("、") || "重合栅元"} 排除 ${newNum}）`),
-              React.createElement("label", { style: { display: "block" } },
-                React.createElement("input", { type: "radio", name: "qc", checked: false, onChange: () => setQuickCheck({ ...qc, recommended: "none" }) }),
-                " C. 不处理，保留原样（可能重叠）"),
-            ),
-            React.createElement("div", { style: { fontSize: 11, color: "var(--text-tertiary)" } },
-              "说明：#n 表示栅元 n 的补集。A 给新栅元表达式追加 #旧号；B 给已有栅元表达式追加 #新号。MCNP 中空格的相邻表达式为求交。"),
+          React.createElement("div", { style: { fontSize: 12, lineHeight: 1.8 } },
+            React.createElement("div", { style: { marginBottom: 8, color: "var(--text-secondary)" } }, "选择如何处理（点击即应用）："),
+            React.createElement("button", { className: "btn btn-sm", style: { display: "block", width: "100%", marginBottom: 6, textAlign: "left" },
+              onClick: () => applyQuickCheck("new_hole") },
+              `挖掉已有（新栅元 # ${others.join(" #") || "—"}）${qc.recommended === "new_hole" ? "  · 推荐" : ""}`),
+            React.createElement("button", { className: "btn btn-sm", style: { display: "block", width: "100%", marginBottom: 6, textAlign: "left" },
+              onClick: () => applyQuickCheck("existing_hole") },
+              `已有让位（${others.join("、") || "—"} # ${newNum}）${qc.recommended === "existing_hole" ? "  · 推荐" : ""}`),
+            React.createElement("button", { className: "btn btn-sm", style: { display: "block", width: "100%", marginBottom: 6, textAlign: "left" },
+              onClick: () => applyQuickCheck("void_only") },
+              "只占真空（挖掉非真空栅元，真空重叠保留）"),
+            React.createElement("button", { className: "btn btn-ghost btn-sm", style: { display: "block", width: "100%", textAlign: "left" },
+              onClick: () => applyQuickCheck("none") },
+              "保持原样（可能重叠）"),
           ),
         );
       })()}

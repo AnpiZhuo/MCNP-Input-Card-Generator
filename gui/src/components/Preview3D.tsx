@@ -50,7 +50,8 @@ import { createTickGrid } from "../three/TickGrid";
 import { AXIS_CONFIG } from "../three/axisConfig";
 import { offsetPlaneForStl } from "../three/planeOffset";
 import { buildQuickCellPreview, wireColorForMaterial } from "../three/quickCellPreview";
-import type { QuickCellResult, QuickShape } from "../utils/quickCell";
+import { appendCardText, type QuickCellResult, type QuickShape } from "../utils/quickCell";
+import FloatingDialog from "./FloatingDialog";
 
 /* ---- plane eq formatting/parsing ---- */
 function planeToStr(plane: any): string {
@@ -527,6 +528,10 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   } | null>(null);
   const [overlapBusy, setOverlapBusy] = useState(false);
   const [highlightNums, setHighlightNums] = useState<string[]>([]);
+  const [quickCheck, setQuickCheck] = useState<{
+    overlaps: any[]; newNum: number; newRow: any; result: QuickCellResult;
+  } | null>(null);
+  const [quickCheckBusy, setQuickCheckBusy] = useState(false);
 
   const runOverlapCheck = useCallback(async () => {
     setOverlapBusy(true);
@@ -719,7 +724,6 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   };
 
   const handleQuickCellGenerate = (result: QuickCellResult) => {
-    onQuickCellGenerate?.(result);
     // 移除本次线框（新栅元由重拉 STL 渲染）
     const ctrl = ctrlRef.current;
     if (ctrl && wirePreviewRef.current) {
@@ -727,6 +731,92 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       wirePreviewRef.current.dispose();
       wirePreviewRef.current = null;
     }
+    if (result.checkOverlap === false) {
+      onQuickCellGenerate?.(result);
+      setGenTick(t => t + 1);
+      return;
+    }
+    // 在 3D 预览页内做重合检测并弹决策（不把提示发回主页面）
+    const newRow = result.cells[0];
+    const p = propsRef.current;
+    const existingCells = p.cells.map((c: any) => ({
+      kind: "cell",
+      cell: {
+        number: parseInt(c.num) || 0,
+        material: c.mat,
+        density: (c as any).density || "",
+        surface_expr: (c as any).surfaces || (c as any).surface_expr || "",
+      },
+    }));
+    (async () => {
+      setQuickCheckBusy(true);
+      try {
+        const r = await fetch(apiUrl("/api/quick-add-check"), {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            surfaces: appendCardText(p.surfaces || "", result.surfacesText),
+            cells: existingCells,
+            tr_cards: appendCardText(p.trCards || "", result.trCardsText),
+            new_cell: {
+              number: parseInt(newRow.num, 10) || 0,
+              material: newRow.mat,
+              density: newRow.density,
+              surface_expr: newRow.surfaces,
+            },
+          }),
+          signal: AbortSignal.timeout(60000),
+        });
+        const j = await r.json();
+        if (j.status !== "error" && j.overlaps && j.overlaps.length > 0) {
+          setQuickCheck({ overlaps: j.overlaps, newNum: parseInt(newRow.num, 10) || 0, newRow, result });
+          setQuickCheckBusy(false);
+          return;
+        }
+      } catch (e) { /* 检测失败 → 直接加入 */ }
+      setQuickCheckBusy(false);
+      onQuickCellGenerate?.(result);
+      setGenTick(t => t + 1);
+    })();
+  };
+
+  // 3D 预览内补集决策：A=挖掉已有 / B=已有让位 / D=只占真空 / C=保持原样
+  const applyQuickCheck = (choice: "new_hole" | "existing_hole" | "void_only" | "none") => {
+    const qc = quickCheck;
+    if (!qc) return;
+    const newNum = qc.newNum;
+    const others = qc.overlaps
+      .map((o: any) => (o.a === newNum ? o.b : o.a))
+      .filter((n: number) => n !== newNum);
+    const result = qc.result;
+    const newRow = qc.newRow;
+    if (choice === "new_hole" || choice === "void_only") {
+      // A/D：新栅元追加 #非真空（或全部）已有栅元
+      const voidSet = new Set(
+        (propsRef.current.cells as any[])
+          .filter(c => String(c.mat) === "0")
+          .map(c => parseInt(c.num, 10)),
+      );
+      const nums = choice === "void_only"
+        ? others.filter(n => !voidSet.has(n))
+        : others;
+      if (nums.length) {
+        result.cells = result.cells.map(c => c.num === String(newNum)
+          ? { ...c, surfaces: (c.surfaces + " " + nums.map(n => "#" + n).join(" ")).trim() }
+          : c);
+      }
+    } else if (choice === "existing_hole") {
+      // B：已有栅元追加 #新号 → 补丁交给 GeometryTab 应用
+      const matMap = new Map(
+        (propsRef.current.cells as any[]).map(c => [parseInt(c.num, 10), c]),
+      );
+      result.existingExprPatch = others.map(n => {
+        const c = matMap.get(n) as any;
+        return { num: String(n), surfaces: ((c?.surfaces || c?.surface_expr || "") + " #" + newNum).trim() };
+      });
+    }
+    result.overlapHandled = true;
+    setQuickCheck(null);
+    onQuickCellGenerate?.(result);
     setGenTick(t => t + 1);
   };
 
@@ -1126,6 +1216,27 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
             background: o.num === cellViews[matPicker.i]?.mat ? "rgba(255,255,255,0.08)" : "transparent",
           } as React.CSSProperties,
         }, o.label)),
+      ),
+    ),
+    /* 快捷建栅元重合决策（在 3D 预览页内提示） */
+    quickCheck && React.createElement(FloatingDialog, {
+      title: `新栅元与栅元 ${quickCheck.overlaps.map((o: any) => (o.a === quickCheck.newNum ? o.b : o.a)).join("、")} 重合`,
+      onClose: () => applyQuickCheck("none"),
+      width: 440,
+    },
+      React.createElement("div", { style: { fontSize: 12, lineHeight: 1.7 } },
+        React.createElement("div", { style: { marginBottom: 10, color: "var(--text-secondary)" } },
+          "选择如何处理（点击即应用）："),
+        ["new_hole", "existing_hole", "void_only", "none"].map(ch => {
+          const label = ch === "new_hole" ? "挖掉已有（新栅元 # 重合栅元）"
+            : ch === "existing_hole" ? "已有让位（重合栅元 # 新栅元）"
+            : ch === "void_only" ? "只占真空（挖掉非真空栅元）"
+            : "保持原样（可能重叠）";
+          return React.createElement("button", {
+            key: ch, className: "btn btn-sm", style: { display: "block", width: "100%", marginBottom: 6, textAlign: "left" },
+            onClick: () => applyQuickCheck(ch as any),
+          }, label);
+        }),
       ),
     ),
   );
