@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   appendCardText,
+  applyQuickAddChoice,
   generatedCellToRow,
   generateQuickCell,
   nextCellNumber,
@@ -236,6 +237,60 @@ describe("数量预览", () => {
       .toEqual({ surfaceCount: 1 + 1 + 2 + 3, cellCount: 24 });
     expect(quickCellCounts("rpp", { size: [2, 2, 2], center: [0, 0, 0], angles: [0, 0, 1], nx: 2, ny: 3, nz: 4 }))
       .toEqual({ surfaceCount: 6 + 1 + 2 + 3, cellCount: 24 });
+  });
+});
+
+describe("applyQuickAddChoice 重合决策（含多栅元）", () => {
+  const existing = [
+    { num: 5, mat: "1", surfaces: "-1" },
+    { num: 7, mat: "2", surfaces: "-2" },
+    { num: 9, mat: "0", surfaces: "-3" },   // 真空
+  ];
+
+  function mkResult(newCells: { num: string; surfaces: string }[]): any {
+    return {
+      surfacesText: "", trCardsText: "", surfaceCount: 0, cellCount: newCells.length,
+      cells: newCells.map(c => ({ num: c.num, mat: "1", density: "-1", surfaces: c.surfaces, comment: "" })),
+    };
+  }
+
+  it("new_hole：新栅元追加 # 全部重合已有栅元（多栅元各自追加）", () => {
+    const r = mkResult([{ num: "10", surfaces: "-10" }, { num: "11", surfaces: "-11" }]);
+    const out = applyQuickAddChoice(r, [
+      { a: 10, b: 5 }, { a: 11, b: 7 }, { a: 11, b: 9 },
+    ], existing, "new_hole");
+    expect(out.cells[0].surfaces).toBe("-10 #5");
+    expect(out.cells[1].surfaces).toBe("-11 #7 #9");
+    expect(out.existingExprPatch).toBeUndefined();
+  });
+
+  it("existing_hole：全部被侵占栅元（含真空）让位 # 新栅元", () => {
+    const r = mkResult([{ num: "10", surfaces: "-10" }]);
+    const out = applyQuickAddChoice(r, [{ a: 10, b: 5 }, { a: 10, b: 9 }], existing, "existing_hole");
+    expect(out.cells[0].surfaces).toBe("-10");
+    expect(out.existingExprPatch).toEqual([
+      { num: "5", surfaces: "-1 #10" },
+      { num: "9", surfaces: "-3 #10" },
+    ]);
+  });
+
+  it("void_only：真空栅元让位 # 新；新栅元只 # 非真空", () => {
+    const r = mkResult([{ num: "10", surfaces: "-10" }, { num: "11", surfaces: "-11" }]);
+    const out = applyQuickAddChoice(r, [
+      { a: 10, b: 5 }, { a: 10, b: 9 }, { a: 11, b: 9 },
+    ], existing, "void_only");
+    expect(out.cells[0].surfaces).toBe("-10 #5");   // 只 # 材料 5
+    expect(out.cells[1].surfaces).toBe("-11");       // 只与真空 9 重合 → 不加 #
+    expect(out.existingExprPatch).toEqual([
+      { num: "9", surfaces: "-3 #10 #11" },          // 真空 9 让位给 10、11
+    ]);
+  });
+
+  it("none：不改动", () => {
+    const r = mkResult([{ num: "10", surfaces: "-10" }]);
+    const out = applyQuickAddChoice(r, [{ a: 10, b: 5 }], existing, "none");
+    expect(out.cells[0].surfaces).toBe("-10");
+    expect(out.existingExprPatch).toBeUndefined();
   });
 });
 

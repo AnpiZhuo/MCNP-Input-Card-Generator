@@ -1034,8 +1034,12 @@ def main():
     overlaps = []
     overlap_truncated = False
     overlap_unresolved = []
+    zero_volume = []
     if data.get("check_overlaps"):
         focus_num = data.get("focus_num")
+        focus_nums_raw = data.get("focus_nums") or (
+            [focus_num] if focus_num is not None else [])
+        focus_nums = {int(n) for n in focus_nums_raw if n is not None}
         cells_by_num = {c["number"]: c for c in data.get("cells", [])}
         aabbs = {}
         for num_str, shape in results.items():
@@ -1046,10 +1050,22 @@ def main():
             except Exception:
                 pass
         candidates = grid_candidates(aabbs) if len(aabbs) >= 2 else []
-        if focus_num is not None:
+        if focus_nums:
             candidates = [c for c in candidates
-                          if c["a"] == focus_num or c["b"] == focus_num]
+                          if c["a"] in focus_nums or c["b"] in focus_nums]
         top, overlap_truncated = cap_by_bbox_volume(candidates, max_ops=300)
+        # 零体积栅元检测：空/退化栅元（体积 ≤ 绝对下限）
+        for num_str, shape in results.items():
+            try:
+                vol = shape.Volume
+            except Exception:
+                try:
+                    vol = shape.Mass  # FcMesh 兼容
+                except Exception:
+                    vol = None
+            if vol is not None and float(vol) <= 1e-6:
+                zero_volume.append(int(num_str))
+        zero_volume.sort()
         results_raw = []
         for cand in top:
             a, b = cand["a"], cand["b"]
@@ -1163,6 +1179,7 @@ def main():
         output["overlaps"] = overlaps
         output["overlap_truncated"] = overlap_truncated
         output["overlap_unresolved"] = overlap_unresolved
+        output["zero_volume"] = zero_volume
 
     print(json.dumps(output))
 

@@ -94,6 +94,69 @@ export interface QuickCellResult {
   overlapHandled?: boolean;
 }
 
+/** 快捷添加重合决策方向 */
+export type QuickAddChoice = "new_hole" | "existing_hole" | "void_only" | "none";
+
+/**
+ * 把重合决策应用到生成结果（纯函数，支持一次性多栅元）。
+ *
+ * 语义（MCNP 中 `expr #n` = 在 expr 内且不在栅元 n 内）：
+ * - new_hole：每个新栅元追加 `#` 其重合的已有栅元（挖掉已有）；
+ * - existing_hole：每个重合的已有栅元追加 `#` 与其重合的新栅元（已有让位）；
+ * - void_only（侵占真空、不侵占已有）：新栅元追加 `#` 重合的**非真空**已有栅元；
+ *   重合的**真空**已有栅元追加 `#` 新栅元（真空让位）；
+ * - none：不改。
+ *
+ * overlaps 只取「新 × 已有」对（两边都是新栅元的对忽略）。
+ * 返回打补丁后的 result（existingExprPatch 由接收方应用到已有行）。
+ */
+export function applyQuickAddChoice(
+  result: QuickCellResult,
+  overlaps: { a: number; b: number }[],
+  existingCells: { num: number; mat: string; surfaces: string }[],
+  choice: QuickAddChoice,
+): QuickCellResult {
+  const newNums = new Set(result.cells.map(c => parseInt(c.num, 10)));
+  const pairs = overlaps
+    .map(o => {
+      const a = Number(o.a);
+      const b = Number(o.b);
+      return { newNum: newNums.has(a) ? a : b, existingNum: newNums.has(a) ? b : a };
+    })
+    .filter(p => newNums.has(p.newNum) && !newNums.has(p.existingNum));
+  const matOf = new Map(existingCells.map(c => [c.num, c.mat]));
+  const surfOf = new Map(existingCells.map(c => [c.num, c.surfaces]));
+  const out: QuickCellResult = { ...result, cells: result.cells.map(c => ({ ...c })) };
+
+  if (choice === "new_hole" || choice === "void_only") {
+    for (const c of out.cells) {
+      const num = parseInt(c.num, 10);
+      let nums = pairs.filter(p => p.newNum === num).map(p => p.existingNum);
+      if (choice === "void_only") {
+        nums = nums.filter(n => String(matOf.get(n) ?? "0").trim() !== "0");
+      }
+      if (nums.length) {
+        c.surfaces = (c.surfaces + " " + nums.map(n => "#" + n).join(" ")).trim();
+      }
+    }
+  }
+  if (choice === "existing_hole" || choice === "void_only") {
+    const existingNums = Array.from(new Set(pairs.map(p => p.existingNum)));
+    const patches: { num: string; surfaces: string }[] = [];
+    for (const en of existingNums) {
+      const isVoid = String(matOf.get(en) ?? "0").trim() === "0";
+      if (choice === "void_only" && !isVoid) continue; // 只占真空：材料栅元不动（由新栅元 # 材料）
+      const newOver = pairs.filter(p => p.existingNum === en).map(p => p.newNum);
+      patches.push({
+        num: String(en),
+        surfaces: ((surfOf.get(en) ?? "") + " " + newOver.map(n => "#" + n).join(" ")).trim(),
+      });
+    }
+    if (patches.length) out.existingExprPatch = patches;
+  }
+  return out;
+}
+
 /** GeometryTab 本地栅元行（camelCase，与 CellEditDialog.CellData 一致） */
 export interface QuickCellLocalRow {
   kind: "cell";

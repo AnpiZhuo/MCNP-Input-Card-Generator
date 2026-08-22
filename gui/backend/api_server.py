@@ -799,7 +799,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
             engine.cleanup()
             report = {"status": "ok", "overlaps": engine.overlaps,
                       "truncated": engine.overlap_truncated,
-                      "unresolved": engine.overlap_unresolved}
+                      "unresolved": engine.overlap_unresolved,
+                      "zero_volume": engine.zero_volume}
             _PREVIEW_CACHE.put_overlaps(fp, report)
             self._ok(report)
         except Exception as e:
@@ -817,11 +818,13 @@ class MCNPHandler(BaseHTTPRequestHandler):
             cell_list = data.get("cells", []) or []
             tr_text = data.get("tr_cards", "")
             new_cell = data.get("new_cell") or {}
-            new_num = int(new_cell.get("number", 0) or 0)
-            if not new_cell.get("surface_expr"):
+            new_cells = data.get("new_cells") or ([new_cell] if new_cell else [])
+            new_cells = [c for c in new_cells if c and c.get("surface_expr")]
+            if not new_cells:
                 self._ok({"status": "ok", "overlaps": [], "recommended": "new_hole",
                           "message": "新栅元缺少几何表达式"})
                 return
+            new_nums = [int(c.get("number", 0) or 0) for c in new_cells]
 
             sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
             from step_importer import StepImporter
@@ -833,33 +836,23 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 return
             surfs = parse_surfaces(surf_text)
             tr_cards = parse_tr_cards(tr_text)
-            all_cells = list(cell_list) + [{"kind": "cell", "cell": new_cell}]
+            all_cells = list(cell_list) + [
+                {"kind": "cell", "cell": c} for c in new_cells]
             cells_data = build_cells_data(all_cells, include_void=True)
             engine = FreeCADEngine(freecad_bin)
             engine.build_geometry(surfs, cells_data, tr_cards, fmt="stl",
-                                  check_overlaps=True, focus_num=new_num)
+                                  check_overlaps=True, focus_nums=new_nums)
             engine.cleanup()
             overlaps = engine.overlaps
-            new_vol = None
-            for o in overlaps:
-                if o["a"] == new_num:
-                    new_vol = float(o["vol_a"])
-                    break
-                if o["b"] == new_num:
-                    new_vol = float(o["vol_b"])
-                    break
-            recommended = "new_hole"
-            if new_vol and new_vol > 0:
-                fully_inside = any(
-                    (o["a"] == new_num and float(o["volume"]) / new_vol > 0.98)
-                    or (o["b"] == new_num and float(o["volume"]) / new_vol > 0.98)
-                    for o in overlaps)
-                if fully_inside:
-                    recommended = "existing_hole"
+            # 任一重合占比 >0.98（新栅元几乎完全在已有内）→ 已有让位
+            recommended = "existing_hole" if any(
+                float(o.get("volumeFraction", 0)) > 0.98 for o in overlaps
+            ) else "new_hole"
             self._ok({"status": "ok", "overlaps": overlaps,
                       "recommended": recommended,
                       "truncated": engine.overlap_truncated,
-                      "unresolved": engine.overlap_unresolved})
+                      "unresolved": engine.overlap_unresolved,
+                      "zero_volume": engine.zero_volume})
         except Exception as e:
             import traceback
             self._err(str(e) + " | " + traceback.format_exc())

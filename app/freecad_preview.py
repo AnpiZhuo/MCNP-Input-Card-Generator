@@ -370,12 +370,14 @@ class FreeCADEngine:
         self.overlaps = []
         self.overlap_truncated = False
         self.overlap_unresolved = []
+        self.zero_volume = []
 
     def build_geometry(self, pymcnp_surfaces: list, cells_data: list,
                        tr_cards: dict, bound: float = 500,
                        fmt: str = "stl", single_file: bool = False,
                        check_overlaps: bool = False,
-                       focus_num: int | None = None) -> dict[int, str]:
+                       focus_num: int | None = None,
+                       focus_nums: list[int] | None = None) -> dict[int, str]:
         """从 pymcnp 对象和栅元数据构建各栅元的 CSG 几何。
 
         Args:
@@ -427,7 +429,8 @@ class FreeCADEngine:
             "format": fmt,
             "single_file": single_file,
             "check_overlaps": check_overlaps,
-            "focus_num": focus_num,
+            "focus_nums": focus_nums if focus_nums is not None
+            else ([focus_num] if focus_num is not None else None),
         }
 
         # 4. 子进程调用 FreeCAD
@@ -438,6 +441,7 @@ class FreeCADEngine:
         self.overlaps = result_data.get("overlaps", []) or []
         self.overlap_truncated = bool(result_data.get("overlap_truncated", False))
         self.overlap_unresolved = result_data.get("overlap_unresolved", []) or []
+        self.zero_volume = result_data.get("zero_volume", []) or []
         for cell_num_str, entry in result_data.get("files", {}).items():
             if isinstance(entry, dict) and "vertices" in entry:
                 # fmt="mesh": 直接返回顶点/三角面数据

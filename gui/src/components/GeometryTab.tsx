@@ -15,7 +15,7 @@ import { openPreview3D, onMaterialChange, onQuickCellGenerate } from "../utils/w
 import { apiUrl } from "../utils/api";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
 import { textToSection } from "../utils/sectionConvert";
-import { appendCardText, generatedCellToRow, type QuickCellResult } from "../utils/quickCell";
+import { appendCardText, applyQuickAddChoice, generatedCellToRow, type QuickAddChoice, type QuickCellResult } from "../utils/quickCell";
 
 /** 下拉右缘防溢出：x 超过视口右缘时 clamp 到 viewportWidth - dropdownWidth - 20。
  *  对齐现行为（现 220 = 200 宽 + 20 边距）。viewportWidth 为 0/负数时 Math.min 自然兜底（返回 min(x, 负数)）。 */
@@ -55,7 +55,8 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     result: QuickCellResult;
     overlaps: any[];
     recommended: "new_hole" | "existing_hole" | "none";
-    newRows: any[];
+    existingNums: number[];
+    zeroVolume: number[];
   } | null>(null);
   // 栅元表材料列点击下拉：i=正在编辑材料号的栅元行索引，x/y=按钮位置（用于 portal 定点浮层）
   const [matPicker, setMatPicker] = useState<{ i: number; x: number; y: number } | null>(null);
@@ -212,14 +213,14 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     return;
   }
     // 快捷添加重合检查：新栅元 vs 已有 → 弹出 A/B/C 补集决策
-    const newRow = newRows[0];
-    if (!newRow || newRow.kind !== "cell") { setCells(prev => [...prev, ...newRows]); return; }
-    const newCellJson = {
-      number: parseInt(newRow.cell.num, 10) || 0,
-      material: newRow.cell.mat,
-      density: newRow.cell.density,
-      surface_expr: newRow.cell.surfaces,
-    };
+    const cellRows = newRows.filter(r => r.kind === "cell");
+    if (!cellRows.length) { setCells(prev => [...prev, ...newRows]); return; }
+    const newCellsPayload = cellRows.map(r => ({
+      number: parseInt(r.cell.num, 10) || 0,
+      material: r.cell.mat,
+      density: r.cell.density,
+      surface_expr: r.cell.surfaces,
+    }));
     const existingCells = cellsRef.current.filter(c => c.kind === "cell").map(c => ({
       kind: "cell",
       cell: {
@@ -237,13 +238,22 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
             surfaces: nextSurf,
             cells: existingCells,
             tr_cards: nextTr,
-            new_cell: newCellJson,
+            new_cells: newCellsPayload,
           }),
           signal: AbortSignal.timeout(60000),
         });
         const j = await r.json();
         if (j.status !== "error" && j.overlaps && j.overlaps.length > 0) {
-          setQuickCheck({ result, overlaps: j.overlaps, recommended: j.recommended, newRows });
+          const newNums = new Set(newCellsPayload.map(c => c.number));
+          const existingNums = Array.from(new Set<number>(
+            j.overlaps
+              .filter((o: any) => newNums.has(o.a) !== newNums.has(o.b))
+              .map((o: any) => Number(newNums.has(o.a) ? o.b : o.a)),
+          ));
+          setQuickCheck({
+            result, overlaps: j.overlaps, recommended: j.recommended,
+            existingNums, zeroVolume: j.zero_volume || [],
+          });
           return;
         }
       } catch (e) { /* 检测失败 → 直接追加，不影响生成 */ }
@@ -251,34 +261,23 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     })();
   };
 
-  // 快捷添加补集决策：A=新#已有 / B=已有#新 / D=只占真空 / C=不处理
-  const applyQuickCheck = (choice: "new_hole" | "existing_hole" | "void_only" | "none") => {
+  // 快捷添加补集决策（纯函数，支持多栅元）：A=新避开已有 / B=已有让位 / D=只占真空 / C=不处理
+  const applyQuickCheck = (choice: QuickAddChoice) => {
     if (!quickCheck) return;
     const qc = quickCheck;
-    const newNum = parseInt(qc.newRows[0].cell.num, 10) || 0;
-    const others = qc.overlaps
-      .map(o => (o.a === newNum ? o.b : o.a))
-      .filter(n => n !== newNum);
-    let rows = qc.newRows;
-    if (choice === "new_hole" || choice === "void_only") {
-      const voidNums: number[] = [];
-      for (const c of cells) {
-        if (c.kind === "cell" && c.cell.mat === "0") voidNums.push(parseInt(c.cell.num, 10));
-      }
-      const voidSet = new Set(voidNums);
-      const nums = choice === "void_only" ? others.filter(n => !voidSet.has(n)) : others;
-      if (nums.length) {
-        rows = rows.map(r => r.kind === "cell"
-          ? { ...r, cell: { ...r.cell, surfaces: (r.cell.surfaces + " " + nums.map(n => "#" + n).join(" ")).trim() } }
-          : r);
-      }
-    } else if (choice === "existing_hole" && others.length) {
-      setCells(prev => prev.map(c => {
-        if (c.kind !== "cell" || !others.includes(parseInt(c.cell.num, 10))) return c;
-        return { ...c, cell: { ...c.cell, surfaces: (c.cell.surfaces + " #" + newNum).trim() } };
-      }));
+    const existing = cells.filter(c => c.kind === "cell").map(c => ({
+      num: parseInt(c.cell.num, 10),
+      mat: c.cell.mat,
+      surfaces: c.cell.surfaces,
+    }));
+    const patched = applyQuickAddChoice(qc.result, qc.overlaps, existing, choice);
+    if (patched.existingExprPatch && patched.existingExprPatch.length) {
+      const patchMap = new Map(patched.existingExprPatch.map(p => [p.num, p.surfaces]));
+      setCells(prev => prev.map(c => c.kind === "cell" && patchMap.has(c.cell.num)
+        ? { ...c, cell: { ...c.cell, surfaces: patchMap.get(c.cell.num)! } }
+        : c));
     }
-    setCells(prev => [...prev, ...rows]);
+    setCells(prev => [...prev, ...patched.cells.map(generatedCellToRow)]);
     setQuickCheck(null);
   };
 
@@ -378,27 +377,27 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
       />}
       {quickCheck && (() => {
         const qc = quickCheck;
-        const newNum = parseInt(qc.newRows[0].cell.num, 10) || 0;
-        const others = qc.overlaps
-          .map((o: any) => (o.a === newNum ? o.b : o.a))
-          .filter((n: number) => n !== newNum);
-        const sevColor = (s: string) => s === "error" ? "#e53935" : s === "warning" ? "#e6a23c" : "#9e9e9e";
+        const others = qc.existingNums;
         return React.createElement(FloatingDialog, {
-          title: `新栅元 ${newNum} 与栅元 ${others.join("、")} 重合`,
+          title: `新栅元与栅元 ${others.join("、")} 重合`,
           onClose: () => applyQuickCheck("none"),
           width: 440,
         },
           React.createElement("div", { style: { fontSize: 12, lineHeight: 1.8 } },
             React.createElement("div", { style: { marginBottom: 8, color: "var(--text-secondary)" } }, "选择如何处理（点击即应用）："),
+            qc.zeroVolume.length > 0
+              ? React.createElement("div", { style: { marginBottom: 8, color: "#e53935", fontSize: 11 } },
+                  `⚠ 体积为零的栅元：${qc.zeroVolume.join("、")}（空/退化几何，请检查参数）`)
+              : null,
             React.createElement("button", { className: "btn btn-sm", style: { display: "block", width: "100%", marginBottom: 6, textAlign: "left" },
               onClick: () => applyQuickCheck("new_hole") },
-              `挖掉已有（新栅元 # ${others.join(" #") || "—"}）${qc.recommended === "new_hole" ? "  · 推荐" : ""}`),
+              `新栅元避开已有（新 # ${others.join(" #") || "—"}）${qc.recommended === "new_hole" ? "  · 推荐" : ""}`),
             React.createElement("button", { className: "btn btn-sm", style: { display: "block", width: "100%", marginBottom: 6, textAlign: "left" },
               onClick: () => applyQuickCheck("existing_hole") },
-              `已有让位（${others.join("、") || "—"} # ${newNum}）${qc.recommended === "existing_hole" ? "  · 推荐" : ""}`),
+              `被侵占栅元让位（${others.join("、") || "—"} # 新栅元）${qc.recommended === "existing_hole" ? "  · 推荐" : ""}`),
             React.createElement("button", { className: "btn btn-sm", style: { display: "block", width: "100%", marginBottom: 6, textAlign: "left" },
               onClick: () => applyQuickCheck("void_only") },
-              "只占真空（挖掉非真空栅元，真空重叠保留）"),
+              "只占真空（真空让位 # 新；新栅元 # 非真空栅元）"),
             React.createElement("button", { className: "btn btn-ghost btn-sm", style: { display: "block", width: "100%", textAlign: "left" },
               onClick: () => applyQuickCheck("none") },
               "保持原样（可能重叠）"),
