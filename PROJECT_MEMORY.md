@@ -1,6 +1,6 @@
 # 项目记忆文档（AI 速查手册）
 
-> 最后更新时间：2026-08-23 —— **按人脑模型重组**（原「顶部横幅 + §8 流水混装」整理为「短期记忆 / 长期记忆」两区，完整流水外置 `docs/CHANGELOG.md`）。同日完成 **GQ/SQ 3D 预览修复 + 渲染后续增强 + OWEN 四项 + 参数扫描前端**：全部门禁绿（pytest **573/0** / vitest **358/0** / tsc EXIT 0）+ PyInstaller sidecar 重打包 + 打包版冒烟通过。
+> 最后更新时间：2026-08-23（v1.7.3 第二批发版部署：keff 仪表盘 + 材料搜索 + 示例库 + INP 对比） —— **按人脑模型重组**（原「顶部横幅 + §8 流水混装」整理为「短期记忆 / 长期记忆」两区，完整流水外置 `docs/CHANGELOG.md`）。同日完成 **GQ/SQ 3D 预览修复 + 渲染后续增强 + OWEN 四项 + 参数扫描前端**：全部门禁绿（pytest **573/0** / vitest **358/0** / tsc EXIT 0）+ PyInstaller sidecar 重打包 + 打包版冒烟通过。
 >
 > **人脑模型组织说明**：
 > - **◉ 短期记忆（工作记忆）**：只放"现在正在处理的事"——当前批次 / 工作区 / 待办。**容量小、变化快、随批次刷新**（人脑工作记忆约 7±2 项）。
@@ -14,7 +14,14 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
-## S1 当前批次：v1.7.3 发布 + 重合检测超时修复 + 零体积检测（2026-08-23，已提交并部署）
+## S1 当前批次：v1.7.3 第二批发版（keff 仪表盘 / 材料搜索 / 示例库 / INP 对比，2026-08-23 已提交并部署）
+- 一句话状态：**v1.7.3 第二次打包部署完成**（主 exe 含全部新前端，sidecar 25,235,799B @ 13:21）；门禁 pytest **595/0** / vitest **376/0** / tsc 0；api.yaml **36** 端点。
+- **1e86299（keff 仪表盘）**：用户批准引入 **recharts@3.10.1**（npm 常规位置，prod audit 0 漏洞）；后端 `sweep.py +parse_keff_history`（逐周期 cycles/mean/std）+ sweep-run 读 mctal 补 convergence/keffStd + manifest 写盘 + 新端点 `/api/sweep-dashboard`（历史目录重读并补全收敛）；前端 `utils/sweepDashboard.ts` 聚合纯函数（对齐 OWEN sweepDashboardCore）+ `components/SweepDashboard.tsx`（Recharts：k-eff vs 参数误差棒 + y=1 临界线 + 逐 run 收敛小多图）+ SweepDialog 结果区默认仪表盘视图（表格/仪表盘切换）。
+- **d7aad5d（材料搜索 + 示例库）**：MaterialEditDialog 预设下拉加搜索过滤（名称/化学式/描述，抽纯函数 `filterPresets` + 4 用例）；BasicSettings「示例」按钮（原格式文档）→ ExamplesDialog 内置 pincell/17×17/BEAVRS 三张真实卡（`gui/public/examples/`），一键导入 = fetch → `mcnp:import-inp` 自定义事件 → App 监听复用 `importInpText` 管线（validate-inp + parse-inp + loadDeck），查看卡文本 = DocViewer。
+- **fa2bee6（INP 对比 diff）**：输出页「⇄ 对比」入口（参数扫描旁）；A=当前工作区生成 INP（可编辑），B=从文件加载/粘贴；后端 `/api/diff-inp`（Python difflib，零新依赖，unified diff + 增删统计）；前端 `DiffDialog` 行着色渲染（新增绿/删除红/头蓝）+ `diffRender` 纯函数 + 2 用例。
+- **e70f309**：sweep-dashboard 读 manifest 容忍 UTF-8 BOM（utf-8-sig）。
+- 发布纪律再记一条：**构建顺序必须 vite build → PyInstaller → tauri build**（vite 会清空 dist，先跑 PyInstaller 会被删掉 dist/python）；本次踩坑后已纠正。
+## S1b（上一批次）当前批次：v1.7.3 发布 + 重合检测超时修复 + 零体积检测（2026-08-23，已提交并部署）
 - 一句话状态：**v1.7.3 已发版并部署至 `D:\MCNP\MCNP输入卡生成器`**（版本四处+lock 均 1.7.3）；重合检测门禁 pytest **590/0** / vitest **363/0** / tsc EXIT 0；交接文档已更新。
 - **e5e09af（快捷添加补集决策完善）**：决策抽纯函数 `applyQuickAddChoice`（A=新#已有 / B=被侵占栅元（含真空）#新 / D=只占真空（真空让位#新，新#非真空） / C=不改）；支持一次性多栅元；后端 quick-add-check 接收 `new_cells` 数组 + worker `focus_nums` 多栅元过滤 + 零体积检测；48 个 PNNL 预设改中文名。
 - **698e7e2（重合检测超时根治，本批关键）**：
@@ -288,4 +295,5 @@
 - bug 修复批**严禁升版**；升版仅限新功能且由上级指定。
 - 版本四处+锁文件同步：tauri.conf.json / package.json / Cargo.toml / README 徽章 / Cargo.lock。
 - 侧边栏版本号读 package.json（单一来源，升版不再破）。
+
 
