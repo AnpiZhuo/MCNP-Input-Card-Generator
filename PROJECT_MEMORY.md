@@ -16,6 +16,7 @@
 
 ## S1 当前批次：v1.7.3 第二批发版（keff 仪表盘 / 材料搜索 / 示例库 / INP 对比，2026-08-23 已提交并部署）
 - 一句话状态：**v1.7.3 第二次打包部署完成**（主 exe 含全部新前端，sidecar 25,235,799B @ 13:21）；门禁 pytest **595/0** / vitest **376/0** / tsc 0；api.yaml **36** 端点。
+- **ef9499f / 76b0c76（第六轮，用户定稿 3D 预览深色方案，已打包部署）**：3D 预览固定黑色背景不受亮色主题影响——Preview3DWindow 根容器硬编码 #000/#fff + preview3d-root 作用域类；global.css 作用域内覆盖 --bg-*/--text-* 为黑底白字系、.form-select/option 黑底白字、强调色 --accent 固定红色系 #FF4D6D（用户：文字不强制全白，红色/强调保留）；场景画布背景 0x000000。门禁 vitest 376 / tsc 0；已部署（主 exe 6,561,792B @ 14:07:32）。
 - **b1e6ebe（第五轮主题修复，已打包部署）**：3D 预览亮色主题全面可读——Preview3DWindow 根容器硬编码 #0a0a1e 蓝黑底+白字 → var(--bg-deepest)/var(--text-primary)；Preview3D 侧栏/面板/输入框/边框/标题硬编码 rgba(10,10,30,…)/rgba(0,0,0,0.3)/rgba(255,255,255,0.04~0.1)/rgba(241,241,249,0.8) → 主题变量；QuickCellForm 材料下拉 select 加 form-select（option 下拉列表走 var(--bg-surface)/var(--text-primary)，不再黑底深字）；3D 场景画布背景与模态遮罩保留深色。门禁 vitest 376 / tsc 0；已部署（主 exe 6,561,280B @ 13:53:45，sidecar 未变）。
 - **e2225e7（第四轮 UI 修复，已打包部署）**：① Preview3D 快捷建栅元覆盖层硬编码深底 rgba(10,10,30,0.98)/白字 → 改主题变量（--bg-surface/--text-primary/--border-glass），亮色主题不再灰底白字；② OutputTab keff 按钮被嵌套进参数扫描按钮内（点击冒泡连带触发）→ 平级闭合；③ ExamplesDialog 查看卡文本 DocViewer 用 createPortal 挂 document.body，脱离父弹窗 overflow:hidden 裁剪。门禁 vitest 376（colorize 性能 flaky 复跑通过）/ tsc 0；已部署（主 exe 6,561,280B）。
 - **9ccee02（第三轮，已打包部署）**：输出页新增「🔬 解析 keff」按钮（KeffDialog：mctal 路径/目录 → /api/parse-keff → 最终 k-eff + 收敛图）；对比按钮从输出页移到基础页工具栏（用户指定）；api.yaml 36→37；部署冒烟 parse-keff 目录/文件两种方式均返回 5 周期收敛 + combined。
