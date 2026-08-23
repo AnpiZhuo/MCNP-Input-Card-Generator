@@ -4,7 +4,7 @@
 
 A desktop application for visually creating, editing, and validating **MCNP** input files (`.INP`). Replaces manual text editing with a structured, form-based GUI, with built-in 3D preview, cross-section view, material library, and energy/time grids.
 
-![应用截图](![alt text](<屏幕截图 2026-08-01 015145.png>))
+![应用截图](images/screenshot.png)
 
 ![Version](https://img.shields.io/badge/Version-1.7.3-blue)
 ![Frontend](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-teal)

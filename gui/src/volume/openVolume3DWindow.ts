@@ -14,7 +14,7 @@ export function readOutputDir(): string {
     const s = JSON.parse(localStorage.getItem("mcnp_workspace_v1") || "null");
     if (s && s.outputPath) return s.outputPath;
   } catch {}
-  return "D:/MCNP/new/claude";
+  return "D:/MCNP/new";
 }
 
 /** 几何外壳模型数据（无模型时不取 STL；桥数据栅元视图由 cells 派生） */

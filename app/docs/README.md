@@ -4,9 +4,9 @@
 
 A desktop application for visually creating, editing, and validating **MCNP** input files (`.INP`). Replaces manual text editing with a structured, form-based GUI, with built-in 3D preview, cross-section view, material library, and energy/time grids.
 
-![应用截图](![alt text](<屏幕截图 2026-08-01 015145.png>))
+![应用截图](images/screenshot.png)
 
-![Version](https://img.shields.io/badge/Version-1.6.3-blue)
+![Version](https://img.shields.io/badge/Version-1.7.3-blue)
 ![Frontend](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-teal)
 ![Shell](https://img.shields.io/badge/Shell-Tauri-green)
 ![License](https://img.shields.io/badge/License-All%20Rights%20Reserved-red)
@@ -34,6 +34,8 @@ A desktop application for visually creating, editing, and validating **MCNP** in
 | **表单化编辑 Form-based editing** | 8 个标签页覆盖所有 MCNP 输入段 |
 | **INP 生成 INP generation** | 自动生成标准 MCNP 输入卡，含 C/`$` 注释、En/Tn/E0/T0 网格 |
 | **INP 导入 INP import** | Windows 原生文件对话框选择 `.INP/.I/.TXT`，或直接拖入窗口；解析后一次性回填所有字段 |
+| **文本↔表单双向互转** | 材料/几何/计数支持一键在"表单"与"原始文本"间切换，互转不丢数据 |
+| **计数乘子 FMn** | 计数卡支持 FMn 乘子（导入自动识别 + 表单直接编辑，自动生成/回放） |
 | **STEP 导入（GEOUNED）** | 几何标签页导入 `.STEP/.STP`，经 FreeCAD + GEOUNED 自动转换为 MCNP 曲面/栅元 |
 | **工作区保存/恢复 Save/Restore** | 关闭自动保存、手动保存按钮、一键清空；刷新/重开自动恢复全部输入 |
 | **3D 预览 / 截面** | FreeCAD 精确几何渲染，独立窗口可边编辑边看；截面由 STL 直接切出，支持 `#n` 栅元补集 |
@@ -76,15 +78,10 @@ python api_server.py
 
 ### 打包为 EXE Build Standalone EXE
 
-```bash
-cd gui
-# 1. 打包 Python 后端为 sidecar exe（PyInstaller，产出名为 "python" 的 sidecar）
-#    （将 api_server + mcnp_bridge + app 模块打成一个可执行文件）
-# 2. 打包 Tauri 前端窗口（需要 Rust）
-RUSTUP_HOME=D:\rust\rustup CARGO_HOME=D:\rust\cargo npm run tauri build
-```
+> 出包请按 **`docs/手动打包方法.md`** 分步操作（v1.6.4 起已停用 build.bat / release.bat 自动化脚本）。
+> 流程：vite 构建 → PyInstaller 打包后端 sidecar → 替换 `src-tauri/binaries/` → Tauri 构建 → 复制产物到交付目录 → 冒烟验证。
 
-打包产物在 `gui/src-tauri/target/release/bundle/`。运行 exe 时前端自动拉起后端、关闭时一起退出。
+打包产物在 `gui/src-tauri/target/release/`（`bundle.active=false`，`bundle/` 目录为空属正常）。运行 exe 时前端自动拉起后端、关闭时一起退出。
 
 ---
 

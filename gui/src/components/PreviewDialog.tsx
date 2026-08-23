@@ -49,7 +49,7 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
         body: JSON.stringify({
           inp: content,
           filename: safeName,
-          outputDir: outputPath || "D:/MCNP/new/claude",
+          outputDir: outputPath || "D:/MCNP/new",
           runBat: runBatContent,
         }),
       });
@@ -89,7 +89,7 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
         className: "btn btn-ghost btn-sm",
         onClick: () => {
           try {
-            const dir = outputPath || "D:/MCNP/new/claude";
+            const dir = outputPath || "D:/MCNP/new";
             fetch(apiUrl("/api/run-mcnp"), {
               method: "POST", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ inp: content, filename: safeName, outputDir: dir, mcnpExe: mcnpExe || "" }),

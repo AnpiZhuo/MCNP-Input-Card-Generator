@@ -78,7 +78,7 @@ def main():
     step_path = data["step_path"]
     output_dir = data["output_dir"]
     geometry_name = data.get("geometry_name", "csg")
-    geouned_path = data.get("geouned_path", "D:/MCNP/GEOUNED")
+    geouned_path = data.get("geouned_path", "") or os.environ.get("GEOUNED_PATH", "")
     settings = data.get("settings", {})
 
     os.makedirs(output_dir, exist_ok=True)

@@ -1153,7 +1153,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
         import datetime, re as _re
         try:
             data = self._read_body()
-            output_dir = data.get("outputDir", "D:/MCNP/new/claude")
+            output_dir = data.get("outputDir", "D:/MCNP/new")
             if not isinstance(output_dir, str) or not output_dir.strip():
                 self._err("输出目录非法", hint="请确认输出目录路径正确")
                 return
@@ -1305,7 +1305,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
         import datetime, re as _re
         try:
             data = self._read_body()
-            output_dir = data.get("outputDir", "D:/MCNP/new/claude")
+            output_dir = data.get("outputDir", "D:/MCNP/new")
             if not isinstance(output_dir, str) or not output_dir.strip():
                 self._err("输出目录非法", hint="请确认输出目录路径正确")
                 return
@@ -1382,7 +1382,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             data = self._read_body()
             inp_text = data.get("inp", "")
             filename = data.get("filename", "output.inp")
-            output_dir = data.get("outputDir", "D:/MCNP/new/claude")
+            output_dir = data.get("outputDir", "D:/MCNP/new")
             run_bat = data.get("runBat", "")
             os.makedirs(output_dir, exist_ok=True)
             inp_path = os.path.join(output_dir, filename)
@@ -1449,7 +1449,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             data = self._read_body()
             inp_text = data.get("inp", "")
             filename = data.get("filename", "output.inp")
-            output_dir = data.get("outputDir", "D:/MCNP/new/claude")
+            output_dir = data.get("outputDir", "D:/MCNP/new")
             exe = data.get("mcnpExe", "") or ""
             if not inp_text.strip():
                 raise ValueError("INP 内容为空")

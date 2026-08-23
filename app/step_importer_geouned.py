@@ -30,8 +30,8 @@ def _resolve_geouned_path() -> str:
             return os.path.dirname(pkg_dir)
     except Exception:
         pass
-    # 兜底：开发机上的独立安装目录
-    return r"D:/MCNP/GEOUNED"
+    # 兜底：环境变量 GEOUNED_PATH（无则返回空，调用方会报"GEOUNED 不可用"）
+    return os.environ.get("GEOUNED_PATH", "")
 
 
 def _map_app_settings_to_geouned(app_settings: dict) -> dict:

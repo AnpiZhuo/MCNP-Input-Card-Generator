@@ -47,7 +47,7 @@ function AppInner() {
   const [viewMode, setViewMode] = useState<"form" | "raw">("form");
   const [rawInp, setRawInp] = useState("");
   const [generating, setGenerating] = useState(false);
-  const [outputPath, setOutputPath] = useState("D:/MCNP/new/claude");
+  const [outputPath, setOutputPath] = useState("D:/MCNP/new");
   const [suffix, setSuffix] = useState(".i");
   const [dragOver, setDragOver] = useState(false);
   const [pendingCell, setPendingCell] = useState(0);
