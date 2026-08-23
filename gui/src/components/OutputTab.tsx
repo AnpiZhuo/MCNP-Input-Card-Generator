@@ -9,7 +9,7 @@ import { openVolume3DWindow, readOutputDir } from "../volume/openVolume3DWindow"
 import { openPtrac3DWindow } from "../ptrac/openPtracWindow";
 import { buildFluxChartSvg } from "../utils/tallyChart";
 import SweepDialog from "./SweepDialog";
-import DiffDialog from "./DiffDialog";
+import KeffDialog from "./KeffDialog";
 
 export default function OutputTab() {
   const [doc, setDoc] = useState<{path:string;title:string}|null>(null);
@@ -19,7 +19,7 @@ export default function OutputTab() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [chartTally, setChartTally] = useState<string | null>(null);
   const [sweepOpen, setSweepOpen] = useState(false);
-  const [diffOpen, setDiffOpen] = useState(false);
+  const [keffOpen, setKeffOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { deck } = useDeck();
 
@@ -271,8 +271,9 @@ export default function OutputTab() {
           </div>
           <button className="btn btn-ghost btn-xs" onClick={() => setSweepOpen(true)}
             title="批量改参数（NPS/keff 等）跑 MCNP">⚙ 参数扫描
-          <button className="btn btn-ghost btn-xs" onClick={() => setDiffOpen(true)}
-            title="对比当前工作区与文件/粘贴文本的 INP">⇄ 对比</button></button>
+          
+          <button className="btn btn-ghost btn-xs" onClick={() => setKeffOpen(true)}
+            title="主动解析 mctal 的 keff 收敛曲线">🔬 解析 keff</button></button>
         </div>
         <div className="form-row">
           <div className="form-group" style={{ flex: 1 }}>
@@ -292,7 +293,7 @@ export default function OutputTab() {
       </div>
 
       {sweepOpen && <SweepDialog onClose={() => setSweepOpen(false)} />}
-      {diffOpen && <DiffDialog onClose={() => setDiffOpen(false)} />}
+      {keffOpen && <KeffDialog onClose={() => setKeffOpen(false)} />}
 
       <div className="glass-card">
         <div className="card-header">

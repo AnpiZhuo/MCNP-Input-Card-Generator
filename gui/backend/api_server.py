@@ -663,6 +663,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             "/api/validate-inp": self._handle_validate_inp,
             "/api/validate-zaid": self._handle_validate_zaid,
             "/api/parse-outp": self._handle_parse_outp,
+            "/api/parse-keff": self._handle_parse_keff,
             "/api/xsdir-search": self._handle_xsdir_search,
             "/api/generate-step": self._handle_generate_step,
             "/api/export-step": self._handle_export_step,
@@ -1962,6 +1963,47 @@ class MCNPHandler(BaseHTTPRequestHandler):
             self._err(str(e))
 
     # ── OUTP 解析 ──
+    def _handle_parse_keff(self):
+        """主动解析 mctal 的 keff 收敛序列（目录自动找 mctal* 文件）。"""
+        try:
+            import glob
+            data = self._read_body() or {}
+            path = str(data.get("path", "")).strip()
+            if not path:
+                self._err("缺少 mctal 文件路径或运行目录")
+                return
+            if os.path.isdir(path):
+                candidates = sorted(glob.glob(os.path.join(path, "mctal*")))
+                if not candidates:
+                    self._err(f"目录中未找到 mctal 文件：{path}")
+                    return
+                mctal_path = candidates[0]
+            else:
+                mctal_path = path
+            if not os.path.isfile(mctal_path):
+                self._err(f"mctal 文件不存在：{mctal_path}")
+                return
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
+            from mctal_parser import parse_mctal
+            with open(mctal_path, "r", encoding="utf-8", errors="replace") as f:
+                result = parse_mctal(f.read())
+            keff = result.get("keff") or {}
+            if not keff.get("mean"):
+                self._err(f"未在 mctal 中解析到 keff 收敛序列：{mctal_path}")
+                return
+            self._ok({
+                "status": "ok",
+                "path": mctal_path,
+                "keff": {
+                    "cycles": keff.get("cycles", []),
+                    "mean": keff.get("mean", []),
+                    "std": keff.get("std", []),
+                    "combined": keff.get("combined"),
+                },
+            })
+        except Exception as e:
+            self._err(str(e), hint="keff 解析失败，请确认 mctal 文件有效")
+
     def _handle_parse_outp(self):
         try:
             data = self._read_body()

@@ -1348,6 +1348,34 @@ paths:
                     properties:
                       diff: { type: string }
                       stats: { type: object }
+  /api/parse-keff:
+    post:
+      operationId: parseKeff
+      tags: [results]
+      summary: 主动解析 mctal 的 keff 收敛序列（目录自动找 mctal* 文件）
+      description: |
+        入参 {path}（mctal 文件路径或运行目录）；返回
+        {status, path, keff:{cycles, mean, std, combined:{mean,std}|null}}。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                path: { type: string }
+      responses:
+        '200':
+          description: keff 解析成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      path: { type: string }
+                      keff: { type: object }
   /api/check-overlap:
     post:
       operationId: checkOverlap

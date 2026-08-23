@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import DocViewer from "./DocViewer";
 import ExamplesDialog from "./ExamplesDialog";
+import DiffDialog from "./DiffDialog";
 import { useDeck } from "../utils/DeckContext";
 
 const MODE_LABELS = ["N 中子", "P 光子", "E 电子", "H 质子", "HE 重离子", "D 氘核", "T 氚核", "A α粒子"];
@@ -9,6 +10,7 @@ const MODE_IDS = ["mode-n", "mode-p", "mode-e", "mode-h", "mode-he", "mode-d", "
 export default function BasicSettings() {
   const [doc, setDoc] = useState<{path:string;title:string}|null>(null);
   const [examples, setExamples] = useState(false);
+  const [diffOpen, setDiffOpen] = useState(false);
   const { deck, patch } = useDeck();
   const b: Record<string, any> = deck.basic || {};
   const setB = (key: string, v: any) => patch({ basic: { ...b, [key]: v } });
@@ -26,6 +28,8 @@ export default function BasicSettings() {
           <div style={{ flex: 1, display: "flex", justifyContent: "center", gap: 6 }}>
             <button className="btn btn-ghost btn-xs" onClick={() => setDoc({path:"/docs/C810_卡片格式详细.md",title:"C810 卡片格式参考"})}>📖 C810</button>
             <button className="btn btn-ghost btn-xs" onClick={() => setExamples(true)}>📚 示例库</button>
+            <button className="btn btn-ghost btn-xs" onClick={() => setDiffOpen(true)}
+              title="对比当前工作区与文件/粘贴文本的 INP">⇄ 对比</button>
           </div>
         </div>
         <div className="form-row">
@@ -82,6 +86,7 @@ export default function BasicSettings() {
       </>
       {doc && <DocViewer path={doc.path} title={doc.title} onClose={() => setDoc(null)} />}
       {examples && <ExamplesDialog onClose={() => setExamples(false)} />}
+      {diffOpen && <DiffDialog onClose={() => setDiffOpen(false)} />}
     </>
   );
 }
