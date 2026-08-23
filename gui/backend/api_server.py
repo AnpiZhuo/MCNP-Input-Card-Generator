@@ -787,7 +787,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             if not os.path.isfile(manifest_path):
                 self._err(f"扫描清单不存在：{manifest_path}")
                 return
-            with open(manifest_path, "r", encoding="utf-8") as f:
+            with open(manifest_path, "r", encoding="utf-8-sig") as f:
                 manifest = json.load(f)
             sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
             import glob
