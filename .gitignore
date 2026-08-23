@@ -42,3 +42,7 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# 内部发版脚本/说明（含本地路径，不公开）
+README-release.md
+release.bat
