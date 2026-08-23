@@ -270,10 +270,9 @@ export default function OutputTab() {
             <button className="btn btn-ghost btn-xs" onClick={() => setDoc({path:"/docs/MCNP6_输出卡结构参考.md",title:"输出卡结构参考"})}>📖</button>
           </div>
           <button className="btn btn-ghost btn-xs" onClick={() => setSweepOpen(true)}
-            title="批量改参数（NPS/keff 等）跑 MCNP">⚙ 参数扫描
-          
+            title="批量改参数（NPS/keff 等）跑 MCNP">⚙ 参数扫描</button>
           <button className="btn btn-ghost btn-xs" onClick={() => setKeffOpen(true)}
-            title="主动解析 mctal 的 keff 收敛曲线">🔬 解析 keff</button></button>
+            title="主动解析 mctal 的 keff 收敛曲线">🔬 解析 keff</button>
         </div>
         <div className="form-row">
           <div className="form-group" style={{ flex: 1 }}>

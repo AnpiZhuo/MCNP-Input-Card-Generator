@@ -894,7 +894,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
     React.createElement("div", {
       style: {
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "12px 20px", borderBottom: "1px solid rgba(255,255,255,0.08)",
+        padding: "12px 20px", borderBottom: "1px solid var(--border-glass)",
         background: "rgba(10,10,30,0.8)",
       } as React.CSSProperties,
     },
@@ -1118,7 +1118,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         quickAddOpen && React.createElement("div", {
           style: {
             position: "absolute", inset: 0, zIndex: 20,
-            background: "rgba(10,10,30,0.98)",
+            background: "var(--bg-surface)",
             display: "flex", flexDirection: "column", overflow: "hidden",
           } as React.CSSProperties,
         },
@@ -1128,7 +1128,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
               padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.08)",
             } as React.CSSProperties,
           },
-            React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: "rgba(241,241,249,0.85)" } }, "⚡ 快捷建栅元"),
+            React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: "var(--text-primary)" } }, "⚡ 快捷建栅元"),
             React.createElement("button", {
               className: "btn btn-ghost btn-xs",
               onClick: restoreQuickCellPanel,

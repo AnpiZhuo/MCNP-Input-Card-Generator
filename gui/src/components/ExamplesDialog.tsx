@@ -4,6 +4,7 @@
  * dispatch "mcnp:import-inp" 自定义事件（App.tsx 监听并复用 importInpText 管线）。
  */
 import React, { useState } from "react";
+import { createPortal } from "react-dom";
 import FloatingDialog from "./FloatingDialog";
 import DocViewer from "./DocViewer";
 
@@ -91,6 +92,10 @@ export default function ExamplesDialog({ onClose }: { onClose: () => void }) {
       ),
     ),
     err ? React.createElement("div", { style: { color: "#e53935", fontSize: 12, marginTop: 6 } }, err) : null,
-    doc ? React.createElement(DocViewer, { path: doc.path, title: doc.title, onClose: () => setDoc(null) }) : null,
+    /* 查看卡文本用 portal 挂到 body，避免被示例库弹窗（overflow:hidden）裁剪 */
+    doc ? createPortal(
+      React.createElement(DocViewer, { path: doc.path, title: doc.title, onClose: () => setDoc(null) }),
+      document.body,
+    ) : null,
   );
 }
