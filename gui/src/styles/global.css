@@ -224,6 +224,7 @@ table input[type=number]{-moz-appearance:textfield;width:100%}
   --border-glass:rgba(255,255,255,0.14); --border-subtle:rgba(255,255,255,0.06);
   --text-primary:#fff; --text-secondary:rgba(255,255,255,0.74); --text-tertiary:rgba(255,255,255,0.46);
   --text-on-glass:rgba(255,255,255,0.88); --editor-bg:#000;
+  --accent:#FF4D6D; --accent-glow:#FF8FA3; /* 强调色固定红系（用户：红色也好） */
 }
 .preview3d-root .form-select{background:#000;color:#fff;border-color:rgba(255,255,255,0.18)}
 .preview3d-root .form-select option{background:#000;color:#fff}
