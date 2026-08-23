@@ -1319,6 +1319,35 @@ paths:
                     properties:
                       baseDir: { type: string }
                       manifest: { type: object }
+  /api/diff-inp:
+    post:
+      operationId: diffInp
+      tags: [workflow]
+      summary: 两段 INP 文本行级 diff（unified 格式 + 增删统计）
+      description: |
+        入参 {text_a, text_b}（INP 卡文本）；返回 {status, diff, stats:{added, removed}}。
+        零新依赖（Python difflib）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text_a: { type: string }
+                text_b: { type: string }
+      responses:
+        '200':
+          description: diff 计算成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      diff: { type: string }
+                      stats: { type: object }
   /api/check-overlap:
     post:
       operationId: checkOverlap

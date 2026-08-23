@@ -680,6 +680,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             "/api/sweep-plan": self._handle_sweep_plan,
             "/api/sweep-run": self._handle_sweep_run,
             "/api/sweep-dashboard": self._handle_sweep_dashboard,
+            "/api/diff-inp": self._handle_diff_inp,
             "/api/check-overlap": self._handle_check_overlap,
             "/api/quick-add-check": self._handle_quick_add_check,
         }
@@ -811,6 +812,23 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 except Exception:
                     continue
             self._ok({"status": "ok", "baseDir": base_dir, "manifest": manifest})
+        except Exception as e:
+            self._err(str(e))
+
+    def _handle_diff_inp(self):
+        """两段 INP 文本行级 diff（unified 格式 + 增删统计）。"""
+        try:
+            data = self._read_body() or {}
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
+            from diff_inp import diff_stats, unified_diff_text
+            text_a = data.get("text_a", "")
+            text_b = data.get("text_b", "")
+            diff = unified_diff_text(text_a, text_b)
+            self._ok({
+                "status": "ok",
+                "diff": diff,
+                "stats": diff_stats(diff),
+            })
         except Exception as e:
             self._err(str(e))
 
