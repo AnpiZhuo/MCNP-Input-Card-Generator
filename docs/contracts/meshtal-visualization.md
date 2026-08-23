@@ -110,7 +110,7 @@ class MeshtalFile:
 **错误信封 `hint` 字段（F4）**：`_err(msg, status=500, hint="")` 增可选 `hint`（友好中文提示）；`hint` 非空时响应 `{"status":"error","message":...,"traceback":...,"hint":"..."}`，空则省略。**对既有 25 端点加性兼容**（既有调用不传 hint → 响应字段不变，漂移闸门不感知）。三 meshtal 端点 guard 必须带 hint。
 
 ### 3.1 `POST /api/meshtal-detect`（operationId `meshtalDetect`，tags `meshtal`）
-- **入参**：`{"outputDir": "D:/..."}`（缺省回退 `D:/MCNP/new/claude`）。
+- **入参**：`{"outputDir": "D:/..."}`（缺省回退 `D:/MCNP/new`）。
 - **出参（ok）**：
 ```json
 {"status":"ok",

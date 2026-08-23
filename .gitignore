@@ -46,3 +46,6 @@ Thumbs.db
 # 内部发版脚本/说明（含本地路径，不公开）
 README-release.md
 release.bat
+启动FreeCAD预览.bat
+启动Python后端.bat
+启动MCNP输入卡生成器.bat
