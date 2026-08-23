@@ -16,6 +16,8 @@
 
 ## S1 当前批次：v1.7.3 第二批发版（keff 仪表盘 / 材料搜索 / 示例库 / INP 对比，2026-08-23 已提交并部署）
 - 一句话状态：**v1.7.3 第二次打包部署完成**（主 exe 含全部新前端，sidecar 25,235,799B @ 13:21）；门禁 pytest **595/0** / vitest **376/0** / tsc 0；api.yaml **36** 端点。
+- **9ccee02（第三轮，已打包部署）**：输出页新增「🔬 解析 keff」按钮（KeffDialog：mctal 路径/目录 → /api/parse-keff → 最终 k-eff + 收敛图）；对比按钮从输出页移到基础页工具栏（用户指定）；api.yaml 36→37；部署冒烟 parse-keff 目录/文件两种方式均返回 5 周期收敛 + combined。
+- 构建顺序纪律（再修正）：**vite → PyInstaller → 复制 dist/python → src-tauri/binaries → tauri build → 部署**；tauri build 的 beforeBuildCommand 会重跑 vite 清空 dist/python，故 PyInstaller 产物必须先复制进 binaries 再跑 tauri，或 PyInstaller 放 tauri 之后。
 - **1e86299（keff 仪表盘）**：用户批准引入 **recharts@3.10.1**（npm 常规位置，prod audit 0 漏洞）；后端 `sweep.py +parse_keff_history`（逐周期 cycles/mean/std）+ sweep-run 读 mctal 补 convergence/keffStd + manifest 写盘 + 新端点 `/api/sweep-dashboard`（历史目录重读并补全收敛）；前端 `utils/sweepDashboard.ts` 聚合纯函数（对齐 OWEN sweepDashboardCore）+ `components/SweepDashboard.tsx`（Recharts：k-eff vs 参数误差棒 + y=1 临界线 + 逐 run 收敛小多图）+ SweepDialog 结果区默认仪表盘视图（表格/仪表盘切换）。
 - **d7aad5d（材料搜索 + 示例库）**：MaterialEditDialog 预设下拉加搜索过滤（名称/化学式/描述，抽纯函数 `filterPresets` + 4 用例）；BasicSettings「示例」按钮（原格式文档）→ ExamplesDialog 内置 pincell/17×17/BEAVRS 三张真实卡（`gui/public/examples/`），一键导入 = fetch → `mcnp:import-inp` 自定义事件 → App 监听复用 `importInpText` 管线（validate-inp + parse-inp + loadDeck），查看卡文本 = DocViewer。
 - **fa2bee6（INP 对比 diff）**：输出页「⇄ 对比」入口（参数扫描旁）；A=当前工作区生成 INP（可编辑），B=从文件加载/粘贴；后端 `/api/diff-inp`（Python difflib，零新依赖，unified diff + 增删统计）；前端 `DiffDialog` 行着色渲染（新增绿/删除红/头蓝）+ `diffRender` 纯函数 + 2 用例。
