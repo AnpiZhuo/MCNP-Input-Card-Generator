@@ -190,5 +190,6 @@ python api_server.py
 ---
 
 > 本项目由 AI 辅助编程完成 / Built with AI assistance (Claude).
+> AI接手可以读取"PROJECT_MEMORY.md"文件
 >
 > Built with [React](https://react.dev/), [Vite](https://vitejs.dev/), [Tauri](https://tauri.app/), and [pymcnp](https://pypi.org/project/pymcnp/).
