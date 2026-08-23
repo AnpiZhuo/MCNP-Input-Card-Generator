@@ -36,13 +36,13 @@ export default function Preview3DWindow() {
   // 独立窗口容器样式：无主界面外壳，纯预览
   const containerStyle: React.CSSProperties = {
     position: "absolute", inset: 0, display: "flex",
-    background: "#0a0a1e", color: "#fff",
+    background: "var(--bg-deepest)", color: "var(--text-primary)",
     overflow: "hidden",
   };
 
   if (!data) {
     return React.createElement("div", { style: containerStyle },
-      React.createElement("div", { style: { margin: "auto", fontSize: 14, color: "#888" } },
+      React.createElement("div", { style: { margin: "auto", fontSize: 14, color: "var(--text-tertiary)" } },
         "没有 3D 预览数据（请从主窗口打开）"),
     );
   }

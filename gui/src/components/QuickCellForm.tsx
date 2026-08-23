@@ -240,6 +240,7 @@ export default function QuickCellForm({
       React.createElement("div", { style: { ...style.grp, maxWidth: 150 } },
         React.createElement("label", { style: style.lbl }, "材料"),
         React.createElement("select", {
+        className: "form-select",
           style: style.inp,
           value: material,
           onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setMaterial(e.target.value),

@@ -895,7 +895,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       style: {
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "12px 20px", borderBottom: "1px solid var(--border-glass)",
-        background: "rgba(10,10,30,0.8)",
+        background: "var(--bg-glass)",
       } as React.CSSProperties,
     },
       React.createElement("span", {
@@ -935,8 +935,8 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       React.createElement("div", {
         ref: panelRef,
         style: {
-          width: 300, borderLeft: "1px solid rgba(255,255,255,0.08)",
-          background: "rgba(10,10,30,0.6)",
+          width: 300, borderLeft: "1px solid var(--border-glass)",
+          background: "var(--bg-glass)",
           display: "flex", flexDirection: "column", overflow: "hidden",
           flexShrink: 0, position: "relative",
         } as React.CSSProperties,
@@ -944,12 +944,12 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         /* 标题：🎨 栅元渲染控制 */
         React.createElement("div", {
           style: {
-            padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.06)",
+            padding: "10px 14px", borderBottom: "1px solid var(--border-glass)",
             display: "flex", justifyContent: "space-between", alignItems: "center",
           } as React.CSSProperties,
         },
           React.createElement("span", {
-            style: { fontSize: 13, fontWeight: 700, color: "rgba(241,241,249,0.8)" },
+            style: { fontSize: 13, fontWeight: 700, color: "var(--text-primary)" },
           }, "🎨 栅元渲染控制"),
           React.createElement("button", {
             className: "btn btn-primary btn-xs",
@@ -959,7 +959,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         ),
         /* 提示 */
         React.createElement("div", {
-          style: { padding: "6px 14px", fontSize: 10, color: "var(--text-tertiary)", borderBottom: "1px solid rgba(255,255,255,0.04)" } as React.CSSProperties,
+          style: { padding: "6px 14px", fontSize: 10, color: "var(--text-tertiary)", borderBottom: "1px solid var(--border-glass)" } as React.CSSProperties,
         }, "勾选状态实时生效，仅勾选的栅元会导出到 STEP 文件"),
         /* 材料颜色对照（共享组件） */
         React.createElement(MaterialLegend, {
@@ -972,7 +972,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         /* 全选/全不选 */
         React.createElement("div", {
           style: {
-            padding: "6px 14px", borderBottom: "1px solid rgba(255,255,255,0.04)",
+            padding: "6px 14px", borderBottom: "1px solid var(--border-glass)",
             display: "flex", gap: 6,
           } as React.CSSProperties,
         },
@@ -990,7 +990,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         /* 半透明查看开关（默认关 → opaque；开启 see-through 可看穿外壳） */
         React.createElement("div", {
           style: {
-            padding: "8px 14px", borderBottom: "1px solid rgba(255,255,255,0.04)",
+            padding: "8px 14px", borderBottom: "1px solid var(--border-glass)",
             display: "flex", alignItems: "center", gap: 8,
           } as React.CSSProperties,
         },
@@ -1012,7 +1012,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         /* 截面控制 */
         React.createElement("div", {
           style: {
-            padding: "8px 14px", borderBottom: "1px solid rgba(255,255,255,0.06)",
+            padding: "8px 14px", borderBottom: "1px solid var(--border-glass)",
             fontSize: 11,
           } as React.CSSProperties,
         },
@@ -1025,7 +1025,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
               onBlur: function() { var p = parsePlane(eqInput); if (p) setCsPlane(p); },
               onKeyDown: function(e: React.KeyboardEvent) { if (e.key === "Enter") { var p = parsePlane(eqInput); if (p) setCsPlane(p); } },
               placeholder: "X + Y + Z = 0",
-              style: { flex: 1, padding: "2px 4px", fontSize: 10, background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-primary)", borderRadius: 4, fontFamily: "Consolas,monospace" } as React.CSSProperties,
+              style: { flex: 1, padding: "2px 4px", fontSize: 10, background: "var(--bg-input)", border: "1px solid var(--border-glass)", color: "var(--text-primary)", borderRadius: 4, fontFamily: "Consolas,monospace" } as React.CSSProperties,
             }),
             React.createElement("button", {
               className: "btn btn-primary btn-xs",
@@ -1060,7 +1060,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         /* 重合检测面板（点击对 → 两栅元红色高亮） */
         React.createElement("div", {
           style: {
-            padding: "8px 14px", borderTop: "1px solid rgba(255,255,255,0.06)",
+            padding: "8px 14px", borderTop: "1px solid var(--border-glass)",
             maxHeight: 160, overflowY: "auto",
           } as React.CSSProperties,
         },
@@ -1102,7 +1102,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         /* 底部：计数 + 关闭 */
         React.createElement("div", {
           style: {
-            padding: "8px 14px", borderTop: "1px solid rgba(255,255,255,0.06)",
+            padding: "8px 14px", borderTop: "1px solid var(--border-glass)",
             display: "flex", justifyContent: "space-between", alignItems: "center",
           } as React.CSSProperties,
         },
