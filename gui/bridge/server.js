@@ -5,7 +5,7 @@ var fs2 = require("fs");
 var os = require("os");
 
 var PORT = 3456;
-var PYTHON = "D:/FreeCAD/FreeCAD_1.1.1-Windows-x86_64-py311/bin/python.exe";
+var PYTHON = "<FreeCAD_PYTHON>";
 var BRIDGE = path.join(__dirname, "..", "backend", "mcnp_bridge.py");
 
 var server = http.createServer(function(req, res) {

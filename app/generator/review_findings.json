@@ -1,42 +1,42 @@
 [
   {
-    "file": "D:\\MCNP\\输入卡生成器源码\\app\\generator\\inp_generator.py",
+    "file": "D:\\MCNP\\PROJECT_ROOT\\app\\generator\\inp_generator.py",
     "line": "已重构，行号作废",
     "summary": "Resolved (F#1, commit 1488aae): raw_overrides 守卫收敛为 _apply_raw_override",
     "failure_scenario": "8 处复制粘贴的 override-guard 模式（旧行 1069/1081/1107/1115/1131/1139/1147/1168）已收敛为 `_apply_raw_override(lines, overrides, key, banner, generator)` 一行调用；旧 1156 不一致变体（raw_tally 判 tally key）保留为 `_has_raw_override(overrides, \"tally\")` 门控（En/T0/Tn 抑制语义一字不动，见 test_e0_override_does_NOT_suppress_en_t0_tn）。`_raw_override_text` 保留空串/纯空白=无覆盖语义。行为零变化：test_generator_overrides.py 28/28 全绿（含 raw_tally 门控三例 pin）。"
   },
   {
-    "file": "D:\\MCNP\\输入卡生成器源码\\app\\generator\\inp_generator.py",
+    "file": "D:\\MCNP\\PROJECT_ROOT\\app\\generator\\inp_generator.py",
     "line": "已重构，行号作废",
     "summary": "Resolved (F#2, historical): redundant `import re` no longer present in `_generate_en_cards`",
     "failure_scenario": "已清偿（P0 期间确认）。模块级 `import re` 存在，`_generate_en_cards` 内无重复 `import re`。该 finding 作为历史记录保留。"
   },
   {
-    "file": "D:\\MCNP\\输入卡生成器源码\\app\\generator\\inp_generator.py",
+    "file": "D:\\MCNP\\PROJECT_ROOT\\app\\generator\\inp_generator.py",
     "line": "已重构，行号作废",
     "summary": "Resolved (F#3, commit c774e56): 函数内 `import json as _json` 清理",
     "failure_scenario": "`_generate_kcode` 与 `_generate_structured_distributions` 内的 `import json as _json` 已删除，改用模块级 `json`（`json.loads` / `json.JSONDecodeError`），异常兜底（KSRC_FAILED_BANNER / 空返回）语义不变。grep `import json as` 归零。同时清理 core.py / __init__.py / api_server.py 的函数内 `import sys` + `[E0DBG]` 调试 print（test_f3_* 转绿）。"
   },
   {
-    "file": "D:\\MCNP\\输入卡生成器源码\\app\\generator\\inp_generator.py",
+    "file": "D:\\MCNP\\PROJECT_ROOT\\app\\generator\\inp_generator.py",
     "line": "已重构，行号作废",
     "summary": "Resolved (F#4, commit 52ca251): _generate_single_source 两分支合并为 _build_sdef_parts",
     "failure_scenario": "旧 Dn 分支（254-290）与普通分支（292-310）合并为 `_build_sdef_parts(src, include_special)` 单一构造函数，include_special=True 时含 6 扩展字段 + sdef_extra。输出字节不变：test_generator_sdef.py 全绿，`test_sdef_single_source_delegates` pin `SDEF  ERG=14.0  POS=0 0 0` 保持绿。新增 SDEF 字段只需改 _build_sdef_parts 一处。"
   },
   {
-    "file": "D:\\MCNP\\输入卡生成器源码\\app\\generator\\inp_generator.py",
+    "file": "D:\\MCNP\\PROJECT_ROOT\\app\\generator\\inp_generator.py",
     "line": "已重构，行号作废",
     "summary": "Resolved (F#5, commits e404172 + 018ced5): _generate_multi_source 拆 5 函数",
     "failure_scenario": "145 行函数已拆为 `_collect_source_values` / `_normalize_probabilities` / `_varying_dist_params` / `_build_multi_sdef_parts` / `_build_multi_sisp_cards` 五函数。概率归一（含 NaN/inf 校验）成为独立纯函数，可单测（test_probability_normalization_table 等 4 例绿）。字符化门（4a）：test_generator_multi_source.py 14/14 全绿（字节不变）。漂移修复（4b）：kitchen-sink R1/R4 红→绿，全量 251/0。"
   },
   {
-    "file": "D:\\MCNP\\输入卡生成器源码\\app\\generator\\inp_generator.py",
+    "file": "D:\\MCNP\\PROJECT_ROOT\\app\\generator\\inp_generator.py",
     "line": "已重构，行号作废",
     "summary": "Resolved (F#6, commits e404172 + 018ced5): 源字段名三处枚举合并为 SDEF_FIELD_SPECS 表驱动",
     "failure_scenario": "值收集 / 方差标注 / SI-SP 映射三处枚举全部改读 `SDEF_FIELD_SPECS` 单一事实来源（字段序 = 多源现状序 POS 首位）。新增字段 = 表加一行，三处自动生效。kitchen-sink 全字段（PAR..RATE + POS）各出现一次（test_f6_kitchen_sink_multi_source_all_fields_present 保持绿）。"
   },
   {
-    "file": "D:\\MCNP\\输入卡生成器源码\\app\\generator\\inp_generator.py",
+    "file": "D:\\MCNP\\PROJECT_ROOT\\app\\generator\\inp_generator.py",
     "line": "已重构，行号作废",
     "summary": "Resolved (F#7, commit bf0a2c7): pymcnp 函数内 import 提到模块顶部",
     "failure_scenario": "`from pymcnp import inp as pymcnp_inp` 从 `_generate_basic` 函数内（旧 110 行）提到模块顶部（banners import 之后），实现模块导入期 fail-fast（pymcnp 缺失 → import 即炸）。pymcnp 是 requirements.txt 硬依赖且已在测试环境/PyInstaller spec 捆绑，无 import 环。test_f7_* ×2 转绿，test_generator_basic.py 零回归。"

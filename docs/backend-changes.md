@@ -67,7 +67,7 @@
 ## 八、本地启动验证步骤
 
 ```bash
-cd "d:/MCNP/输入卡生成器源码"
+cd "PROJECT_ROOT"
 python -m pytest tests/ -v          # 期望 245 绿 / 6 红（4 红=F#3/F#7 技术债，2 红=kitchen-sink R1/R4，P1 范围）
 ```
 
@@ -115,7 +115,7 @@ python -m pytest tests/ -v          # 期望 245 绿 / 6 红（4 红=F#3/F#7 技
 ## A.5 本地启动验证步骤
 
 ```bash
-cd "d:/MCNP/输入卡生成器源码"
+cd "PROJECT_ROOT"
 python -m pytest tests/ -v          # 期望 251 绿 / 0 红（复跑 ×2 稳定）
 ```
 
@@ -178,7 +178,7 @@ python -m pytest tests/ -v          # 期望 251 绿 / 0 红（复跑 ×2 稳定
 ### B.7 本地启动验证步骤
 
 ```bash
-cd "d:/MCNP/输入卡生成器源码"
+cd "PROJECT_ROOT"
 python -m pytest tests/ -v          # 期望 271 绿 / 0 红
 python gui/backend/api_server.py    # 起 5001，post /api/preview-3d 同一 deck 两次：第一次 FreeCAD 重建，第二次命中缓存
 ```
@@ -228,7 +228,7 @@ python gui/backend/api_server.py    # 起 5001，post /api/preview-3d 同一 dec
 ## C.6 本地启动验证步骤
 
 ```bash
-cd "d:/MCNP/输入卡生成器源码"
+cd "PROJECT_ROOT"
 python -m pytest tests/ -v          # 期望 287 绿 / 0 红
 ```
 
@@ -285,7 +285,7 @@ python -m pytest tests/ -v          # 期望 287 绿 / 0 红
 ## E.7 本地启动验证步骤
 
 ```bash
-cd "d:/MCNP/输入卡生成器源码"
+cd "PROJECT_ROOT"
 python -m pytest tests/ -v          # 期望 293 绿 / 0 红
 python -c "from app.generator.parsers.core import parse_data_cards; r=parse_data_cards('SSR OLD 3 2 NEW 6 7 12 13 TR D5\nSI5 L 4 5\nSP5 .4 .6'.splitlines()); print(r['other_cards'], r['sdef_distributions'])"
 ```
@@ -343,7 +343,7 @@ python -c "from app.generator.parsers.core import parse_data_cards; r=parse_data
 ## D.6 本地启动验证步骤
 
 ```bash
-cd "d:/MCNP/输入卡生成器源码"
+cd "PROJECT_ROOT"
 python -m pytest tests/ -v          # 期望 287 绿 / 0 红
 python gui/backend/api_server.py    # 起 5001
 # #6: POST /api/text-to-section {"section":"cells","text":"1 1 -2.7 -1 2 imp:n=1 vol=3.14 ..."}
@@ -392,7 +392,7 @@ python gui/backend/api_server.py    # 起 5001
 ## F.6 本地启动验证步骤
 
 ```bash
-cd "d:/MCNP/输入卡生成器源码"
+cd "PROJECT_ROOT"
 python -m pytest tests/ -v          # 期望 343 绿 / 0 红
 python -c "from app.generator.parsers.sections import split_sections; print(split_sections(['t','1 0 -1','1 pz -1e9','*F4:N 1 2 3'])[3])"   # ['*F4:N 1 2 3']
 python -c "from app.generator.parsers.core import parse_sdef_simple, parse_data_cards; print(parse_sdef_simple('SDEF ERG 14'.split())[0].erg); print(parse_data_cards(['PTRAC \$ write particles'])['other_cards'])"
@@ -482,7 +482,7 @@ python -c "from app.generator.parsers.core import parse_sdef_simple, parse_data_
 ## G.8 本地启动验证步骤
 
 ```bash
-cd "d:/MCNP/输入卡生成器源码"
+cd "PROJECT_ROOT"
 python -m pytest tests/ -q                  # 期望 409 通过 / 0 失败（343 基线 + 66 新增全绿）
 python -m pytest tests/parser/test_regress_fmesh_import.py tests/unit/test_meshtal_parser.py tests/integration/test_meshtal_api.py -q   # 红基线 6+10+9 全绿
 # 三端点真实 HTTP 往返（test_meshtal_api.py 已覆盖子进程起 5001）
@@ -892,7 +892,7 @@ dims ni=1 nj=2 nk=2 / grid_bounds [49,-10,90]~[51,10,110]；texture 同样 ok（
 
 **回归测试（先红后绿）**：`tests/parser/test_regress_sdef_sc_chain.py` 3 + `test_regress_thtme_table.py` 3 + `test_regress_material_spaced_options.py` 4 = 10 用例 + fixture inp02.i。**inp02.i 全文件不动点 g2==g1 达成**（THTME 卡表相邻、M3 rows 纯净、other_cards 零分布卡残留）。全量 pytest **479 通过 / 24 环境性 error**（5 个 cache/api 测试文件 tmp_path 建目录被沙箱拒，与改动无关；正常环境无此问题）+ tsc EXIT 0（vitest 因沙箱 spawn EPERM 未跑，前端改动为可选字段+只读展示，建议本地补跑）。
 
-**打包部署（2026-08-16，用户授权放行）**：v1.7.1 重打包——门禁 pytest **503/0** + vitest **293/0** + tsc EXIT 0；vite 3.3s；PyInstaller sidecar 25,112,062B；tauri build exit 0（增量 10.8s）；**6.2 时效坑命中**（增量编译未刷新 target\release sidecar，手动覆盖后 grep 确认 core.py 含 SC/THTME 修复）；部署 D:\MCNP\MCNP输入卡生成器；冒烟：探活 loaded:true 6s / parse-inp 实测 inp02.i → dist ids [1,2,3,4]+d2.sc 结构化+other_cards 零分布卡+THTME 表保留+M3 干净+warnings[] / mcnp-detect 命中 / bundle 含 1.7.1。
+**打包部署（2026-08-16，用户授权放行）**：v1.7.1 重打包——门禁 pytest **503/0** + vitest **293/0** + tsc EXIT 0；vite 3.3s；PyInstaller sidecar 25,112,062B；tauri build exit 0（增量 10.8s）；**6.2 时效坑命中**（增量编译未刷新 target\release sidecar，手动覆盖后 grep 确认 core.py 含 SC/THTME 修复）；部署 DIST_DIR；冒烟：探活 loaded:true 6s / parse-inp 实测 inp02.i → dist ids [1,2,3,4]+d2.sc 结构化+other_cards 零分布卡+THTME 表保留+M3 干净+warnings[] / mcnp-detect 命中 / bundle 含 1.7.1。
 
 **修复 4（用户实测"导入→运行"暴露）——SDEF 裸参数分布引用丢失（P0）**：根因：parse_sdef_fields 裸参数分支白名单只有 PAR/SUR/NRM/TR/CCC/ARA/RATE，`cel d4  x d1  y d2  z d3` 落 `ti += 1` 静默跳过 → 生成 SDEF 只剩 ERG=1 → MCNP 报 "source distribution 1/2/3/4 is not used" + "fatal error. v option on non-cell source distribution 4"。修复：裸 X/Y/Z 分支（1~3 值或 D 引用，遇已知 SDEF key 停靠）+ CEL/ERG/WGT/DIR/TME/RAD/EXT 进单值白名单（对齐 D-07 的 parse_sdef_simple）。回归测试 `tests/parser/test_regress_sdef_bare_dist_refs.py` 3 用例先红后绿；全量 pytest **506/0**；inp02 不动点保持。**当日二次重打包部署 v1.7.1**：sidecar 25,112,345B/20:55 + tauri exit 0 + 部署冒烟（部署版 parse sdefFields 四引用齐全、generate 输出 `SDEF X=d1 Y=d2 Z=d3 ERG=1 CEL=d4`）。
 
