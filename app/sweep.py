@@ -56,6 +56,27 @@ def parse_keff(text: str) -> float | None:
     return None
 
 
+def parse_keff_history(text: str) -> dict | None:
+    """提取逐周期 keff 收敛序列（供仪表盘画收敛小图）。
+
+    输入可以是 mctal 文件全文或包含 k-eff 周期行的输出文本；
+    找不到周期序列返回 None。输出 {cycles, mean, std} 与 OWEN
+    RunResults.keff 的收敛字段对齐（缺 combined 不阻断）。
+    """
+    try:
+        r = parse_mctal(text)
+        k = r.get("keff")
+        if k and k.get("mean"):
+            return {
+                "cycles": k.get("cycles") or [],
+                "mean": [float(v) for v in k["mean"]],
+                "std": [float(v) for v in (k.get("std") or [])],
+            }
+    except Exception:
+        pass
+    return None
+
+
 def cartesian(parameters: list[dict]) -> list[dict]:
     """参数值列表的笛卡尔积 → 每组合一个 dict。"""
     if not parameters:
@@ -123,6 +144,6 @@ def build_summary_tsv(parameters: list[dict], records: list[dict]) -> str:
 
 
 __all__ = [
-    "parse_keff", "cartesian", "apply_parameters", "run_dir_name",
+    "parse_keff", "parse_keff_history", "cartesian", "apply_parameters", "run_dir_name",
     "build_manifest", "build_summary_tsv",
 ]

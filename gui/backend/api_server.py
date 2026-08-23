@@ -679,6 +679,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             "/api/ptrac-parse": self._handle_ptrac_parse,
             "/api/sweep-plan": self._handle_sweep_plan,
             "/api/sweep-run": self._handle_sweep_run,
+            "/api/sweep-dashboard": self._handle_sweep_dashboard,
             "/api/check-overlap": self._handle_check_overlap,
             "/api/quick-add-check": self._handle_quick_add_check,
         }
@@ -747,11 +748,69 @@ class MCNPHandler(BaseHTTPRequestHandler):
                         (proc.stdout or "") + "\n" + (proc.stderr or ""))
                 except subprocess.TimeoutExpired:
                     pass
+                # 收敛序列（仪表盘小图）：优先读 run 目录里的 mctal
+                try:
+                    import glob
+                    mctal_paths = sorted(glob.glob(os.path.join(run_dir, "mctal*")))
+                    if mctal_paths:
+                        with open(mctal_paths[0], "r", encoding="utf-8",
+                                  errors="replace") as f:
+                            hist = sweep.parse_keff_history(f.read())
+                        if hist:
+                            rec["convergence"] = hist
+                            if hist.get("std"):
+                                rec["keffStd"] = hist["std"][-1]
+                except Exception:
+                    pass
                 records.append(rec)
             tsv = sweep.build_summary_tsv(parameters, records)
             manifest = sweep.build_manifest("sweep.i", "mcnp", parameters, records)
+            manifest_path = os.path.join(base_dir, "sweep-manifest.json")
+            try:
+                with open(manifest_path, "w", encoding="utf-8") as f:
+                    json.dump(manifest, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
             self._ok({"status": "ok", "baseDir": base_dir, "records": records,
-                      "summaryTsv": tsv, "manifest": manifest})
+                      "summaryTsv": tsv, "manifest": manifest,
+                      "manifestPath": manifest_path})
+        except Exception as e:
+            self._err(str(e))
+
+    def _handle_sweep_dashboard(self):
+        """读取历史扫描目录（sweep-manifest.json），补齐缺失的收敛序列后返回。"""
+        try:
+            data = self._read_body() or {}
+            base_dir = data.get("baseDir", "")
+            manifest_path = os.path.join(base_dir, "sweep-manifest.json")
+            if not os.path.isfile(manifest_path):
+                self._err(f"扫描清单不存在：{manifest_path}")
+                return
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
+            import glob
+            import sweep
+            for rec in manifest.get("runs", []):
+                if rec.get("convergence"):
+                    continue
+                run_dir = rec.get("outputDir", "")
+                if not run_dir or not os.path.isdir(run_dir):
+                    continue
+                try:
+                    mctal_paths = sorted(glob.glob(os.path.join(run_dir, "mctal*")))
+                    if not mctal_paths:
+                        continue
+                    with open(mctal_paths[0], "r", encoding="utf-8",
+                              errors="replace") as f:
+                        hist = sweep.parse_keff_history(f.read())
+                    if hist:
+                        rec["convergence"] = hist
+                        if hist.get("std"):
+                            rec["keffStd"] = hist["std"][-1]
+                except Exception:
+                    continue
+            self._ok({"status": "ok", "baseDir": base_dir, "manifest": manifest})
         except Exception as e:
             self._err(str(e))
 

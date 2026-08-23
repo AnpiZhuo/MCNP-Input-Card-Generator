@@ -8,6 +8,7 @@ import { apiUrl, errorHint } from "../utils/api";
 import { useDeck } from "../utils/DeckContext";
 import { generateInp } from "../utils/dataCollector";
 import FloatingDialog from "./FloatingDialog";
+import SweepDashboard from "./SweepDashboard";
 
 interface ParamRow { name: string; pattern: string; values: string; }
 interface RunRecord {
@@ -15,6 +16,8 @@ interface RunRecord {
   parameters: Record<string, string | number>;
   exitCode: number | null;
   keff: number | null;
+  keffStd?: number | null;
+  convergence?: { cycles: number[]; mean: number[]; std: number[] } | null;
 }
 interface RunResult { baseDir: string; records: RunRecord[]; summaryTsv: string; }
 
@@ -45,6 +48,7 @@ export default function SweepDialog({ onClose }: { onClose: () => void }) {
   const [run, setRun] = useState<RunResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [view, setView] = useState<"table" | "dash">("dash");
 
   const gen = async () => {
     setGenBusy(true); setErr("");
@@ -148,8 +152,14 @@ export default function SweepDialog({ onClose }: { onClose: () => void }) {
         React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", marginBottom: 6 } },
           React.createElement("label", { style: { fontSize: 12, fontWeight: 600 } }, `执行结果（${run.records.length} 组合）`),
           React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: downloadTsv }, "下载 TSV"),
+          React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: () => setView("dash") }, "仪表盘"),
+          React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: () => setView("table") }, "结果表"),
         ),
-        React.createElement("div", { className: "table-wrap", style: { maxHeight: 240, overflow: "auto" } },
+        view === "dash"
+          ? React.createElement("div", { style: { maxHeight: 460, overflow: "auto" } },
+              React.createElement(SweepDashboard, { records: run.records, parameters: payload.parameters }),
+            )
+          : React.createElement("div", { className: "table-wrap", style: { maxHeight: 240, overflow: "auto" } },
           React.createElement("table", null,
             React.createElement("thead", null, React.createElement("tr", null,
               React.createElement("th", null, "#"),

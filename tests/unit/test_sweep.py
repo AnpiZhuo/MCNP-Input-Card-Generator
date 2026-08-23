@@ -1,7 +1,8 @@
 """参数扫描纯函数测试（对齐 OWEN sweepCore.ts 语义，纯 stdlib）。"""
 
 from app.sweep import (
-    apply_parameters, build_summary_tsv, cartesian, parse_keff, run_dir_name,
+    apply_parameters, build_summary_tsv, cartesian, parse_keff, parse_keff_history,
+    run_dir_name,
 )
 
 
@@ -64,3 +65,23 @@ def test_run_dir_name_and_summary_tsv():
     assert lines[0] == "index\tnps\texit\tkeff"
     assert lines[1] == "1\t1000\t0\t1.001000"
     assert lines[2] == "2\t2000\tn/a\tn/a"
+
+
+def test_parse_keff_history_from_mctal():
+    text = (
+        "ktally 1 nps=100\n"
+        "k  eff (c) 1.00000 0.00200\n"
+        "k  eff (c) 1.00100 0.00190\n"
+        "k  eff (c) 1.00050 0.00180\n"
+        "combined keff = 1.00030 0.00110\n"
+    )
+    h = parse_keff_history(text)
+    assert h is not None
+    assert h["cycles"] == [1, 2, 3]
+    assert h["mean"] == [1.0, 1.001, 1.0005]
+    assert h["std"] == [0.002, 0.0019, 0.0018]
+
+
+def test_parse_keff_history_none_when_no_sequence():
+    assert parse_keff_history("no keff here") is None
+    assert parse_keff_history("") is None

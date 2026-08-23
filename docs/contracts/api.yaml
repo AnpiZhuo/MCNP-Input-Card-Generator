@@ -1258,7 +1258,8 @@ paths:
       description: |
         入参同 sweep-plan；组合数上限 50。无 MCNP → {status:"error", message}。
         响应 {status, baseDir, records:[{index, parameters, inputFile, outputDir,
-        exitCode, keff}], summaryTsv, manifest}。
+        exitCode, keff, keffStd?, convergence?:{cycles, mean, std}}], summaryTsv,
+        manifest, manifestPath}。
       requestBody:
         required: true
         content:
@@ -1285,9 +1286,38 @@ paths:
                   - { $ref: '#/components/schemas/OkEnvelope' }
                   - type: object
                     properties:
+                        baseDir: { type: string }
+                        records: { type: array }
+                        summaryTsv: { type: string }
+                        manifest: { type: object }
+                        manifestPath: { type: string }
+  /api/sweep-dashboard:
+    post:
+      operationId: sweepDashboard
+      tags: [workflow]
+      summary: 读取历史扫描目录（仪表盘数据源）
+      description: |
+        入参 {baseDir}；读取 {baseDir}/sweep-manifest.json，run 缺 convergence
+        时按 outputDir 重解析 mctal 补全；返回 {status, baseDir, manifest}。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                baseDir: { type: string }
+      responses:
+        '200':
+          description: 扫描 manifest 读取成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
                       baseDir: { type: string }
-                      records: { type: array }
-                      summaryTsv: { type: string }
                       manifest: { type: object }
   /api/check-overlap:
     post:

@@ -96,6 +96,8 @@ describe("SweepDialog DOM 交互", () => {
       React.createElement(SweepDialog, { onClose: () => {} })));
     await waitFor(() => expect(screen.getByDisplayValue(/已生成/)).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: /开始扫描/ }));
+    expect(await screen.findByText(/k-eff vs/)).toBeTruthy();   // 默认视图=仪表盘
+    fireEvent.click(screen.getByRole("button", { name: "结果表" }));
     expect(await screen.findByText("1.001000")).toBeTruthy();   // keff 列
     expect(screen.getByText("n/a")).toBeTruthy();               // 第 2 组合 keff 缺失
     expect(screen.getByRole("button", { name: "下载 TSV" })).toBeTruthy();
