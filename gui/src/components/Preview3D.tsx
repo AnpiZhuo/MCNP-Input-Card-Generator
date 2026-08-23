@@ -111,7 +111,7 @@ function initScene(
 
   /* 场景 */
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x1a1a2e);
+  scene.background = new THREE.Color(0x000000);
 
   /* 相机 — 初始用默认包围盒参数（realExt=10 → viewDist=35）；STL 加载后按实际几何 reframe */
   const rect = canvas.getBoundingClientRect();
