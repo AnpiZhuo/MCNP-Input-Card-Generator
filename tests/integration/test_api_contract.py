@@ -268,3 +268,18 @@ def test_http_parse_outp_compact_mcnp61(backend_base_url):
     t = resp["tallies"]["4"]
     assert t["type"] == 4
     assert t["rows"] == [{"energy": "", "flux": "3.36115E-03", "error": "0.0071"}]
+
+
+def test_http_sweep_run_budget_rejected(backend_base_url):
+    """sweep-run 组合数×单次超时超总预算（7×300>1800s）→ code=budget_exceeded 拒绝。
+
+    拒绝发生在 MCNP 检测之前，不依赖真实 MCNP 可执行文件。
+    """
+    params = [{"name": "nps", "pattern": r"NPS\s+(\d+)",
+               "values": [1000, 2000, 3000, 4000, 5000, 6000, 7000]}]
+    resp = _post(backend_base_url, "/api/sweep-run",
+                 {"deck": "t\n", "parameters": params})
+    assert resp.get("status") == "error", resp
+    assert resp.get("code") == "budget_exceeded", resp
+    assert "7" in resp.get("message", "")  # 当前组合数
+    assert "预算" in resp.get("message", "")

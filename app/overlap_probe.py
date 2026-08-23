@@ -73,8 +73,10 @@ def sample_overlap(ast_a, ast_b, surfaces_by_num, tr_cards,
     try:
         in_a = eval_cell_field(ast_a, fns, X, Y, Z)
         in_b = eval_cell_field(ast_b, fns, X, Y, Z)
-    except Exception:
-        return None
+    except Exception as e:
+        # 探针求值失败：不再静默返回 None（worker 会 continue 漏掉该栅元对），
+        # 抛带 probe_error 前缀的异常，由调用方记入 overlap_unresolved（reason）。
+        raise RuntimeError(f"probe_error: {e}") from e
     n_a = int(in_a.sum())
     n_b = int(in_b.sum())
     n_ab = int((in_a & in_b).sum())

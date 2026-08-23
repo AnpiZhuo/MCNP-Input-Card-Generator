@@ -1084,3 +1084,72 @@ ormalizeImportedMaterials（核素行 zaid 剥后缀，raw 行原样，rows/nucl
 - 测试：`gui/test/outputParser.test.ts` +2、`gui/test/tallyChart.test.ts` +3；vitest **325/0** + tsc EXIT 0。
 
 > 追加：本地兜底解析器数据块标记泛化为 `(cell|surface|detector) N`（F1/F2/F4/F5/F7/F8 等），`outputParser.test.ts` +2（F1 surface / F5 detector），vitest **327/0**。
+
+---
+
+## 快捷建栅元（v1.7.2 新功能，2026-08-18，前端，已随 v1.7.2 八次打包部署）
+
+> 范围：`gui/src/utils/quickCell.ts` + `gui/src/three/quickCellPreview.ts` + `gui/src/components/QuickCellDialog.tsx` + GeometryTab 接线 + Preview3D 主预览修复。零新依赖。
+
+- **`gui/src/utils/quickCell.ts`（纯函数深模块，vitest 可测）**：RCC 圆柱（N 环×M 段）/ RPP 六面体（长×宽×高 + 体中心 + 倾斜角 Roll/Pitch/Yaw，标准 Yaw-Pitch-Roll 外旋，`eulerRotation`/`trBFromAngles`）+ SPH 球（K 球壳）；编号规则（曲面无则 101 起/有则最大+1，cell/TR 同理）；`parseAngleExpr`（π 表达式：π/2、2π）；`appendCardText`/`generatedCellToRow` 填入逻辑抽纯函数；`gui/test/quickCell.test.ts` **20** 用例。
+- **`gui/src/three/quickCellPreview.ts`**：线框实时预览——切分线 + **世界固定 XYZ 轴（X红/Y绿/Z蓝，带标签，Z 朝上）**，100ms 防抖 + 按需渲染；RPP 切分矩形居中跨整个截面；`gui/test/quickCellPreview.test.ts` 3 用例。
+- **`gui/src/components/QuickCellDialog.tsx`**：弹窗一次一种形状；材料默认 M0 真空、选材料自动带出密度、imp:n/p/e 勾选；文本模式禁用+弹窗警告。
+- **三新特性（用户指定）**：① 材料 0 确认弹窗（玻璃拟态+橙色光晕，非系统 confirm）；② 所有数值输入默认空（空按 0/1 处理）；③ **主 3D 预览侧栏「⚡ 快捷建栅元」**（QuickCellForm 共享组件，蓝色线框直接画进主场景，颜色随材料/M0 白线；确认生成后写回 deck + `genTick++` 整模重拉 STL；独立 3D 预览窗口经 localStorage 桥回写主窗口）。
+- **主 3D 预览坐标轴根因修复**：`loadStlMeshes` 去掉几何归一化（不平移），模型显示在真实世界坐标，轴固定在真实原点 (0,0,0)；取景框=模型∪原点，target=模型中心。新建 `gui/src/three/axisConfig.ts`（轴单一事实来源 X红/Y绿/Z蓝）+ `gui/src/three/planeOffset.ts`（截面平面显示系→原始系换算，modelCenter 恒 0）。
+- **线框预览不再强制矫正摄像头**：仅线框首次出现时取景一次，后续输入保持用户当前视角。
+- 门禁 vitest **335/0** + tsc EXIT 0；详见 CHANGELOG 08-18 条目。
+
+## GQ/SQ 3D 预览 · 前端材料库扩充（2026-08-22，未 commit，文件恒 1.7.2）
+
+- **`gui/src/data/pnnlPresets.ts`**：从 OWEN 的 `data/pnnl-materials.json`（PNNL-15870 Rev.2）**精选 48 种**材料（核燃料 6 / 探测器 11 / 屏蔽与慢化 9 / 结构与合金 5 / 气体与冷却剂 3 / 组织与剂量 6 / 通用 8），同位素级 ZAID + 负质量份额 rows（一次性脚本生成勿手改）；`PresetItem` 加 `rows` 字段。总预设 **49 内置 + 48 PNNL = 97 种 ≤100**（用户要求）。
+- **`gui/src/components/MaterialEditDialog.tsx`**：选 PNNL 预设 → **直接填手动 ZAID 模式**（`handlePreset` 的 `setMode("formula")→"manual"`；`parseFormula` 本就填充核素行，formulaText 保留供切回化学式查看）。
+- 测试：`gui/test/pnnlPresets.test.ts` +3（数据契约用例）；vitest **348/0** + tsc EXIT 0。
+
+## 3D 重合检测 · 前端（2026-08-22，未 commit，文件恒 1.7.2）
+
+- **`gui/src/components/Preview3D.tsx`**：STL 渲染完成后**异步自动调 `/api/check-overlap`** + 侧栏**预警面板**（重叠对列表：severity 色点 ●/▲/· + 栅元对 + 占比%，suspected 疑似降级）+ **点击对两栅元红色高亮**（`controller.setHighlight`）；真空栅元参与检测；检测失败静默降级不影响预览。
+- **`gui/src/components/GeometryTab.tsx` + `gui/src/utils/quickCell.ts`**：快捷添加后调 `/api/quick-add-check` → **A/B/C 补集决策**（A=新 # 已有 / B=已有 # 新 / C=只占真空 / D=保持原样），决策抽纯函数 `applyQuickAddChoice`（支持一次性多栅元，真空让位逻辑）。
+- 门禁 vitest **358/0** + tsc EXIT 0；详见 CHANGELOG 08-22「3D 重合检测」条目。
+
+## v1.7.3 新功能前端两批（2026-08-23，已提交并部署）
+
+### keff 仪表盘 SweepDashboard
+- `gui/src/utils/sweepDashboard.ts`（聚合纯函数，对齐 OWEN sweepDashboardCore）+ `gui/src/components/SweepDashboard.tsx`（**recharts@3.10.1**，用户批准引入：k-eff vs 参数误差棒 + y=1 临界线 + 逐 run 收敛小多图）+ SweepDialog 结果区**默认仪表盘视图**（表格/仪表盘切换）；`gui/test/sweepDashboard.test.ts`。
+
+### 材料搜索 filterPresets
+- `MaterialEditDialog.tsx` 预设下拉加搜索过滤（名称/化学式/描述，抽纯函数 `filterPresets` + 4 用例）。
+
+### 示例库 ExamplesDialog + mcnp:import-inp
+- `BasicSettings`「示例」按钮 → `ExamplesDialog` 内置 pincell / 17×17 / BEAVRS 三张真实卡（`gui/public/examples/`）；一键导入 = fetch → `mcnp:import-inp` 自定义事件 → `App.tsx` 监听复用 `importInpText` 管线（validate-inp + parse-inp + loadDeck）；查看卡文本 = `DocViewer`。
+
+### INP 对比 DiffDialog
+- 输出页「⇄ 对比」入口；A=当前工作区生成 INP（可编辑），B=从文件加载/粘贴；后端 `/api/diff-inp`；前端 `DiffDialog` 行着色渲染（新增绿/删除红/头蓝）+ `diffRender` 纯函数 + 2 用例。
+
+### 3D 预览主题修复 5 轮
+- **e2225e7（第四轮）**：① Preview3D 快捷建栅元覆盖层硬编码深底 rgba(10,10,30,0.98)/白字 → 改主题变量（--bg-surface/--text-primary/--border-glass），亮色主题不再灰底白字；② OutputTab keff 按钮被嵌套进参数扫描按钮内（点击冒泡连带触发）→ 平级闭合；③ ExamplesDialog 查看卡文本 DocViewer 用 createPortal 挂 document.body，脱离父弹窗 overflow:hidden 裁剪。
+- **b1e6ebe（第五轮）**：3D 预览亮色主题全面可读——Preview3DWindow 根容器硬编码 #0a0a1e 蓝黑底+白字 → var(--bg-deepest)/var(--text-primary)；Preview3D 侧栏/面板/输入框/边框/标题硬编码 rgba(10,10,30,…)/rgba(0,0,0,0.3) → 主题变量；QuickCellForm 材料下拉 select 加 form-select（option 走 var(--bg-surface)/var(--text-primary)）。
+- **ef9499f（第六轮，用户定稿）**：3D 预览**固定黑色背景不受亮色主题影响**——Preview3DWindow 根容器硬编码 #000/#fff + preview3d-root 作用域类；global.css 作用域内覆盖 --bg-*/--text-* 为黑底白字系、.form-select/option 黑底白字、强调色 --accent 固定红色系 #FF4D6D；场景画布背景 0x000000。
+- **9ccee02（第三轮）**：输出页新增「🔬 解析 keff」按钮（`KeffDialog`：mctal 路径/目录 → /api/parse-keff → 最终 k-eff + 收敛图）；对比按钮从输出页移到基础页工具栏（用户指定）。
+- 门禁 vitest **376/0** + tsc EXIT 0；已部署。
+
+## 批量编辑栅元（BatchCellEditDialog，2026-08-23，未 commit）
+
+- `gui/src/utils/batchCellEdit.ts`（纯函数：`applyBatchCellEdit` 空字段=不改、曲面**永不覆盖只追加**；`batchEditEmpty` 判空控确认钮）+ `gui/src/components/BatchCellEditDialog.tsx`（材料下拉自动带出密度 / IMP:N·P·E / 高级参数折叠区 / **锁死的曲面提示**「无法批量更改曲面表达式，只可添加」+ 后缀输入，确认后追加到勾选栅元表达式末尾）。
+- `gui/src/components/GeometryTab.tsx` 接入：栅元列表新增勾选列 + 表头全选/取消全选 + 「⚡ 批量编辑」按钮（无勾选灰禁用，勾选后可点）；local→deck 走现有 patch 管线。
+- 测试：`gui/test/batchCellEdit.test.ts`（9 用例）+ `gui/test/batchCellEditDialog.dom.test.tsx`（3 用例）；门禁 vitest **387/0** + tsc EXIT 0 / vite build 成功。
+
+## 前端技术债清理批 T1–T4（2026-08-23，PM 派发，未 commit，测试先行红→绿）
+
+- **T1（P1，勾选存下标 → 重排后静默改错栅元）**：批量编辑勾选状态从「数组下标」改为「栅元 num」——`batchCellEdit.ts` 新增 `toggleCellNum` / `selectedCellsFromNums` / `applyBatchEditToRows` / `pruneSelectedNums`（勾选状态机纯函数，重排/删除/同步行后按 num 解析到当前行）；GeometryTab 全接线（checkbox `checked=selectedCells.includes(c.cell.num)`）。**红→绿**：`gui/test/batchCellEditReorder.test.ts`（5，初跑 5 失败）+ **DOM 集成测试** `gui/test/geometryBatchEditReorder.dom.test.tsx`（勾选 → 拖拽重排 → 批量编辑 → 断言改到原勾选栅元）。
+- **T2（P1，快捷建栅元重合检测 catch 静默跳过）**：失败时仍追加栅元，但弹出非阻塞警告「重合检测失败，未校验与已有栅元重叠」+ `console.warn` 记录原因——`quickCell.ts` 新增 `quickAddCheckFailedMessage`；GeometryTab 新增 `quickCheckWarn` state + FloatingDialog 警告。**红→绿**：`gui/test/quickAddCheckWarn.test.ts`（2，纯函数文案 + 源码级守卫 catch 不再静默）。
+- **T3（P1，SweepDialog doRun 无超时/无取消）**：doRun 加 `AbortController` + `SWEEP_RUN_TIMEOUT_MS=120s` 超时兜底（超时 abort 提示「扫描超时（120s），已中止」）+ **「取消」按钮**（点击 abort 进行中的请求，中止后清理状态）；后端拒绝超预算请求时显示后端错误消息（既有行为，测试 pin）。**红→绿**：`gui/test/sweepDialogCancel.test.tsx`（3：取消按钮 / 120s 超时 / 后端错误透传；mock 以 `signal.reason` reject 模拟真实 fetch，jsdom 里 DOMException 非 Error 实例故直接透传 reason）。
+- **T4（P2，Preview3D 死代码 + 生产 console.log 残留）**：删 `dbgLog` state + `log()` 助手（从未调用/从未渲染）与 `console.log("[3D] initScene entry/start/done")`；真实错误 `console.error`（init error / STL load error / overlap check failed）保留。**红→绿**：`gui/test/preview3dDeadLog.test.ts`（3，源码级守卫：无 dbgLog/initScene console.log，真实 error 保留）。
+- 门禁 vitest **407/0**（基线 388 + 新增 19）+ tsc EXIT 0 + vite build EXIT 0；未 commit（等 PM 统一提交）。
+
+## P0 修复：3D 预览窗口快捷建栅元丢补集决策（2026-08-23，用户实测「添加新栅元后真空栅元仍显示重合，关闭重开预览才正常」）
+
+> 根因（只读诊断已确认）：3D 预览窗口打开时一次性取走 deck 快照（`readPreview3DData()` 读桥后 removeItem，`windows.ts`；`Preview3DWindow.tsx` useState 只初始化一次），此后预览窗口数据**永不与主窗口 deck 同步**。预览窗口内快捷建栅元 + 补集决策时，`Preview3DWindow.handleQuickCellGenerate` **只 append 新栅元、丢掉 `result.existingExprPatch`**（被侵占栅元表达式没改成 `...#新`）→ 预览侧真空栅元还是旧表达式 → `runOverlapCheck` POST 旧快照给 `/api/check-overlap` → 返回陈旧重合。关闭重开 → 重新从主 deck 写桥 → 真空带 `#新` → 正常。**真空只是最常见受害者**（真空不渲染 STL 只能靠面板感知）；指纹缓存只是放大器非根因。
+
+- **最小修复（必做，已完成）**：`gui/src/utils/quickCell.ts` 新增纯函数 `applyExistingExprPatch(cells, patch)`（num 命中 patch 的栅元 surfaces 替换为 p.surfaces，未命中/空 patch 原样返回，不改原数组）；`gui/src/components/Preview3DWindow.tsx` `handleQuickCellGenerate` 在追加新栅元**之前**先 `applyExistingExprPatch(prev, result.existingExprPatch || [])`（照 `GeometryTab.tsx:211-216` 主窗口补丁逻辑）。修复后：预览窗口内快捷建栅元 + 选补集决策 → 预览侧被侵占栅元表达式与主窗口一致（带 `#新`）→ 「重新检测重合」不再报陈旧重合。
+- **测试（红→绿）**：`gui/test/existingExprPatch.test.ts`（4：命中替换/多 patch/空 patch 原引用/数字字符串混用）+ `gui/test/preview3dWindowPatch.dom.test.tsx`（1：mock Preview3D 捕获 props，收到带 existingExprPatch 的 quickCellGenerate → 断言 deckCells 中命中 patch 的栅元 surfaces 已替换且新栅元追加；初跑红 `'-1'` 未变 `'-1 #4'`）。门禁 vitest **407/0**（402 基线 + 新增 5）+ tsc EXIT 0 + vite build EXIT 0。
+- **增强（可选，未做，方案待 PM 定夺）**：主窗口 deck 变更时同步到已打开的预览窗口（根治「不同步」）。方案：主窗口 deck.cells/surfaces/tr_cards 变化时经 `windows.ts` 写预览桥 + storage 事件，`Preview3DWindow` 监听刷新。**风险**：预览窗口内快捷建栅元已写回主窗口 deck（emitQuickCellGenerate → 主窗口应用补丁 + 追加），双向同步需防环路/竞态、且会改变「预览窗口=打开瞬间快照」的既有语义；改动面含 windows.ts 桥 + Preview3DWindow 监听 + 主窗口 deck-change effect，中高风险，本批不强做。

@@ -11,9 +11,12 @@
 
 from __future__ import annotations
 
+import logging
 import math
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 try:
     from quadric import sq_to_gq, gq_aabb, classify_gq
@@ -881,7 +884,9 @@ def _tangent_plane_mesh(ast, surfaces_by_num, tr_cards, B, segments: int = 48):
                     center_g = origin + center_g @ rotate
                 verts_arr = center_g + lam * (verts_arr - center_g)
         return verts_arr, tri_arr
-    except Exception:
+    except Exception as e:
+        # 切线平面法快路径异常 → 记录原因后回退 marching cubes（保留回退行为）。
+        logger.warning("切线平面法快路径失败，回退 marching cubes: %s", e)
         return None
 
 
@@ -898,14 +903,8 @@ def mesh_cell_polydata(ast, surfaces_by_num, tr_cards, B, res: int = None):
     紧盒子内按 cell span 自适应 64/96/128 细化；32³ 粗扫找不到时用
     cell_aabb 紧盒兜底再扫一遍。
     """
-    # 兼容旧签名 mesh_cell_polydata(ast, surfaces_by_num, B, res)：
-    # 旧调用的第三参是 bound 数值而不是 tr_cards dict。
-    if isinstance(tr_cards, (int, float)) and not isinstance(tr_cards, bool):
-        old_b = float(tr_cards)
-        old_res = int(B) if isinstance(B, (int, float)) else None
-        tr_cards = {}
-        B = old_b
-        res = old_res
+    # 新签名 mesh_cell_polydata(ast, surfaces_by_num, tr_cards, B, res)：全部调用方
+    # 已迁移（grep 全仓库确认无旧签名「第三参=bound 数值」调用方），旧 shim 已移除。
     tr_cards = tr_cards or {}
 
     # 切线平面法快路径：单个内侧椭球/球/圆柱 + 平面封口 → 水密光滑多面体

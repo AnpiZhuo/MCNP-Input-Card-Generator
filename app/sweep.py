@@ -11,14 +11,26 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import re
+import tempfile
 
 try:
     from mctal_parser import parse_mctal
 except ImportError:  # 测试/直接 import app 包时在 app/ 下
     from app.mctal_parser import parse_mctal
 
+logger = logging.getLogger(__name__)
+
 _NUM = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
+SWEEP_MAX_COMBOS = 50               # 组合数上限（对齐 api.yaml）
+SWEEP_PER_RUN_TIMEOUT = 300         # 秒：单组合 MCNP 执行超时
+SWEEP_TOTAL_BUDGET = 1800           # 秒：总时长预算（30 分钟，命令硬性超时纪律）
+# sweep 摘要（manifest + TSV）持久化根目录；临时 run 目录清理后仍可被
+# sweep-dashboard / 前端下载引用（每个 sweep 一个 <stamp> 子目录，小文件）。
+SWEEP_SUMMARY_ROOT = os.path.join(tempfile.gettempdir(), "mcnp_sweep_summaries")
 _KEFF_FINAL_RE = re.compile(
     r"final\s+estimated\s+combined\s+collision\s*/\s*absorption\s*/\s*track[\s-]"
     r"length\s+keff[^=:\d]*[=:]?\s*(" + _NUM + r")",
@@ -43,8 +55,9 @@ def parse_keff(text: str) -> float | None:
             means = r["keff"].get("mean") or []
             if means:
                 return float(means[-1])
-    except Exception:
-        pass
+    except Exception as e:
+        # 分层兜底设计：mctal 解析失败不阻断，走正则继续；但不再静默。
+        logger.warning("parse_keff: parse_mctal 解析失败，回退正则兜底（%s）", e)
     for re_ in (_KEFF_FINAL_RE, _KEFF_OPENMC_RE, _KEFF_FALLBACK_RE):
         m = re_.search(text)
         if m:
@@ -108,14 +121,66 @@ def apply_parameters(text: str, params: dict, schema: list[dict]) -> str:
 def _substitute(m: re.Match, value: str) -> str:
     if m.lastindex is None or m.lastindex < 1:
         return value
-    group = m.group(1)
-    idx = m.group(0).index(group)
-    return m.group(0)[:idx] + value + m.group(0)[idx + len(group):]
+    # 用 m.start(1)/m.end(1) 精确定位组 1（相对 group(0) 的偏移 = 绝对偏移 − m.start(0)），
+    # 避免 group(0) 中更早出现的同文本被 .index() 命中而错位
+    # （如模式 r"\d(\d+)cm" 匹配 "55cm" 时 group(1) 是第二个 5）。
+    g0_start = m.start(0)
+    start = m.start(1) - g0_start
+    end = m.end(1) - g0_start
+    return m.group(0)[:start] + value + m.group(0)[end:]
 
 
 def run_dir_name(index: int) -> str:
     """运行目录名：run_001 / run_010。"""
     return f"run_{index:03d}"
+
+
+def sweep_budget_status(num_combos, per_run_timeout=SWEEP_PER_RUN_TIMEOUT,
+                        total_budget=SWEEP_TOTAL_BUDGET):
+    """检查 sweep-run 是否超出总时长预算（命令硬性超时纪律）。
+
+    预算 = 组合数 × 单次超时。组合数超上限或预计总耗时超过预算 → 返回
+    ``{"code": "budget_exceeded", "message": ...}``（含当前组合数/预算说明）；
+    可执行返回 ``None``。
+    """
+    if num_combos > SWEEP_MAX_COMBOS:
+        message = f"组合数 {num_combos} 超上限 {SWEEP_MAX_COMBOS}，请缩小参数范围"
+    else:
+        expected = num_combos * per_run_timeout
+        if expected <= total_budget:
+            return None
+        message = (
+            f"组合数 {num_combos} × 单次超时 {per_run_timeout}s = 预计耗时 "
+            f"{expected}s（{expected // 60} 分钟），超过总预算 "
+            f"{total_budget}s（{total_budget // 60} 分钟）。"
+            f"请缩小参数范围或缩短单次运行时间。"
+        )
+    return {"code": "budget_exceeded", "message": message}
+
+
+def persist_sweep_summary(base_dir, manifest, summary_tsv):
+    """把 sweep 摘要（manifest + TSV）拷贝到稳定摘要目录。
+
+    摘要落在 ``SWEEP_SUMMARY_ROOT/<base_dir 名>/``（小文件）；调用方随后
+    ``cleanup_sweep_dir(base_dir)`` 删除含 run_XXX 子目录与大文件的临时目录。
+    返回 ``(summary_base, manifest_path, tsv_path)``。
+    """
+    stamp = os.path.basename(base_dir) or "sweep"
+    summary_base = os.path.join(SWEEP_SUMMARY_ROOT, stamp)
+    os.makedirs(summary_base, exist_ok=True)
+    manifest_path = os.path.join(summary_base, "sweep-manifest.json")
+    tsv_path = os.path.join(summary_base, "sweep-summary.tsv")
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    with open(tsv_path, "w", encoding="utf-8") as f:
+        f.write(summary_tsv)
+    return summary_base, manifest_path, tsv_path
+
+
+def cleanup_sweep_dir(base_dir):
+    """递归删除 sweep 临时目录（含 run_XXX 子目录与 MCNP 大文件）。失败忽略。"""
+    import shutil
+    shutil.rmtree(base_dir, ignore_errors=True)
 
 
 def build_manifest(base_file: str, language: str, parameters: list[dict],
@@ -146,4 +211,5 @@ def build_summary_tsv(parameters: list[dict], records: list[dict]) -> str:
 __all__ = [
     "parse_keff", "parse_keff_history", "cartesian", "apply_parameters", "run_dir_name",
     "build_manifest", "build_summary_tsv",
+    "sweep_budget_status", "persist_sweep_summary", "cleanup_sweep_dir",
 ]

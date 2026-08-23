@@ -93,6 +93,17 @@ def parse_mctal(text: str) -> dict:
 
     # tally / ktally 块
     block_re = re.compile(r"^(?:1?tally|ktally)\s+(\d+)", re.IGNORECASE)
+
+    # 顶层 nps：从 mctal 头部（第一个 tally/ktally 块之前）解析；
+    # 头部无 nps 则不输出该键（不再硬编码死字段 None）。
+    top_nps = None
+    for header_line in lines:
+        if block_re.match(header_line.strip()):
+            break
+        nps_m = re.search(r"nps\s*=\s*(\d+)", header_line, re.IGNORECASE)
+        if nps_m:
+            top_nps = int(nps_m.group(1))
+
     blocks: list[dict] = []
     cur: dict | None = None
     for line in lines:
@@ -140,14 +151,16 @@ def parse_mctal(text: str) -> dict:
     if version is None and not mean and not blocks:
         warnings.append("未识别到 mctal 结构（无 version/tally/ktally 标记）")
 
-    return {
+    result = {
         "status": "ok",
         "version": version,
-        "nps": None,
         "keff": keff,
         "tallies": blocks,
         "warnings": warnings,
     }
+    if top_nps is not None:
+        result["nps"] = top_nps
+    return result
 
 
 __all__ = ["parse_mctal"]

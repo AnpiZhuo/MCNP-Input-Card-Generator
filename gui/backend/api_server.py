@@ -20,6 +20,19 @@ if APP_DIR not in sys.path:
 if PROJECT_DIR not in sys.path:
     sys.path.insert(0, PROJECT_DIR)
 
+
+def _import_app(module, base_dir=APP_DIR):
+    """惰性导入 app/（或指定目录）下模块：先确保目录在 sys.path。
+
+    集中替代 handler 内重复的 ``sys.path.insert(0, ...)`` + 惰性 import；
+    保持「不模块级 import 后端污染」语义不变——模块级只 import 核心引擎，
+    FreeCAD/step 等重量依赖仍延迟到 handler 内首次调用时导入。
+    """
+    if base_dir not in sys.path:
+        sys.path.insert(0, base_dir)
+    return __import__(module)
+
+
 from models import (
     BasicSettings, CellData, CellRow, FmeshDefinition, MaterialData, MaterialRow,
     PTRACSettings, SourceData, TallySettings, TallyDefinition, AdvancedSettings, DeckData
@@ -29,6 +42,9 @@ from generator.parsers import parse_inp_text
 from xsdir_db import DB as xsdir_db
 
 PORT = 5001
+
+# 快捷建栅元重合检查：新栅元几乎完全在已有栅元内（重合占比超此阈值）→ 推荐已有让位。
+RECOMMEND_EXISTING_HOLE_FRAC = 0.98
 
 
 def _meshtal_worker_cmd() -> list:
@@ -696,8 +712,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
     def _handle_sweep_plan(self):
         """参数扫描规划：笛卡尔组合 + 应用到 deck 文本（不执行 MCNP）。"""
         try:
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
-            import sweep
+            sweep = _import_app("sweep")
             data = self._read_body() or {}
             deck_text = data.get("deck") or ""
             parameters = data.get("parameters") or []
@@ -711,71 +726,76 @@ class MCNPHandler(BaseHTTPRequestHandler):
             self._err(str(e))
 
     def _handle_sweep_run(self):
-        """参数扫描执行：逐组合写 INP → 调 MCNP → 提取 keff → 汇总 TSV。"""
+        """参数扫描执行：逐组合写 INP → 调 MCNP → 提取 keff → 汇总 TSV。
+
+        总时长预算纪律：组合数 × 单次超时 ≤ 预算（默认 30 分钟），超预算/超上限
+        直接拒绝（code="budget_exceeded" + 中文消息）；单组合保持 300s 超时。
+        临时目录在成功/失败后清理（摘要先拷到稳定目录再删）。
+        """
         try:
+            import glob
+            import shutil
             import subprocess
             import tempfile
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
-            import sweep
+            sweep = _import_app("sweep")
             data = self._read_body() or {}
             deck_text = data.get("deck") or ""
             parameters = data.get("parameters") or []
             combos = sweep.cartesian(parameters)
-            if len(combos) > 50:
-                self._ok({"status": "error",
-                          "message": f"组合数 {len(combos)} 超上限 50，请缩小参数范围"})
+            budget = sweep.sweep_budget_status(len(combos))
+            if budget is not None:
+                self._ok({"status": "error", **budget})
                 return
             exe = _find_mcnp_exe()
             if not exe:
                 self._ok({"status": "error", "message": "未检测到 MCNP 可执行文件"})
                 return
             base_dir = tempfile.mkdtemp(prefix="mcnp_sweep_")
-            records = []
-            for i, combo in enumerate(combos, 1):
-                inp = sweep.apply_parameters(deck_text, combo, parameters)
-                run_dir = os.path.join(base_dir, sweep.run_dir_name(i))
-                os.makedirs(run_dir, exist_ok=True)
-                inp_path = os.path.join(run_dir, "sweep.i")
-                with open(inp_path, "w", encoding="utf-8") as f:
-                    f.write(inp)
-                rec = {"index": i, "parameters": combo, "inputFile": inp_path,
-                       "outputDir": run_dir, "exitCode": None, "keff": None}
-                try:
-                    proc = subprocess.run(
-                        [exe, "i=sweep.i"], cwd=run_dir,
-                        capture_output=True, text=True, timeout=300,
-                    )
-                    rec["exitCode"] = proc.returncode
-                    rec["keff"] = sweep.parse_keff(
-                        (proc.stdout or "") + "\n" + (proc.stderr or ""))
-                except subprocess.TimeoutExpired:
-                    pass
-                # 收敛序列（仪表盘小图）：优先读 run 目录里的 mctal
-                try:
-                    import glob
-                    mctal_paths = sorted(glob.glob(os.path.join(run_dir, "mctal*")))
-                    if mctal_paths:
-                        with open(mctal_paths[0], "r", encoding="utf-8",
-                                  errors="replace") as f:
-                            hist = sweep.parse_keff_history(f.read())
-                        if hist:
-                            rec["convergence"] = hist
-                            if hist.get("std"):
-                                rec["keffStd"] = hist["std"][-1]
-                except Exception:
-                    pass
-                records.append(rec)
-            tsv = sweep.build_summary_tsv(parameters, records)
-            manifest = sweep.build_manifest("sweep.i", "mcnp", parameters, records)
-            manifest_path = os.path.join(base_dir, "sweep-manifest.json")
             try:
-                with open(manifest_path, "w", encoding="utf-8") as f:
-                    json.dump(manifest, f, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
-            self._ok({"status": "ok", "baseDir": base_dir, "records": records,
-                      "summaryTsv": tsv, "manifest": manifest,
-                      "manifestPath": manifest_path})
+                records = []
+                for i, combo in enumerate(combos, 1):
+                    inp = sweep.apply_parameters(deck_text, combo, parameters)
+                    run_dir = os.path.join(base_dir, sweep.run_dir_name(i))
+                    os.makedirs(run_dir, exist_ok=True)
+                    inp_path = os.path.join(run_dir, "sweep.i")
+                    with open(inp_path, "w", encoding="utf-8") as f:
+                        f.write(inp)
+                    rec = {"index": i, "parameters": combo, "inputFile": inp_path,
+                           "outputDir": run_dir, "exitCode": None, "keff": None}
+                    try:
+                        proc = subprocess.run(
+                            [exe, "i=sweep.i"], cwd=run_dir,
+                            capture_output=True, text=True, timeout=300,
+                        )
+                        rec["exitCode"] = proc.returncode
+                        rec["keff"] = sweep.parse_keff(
+                            (proc.stdout or "") + "\n" + (proc.stderr or ""))
+                    except subprocess.TimeoutExpired:
+                        pass
+                    # 收敛序列（仪表盘小图）：优先读 run 目录里的 mctal
+                    try:
+                        mctal_paths = sorted(glob.glob(os.path.join(run_dir, "mctal*")))
+                        if mctal_paths:
+                            with open(mctal_paths[0], "r", encoding="utf-8",
+                                      errors="replace") as f:
+                                hist = sweep.parse_keff_history(f.read())
+                            if hist:
+                                rec["convergence"] = hist
+                                if hist.get("std"):
+                                    rec["keffStd"] = hist["std"][-1]
+                    except Exception:
+                        pass
+                    records.append(rec)
+                tsv = sweep.build_summary_tsv(parameters, records)
+                manifest = sweep.build_manifest("sweep.i", "mcnp", parameters, records)
+                # 摘要（manifest + TSV）拷到稳定目录后清理临时目录（T8）
+                summary_base, manifest_path, _ = sweep.persist_sweep_summary(
+                    base_dir, manifest, tsv)
+                self._ok({"status": "ok", "baseDir": summary_base,
+                          "records": records, "summaryTsv": tsv,
+                          "manifest": manifest, "manifestPath": manifest_path})
+            finally:
+                shutil.rmtree(base_dir, ignore_errors=True)
         except Exception as e:
             self._err(str(e))
 
@@ -790,9 +810,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 return
             with open(manifest_path, "r", encoding="utf-8-sig") as f:
                 manifest = json.load(f)
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
             import glob
-            import sweep
+            sweep = _import_app("sweep")
             for rec in manifest.get("runs", []):
                 if rec.get("convergence"):
                     continue
@@ -820,8 +839,9 @@ class MCNPHandler(BaseHTTPRequestHandler):
         """两段 INP 文本行级 diff（unified 格式 + 增删统计）。"""
         try:
             data = self._read_body() or {}
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
-            from diff_inp import diff_stats, unified_diff_text
+            _diff = _import_app("diff_inp")
+            diff_stats = _diff.diff_stats
+            unified_diff_text = _diff.unified_diff_text
             text_a = data.get("text_a", "")
             text_b = data.get("text_b", "")
             diff = unified_diff_text(text_a, text_b)
@@ -851,9 +871,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 self._ok(cached)
                 return
 
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
-            from step_importer import StepImporter
-            from freecad_preview import FreeCADEngine
+            StepImporter = _import_app("step_importer").StepImporter
+            FreeCADEngine = _import_app("freecad_preview").FreeCADEngine
             freecad_bin = StepImporter.detect_freecad()
             if not freecad_bin:
                 self._ok({"status": "ok", "overlaps": [], "truncated": False,
@@ -904,9 +923,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 return
             new_nums = [int(c.get("number", 0) or 0) for c in new_cells]
 
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
-            from step_importer import StepImporter
-            from freecad_preview import FreeCADEngine
+            StepImporter = _import_app("step_importer").StepImporter
+            FreeCADEngine = _import_app("freecad_preview").FreeCADEngine
             freecad_bin = StepImporter.detect_freecad()
             if not freecad_bin:
                 self._ok({"status": "ok", "overlaps": [], "recommended": "new_hole",
@@ -922,9 +940,9 @@ class MCNPHandler(BaseHTTPRequestHandler):
                                   check_overlaps=True, focus_nums=new_nums)
             engine.cleanup()
             overlaps = engine.overlaps
-            # 任一重合占比 >0.98（新栅元几乎完全在已有内）→ 已有让位
+            # 任一重合占比超阈值（新栅元几乎完全在已有内）→ 已有让位
             recommended = "existing_hole" if any(
-                float(o.get("volumeFraction", 0)) > 0.98 for o in overlaps
+                float(o.get("volumeFraction", 0)) > RECOMMEND_EXISTING_HOLE_FRAC for o in overlaps
             ) else "new_hole"
             self._ok({"status": "ok", "overlaps": overlaps,
                       "recommended": recommended,
@@ -1592,8 +1610,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
             # Import generate_step
             step_path = os.path.join(tempfile.gettempdir(), "mcnp_geometry.step")
             try:
-                sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
-                from generate_step import generate_step
+                _gen = _import_app("generate_step", os.path.dirname(__file__))
+                generate_step = _gen.generate_step
                 step_path = generate_step(surfaces.split("\\n") if surfaces else [])
             except ImportError:
                 # Fallback: write surfaces as comments in STEP
@@ -1702,8 +1720,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 return
 
             # 1. 检测 FreeCAD
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
-            from step_importer import StepImporter
+            StepImporter = _import_app("step_importer").StepImporter
             freecad_bin = StepImporter.detect_freecad()
             if not freecad_bin:
                 self._ok({"stl_files": {}, "message": "未检测到 FreeCAD，请安装后重试"})
@@ -1789,9 +1806,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
         STL 不参与。无会话时提示先做 3D 预览。
         """
         try:
-            _app_dir = os.path.join(os.path.dirname(__file__), "..", "..", "app")
-            if _app_dir not in sys.path: sys.path.insert(0, _app_dir)
-            from stl_cross_section import cross_section_from_stl
+            cross_section_from_stl = _import_app("stl_cross_section").cross_section_from_stl
             data = self._read_body()
             cell_nums = data.get("cellNums") or []
             plane = data.get("plane") or {"A": 0, "B": 0, "C": 1, "D": 0}
@@ -1983,8 +1998,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             if not os.path.isfile(mctal_path):
                 self._err(f"mctal 文件不存在：{mctal_path}")
                 return
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
-            from mctal_parser import parse_mctal
+            parse_mctal = _import_app("mctal_parser").parse_mctal
             with open(mctal_path, "r", encoding="utf-8", errors="replace") as f:
                 result = parse_mctal(f.read())
             keff = result.get("keff") or {}

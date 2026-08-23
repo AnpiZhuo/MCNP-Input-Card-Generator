@@ -10,6 +10,10 @@ import { generateInp } from "../utils/dataCollector";
 import FloatingDialog from "./FloatingDialog";
 import SweepDashboard from "./SweepDashboard";
 
+/** doRun 请求级超时（ms）：后端负责预算拒绝/请求级超时（返回明确错误消息），
+ *  前端超时只作兜底，防止大组合 fetch 无限挂起。MCNP 逐组合运行较久，故给 120s。 */
+const SWEEP_RUN_TIMEOUT_MS = 120000;
+
 interface ParamRow { name: string; pattern: string; values: string; }
 interface RunRecord {
   index: number;
@@ -49,6 +53,8 @@ export default function SweepDialog({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [view, setView] = useState<"table" | "dash">("dash");
+  // T3：doRun 进行中的 AbortController（供「取消」按钮中止请求；完成后/中止后置 null）
+  const [runAbort, setRunAbort] = useState<AbortController | null>(null);
 
   const gen = async () => {
     setGenBusy(true); setErr("");
@@ -83,16 +89,32 @@ export default function SweepDialog({ onClose }: { onClose: () => void }) {
 
   const doRun = async () => {
     setErr(""); setBusy(true); setRun(null);
+    // T3：可取消 + 超时兜底（后端拒绝超预算请求时由 catch 显示后端错误消息）
+    const ctrl = new AbortController();
+    setRunAbort(ctrl);
+    const timer = setTimeout(() => {
+      if (!ctrl.signal.aborted) ctrl.abort(new DOMException("扫描超时（120s），已中止", "TimeoutError"));
+    }, SWEEP_RUN_TIMEOUT_MS);
     try {
       const r = await fetch(apiUrl("/api/sweep-run"), {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(payload), signal: ctrl.signal,
       });
       const j = await r.json();
       if (j.status === "error") throw new Error(j.message);
       setRun({ baseDir: j.baseDir, records: j.records, summaryTsv: j.summaryTsv });
-    } catch (e: any) { setErr(errorHint(e, "扫描失败")); }
-    finally { setBusy(false); }
+    } catch (e: any) {
+      if (ctrl.signal.aborted) {
+        // 主动取消/超时：用固定文案（不要取 e.message，AbortError.message 无用户语义）
+        setErr((e && e.name === "TimeoutError") ? "扫描超时（120s），已中止" : "扫描已取消");
+      } else {
+        setErr(errorHint(e, "扫描失败"));
+      }
+    } finally {
+      clearTimeout(timer);
+      setRunAbort(null);
+      setBusy(false);
+    }
   };
 
   const downloadTsv = () => {
@@ -112,6 +134,8 @@ export default function SweepDialog({ onClose }: { onClose: () => void }) {
       React.createElement("button", { className: "btn btn-ghost btn-sm", onClick: onClose }, "关闭"),
       React.createElement("button", { className: "btn btn-ghost btn-sm", onClick: doPlan, disabled: busy || !baseText },
         busy ? "处理中…" : "规划预览"),
+      // T3：取消按钮——扫描进行中点击 abort 请求，中止后清理状态
+      runAbort ? React.createElement("button", { className: "btn btn-danger btn-sm", onClick: () => runAbort.abort(), disabled: !busy }, "取消") : null,
       React.createElement("button", { className: "btn btn-primary btn-sm", onClick: doRun, disabled: busy || !baseText || comboCount > 50 },
         busy ? "扫描中…" : `开始扫描（${comboCount} 组合）`),
     ),

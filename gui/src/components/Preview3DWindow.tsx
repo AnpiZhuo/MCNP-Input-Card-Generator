@@ -7,7 +7,7 @@
 import React, { useEffect, useState } from "react";
 import Preview3D from "./Preview3D";
 import { readPreview3DData, closeCurrentWindow, clearStlSession } from "../utils/windows";
-import { appendCardText, type QuickCellResult } from "../utils/quickCell";
+import { appendCardText, applyExistingExprPatch, type QuickCellResult } from "../utils/quickCell";
 
 export default function Preview3DWindow() {
   const [data] = useState(() => readPreview3DData());
@@ -26,8 +26,11 @@ export default function Preview3DWindow() {
   const handleQuickCellGenerate = (result: QuickCellResult) => {
     setSurfaces((prev) => appendCardText(prev, result.surfacesText));
     setTrCards((prev) => appendCardText(prev, result.trCardsText));
+    // P0：追加新栅元之前先应用补集决策的已有栅元表达式补丁（被侵占栅元 → `...#新`），
+    // 否则预览侧旧表达式会 POST /api/check-overlap 返回陈旧重合（真空栅元最常见受害者）。
+    // 照 GeometryTab.tsx:211-216 主窗口已实现的补丁逻辑（applyExistingExprPatch 纯函数）。
     setDeckCells((prev) => [
-      ...prev,
+      ...applyExistingExprPatch(prev, result.existingExprPatch || []),
       ...result.cells.map((c) => ({ num: c.num, mat: c.mat, comment: c.comment, surfaces: c.surfaces })),
     ]);
     import("../utils/windows").then((m) => m.emitQuickCellGenerate(result));

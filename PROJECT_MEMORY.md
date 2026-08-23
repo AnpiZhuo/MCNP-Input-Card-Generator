@@ -14,7 +14,17 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
-## S1 当前批次：v1.7.3 第二批发版（keff 仪表盘 / 材料搜索 / 示例库 / INP 对比，2026-08-23 已提交并部署）
+## S1 当前批次：栅元列表批量编辑（前端，2026-08-23 施工完成，未 commit）
+- 一句话状态：**栅元列表批量编辑功能落地**——勾选若干栅元 → 「⚡ 批量编辑」按钮由灰变亮 → 弹窗批量改材料号/密度/IMP/高级参数；曲面表达式**只能追加**（锁死提示「无法批量更改曲面表达式，只可添加」+ 后缀输入，确认后追加到勾选栅元曲面表达式末尾）。门禁 vitest **387/0**（含 colorize 性能 flaky 复跑通过）/ tsc EXIT 0 / vite build 成功；纯前端改动，无新增后端端点。
+- **同日技术债清理批（PM 派发，未 commit，测试先行红→绿）**：T1 批量编辑勾选状态「数组下标 → 栅元 num」（`batchCellEdit.ts` 新增 `toggleCellNum/selectedCellsFromNums/applyBatchEditToRows/pruneSelectedNums`，重排/删除后仍改对原勾选栅元；DOM 集成测试 勾选→拖拽重排→批量编辑）；T2 快捷建栅元重合检测 catch 不再静默（`quickAddCheckFailedMessage` + 非阻塞警告弹窗 + console.warn）；T3 SweepDialog doRun 加 `AbortController` + 120s 超时 + 「取消」按钮；T4 Preview3D 删 `dbgLog`/`log()` 死代码与 initScene 生产 console.log。
+- **同日 P0 修复（用户实测「添加新栅元后真空栅元仍显示重合，关闭重开预览才正常」）**：根因=Preview3DWindow 打开时一次性取 deck 快照，预览窗口内快捷建栅元 + 补集决策只 append 新栅元、丢 `existingExprPatch`（被侵占栅元表达式没改 `...#新`）→ 预览侧旧快照 POST check-overlap 报陈旧重合（真空只是最常见受害者）。修复：`quickCell.ts` 新增 `applyExistingExprPatch` 纯函数，`Preview3DWindow.handleQuickCellGenerate` 追加前先应用补丁（照 GeometryTab:211-216）；`existingExprPatch.test.ts`(4) + `preview3dWindowPatch.dom.test.tsx`(1) 红→绿。**增强「主窗口 deck 同步到预览窗口」未做，方案+风险已报 PM 定夺**。
+- **门禁 vitest 407/0（基线 388 + 新增 19）/ tsc EXIT 0 / vite build EXIT 0**。改动清单 docs/frontend-changes.md 已补 08-18/08-22/08-23 五批缺失条目 + 本批 T1-T4 + P0。
+- **批量编辑**：`gui/src/utils/batchCellEdit.ts`（纯函数：`applyBatchCellEdit` 空字段=不改、曲面永不覆盖只追加；`batchEditEmpty` 判空控确认钮）+ `gui/src/components/BatchCellEditDialog.tsx`（材料下拉自动带出密度 / IMP:N·P·E / 高级参数折叠区 / 锁死的曲面提示 + 追加输入）。
+- **接入** `gui/src/components/GeometryTab.tsx`：栅元列表新增勾选列 + 表头全选/取消全选 + 「⚡ 批量编辑」按钮（无勾选时灰色禁用，勾选后可点）；删除/同步行变化自动清理失效勾选；local→deck 走现有 patch 管线。
+- **约定（用户已确认）**：弹窗留空字段 = 不修改；曲面表达式只做「追加」（空格分隔）。
+- **测试**：`gui/test/batchCellEdit.test.ts`（9 用例）+ `gui/test/batchCellEditDialog.dom.test.tsx`（3 用例）。
+
+## S1b（上一批次）当前批次：v1.7.3 第二批发版（keff 仪表盘 / 材料搜索 / 示例库 / INP 对比，2026-08-23 已提交并部署）
 - 一句话状态：**v1.7.3 第二次打包部署完成**（主 exe 含全部新前端，sidecar 25,235,799B @ 13:21）；门禁 pytest **595/0** / vitest **376/0** / tsc 0；api.yaml **36** 端点。
 - **ef9499f / 76b0c76（第六轮，用户定稿 3D 预览深色方案，已打包部署）**：3D 预览固定黑色背景不受亮色主题影响——Preview3DWindow 根容器硬编码 #000/#fff + preview3d-root 作用域类；global.css 作用域内覆盖 --bg-*/--text-* 为黑底白字系、.form-select/option 黑底白字、强调色 --accent 固定红色系 #FF4D6D（用户：文字不强制全白，红色/强调保留）；场景画布背景 0x000000。门禁 vitest 376 / tsc 0；已部署（主 exe 6,561,792B @ 14:07:32）。
 - **b1e6ebe（第五轮主题修复，已打包部署）**：3D 预览亮色主题全面可读——Preview3DWindow 根容器硬编码 #0a0a1e 蓝黑底+白字 → var(--bg-deepest)/var(--text-primary)；Preview3D 侧栏/面板/输入框/边框/标题硬编码 rgba(10,10,30,…)/rgba(0,0,0,0.3)/rgba(255,255,255,0.04~0.1)/rgba(241,241,249,0.8) → 主题变量；QuickCellForm 材料下拉 select 加 form-select（option 下拉列表走 var(--bg-surface)/var(--text-primary)，不再黑底深字）；3D 场景画布背景与模态遮罩保留深色。门禁 vitest 376 / tsc 0；已部署（主 exe 6,561,280B @ 13:53:45，sidecar 未变）。
@@ -54,10 +64,11 @@
 
 ## S2 工作区与分支
 
-- **分支**：`feat/meshtal-volume`（主分支 `main`）。
-- **工作树未提交改动**（git status 快照）：
-  - 修改：`PROJECT_MEMORY.md`、`docs/CHANGELOG.md`、`docs/contracts/geometry-check.md`、`app/_freecad_cross_section_worker.py`、`app/_freecad_csg_worker.py`、`app/freecad_preview.py`、`tests/unit/test_preview_bound.py`、`tests/integration/test_preview3d_worker.py`、`gui/mcnp_sidecar.spec`
-  - 新增：`app/quadric.py`、`app/voxel_csg.py`、`app/mc.py`、`tests/unit/test_voxel_csg.py` —— GQ/SQ 3D 预览修复施工（去 vtk + TR 变换），归属已确认。
+- **分支**：`main`。
+- **工作树未提交改动**（git status 快照，批量编辑栅元批次）：
+  - 修改：`gui/src/components/GeometryTab.tsx`（栅元列表批量编辑接入）
+  - 新增：`gui/src/components/BatchCellEditDialog.tsx`、`gui/src/utils/batchCellEdit.ts`、`gui/test/batchCellEdit.test.ts`、`gui/test/batchCellEditDialog.dom.test.tsx`
+  - 说明：`gui/test/volume/__snapshots__/volumeShader.snapshot.test.ts.snap` 仅行尾 LF/CRLF 差异（非内容改动，环境产物，勿提交）；此前 `app/*.py` 等相关改动已提交，故不再列出。
 - **版本四处+锁文件**：tauri.conf.json / package.json / Cargo.toml / README 徽章 / Cargo.lock 恒 **1.7.2** 一致。
 
 ## S3 进行中任务 / 待办
@@ -103,6 +114,7 @@
   - **校验规则交叉核对**（2026-08-22）：`docs/contracts/validator-crosscheck.md`（OWEN rules.ts 映射）+ validator 新增 ZAID 格式/份额符号/S(α,β) 目标 3 条材料级规则
   - **BEAVRS/17×17/单棒卡进测试夹具**（2026-08-22）：`tests/fixtures/owen/` 解析基线回归
   - **快捷建栅元**（几何标签页「曲面卡 & TR 变换」⚡）：RCC/RPP/SPH 一键生成曲面+TR+栅元（编号顺延/材料密度带出/imp 勾选/实时线框预览，轴固定世界原点 Z 朝上）
+  - **栅元列表批量编辑**（几何标签页栅元列表 ⚡，2026-08-23）：勾选多栅元 → 批量改材料号/密度/IMP/高级参数；曲面表达式**只能追加**（锁死提示 + 后缀输入，确认后回填到栅元表达式末尾；留空字段=不改）
   - **网格计数（FMESH/TMESH）3D 体积可视化**（独立「3D 结果」窗口）：体积渲染（`glslVersion:GLSL3`）+ 相机 offset 居中 + 图层级半透明 + 自适应色阶下限 + 不相交并集取景 + A1.2 不匹配警告横幅
   - **PTRAC 粒子径迹可视化**（独立「3D 径迹」窗口）：类型三色 × 能量渐变 + 密度抽样 + NPS 高亮 + 自动探测
   - **OUTP 输出解析/绘图/导出 CSV**（`app/outp_parser.py` 纯 stdlib 容错 + `tallyChart.ts` SVG 折线图 + BOM CSV；MCNP6.1 紧凑布局 + F1/F2/F5 泛化）
@@ -144,6 +156,7 @@
 | `gui/src/volume/` | 体积可视化 11 模块（volumeShader/VolumeRenderer/colorize/alignWorld/downsampleRequest/fmeshState/ColorLegend/FMeshForm/VolumeControlPanel/ResultWindow/surfacesAABB） | 前端 |
 | `gui/src/ptrac/` | PTRAC 径迹 3D 窗口模块（trackColors/PtracRenderer/PtracWindow 等） | 前端 |
 | `gui/src/utils/quickCell.ts` / `gui/src/components/QuickCellDialog.tsx` | 快捷建栅元：纯函数生成（编号/校验/RCC/RPP/SPH）+ 弹窗 | 前端 |
+| `gui/src/utils/batchCellEdit.ts` / `gui/src/components/BatchCellEditDialog.tsx` | 栅元列表批量编辑：纯函数应用（空字段=不改、曲面只追加）+ 弹窗 | 前端 |
 | `gui/src/utils/rawOverrides.ts` | **raw_overrides 纯函数构造（V1.7.2.2 新增，含 sdef）** | 前端 |
 | `gui/src/utils/tallyChart.ts` | **OUTP 结果 SVG 折线图纯函数（V1.7.2.2 新增）** | 前端 |
 | `gui/src/utils/DeckContext.tsx` | **单一权威表单状态**（localStorage 键 `mcnp_workspace_v1`） | 前端 |

@@ -104,7 +104,6 @@ function initScene(
   canvas: HTMLCanvasElement,
   cells: CellView[],
 ) {
-  console.log("[3D] initScene entry, canvas:", canvas?.width, canvas?.height, "parent:", canvas?.parentElement?.clientWidth);
   /* 初始场景尺寸（等 STL 加载后根据实际几何更新） */
   var sceneExtent = 10;
   var viewDist = 35;
@@ -508,8 +507,6 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   const seeThroughRef = useRef(false);
   useEffect(() => { seeThroughRef.current = seeThrough; }, [seeThrough]);
   const [csPlane, setCsPlane] = useState({A:0,B:0,C:1,D:0});
-  const [dbgLog, setDbgLog] = useState<string[]>([]);
-  const log = (msg: string) => { console.log('[3Ddbg]', msg); setDbgLog(p => [...p, msg]); };
   const [csSlices, setCsSlices] = useState<any[] | null>(null);
   // 材料选择浮层：i=cellViews 索引, x/y=点击屏幕坐标
   const [matPicker, setMatPicker] = useState<{ i: number; x: number; y: number } | null>(null);
@@ -664,9 +661,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   useEffect(() => {
     if (!canvasRef.current) return;
       try {
-      console.log("[3D] initScene start");
       ctrlRef.current = initScene(canvasRef.current, cellViews);
-      console.log("[3D] initScene done");
       } catch (e: any) {
       console.error("[3D] init error:", e);
       setInitErr("3D 初始化失败: " + (e?.message || String(e)) + "\n" + (e?.stack?.split("\n").slice(0,3).join(" | ") || ""));

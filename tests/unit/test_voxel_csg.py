@@ -270,6 +270,20 @@ def test_tangent_plane_sphere_fast_path():
     )
 
 
+def test_tangent_plane_fallback_warns_on_failure(caplog, monkeypatch):
+    """切线平面法快路径抛异常 → warn 记录回退原因，仍回退 MC 出网格。"""
+    def boom(coeffs):
+        raise ValueError("classify_gq boom")
+    monkeypatch.setattr(voxel_csg, "classify_gq", boom)
+    surfaces = _sphere_surface(1, 2.0)
+    with caplog.at_level("WARNING", logger="app.voxel_csg"):
+        vertices, triangles = voxel_csg.mesh_cell_polydata(
+            _neg(1), surfaces, {}, B=3.0, res=16)
+    assert len(vertices) > 0 and len(triangles) > 0  # MC 回退仍出网格
+    assert any("切线平面法" in rec.message or "回退" in rec.message
+               for rec in caplog.records)
+
+
 def test_tangent_plane_cylinder_fast_path():
     """圆柱 GQ（沿 z，r=1）走切线路径：三角形数少且水密。"""
     surfaces = {1: {"type": "GQ", "number": 1,

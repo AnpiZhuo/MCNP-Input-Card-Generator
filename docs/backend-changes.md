@@ -935,3 +935,99 @@ dims ni=1 nj=2 nk=2 / grid_bounds [49,-10,90]~[51,10,110]；texture 同样 ok（
 **回归测试**：`tests/unit/test_outp_parser.py` 4 用例（紧凑两列 / 能量仓+total / 多栅元 / fatal 警告）；`tests/integration/test_api_contract.py` +1（HTTP 紧凑格式，fixture `tests/fixtures/simple_tally.outp`）；前端 `gui/test/outputParser.test.ts` +2、`gui/test/tallyChart.test.ts` +3。全量 pytest **526/0** + vitest **325/0** + tsc EXIT 0。
 
 **§T 追加（2026-08-19）——泛化到全部常见 F 卡布局**：兜底解析器数据块标记从仅 `cell N` 泛化为 `(cell|surface|detector) N`（无冒号）——`surface` 块覆盖 F1/F2（面电流/面通量）、`detector` 块覆盖 F5（点探测器）、`cell` 块覆盖 F4/F6/F7/F8 等；`surfaces:`/`cell:`（冒号）不匹配，避免误进 volumes/surfaces 段。新增单测 `test_f1_surface_layout`、`test_f5_detector_layout`（+2）与前端 `outputParser.test.ts` +2。已知边界：F1/F2 角度分仓等多维表按前 3 列 best-effort 映射；MCNP6.2 系输出优先走内置 pymcnp。全量 pytest **528/0** + vitest **327/0** + tsc EXIT 0。
+
+---
+
+# 附录 U：2026-08-19~08-23 缺失批次补条（V1.7.2.2 / GQ·SQ 预览 / OWEN 四项 / 3D 重合 / v1.7.3）
+
+> 本附录补齐 `backend-changes.md` 在 §T（08-19）之后缺失的五个批次条目，按既有「根因/改动/测试/门禁」格式。详细流水见 `docs/CHANGELOG.md` + `PROJECT_MEMORY.md` §8。
+
+## §U.1 V1.7.2.2 批次（2026-08-19，用户指定批次号，文件版本恒 1.7.2）
+
+四修复进包，其中三件已在本文件 §R/§S/§T 详述，此处作批次级汇总并补 source 漏生成后端视角：
+
+| 修复 | 详述处 | 后端改动 |
+| :--- | :--- | :--- |
+| 源卡文本模式漏生成 | §CHANGELOG | 前端 `rawOverrides.ts` 补 `sdef` 键 + SourceTab 置 `textMode.sdef=true`；后端 `_apply_raw_override` 本就透传 sdef 覆盖（`_generate_sdef([])` 空源分支修复由 §R 覆盖） |
+| SDEF 表单模式漏生成 + `sdef_extra` 往返 | **§R** | `_sdef_dispatch` 增回退（无分布时 sources 优先 → 表单字段合成单源 → 全空 `[]`）+ `_sources_from_list`/`_adv_from_dict` 映射 `sdef_extra` |
+| IMP 归一化 | **§S** | `_generate_cells` 按粒子归一化补齐 imp_n/p/e（缺省补 1），raw 条件行透传 |
+| OUTP 解析/绘图/CSV | **§T** | `app/outp_parser.py` 纯 stdlib 容错 + `_handle_parse_outp` 重写（pymcnp 正确 API 优先）+ F1/F2/F5 泛化 |
+
+门禁：pytest **512→528/0** + vitest **320→327/0** + tsc EXIT 0；V1.7.2.2 终版重打包部署（sidecar 25,114,215B）。
+
+## §U.2 GQ/SQ 3D 预览后端（2026-08-22，用户指定版本 1.7.3，施工期间文件恒 1.7.2）
+
+含 GQ/SQ 曲面的栅元改用纯 numpy 体素 CSG（去 vtk），worker 跑在 FreeCAD 自带 Python（无 vtk）也能出网格：
+
+| 文件 | 改动 |
+| :--- | :--- |
+| `app/mc.py` | **新增**：纯 numpy 256-case marching cubes（Kuhn 六四面体剖分生成 case 表，顶点 0/1 中点），按构造水密 |
+| `app/voxel_csg.py` | 去 vtk：`surface_fn`/AABB 支持 `*TRn`（`p_local=rotate⁻¹·(p_global−o)`）；带 TR 有界曲面 AABB 经 8 角点变换求全局紧盒（`_transform_aabb`），无界才保守全盒；margin 按实际扫描盒间距（勿用全局 B）；res 按 cell span 自适应 64/96/128 |
+| `app/quadric.py` | sq→gq / gq AABB / gq 分类 |
+| `app/analytic_slice.py` | **新增**：2D 解析切片（切割平面逐点解析求值 + marching squares 轮廓），GQ/SQ 截面精确 |
+| `app/_freecad_csg_worker.py` | GQ/SQ 兜底换 numpy MC、`_polydata_to_fcmesh`→`_triangles_to_fcmesh`（批量 `addFacets`）、失败降级包围盒 + `栅元 N: GQ/SQ 网格化失败` 告警 |
+| `gui/mcnp_sidecar.spec` | `_keep_py` 补 `quadric.py`/`voxel_csg.py`/`mc.py` |
+
+动态测试发现并修复 3 bug（邻接索引 tile/repeat 错位、BFS 波前未去重膨胀、TR 大 bound 漏检，见 PROJECT_MEMORY §6）。测试：`tests/unit/test_voxel_csg.py`（体积/水密/朝向/TR 平移旋转/复杂 AST/空栅元/性能）+ `tests/unit/test_analytic_slice.py` 5 用例 + `tests/integration/test_preview3d_worker.py` 更新（全文件无 vtk 依赖）。门禁：pytest **544/0** + vitest **345/0** + tsc EXIT 0。
+
+## §U.3 OWEN 四项落地（2026-08-22，同日）
+
+| 项 | 后端改动 |
+| :--- | :--- |
+| BEAVRS/17×17/单棒卡夹具 | `tests/fixtures/owen/`（3 文件 + README 出处声明），解析基线 3 用例（pincell 5/266/4、17×17 15/275/5 含 `lat=1`、BEAVRS 331/2101/13） |
+| mctal 解析 | `app/mctal_parser.py` 纯 stdlib：k-eff 周期/combined、tally 块/nps/能量网格/OWEN 两列通量谱，容错 + 4 用例 |
+| 校验规则交叉核对 | `docs/contracts/validator-crosscheck.md`（OWEN rules.ts 9 条 → 覆盖映射）；`validator.py` +3 材料级规则（ZAID 格式 `\d{4,6}(\.\d{2,}[a-z])?` / 份额符号一致 / `_check_sab_target`），7 用例 |
+| 参数扫描 | `app/sweep.py` 纯 stdlib 对齐 OWEN sweepCore（cartesian/apply_parameters/parse_keff/manifest/TSV）+ `/api/sweep-plan`（规划不执行）与 `/api/sweep-run`（执行上限 50）两端点 + api.yaml 30→32，6 用例 |
+
+门禁：pytest **573/0** + vitest **348/0** + tsc EXIT 0 + 契约闸门 10/10。
+
+## §U.4 3D 重合检测后端（2026-08-22，反馈 #7，同日）
+
+| 文件 | 改动 |
+| :--- | :--- |
+| `app/overlap_classify.py` | 容差/volumeFraction/severity 表/探针 suspected 降级/截断 |
+| `app/spatial_index.py` | AABB 均匀网格候选对 O(n·k) + 新增单查询 |
+| `app/overlap_probe.py` | GQ/SQ 解析采样探针（复用 voxel_csg 求值含 TR，MC 估占比），结果标 suspected |
+| `app/_freecad_csg_worker.py` | Step 3.5 检测段：`check_overlaps`/`focus_num`(s) 入参，`overlaps`/`overlap_truncated`/`overlap_unresolved`/`zero_volume` 出参，**只增不改**既有行为 |
+| 端点 | `/api/check-overlap`（同指纹缓存 overlaps.json）+ `/api/quick-add-check`（推荐方向 new_hole/existing_hole）+ api.yaml 32→34 |
+
+测试：pytest **+14**（classify 6 / spatial 4 / probe 4）。门禁：pytest **587/0** + vitest **358/0** + tsc EXIT 0 + 契约闸门 10/10（34 端点）。
+
+## §U.5 v1.7.3（2026-08-23，用户指定版本 1.7.3）
+
+| 改动 | 端点 | 说明 |
+| :--- | :--- | :--- |
+| parse-keff | `/api/parse-keff` | mctal 目录/文件两种方式 → 5 周期收敛 + combined（`sweep.py +parse_keff_history`），api.yaml 36→37 |
+| sweep 仪表盘 | `/api/sweep-dashboard` | 历史目录重读 manifest 补全收敛序列；读 manifest 容忍 UTF-8 BOM（utf-8-sig） |
+| INP 对比 | `/api/diff-inp` | difflib unified diff + 增删统计，零新依赖 |
+| sweep-run 总时长预算 | `/api/sweep-run` | 组合数 × 单次超时 ≤ 预算（默认 30 分钟），超预算/超上限拒绝 `code="budget_exceeded"`（详见 §V.1 T3） |
+
+门禁：pytest **595/0** + vitest **376/0** + tsc EXIT 0 + 契约闸门 37 端点双向绿。
+
+# 附录 V：后端技术债清偿（2026-08-23，PM 派发全修，测试先行 红→绿）
+
+> 契约：api.yaml 端点**数量与签名不变**（37 端点，仅 sweep-run 错误信封加 `code` 字段，加性不改签名）；门禁 pytest 595 基线不破 + 漂移闸门保持绿。
+
+## §V.1 P1
+
+| 项 | 根因 | 修复 | 测试（红→绿） |
+| :--- | :--- | :--- | :--- |
+| **T3** sweep-run 无总时预算 | `_handle_sweep_run` 顺序跑 ≤50 组合 × 300s = 最长 ~4.2h，违反「命令加硬性超时」纪律 | `app/sweep.py +sweep_budget_status`（`SWEEP_MAX_COMBOS=50`/`SWEEP_PER_RUN_TIMEOUT=300`/`SWEEP_TOTAL_BUDGET=1800`）：组合数×单次超时超预算或超上限 → 拒绝 `{"status":"error","code":"budget_exceeded","message":含组合数与预算说明}`；单组合保持 300s 超时 | `test_sweep_budget_*` +4 + HTTP `test_http_sweep_run_budget_rejected`（7×300>1800 拒绝，不依赖真实 MCNP） |
+| **T7** 探针求值静默遗漏 | `overlap_probe.py` 探针求值失败 `except Exception: return None` → worker `continue`，该栅元对既不入报告也不入 unresolved | 改 `raise RuntimeError("probe_error: …")`，worker 既有 `except` 把它记入 `overlap_unresolved`（reason） | `test_probe_eval_failure_raises_probe_error`（monkeypatch `eval_cell_field` 抛异常） |
+| **T8** sweep 临时目录从不清理 | `tempfile.mkdtemp(prefix="mcnp_sweep_")` 泄漏 run_XXX 子目录与 MCNP 大文件 | `app/sweep.py +persist_sweep_summary`（manifest+TSV 拷到 `SWEEP_SUMMARY_ROOT/<stamp>/`）`+cleanup_sweep_dir`（rmtree）；`_handle_sweep_run` 成功/失败后 `shutil.rmtree(base_dir, ignore_errors=True)`（try/finally） | `test_persist_summary_then_cleanup_sweep_dir`（摘要保留 + 临时目录删除）+ `test_cleanup_sweep_dir_ignores_missing` |
+
+## §V.2 P2/可选
+
+| 项 | 修复 | 测试（红→绿） |
+| :--- | :--- | :--- |
+| **T6** `voxel_csg._tangent_plane_mesh` 宽 except 静默回退 MC | `except Exception` 加 `logger.warning` 记录回退原因（保留回退行为） | `test_tangent_plane_fallback_warns_on_failure`（monkeypatch `classify_gq` 抛异常 → 告警 + MC 仍出网格） |
+| **T9** `sweep._substitute` 用 `.index()` 找组位置 | 改 `m.start(1)/m.end(1)`（相对 group(0) 偏移 = 绝对偏移 − m.start(0)）精确定位，修掉「匹配上下文更早出现同文本」错位 | `test_substitute_precise_group_position`（`\d(\d+)cm` 匹配 "55cm" → 替换到第二个 5）+ `test_substitute_simple_cm_unchanged` |
+| **T10** `mctal_parser` 顶层 `"nps": None` 死字段 | 从 mctal 头部（首个 tally/ktally 块之前）解析 nps；解析不到则移除该键（不再硬编码 None） | `test_top_level_nps_parsed_from_header` + `test_top_level_nps_absent_when_not_in_header` |
+| **T11** api_server 7+ 处重复 `sys.path.insert` + 惰性 import | 抽 `_import_app(module, base_dir=APP_DIR)` 助手集中（`__import__` + 目录确保在 sys.path），替换全部 9 处调用点（sweep-plan/run/dashboard、diff-inp、check-overlap、quick-add-check、generate-step、preview-3d、cross-section、parse-keff）；「不模块级 import 后端污染」语义不变 | 零行为变化，靠既有测试守护（漂移闸门 HTTP 往返绿） |
+| **T12** quick-add-check `>0.98` 魔法数字 | 提为具名常量 `RECOMMEND_EXISTING_HOLE_FRAC = 0.98` | 既有行为不变 |
+| **T13** `mesh_cell_polydata` 旧签名兼容 shim | grep 全仓库确认全部调用方（worker + test_voxel_csg.py）已用新签名 `(ast, surfaces_by_num, tr_cards, B, res)`，移除 shim | 既有测试守护（test_voxel_csg.py 全绿） |
+| **T14** `sweep.parse_keff` `except Exception: pass` 静默降级 | 加 `logger.warning` 记录 mctal 解析失败（保留分层兜底：正则继续） | `test_parse_keff_warns_on_mctal_failure`（monkeypatch `parse_mctal` 抛异常 → 告警 + 兜底仍返回） |
+
+## §V.3 全量门禁
+
+**pytest 609/0**（基线 595 + 14 新增；复跑稳定）——含契约漂移闸门 `tests/integration/test_api_contract.py`（37 端点双向绿：handlers dict ↔ api.yaml operationId + contract.ts 字段 ⊆ models.py + 三核心端点 HTTP 往返 + 本批新增 sweep-run 预算 HTTP 拒绝）。**未 commit**（等 PM 统一提交）。

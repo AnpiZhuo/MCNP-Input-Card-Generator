@@ -98,6 +98,33 @@ export interface QuickCellResult {
 export type QuickAddChoice = "new_hole" | "existing_hole" | "void_only" | "none";
 
 /**
+ * 把补集决策的已有栅元表达式补丁应用到 flat 栅元列表（Preview3DWindow 用）。
+ * num 命中 patch 的栅元 surfaces 替换为 p.surfaces（被侵占栅元 → `...#新`）；
+ * 未命中/空 patch 原样返回。不改原数组。
+ * 与 GeometryTab 主窗口补丁逻辑（applyQuickAddChoice 产出的 existingExprPatch）一致。
+ */
+export function applyExistingExprPatch<T extends { num: string | number; surfaces: string }>(
+  cells: T[],
+  patch: { num: string | number; surfaces: string }[],
+): T[] {
+  if (!patch || patch.length === 0) return cells;
+  const map = new Map(patch.map(p => [String(p.num), p.surfaces]));
+  return cells.map(c => {
+    const s = map.get(String(c.num));
+    return s === undefined ? c : { ...c, surfaces: s };
+  });
+}
+
+/**
+ * 快捷添加重合检测失败 → 非阻塞警告文案（T2：不再静默跳过检测）。
+ * 失败时调用方仍追加栅元，但弹警告告知「未校验与已有栅元重叠」+ console.warn 记录原因。
+ */
+export function quickAddCheckFailedMessage(e: unknown): string {
+  const reason = (e as any)?.message ? String((e as any).message) : "";
+  return "重合检测失败，未校验与已有栅元重叠" + (reason ? `（${reason}）` : "");
+}
+
+/**
  * 把重合决策应用到生成结果（纯函数，支持一次性多栅元）。
  *
  * 语义（MCNP 中 `expr #n` = 在 expr 内且不在栅元 n 内）：

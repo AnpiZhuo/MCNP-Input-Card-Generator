@@ -65,3 +65,24 @@ def test_empty_input():
     assert r["status"] == "ok"
     assert r["keff"] is None
     assert len(r["warnings"]) >= 1
+
+
+def test_top_level_nps_parsed_from_header():
+    """mctal 头部含 nps → 顶层 nps 填充（不再硬编码 None）。"""
+    text = (
+        "1.0 mctal\n"
+        "nps = 250000\n"
+        "ktally 1 nps = 100000\n"
+        "k  eff (c) 1.00000 0.00200\n"
+        "combined keff = 1.00030 0.00110\n"
+    )
+    r = parse_mctal(text)
+    assert r["nps"] == 250000
+
+
+def test_top_level_nps_absent_when_not_in_header():
+    """头部无 nps → 返回结构不含 nps 键（死字段移除）。"""
+    r = parse_mctal(_load("sample.mctal"))
+    assert "nps" not in r
+    # 各 tally 块的 nps 解析不受影响（sample 无 nps，但结构键存在）
+    assert all("nps" in t for t in r["tallies"])

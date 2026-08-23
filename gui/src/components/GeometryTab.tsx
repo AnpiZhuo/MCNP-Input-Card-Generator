@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import CellEditDialog, { type CellData } from "./CellEditDialog";
+import BatchCellEditDialog from "./BatchCellEditDialog";
 import McnpEditor from "./McnpEditor";
 import TextModeSection from "./TextModeSection";
 import DocViewer from "./DocViewer";
@@ -15,7 +16,8 @@ import { openPreview3D, onMaterialChange, onQuickCellGenerate } from "../utils/w
 import { apiUrl } from "../utils/api";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
 import { textToSection } from "../utils/sectionConvert";
-import { appendCardText, applyQuickAddChoice, generatedCellToRow, type QuickAddChoice, type QuickCellResult } from "../utils/quickCell";
+import { appendCardText, applyQuickAddChoice, generatedCellToRow, quickAddCheckFailedMessage, type QuickAddChoice, type QuickCellResult } from "../utils/quickCell";
+import { applyBatchEditToRows, pruneSelectedNums, selectedCellsFromNums, toggleCellNum, type BatchCellEditValues } from "../utils/batchCellEdit";
 
 /** 下拉右缘防溢出：x 超过视口右缘时 clamp 到 viewportWidth - dropdownWidth - 20。
  *  对齐现行为（现 220 = 200 宽 + 20 边距）。viewportWidth 为 0/负数时 Math.min 自然兜底（返回 min(x, 负数)）。 */
@@ -46,6 +48,8 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     setCells([...cells, { kind: "raw", text: `#ifdef ${name.trim()}` }, { kind: "raw", text: "#else" }, { kind: "raw", text: "#endif" }]);
   };
   const [editCell, setEditCell] = useState<number | null>(null);
+  const [selectedCells, setSelectedCells] = useState<string[]>([]);
+  const [batchOpen, setBatchOpen] = useState(false);
   const [surfText, setSurfText] = useState("");
   const [trText, setTrText] = useState("");
   const [show3D, setShow3D] = useState(false);
@@ -58,6 +62,8 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     existingNums: number[];
     zeroVolume: number[];
   } | null>(null);
+  // T2：快捷添加重合检测失败 → 非阻塞警告（仍追加栅元，但告知未校验重叠）
+  const [quickCheckWarn, setQuickCheckWarn] = useState<string | null>(null);
   // 栅元表材料列点击下拉：i=正在编辑材料号的栅元行索引，x/y=按钮位置（用于 portal 定点浮层）
   const [matPicker, setMatPicker] = useState<{ i: number; x: number; y: number } | null>(null);
   const fc = useFreecadStatus();
@@ -256,7 +262,11 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
           });
           return;
         }
-      } catch (e) { /* 检测失败 → 直接追加，不影响生成 */ }
+      } catch (e) {
+        // T2：检测失败 → 仍追加栅元，但非阻塞警告用户未校验重合（不再静默跳过）
+        console.warn("[quick-add-check] 重合检测失败，未校验与已有栅元重叠:", e);
+        setQuickCheckWarn(quickAddCheckFailedMessage(e));
+      }
       setCells(prev => [...prev, ...newRows]);
     })();
   };
@@ -315,6 +325,37 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     })),
   ].sort((a, b) => parseInt(a.num) - parseInt(b.num));
 
+  // ── 批量编辑栅元：勾选（存栅元 num）+ 按钮（常态灰，勾选后可用）──
+  // T1 修复：勾选状态存「栅元 num」而非数组下标——moveCellRow（拖拽重排）/删除行
+  // 改 cells 顺序后，按 num 解析到当前行，批量编辑仍改到原勾选栅元（不静默写错）。
+  const cellRowNums = cells.filter(c => c.kind === "cell").map(c => c.cell.num);
+  const allSelected = cellRowNums.length > 0 && cellRowNums.every(n => selectedCells.includes(n));
+  const toggleSelect = (num: string) => {
+    setSelectedCells(prev => toggleCellNum(prev, num));
+  };
+  const toggleSelectAll = () => {
+    if (allSelected) setSelectedCells([]);
+    else setSelectedCells(cellRowNums);
+  };
+  // 勾选集 → 实际要编辑的栅元（按 num 解析到当前行；已删除/原始行自动失效）
+  const selectedCellRows = selectedCellsFromNums(cells, selectedCells);
+  const openBatchEdit = () => {
+    if (selectedCellRows.length === 0) return;
+    setBatchOpen(true);
+  };
+  const applyBatchEdit = (values: BatchCellEditValues) => {
+    setCells(prev => applyBatchEditToRows(prev, selectedCells, values));
+    setBatchOpen(false);
+    setSelectedCells([]);
+  };
+  // 栅元被删除/同步替换后，剔除勾选集中已不存在的栅元 num（重排不影响——存的是 num）
+  useEffect(() => {
+    setSelectedCells(prev => {
+      const next = pruneSelectedNums(prev, cells);
+      return next.length === prev.length ? prev : next;
+    });
+  }, [cells]);
+
   // 独立 3D 窗口里改材料号 → storage 事件回写主窗口（双向同步）
   useEffect(() => {
     const offMat = onMaterialChange((cellNum, newMat) => {
@@ -364,6 +405,12 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   return (
     <>
       {editCell !== null && cells[editCell]?.kind === "cell" && <CellEditDialog cell={cells[editCell].cell} onSave={(d) => { const c = [...cells]; c[editCell] = { kind: "cell", cell: d }; setCells(c); setEditCell(null); }} onClose={() => setEditCell(null)} availableMats={deck.materials} />}
+      {batchOpen && selectedCellRows.length > 0 && <BatchCellEditDialog
+        cells={selectedCellRows.map(c => ({ num: c.num, mat: c.mat, density: c.density }))}
+        availableMats={deck.materials}
+        onApply={applyBatchEdit}
+        onClose={() => setBatchOpen(false)}
+      />}
       {quickCellOpen && <QuickCellDialog
         surfacesText={surfText}
         trCardsText={trText}
@@ -404,6 +451,15 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
           ),
         );
       })()}
+      {quickCheckWarn && React.createElement(FloatingDialog, {
+        title: "⚠ 重合检测失败",
+        onClose: () => setQuickCheckWarn(null),
+        width: 420,
+        footer: React.createElement("button", { className: "btn btn-primary btn-sm", onClick: () => setQuickCheckWarn(null) }, "知道了"),
+      },
+        React.createElement("div", { style: { fontSize: 12, lineHeight: 1.7, color: "var(--text-secondary)" } },
+          `${quickCheckWarn}。栅元已直接添加，请自行核对是否与已有栅元重叠。`),
+      )}
       <div className="glass-card">
         <div className="card-header">
           <span className="card-title" style={{ flexShrink: 0 }}>曲面卡 &amp; TR 变换</span>
@@ -444,15 +500,36 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
           <div className="btn-group">
             <button className="btn btn-success btn-xs" onClick={addCellRow}>+ 栅元</button>
             <button className="btn btn-ghost btn-xs" onClick={addConditionalCells} title="插入 #ifdef 名称 / #else / #endif 三行"># 条件</button>
+            <button
+              className="btn btn-primary btn-xs"
+              disabled={selectedCellRows.length === 0}
+              onClick={openBatchEdit}
+              title={selectedCellRows.length === 0 ? "请先勾选栅元" : "批量编辑勾选的栅元"}
+              style={selectedCellRows.length === 0
+                ? { background: "var(--bg-glass)", color: "var(--text-tertiary)", cursor: "not-allowed", boxShadow: "none", opacity: 0.6 }
+                : undefined}
+            >⚡ 批量编辑</button>
           </div>
         </div>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>#</th><th>材料</th><th>密度</th><th>曲面表达式</th><th>IMP:N</th><th>注释</th><th>操作</th></tr></thead>
+            <thead><tr>
+              <th style={{ width: 28 }}>
+                <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} title="全选 / 取消全选" />
+              </th>
+              <th>#</th>
+              <th>材料</th>
+              <th>密度</th>
+              <th>曲面表达式</th>
+              <th>IMP:N</th>
+              <th>注释</th>
+              <th>操作</th>
+            </tr></thead>
             <tbody>
               {cells.map((c, i) => c.kind === "raw" ? (
                 <tr key={i} {...cellDrag.rowHandlers(i)}
                   style={{ background: "rgba(255,255,255,0.04)", ...cellDrag.rowStyle(i) }}>
+                  <td style={{ textAlign: "center" }}><input type="checkbox" disabled /></td>
                   <td colSpan={6} style={{ fontFamily: "Consolas,monospace", fontSize: 12, color: "#ce93d8" }}>{c.text}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button className="btn btn-danger btn-xs" onClick={() => setCells(cells.filter((_, j) => j !== i))}>×</button>
@@ -461,6 +538,9 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
               ) : (
                 <tr key={i} {...cellDrag.rowHandlers(i)}
                   style={cellDrag.rowStyle(i)}>
+                  <td style={{ textAlign: "center" }}>
+                    <input type="checkbox" checked={selectedCells.includes(c.cell.num)} onChange={() => toggleSelect(c.cell.num)} />
+                  </td>
                   <td style={{fontWeight:600,color:"var(--text-primary)"}}>{c.cell.num}</td>
                   <td style={{ position: "relative" }}>
                     {/* 材料号可点击，弹下拉选择（同 3D 预览）；样式：可点外观 */}
