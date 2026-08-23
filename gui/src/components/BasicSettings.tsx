@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import DocViewer from "./DocViewer";
+import ExamplesDialog from "./ExamplesDialog";
 import { useDeck } from "../utils/DeckContext";
 
 const MODE_LABELS = ["N 中子", "P 光子", "E 电子", "H 质子", "HE 重离子", "D 氘核", "T 氚核", "A α粒子"];
@@ -7,6 +8,7 @@ const MODE_IDS = ["mode-n", "mode-p", "mode-e", "mode-h", "mode-he", "mode-d", "
 
 export default function BasicSettings() {
   const [doc, setDoc] = useState<{path:string;title:string}|null>(null);
+  const [examples, setExamples] = useState(false);
   const { deck, patch } = useDeck();
   const b: Record<string, any> = deck.basic || {};
   const setB = (key: string, v: any) => patch({ basic: { ...b, [key]: v } });
@@ -23,7 +25,7 @@ export default function BasicSettings() {
           <span className="card-title" style={{ flexShrink: 0 }}>标题 & 运行控制</span>
           <div style={{ flex: 1, display: "flex", justifyContent: "center", gap: 6 }}>
             <button className="btn btn-ghost btn-xs" onClick={() => setDoc({path:"/docs/C810_卡片格式详细.md",title:"C810 卡片格式参考"})}>📖 C810</button>
-            <button className="btn btn-ghost btn-xs" onClick={() => setDoc({path:"/docs/sample_format.md",title:"INP 示例格式"})}>📄 示例</button>
+            <button className="btn btn-ghost btn-xs" onClick={() => setExamples(true)}>📚 示例库</button>
           </div>
         </div>
         <div className="form-row">
@@ -79,6 +81,7 @@ export default function BasicSettings() {
       </div>
       </>
       {doc && <DocViewer path={doc.path} title={doc.title} onClose={() => setDoc(null)} />}
+      {examples && <ExamplesDialog onClose={() => setExamples(false)} />}
     </>
   );
 }

@@ -5,7 +5,7 @@ interface Nuclide { zaid: string; fraction: string }
 interface MaterialFormData { matNum: string; name: string; nuclides: MaterialRow[]; options: string; mtCard: string; density: string }
 interface Props { matNum: string; name: string; nuclides: MaterialRow[]; density?: string; options?: string; mtCard?: string; onSave: (d: MaterialFormData) => void; onClose: () => void }
 
-import { PRESET_CATEGORIES, type PresetItem } from "./MaterialPresets";
+import { PRESET_CATEGORIES, filterPresets, type PresetItem } from "./MaterialPresets";
 import type { MaterialRow } from "../utils/DeckContext";
 import { useRowDrag } from "../utils/useRowDrag";
 import { apiUrl } from "../utils/api";
@@ -138,6 +138,7 @@ async function expandFormula(formula: string, isWeight: boolean = true): Promise
 
 export default function MaterialEditDialog({ matNum, name, nuclides: initial, density: initDensity, options: initOptions, mtCard: initMtCard, onSave, onClose }: Props) {
   const [userPresets, setUserPresets] = useState<PresetItem[]>(() => loadUP());
+  const [presetSearch, setPresetSearch] = useState("");
   const [mode, setMode] = useState<"manual" | "formula">(initial.length > 0 ? "manual" : "formula");
   const [nucs, setNucs] = useState<MaterialRow[]>(initial.length > 0 ? initial : [{ kind: "nuclide", zaid: "", fraction: "" }]);
   const [comment, setComment] = useState(name);
@@ -158,6 +159,8 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
   });
 
   // 用拍平映射快速查找
+  const presetFiltered: [string, PresetItem[]][] = filterPresets(PRESET_CATEGORIES, presetSearch);
+
   const flatPresets: Record<string, PresetItem> = {};
   for (const [, items] of PRESET_CATEGORIES) for (const item of items) flatPresets[item.key] = item;
   const handlePreset = (key: string) => {
@@ -301,14 +304,20 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
         // 预设 + 用户预设管理
         React.createElement("div", { style: { marginBottom: 12 } },
           React.createElement("label", { style: s.lbl }, "预设材料"),
+          React.createElement("input", {
+            style: { ...s.inp, marginBottom: 6, height: 28 },
+            placeholder: "搜索预设（名称/化学式/描述）",
+            value: presetSearch,
+            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setPresetSearch(e.target.value),
+          }),
           React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
             React.createElement("select", { className: "form-select", style: { height: 34, flex: 1 }, onChange: (e: React.ChangeEvent<HTMLSelectElement>) => e.target.value && handlePreset(e.target.value), value: "" },
-              React.createElement("option", { value: "" }, "-- " + (PRESET_CATEGORIES.flatMap(([, items]) => items).length + userPresets.length) + " 种预设材料 --"),
+              React.createElement("option", { value: "" }, "-- " + (presetFiltered.flatMap(([, items]) => items).length + userPresets.length) + " 种预设材料 --"),
               userPresets.length > 0 ? React.createElement(React.Fragment, null,
                 React.createElement("optgroup", { key: "_user", label: "用户预设" }),
                 userPresets.map((p, ui) => React.createElement("option", { key: p.key, value: p.key }, p.name)),
               ) : null,
-              ...PRESET_CATEGORIES.flatMap(([cat, items]) => [
+              ...presetFiltered.flatMap(([cat, items]) => [
                 React.createElement("optgroup", { key: cat, label: cat }),
                 ...items.map(item => React.createElement("option", { key: item.key, value: item.key }, item.name)),
               ]),

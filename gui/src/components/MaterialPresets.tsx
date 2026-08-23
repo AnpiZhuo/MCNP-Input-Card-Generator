@@ -89,3 +89,19 @@ for (const [, items] of PRESET_CATEGORIES) {
 }
 export const PRESETS = flat;
 export type PresetKey = keyof typeof PRESETS;
+
+/** 预设搜索过滤：名称/化学式/描述命中（大小写不敏感）；空关键词返回全量。 */
+export function filterPresets(
+  categories: [string, PresetItem[]][],
+  query: string,
+): [string, PresetItem[]][] {
+  const q = (query || "").trim().toLowerCase();
+  if (!q) return categories;
+  return categories
+    .map(([cat, items]) => [
+      cat,
+      items.filter((i) =>
+        (i.name + " " + (i.formula || "") + " " + (i.desc || "")).toLowerCase().includes(q)),
+    ] as [string, PresetItem[]])
+    .filter(([, items]) => items.length > 0);
+}

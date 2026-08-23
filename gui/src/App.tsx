@@ -189,6 +189,16 @@ function AppInner() {
     }
   }, [loadDeck]);
 
+  // 示例库一键导入：ExamplesDialog dispatch 自定义事件 → 复用同一导入管线
+  useEffect(() => {
+    const onImport = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail && typeof detail.text === 'string') importInpText(detail.text);
+    };
+    window.addEventListener('mcnp:import-inp', onImport);
+    return () => window.removeEventListener('mcnp:import-inp', onImport);
+  }, [importInpText]);
+
   // 导入按钮 → Windows 原生文件选择对话框
   const handleImportNative = useCallback(async () => {
     try {
