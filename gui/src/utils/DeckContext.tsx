@@ -8,7 +8,7 @@ export type MaterialRow =
   | { kind: "nuclide"; zaid: string; fraction: string }
   | { kind: "raw"; text: string };
 export interface MaterialData { number: number; comment: string; nuclides: MaterialRow[]; density: string; options: string; mt_card: string }
-export interface CellData { number: number; material: string; density: string; surface_expr: string; imp_n: string; imp_p: string; imp_e: string; vol: string; pwt: string; ext: string; fcl: string; u: string; fill: string; lat: string; trcl: string; tmp: string; other_params: string; render: boolean; comment: string }
+export interface CellData { number: number; material: string; density: string; surface_expr: string; imp_n: string; imp_p: string; imp_e: string; vol: string; pwt: string; ext: string; fcl: string; u: string; fill: string; lat: string; trcl: string; tmp: string; other_params: string; render: boolean; fill_grid: string; comment: string }
 /** 栅元行：真正的栅元或原样条件/预处理器行（判别联合） */
 export type CellRow =
   | { kind: "cell"; cell: CellData }

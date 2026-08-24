@@ -7,6 +7,7 @@ MCNP 生成器 API 服务 — 桥接 React 前端与 Python 后端
 """
 
 import json
+import math
 import os
 import sys
 from http.server import ThreadingHTTPServer as HTTPServer, BaseHTTPRequestHandler
@@ -80,6 +81,10 @@ def _ptrac_worker_cmd() -> list:
 # 的是会话目录，缓存拷贝存活 → 关预览窗口后重开同一 deck 仍命中（≤1s）。
 from preview_cache import PreviewCache
 _PREVIEW_CACHE = PreviewCache()
+
+# 格阵 universe 裁剪 STL 独立缓存（LRU 2）：键含 u/cellNum/pitch/height（extra 并入指纹），
+# 防不同裁剪参数脏命中。与 _PREVIEW_CACHE 分离，不互相驱逐。
+_PREVIEW_CACHE_LATTICE = PreviewCache(max_entries=2)
 
 # ── 3D 预览 STL 会话 ──
 # 3D 预览生成的 STL 保留在此（不随请求清理），供截面复用（numpy 切平面）。
@@ -260,7 +265,7 @@ def build_cells_data(cell_list: list, include_void: bool = True) -> list:
     """
     from pymcnp.types.Geometry import Geometry
     from freecad_preview import resolve_cell_complements, parenthesize_unions
-    entries = []  # (number, mat_val, density, ast_node)
+    entries = []  # (number, mat_val, density, ast_node, render, has_fill_grid)
     seen_numbers = set()
     for cell in cell_list:
         if not isinstance(cell, dict):
@@ -280,19 +285,27 @@ def build_cells_data(cell_list: list, include_void: bool = True) -> list:
         raw_mat_raw = cell.get("material") or cell.get("mat") or ""
         raw_mat = str(raw_mat_raw).strip().split()[0] if raw_mat_raw else ""
         mat_val = raw_mat or raw_mat_raw
+        # 第一遍捕获 render / fill_grid（第二遍 skip 用）
+        render = bool(cell.get("render", True))
+        has_fill_grid = bool(cell.get("fill_grid"))
         try:
             ast = Geometry.from_mcnp(parenthesize_unions(expr))
             ast_node = ast.ast
         except Exception:
             ast_node = None
-        entries.append((number, mat_val, cell.get("density", ""), ast_node))
+        entries.append((number, mat_val, cell.get("density", ""), ast_node,
+                        render, has_fill_grid))
 
-    # #n 栅元补集引用解析：先建 number → ast_node 映射（含真空栅元）
-    cells_by_num = {num: node for num, _, _, node in entries}
+    # #n 栅元补集引用解析：先建 number → ast_node 映射（含真空/不渲染/格阵栅元）
+    cells_by_num = {num: node for num, _, _, node, _, _ in entries}
     cells_data = []
-    for number, mat_val, density, ast_node in entries:
+    for number, mat_val, density, ast_node, render, has_fill_grid in entries:
         if not include_void and str(mat_val).split()[0] == "0":
             continue  # STEP 导出跳过真空；其几何已在上面的映射里用于 #n 解析
+        if not render:
+            continue  # render:false → 跳过（死代码修复：此前前端传 render 但被忽略）
+        if has_fill_grid:
+            continue  # 格阵栅元不产实体 STL（由 /api/preview-lattice 展开）
         if ast_node is not None:
             ast_node = resolve_cell_complements(ast_node, cells_by_num)
         # 包回 Geometry 对象（下游 _geometry_ast_to_json 用 c["ast"].ast）
@@ -303,6 +316,298 @@ def build_cells_data(cell_list: list, include_void: bool = True) -> list:
             "density": density,
         })
     return cells_data
+
+
+# ===== 格阵 3D 预览助手（/api/preview-lattice） =====
+# 与 app/lattice.py 深模块配合：lattice_cell_extent/expand_positions/compose_lattice_tree
+# 纯函数在 lattice.py；本文件负责请求解析、pitch/height 覆盖、TRCL 提取、universe 裁剪 STL。
+
+def _cell_u(c: dict) -> str:
+    """CellRow dict → universe 号（cell 判别联合嵌套取 cell.u）。"""
+    if c.get("kind") == "cell" and isinstance(c.get("cell"), dict):
+        c = c.get("cell") or {}
+    return str(c.get("u", "") or "")
+
+
+def _cell_fill_grid(c: dict) -> str:
+    if c.get("kind") == "cell" and isinstance(c.get("cell"), dict):
+        c = c.get("cell") or {}
+    return str(c.get("fill_grid", "") or "")
+
+
+def _max_surface_num(surf_text: str) -> int:
+    """曲面卡文本最大曲面号（格元盒 RPP clip 曲面编号顺延起点）。"""
+    import re
+    m = 0
+    for line in str(surf_text).splitlines():
+        mm = re.match(r'^\s*(\d+)', line)
+        if mm:
+            m = max(m, int(mm.group(1)))
+    return m
+
+
+def _clip_suffix_and_lines(box: dict, max_surf: int):
+    """格元盒 → (RPP 曲面卡行, 盒内半空间表达式后缀)。
+
+    盒 [x_min,x_max]×[y_min,y_max]×[z_min,z_max] 用**一个 RPP 宏体**表达裁剪：
+    后缀 `-<num>`（RPP 负侧 = 盒内实体），worker 里对 cell solid ∩ RPP 盒实体做
+    solid-solid common。**禁止再合成 6 个 PX/PY/PZ 平面**——FreeCAD/OCC 对
+    「圆柱（C/CZ 半空间）∩ 平行于其轴的平面」的布尔 common 恒返回空
+    （QA 复现：圆柱+2×PZ 正常 / +2×PX 空 / +6×盒平面空）。RPP 盒实体是闭盒，
+    与圆柱做 solid-solid common 正常（与 preview-3d 的 bound 盒裁剪同机制）。
+    """
+    b = dict(box)
+    for ax in "xyz":
+        lo, hi = b.get(ax + "_min"), b.get(ax + "_max")
+        if lo is None or hi is None:
+            b[ax + "_min"], b[ax + "_max"] = -0.5, 0.5
+        elif hi - lo < 1e-9:  # 退化盒防御：扩到单位跨度，避免零厚度 RPP
+            mid = (float(lo) + float(hi)) / 2.0
+            b[ax + "_min"], b[ax + "_max"] = mid - 0.5, mid + 0.5
+    num = max_surf + 1
+    suffix = f"-{num}"
+    lines = (
+        f"{num} rpp {b['x_min']:.6g} {b['x_max']:.6g} "
+        f"{b['y_min']:.6g} {b['y_max']:.6g} "
+        f"{b['z_min']:.6g} {b['z_max']:.6g}"
+    )
+    return lines, suffix
+
+
+def _stl_triangle_count(raw: bytes) -> int:
+    """STL 字节 → 三角形数（ASCII 'facet' 计数 / 二进制头 offset80 uint32）。
+
+    0 三角形 = 空 STL（FreeCAD 二进制空文件恰 84 字节：80 头 + count=0），
+    由 _build_one_universe 显式丢弃，不静默产出。
+    """
+    if not raw:
+        return 0
+    if b"facet" in raw:  # ASCII STL：facet 行即三角形
+        return raw.count(b"facet")
+    if len(raw) >= 84:   # 二进制 STL：offset 80 处 uint32 三角形数
+        import struct
+        return struct.unpack("<I", raw[80:84])[0]
+    return 0
+
+
+def _cell_trcl_deg(trcl_field, tr_cards) -> float:
+    """trcl 字段（"1"/"TR1"/"*TR1"/""）→ 绕 Z 旋转角（度）。
+
+    只取绕 Z 分量：TR 卡旋转矩阵首行 = 局部 X 轴方向余弦 (cosθ, sinθ, 0)。
+    翻译部分忽略（格阵假设居中）。
+    """
+    if not trcl_field:
+        return 0.0
+    s = str(trcl_field).strip().lstrip("*").lstrip("Tt").lstrip("Rr")
+    if not s or not s.isdigit():
+        return 0.0
+    card = tr_cards.get(s)
+    if not card:
+        return 0.0
+    rot = card.get("rotate")
+    if not rot:
+        return 0.0
+    try:
+        a = float(rot[0][0])
+        b = float(rot[0][1])
+        return math.degrees(math.atan2(b, a))
+    except (TypeError, ValueError, IndexError):
+        return 0.0
+
+
+def _scan_lattice_z(surf_text: str, info: dict, sub_by_u: dict, lattice) -> tuple:
+    """扫描格阵引用的 universe 栅元 PZ 约束 → (z_lower, z_upper)；无 → (None, None)。"""
+    fg = info.get("fill_grid")
+    if fg is None:
+        return None, None
+    lo, hi = None, None
+    seen = set()
+    for e in fg.cells:
+        u = str(e.u or "")
+        if u in ("0", "") or u in seen:
+            continue
+        seen.add(u)
+        for cell in sub_by_u.get(u, []):
+            clo, chi = lattice._cell_pz_bounds(cell.get("surface_expr", ""), surf_text)
+            if clo is not None:
+                lo = clo if lo is None else max(lo, clo)
+            if chi is not None:
+                hi = chi if hi is None else min(hi, chi)
+    return lo, hi
+
+
+def _resolved_extent(raw_extent, lat, req_pitch, req_height,
+                     surf_text, info, sub_by_u, lattice) -> dict:
+    """格阵 cell 范围 → 解析后 extent（pitch/height 覆盖 + 缺省填充）。
+
+    pitch 覆盖次序：请求 > extent/dims > 默认 1；
+    z 高度覆盖次序：请求 > 格阵 cell PZ（extent 已含）> universe 栅元 PZ 扫描 > 默认 1。
+    """
+    ext = {}
+    for ax in "xyz":
+        lo = None if raw_extent is None else raw_extent.get(ax + "_min")
+        hi = None if raw_extent is None else raw_extent.get(ax + "_max")
+        ext[ax + "_min"] = lo
+        ext[ax + "_max"] = hi
+    lat = str(lat or "1")
+    # pitch 覆盖（x/y）
+    if req_pitch is not None and str(req_pitch).strip():
+        p = float(req_pitch)
+        if lat == "2":
+            # hex：pitch=中心距；x 跨度=2R=2p/√3，y 跨度=p
+            hx = p * 2.0 / math.sqrt(3.0) / 2.0
+            ext["x_min"], ext["x_max"] = -hx, hx
+            ext["y_min"], ext["y_max"] = -p / 2.0, p / 2.0
+        else:
+            ext["x_min"], ext["x_max"] = -p / 2.0, p / 2.0
+            ext["y_min"], ext["y_max"] = -p / 2.0, p / 2.0
+    # z 高度覆盖
+    if req_height is not None and str(req_height).strip():
+        h = float(req_height)
+        ext["z_min"], ext["z_max"] = -h / 2.0, h / 2.0
+    else:
+        zlo, zhi = ext.get("z_min"), ext.get("z_max")
+        if zlo is None or zhi is None:
+            slo, shi = _scan_lattice_z(surf_text, info, sub_by_u, lattice)
+            if slo is not None and shi is not None:
+                ext["z_min"], ext["z_max"] = slo, shi
+        if ext.get("z_min") is None or ext.get("z_max") is None:
+            ext["z_min"], ext["z_max"] = -0.5, 0.5
+    return ext
+
+
+def _clip_box_from_extent(extent: dict | None) -> dict:
+    """解析后 extent → 裁剪盒 {x_min..z_max}（缺省用默认 1 跨度）。"""
+    box = {}
+    for ax in "xyz":
+        lo = None if extent is None else extent.get(ax + "_min")
+        hi = None if extent is None else extent.get(ax + "_max")
+        if lo is None or hi is None:
+            box[ax + "_min"], box[ax + "_max"] = -0.5, 0.5
+        else:
+            box[ax + "_min"], box[ax + "_max"] = float(lo), float(hi)
+    return box
+
+
+def _universe_has_lattice(sub_by_u: dict, u: str) -> bool:
+    """universe u 是否含格阵 cell（是 → 嵌套子格阵，不由外层直接产 STL）。"""
+    for cell in sub_by_u.get(str(u), []):
+        fg = cell.get("fill_grid")
+        if fg is not None and fg.kind == "lattice":
+            return True
+    return False
+
+
+def _stls_base64(cells: dict) -> dict:
+    """缓存/会话 cells {num: {path}} → {num: base64}。"""
+    import base64
+    out = {}
+    for num, info in cells.items():
+        p = info.get("path")
+        if p and os.path.isfile(p):
+            try:
+                with open(p, "rb") as f:
+                    out[str(num)] = base64.b64encode(f.read()).decode()
+            except OSError:
+                continue
+    return out
+
+
+def _build_one_universe(surf_text, tr_text, cell_list, u, box,
+                        cell_num, pitch, height, lattice) -> dict:
+    """把 universe u 的实体栅元裁剪到格元盒 → FreeCAD STL（{cellNum: base64}）。
+
+    格元盒用**一个 RPP 宏体**（`-<num>` 盒内半空间）追加进 universe 栅元
+    surface_expr，worker 内做 cell solid ∩ RPP 盒实体 的 solid-solid common
+    （闭盒实体 ∩ 圆柱正常；「圆柱 ∩ 平行轴平面」FreeCAD/OCC 恒空，QA 复现）。
+    空 STL（0 三角形）显式丢弃不产出——前端对缺失 (u,cellNum) 回退占位盒
+    （显式降级，不静默给 84B 空 STL）。按 u/cellNum/pitch/height 指纹缓存。
+    """
+    # 1. 收集 universe u 的实体栅元（跳过格阵 cell）
+    uni_cells = []
+    for c in cell_list:
+        if not isinstance(c, dict) or c.get("kind") == "raw":
+            continue
+        cell = c.get("cell") if c.get("kind") == "cell" and isinstance(c.get("cell"), dict) else c
+        if _cell_u(c) != str(u):
+            continue
+        if _cell_fill_grid(c):
+            continue
+        expr = str(cell.get("surface_expr", "") or "").strip()
+        if expr:
+            uni_cells.append(cell)
+    if not uni_cells:
+        return {}
+    # 2. 合成格元盒 RPP 曲面卡 + 盒内半空间后缀（solid-solid 盒裁剪）
+    max_surf = _max_surface_num(surf_text)
+    clip_lines, suffix = _clip_suffix_and_lines(box, max_surf)
+    new_surf_text = (str(surf_text).rstrip() + "\n" + clip_lines) if str(surf_text).strip() else clip_lines
+    mod_cells = []
+    for cell in uni_cells:
+        m = dict(cell)
+        expr = str(cell.get("surface_expr", "") or "").strip()
+        m["surface_expr"] = (expr + " " + suffix).strip()
+        mod_cells.append(m)
+    # 3. 指纹缓存（extra 含 pitch/height 防脏命中）
+    fp = _PREVIEW_CACHE_LATTICE.fingerprint(
+        new_surf_text, mod_cells, tr_text,
+        extra={"u": str(u), "cellNum": cell_num,
+               "pitch": list(pitch), "height": height})
+    cached = _PREVIEW_CACHE_LATTICE.get(fp)
+    if cached is not None:
+        return _stls_base64(cached["cells"])
+    # 4. FreeCAD 构建
+    StepImporter = _import_app("step_importer").StepImporter
+    freecad_bin = StepImporter.detect_freecad()
+    if not freecad_bin:
+        return {}
+    import tempfile, base64
+    surfs = parse_surfaces(new_surf_text)
+    tr_cards = parse_tr_cards(tr_text)
+    cells_data = [cd for cd in build_cells_data(mod_cells, include_void=False)
+                  if cd.get("ast") is not None]
+    if not surfs or not cells_data:
+        return {}
+    from freecad_preview import FreeCADEngine
+    engine = FreeCADEngine(freecad_bin)
+    try:
+        result = engine.build_geometry(surfs, cells_data, tr_cards, fmt="stl")
+        session_dir = tempfile.mkdtemp(prefix="mcnp_lat_stl_")
+        session_cells = {}
+        stl_data = {}
+        for cd in cells_data:
+            num = cd.get("number")
+            if num not in result or not os.path.isfile(result[num]):
+                continue
+            try:
+                with open(result[num], "rb") as f:
+                    raw = f.read()
+                if _stl_triangle_count(raw) == 0:
+                    continue  # 空 STL 显式降级：不产出（前端回退占位盒）
+                dst = os.path.join(session_dir, f"cell_{num}.stl")
+                with open(dst, "wb") as f:
+                    f.write(raw)  # 直接落盘已读字节，避免二次读
+                stl_data[str(num)] = base64.b64encode(raw).decode()
+            except OSError:
+                continue
+            session_cells[num] = {"material": cd.get("material", "0"), "path": dst}
+        if stl_data:
+            _PREVIEW_CACHE_LATTICE.put(
+                fp, {"dir": session_dir, "cells": session_cells, "freecad": freecad_bin})
+        return stl_data
+    finally:
+        engine.cleanup()
+
+
+def _find_lattice_cell_info_by_num(num, lattice_infos, sub_by_u) -> dict:
+    for info in lattice_infos:
+        if info.get("cellNum") == num:
+            return info
+    for _u, cells in sub_by_u.items():
+        for info in cells:
+            if info.get("cellNum") == num:
+                return info
+    return {}
 
 
 def _deck_snapshot(surfs, cells_data, tr_cards) -> dict:
@@ -424,6 +729,7 @@ def _cells_from_list(arr: list) -> list[CellRow]:
             fcl=cell_dict.get("fcl", ""), u=cell_dict.get("u", ""), fill=cell_dict.get("fill", ""), lat=cell_dict.get("lat", ""),
             trcl=cell_dict.get("trcl", ""), tmp=cell_dict.get("tmp", ""), other_params=cell_dict.get("other_params", ""),
             render=cell_dict.get("render", True), comment=cell_dict.get("comment", ""),
+            fill_grid=cell_dict.get("fill_grid", ""),
         )))
     return out
 
@@ -700,6 +1006,9 @@ class MCNPHandler(BaseHTTPRequestHandler):
             "/api/diff-inp": self._handle_diff_inp,
             "/api/check-overlap": self._handle_check_overlap,
             "/api/quick-add-check": self._handle_quick_add_check,
+            "/api/validate-lattice-surfaces": self._handle_validate_lattice_surfaces,
+            "/api/lattice-extent": self._handle_lattice_extent,
+            "/api/preview-lattice": self._handle_preview_lattice,
         }
         handler = handlers.get(parsed.path)
         if handler:
@@ -1955,6 +2264,162 @@ class MCNPHandler(BaseHTTPRequestHandler):
             self._ok({"valid": len(errors) == 0, "errors": errors})
         except Exception as e:
             self._err(str(e))
+
+    # ── 格阵曲面预检测（阶段2 LatticeEditDialog 失焦校验）──
+    def _handle_validate_lattice_surfaces(self):
+        """校验格阵栅元的曲面表达式是否构成合法格元（lat=1 六面体 / lat=2 六棱柱）。
+
+        ok=false 为正常校验结果（不构成格元盒），HTTP 仍 200 返回统一信封。
+        """
+        try:
+            lattice = _import_app("lattice")
+            data = self._read_body() or {}
+            ok, msg = lattice.validate_lattice_surfaces(
+                data.get("surface_expr", ""),
+                str(data.get("lat", "")),
+                data.get("surfaces_text", ""),
+            )
+            self._ok({"ok": ok, "msg": msg})
+        except Exception as e:
+            self._err(str(e))
+
+    # ── 格元范围解析（阶段3 lattice-extent）──
+    def _handle_lattice_extent(self):
+        """解析格元曲面表达式 → 物理范围（供 pitch/裁剪盒推导）。
+
+        入参 {surface_expr, lat, surfaces_text} → {ok, extent|null, msg}。
+        extent = {x_min,x_max,y_min,y_max,z_min,z_max}，z 无界字段为 null。
+        """
+        try:
+            lattice = _import_app("lattice")
+            data = self._read_body() or {}
+            extent = lattice.lattice_cell_extent(
+                data.get("surface_expr", ""),
+                str(data.get("lat", "")),
+                data.get("surfaces_text", ""),
+            )
+            if extent is None:
+                self._ok({"ok": False, "extent": None,
+                          "msg": "无法解析格元范围（需合法 lat=1/2 格元曲面表达式 + 曲面卡定义）"})
+            else:
+                self._ok({"ok": True, "extent": extent, "msg": ""})
+        except Exception as e:
+            self._err(str(e))
+
+    # ── 格阵 3D 预览（阶段3 preview-lattice：universe 实例化 + 嵌套 fill 递归）──
+    def _handle_preview_lattice(self):
+        """格阵预览：每格阵 positions + 叶 universe 裁剪 STL + 嵌套 tree/leafInstances。
+
+        入参 {surfaces, cells, tr_cards, latticeNum?, pitch?, height?}。
+        响应 {lattices:[{num,lat,kind,dims,range,center,pitch,height,trclRotationDeg,
+                        positions,universes}], leafInstances, tree, count, detailViable,
+              limit}。嵌套 fill 递归在后端 compose_lattice_tree 完成。
+        """
+        try:
+            lattice = _import_app("lattice")
+            data = self._read_body() or {}
+            surf_text = data.get("surfaces", "")
+            cell_list = data.get("cells", []) or []
+            tr_text = data.get("tr_cards", "")
+            req_lattice = data.get("latticeNum")
+            req_pitch = data.get("pitch")
+            req_height = data.get("height")
+
+            # 1. 按 u 分组 + 收集全部格阵 cell（含嵌套）
+            sub_by_u = {}
+            lattice_infos = []
+            for c in cell_list:
+                if not isinstance(c, dict) or c.get("kind") == "raw":
+                    continue
+                cell = (c.get("cell") if c.get("kind") == "cell"
+                        and isinstance(c.get("cell"), dict) else c)
+                u = str(cell.get("u", "") or "")
+                fg_json = cell.get("fill_grid", "")
+                fg = lattice.FillGrid.from_json(fg_json) if fg_json else None
+                info = {
+                    "cellNum": cell.get("number"),
+                    "material": str(cell.get("material", "") or "0"),
+                    "fill": str(cell.get("fill", "") or ""),
+                    "fill_grid": fg,
+                    "surface_expr": str(cell.get("surface_expr", "") or ""),
+                    "lat": str(cell.get("lat", "") or ""),
+                    "trcl": str(cell.get("trcl", "") or ""),
+                }
+                if fg is not None and fg.kind == "translated":
+                    e = fg.cells[0] if fg.cells else None
+                    if e is not None:
+                        info["fill"] = str(e.u or "")
+                        info["offset"] = (lattice._num(e.dx), lattice._num(e.dy),
+                                          lattice._num(e.dz))
+                sub_by_u.setdefault(u, []).append(info)
+                if fg is not None and fg.kind == "lattice":
+                    lattice_infos.append(info)
+
+            if not lattice_infos:
+                self._ok({"status": "ok", "lattices": [], "leafInstances": [], "tree": [],
+                          "count": 0, "detailViable": True, "limit": "ok",
+                          "message": "没有格阵栅元"})
+                return
+            if req_lattice is not None:
+                lattice_infos = [info for info in lattice_infos
+                                 if int(info["cellNum"]) == int(req_lattice)]
+            if not lattice_infos:
+                self._ok({"status": "ok", "lattices": [], "leafInstances": [], "tree": [],
+                          "count": 0, "detailViable": True, "limit": "ok",
+                          "message": "未找到指定格阵栅元"})
+                return
+
+            # 2. 解析 TRCL + 为 sub_by_u 中所有格阵 cell 解析 extent（pitch/height 覆盖）
+            tr_cards = parse_tr_cards(tr_text)
+            for _u, cells in sub_by_u.items():
+                for info in cells:
+                    fg = info.get("fill_grid")
+                    if fg is None or fg.kind != "lattice":
+                        continue
+                    info["trcl_deg"] = _cell_trcl_deg(info.get("trcl", ""), tr_cards)
+                    info["extent"] = _resolved_extent(
+                        lattice.lattice_cell_extent(
+                            info.get("surface_expr", ""), info.get("lat", ""), surf_text),
+                        info.get("lat", ""), req_pitch, req_height,
+                        surf_text, info, sub_by_u, lattice)
+
+            # 3. compose 嵌套树/叶/各格阵 positions（outer 的 trcl_deg 已在上面子循环里算好）
+            outer = lattice_infos[0]
+            trcl_deg = outer.get("trcl_deg", 0.0)
+            composed = lattice.compose_lattice_tree(
+                outer["fill_grid"], sub_by_u, outer["extent"], trcl_deg,
+                lattice.MAX_LATTICE_DEPTH, lattice.MAX_TOTAL_INSTANCES)
+            limit = composed.pop("status", "ok")
+
+            # 4. 每个格阵 → 直接引用叶 universe 的裁剪 STL
+            for entry in composed.get("lattices", []):
+                info = _find_lattice_cell_info_by_num(
+                    entry.get("num"), lattice_infos, sub_by_u)
+                fg = info.get("fill_grid")
+                box = _clip_box_from_extent(entry.get("extent"))
+                universes = {}
+                if fg is not None:
+                    seen = set()
+                    for e in fg.cells:
+                        u = str(e.u or "")
+                        if u in ("0", "") or u in seen:
+                            continue
+                        seen.add(u)
+                        if _universe_has_lattice(sub_by_u, u):
+                            continue  # 嵌套子格阵由自己的 lattices 条目负责
+                        pitch = entry.get("pitch", [1, 1, 1])
+                        height = entry.get("height", 1.0)
+                        stls = _build_one_universe(
+                            surf_text, tr_text, cell_list, u, box,
+                            entry.get("num"), pitch, height, lattice)
+                        if stls:
+                            universes[u] = stls
+                entry["universes"] = universes
+
+            self._ok({**composed, "limit": limit})
+        except Exception as e:
+            import traceback
+            self._err(str(e) + " | " + traceback.format_exc())
 
     # ── ZAID 校验 ──
     def _handle_validate_zaid(self):

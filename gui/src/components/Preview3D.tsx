@@ -12,6 +12,7 @@
 import React, { useRef, useEffect, useState, useCallback } from "react";
 import CrossSectionView from "./CrossSectionView";
 import QuickCellForm from "./QuickCellForm";
+import Preview3DLattice from "./Preview3DLattice";
 
 /* ---- 类型定义 ---- */
 interface CellView {
@@ -23,7 +24,7 @@ interface CellView {
 }
 
 interface Preview3DProps {
-  cells: { num: string; mat: string; comment?: string; render?: boolean }[];
+  cells: { num: string; mat: string; density?: string; surfaces?: string; comment?: string; render?: boolean; u?: string; fill?: string; lat?: string; trcl?: string; fill_grid?: string }[];
   surfaces?: string;
   trCards?: string;
   onClose: () => void;
@@ -487,6 +488,9 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   const { deck } = useDeck();
   // 独立窗口模式：材料列表由宿主传入（materials），否则回退主窗口 deck
   const matList = materials ?? deck.materials;
+  // 格阵 3D：cells 含 fill_grid 非空 → 出现「格阵 3D」toggle 切换 universe 实例化预览
+  const [latticeView, setLatticeView] = useState(false);
+  const hasLattice = rawCells.some((c) => c.fill_grid && c.fill_grid.trim() !== "");
 
   // 初始化 cellView 状态（非 void 默认可见：否则无 FreeCAD 时截面过滤会滤掉全部栅元）
   const [cellViews, setCellViews] = useState<CellView[]>(() =>
@@ -876,6 +880,16 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
     }
   }
 
+    // 格阵 3D 预览：切换进入 universe 实例化（独立场景 + 色块总览 toggle）
+    if (latticeView) {
+      return React.createElement(Preview3DLattice, {
+        cells: rawCells,
+        surfaces: surfaces,
+        trCards: trCards,
+        onClose: () => setLatticeView(false),
+      });
+    }
+
     return React.createElement(React.Fragment, null,
     React.createElement("div", {
     className: "preview-overlay",
@@ -900,6 +914,15 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         React.createElement("span", {
           style: { fontSize: 11, color: "var(--text-tertiary)" },
         }, "🖱 拖拽旋转 · 滚轮缩放 · 右键平移"),
+        hasLattice ? React.createElement("button", {
+          className: "btn btn-ghost btn-xs",
+          onClick: () => setLatticeView((v) => !v),
+          style: {
+            fontSize: 11,
+            border: latticeView ? "1px solid var(--accent)" : undefined,
+            color: latticeView ? "var(--accent)" : undefined,
+          } as React.CSSProperties,
+        }, latticeView ? "退出格阵 3D" : "格阵 3D") : null,
         React.createElement("button", {
           className: "btn btn-ghost btn-xs",
           onClick: onClose,

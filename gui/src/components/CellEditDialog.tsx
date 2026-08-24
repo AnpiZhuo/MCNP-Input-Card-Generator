@@ -21,6 +21,7 @@ export interface CellData {
   tmp: string;
   otherParams: string;
   render: boolean;
+  fill_grid: string;
   comment: string;
 }
 
@@ -29,6 +30,8 @@ interface Props {
   onSave: (cell: CellData) => void;
   onClose: () => void;
   availableMats?: MaterialData[];
+  /** 打开格阵编辑器（该栅元含 fill_grid 时显示入口） */
+  onOpenLattice?: () => void;
 }
 
 const style: Record<string, React.CSSProperties> = {
@@ -39,7 +42,7 @@ const style: Record<string, React.CSSProperties> = {
 };
 const tarea = { ...style.inp, height: 50, resize: "vertical" as const, fontFamily: "Consolas,monospace" as const, fontSize: 11, paddingTop: 6 };
 
-export default function CellEditDialog({ cell, onSave, onClose, availableMats }: Props) {
+export default function CellEditDialog({ cell, onSave, onClose, availableMats, onOpenLattice }: Props) {
   const [data, setData] = useState(cell);
   const set = (k: keyof CellData, v: string) => {
     if (k === "mat" && availableMats?.length) {
@@ -156,6 +159,22 @@ export default function CellEditDialog({ cell, onSave, onClose, availableMats }:
             React.createElement("label", { style: style.lbl }, "TMP 温度"),
             React.createElement("input", { style: style.inp, value: data.tmp, onChange: (e) => set("tmp", e.target.value), placeholder: "如 2.53e-8" }),
           ),
+        ),
+        React.createElement("div", { style: { ...style.row, alignItems: "center" } },
+          React.createElement("div", { style: { ...style.grp, flex: 1, minWidth: 0 } },
+            React.createElement("label", { style: style.lbl }, "格阵数据 (fill_grid)"),
+            React.createElement("div", { style: { fontSize: 10, color: "var(--text-tertiary)", fontFamily: "Consolas,monospace", wordBreak: "break-all", lineHeight: 1.5, maxHeight: 48, overflow: "auto" } },
+              data.fill_grid || "（无格阵数据）"
+            ),
+          ),
+          data.fill_grid && onOpenLattice
+            ? React.createElement("button", {
+                type: "button",
+                className: "btn btn-primary btn-sm",
+                onClick: onOpenLattice,
+                style: { marginLeft: 10, flexShrink: 0 },
+              }, "⬚ 打开栅格编辑器")
+            : null,
         ),
         React.createElement("div", { style: style.row },
           React.createElement("div", { style: style.grp },

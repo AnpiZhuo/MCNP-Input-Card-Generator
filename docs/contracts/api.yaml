@@ -1445,6 +1445,201 @@ paths:
                       truncated: { type: boolean }
                       unresolved: { type: array }
 
+  /api/validate-lattice-surfaces:
+    post:
+      operationId: validateLatticeSurfaces
+      tags: [geometry]
+      summary: 格阵栅元曲面表达式预检测（lat=1 六面体 / lat=2 六棱柱）
+      description: |
+        入参 {surface_expr, lat, surfaces_text}。surface_expr 只接受带符号整数曲面号
+        交集（拒绝 # 补集 / : 并集 / 括号）；lat=1 合法=单 RPP/BOX 宏体、或 6 个
+        PX/PY/PZ 平面（每轴一对±）、或 4 个平面（2D 延伸）；lat=2 合法=单 RHP/HEX 宏体、
+        或 6 个竖直 P 平面（法向水平面均布 6 向）+ 2 个 PZ（顶底）。自带曲面卡正则
+        解析（不依赖 freecad/parsers）。返回 {"status":"ok","ok":bool,"msg":string}；
+        ok=false 为正常校验结果（非 HTTP 错误）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                surface_expr:
+                  type: string
+                  description: 格元曲面表达式（带符号整数曲面号交集）
+                lat:
+                  type: string
+                  enum: ['1', '2']
+                  description: 格阵类型（lat=1 六面体 / lat=2 六棱柱）
+                surfaces_text:
+                  type: string
+                  description: 曲面卡原始文本（定位曲面号定义，缺失则校验失败）
+      responses:
+        '200':
+          description: 校验结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      ok: { type: boolean, description: 是否构成合法格元盒 }
+                      msg: { type: string, description: 错误消息（合法时为空串） }
+        '500':
+          description: 校验异常
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/lattice-extent:
+    post:
+      operationId: latticeExtent
+      tags: [geometry]
+      summary: 格元曲面表达式 → 物理范围（供 pitch / 裁剪盒推导）
+      description: |
+        入参 {surface_expr, lat, surfaces_text}；返回
+        {ok, extent|null, msg}。extent = {x_min,x_max,y_min,y_max,z_min,z_max}，
+        z 无界（2D 延伸）字段为 null。无法解析（非法表达式 / 缺曲面定义）→
+        extent:null + ok:false + msg。ok=false 为正常校验结果（非 HTTP 错误）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                surface_expr: { type: string, description: 格元曲面表达式 }
+                lat: { type: string, enum: ['1', '2'] }
+                surfaces_text: { type: string, description: 曲面卡原始文本 }
+      responses:
+        '200':
+          description: 范围解析结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      ok: { type: boolean }
+                      extent:
+                        type: object
+                        nullable: true
+                        description: 解析失败为 null；z 无界字段为 null
+                        properties:
+                          x_min: { type: number, nullable: true }
+                          x_max: { type: number, nullable: true }
+                          y_min: { type: number, nullable: true }
+                          y_max: { type: number, nullable: true }
+                          z_min: { type: number, nullable: true }
+                          z_max: { type: number, nullable: true }
+                      msg: { type: string }
+        '500':
+          description: 解析异常
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/preview-lattice:
+    post:
+      operationId: previewLattice
+      tags: [geometry]
+      summary: 格阵 3D 预览（universe 实例化 + 嵌套 fill 递归）
+      description: |
+        入参 {surfaces, cells, tr_cards, latticeNum?, pitch?, height?}。
+        latticeNum 可选：只展开指定格阵 cell；pitch/height 可选覆盖（缺省从
+        lattice_cell_extent 解析）。嵌套 fill 递归在后端 compose_lattice_tree
+        完成。响应 {lattices, leafInstances, tree, count, detailViable, limit}：
+        - lattices: 每格阵（含嵌套）{num,lat,kind,dims,range,center,pitch,height,
+          trclRotationDeg,positions,universes}，positions 含全部格位（hex 角位
+          void u="0" 前端跳渲染），universes = 该格阵直接引用叶 universe 的裁剪
+          STL {u:{cellNum: base64}}。
+        - leafInstances: FLAT 绝对坐标 [{path,u,cellNum,mat,x,y,z,depth}]。
+        - tree: NESTED 保层次。count = 叶实例数。detailViable = count≤20000。
+        - limit: "ok" | "depth_limit"（递归超 MAX_LATTICE_DEPTH=8）|
+          "too_many"（叶超 MAX_TOTAL_INSTANCES=500000）。
+        各类守卫（无格阵/无 FreeCAD）在 HTTP 200 下返回空 lattices + message。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                surfaces: { type: string }
+                cells: { type: array, items: { $ref: '#/components/schemas/CellRow' } }
+                tr_cards: { type: string }
+                latticeNum: { type: integer, description: 可选：指定格阵 cell 号 }
+                pitch: { type: number, description: 可选：格距覆盖 }
+                height: { type: number, description: 可选：z 高度覆盖 }
+      responses:
+        '200':
+          description: 格阵预览结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      lattices:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            num: { type: integer, nullable: true, description: 格阵 cell 号 }
+                            lat: { type: string }
+                            kind: { type: string }
+                            dims: { type: array, items: { type: integer } }
+                            range: { type: array, items: { type: string } }
+                            center: { type: array, items: { type: number }, description: [cx,cy,cz] }
+                            pitch: { type: array, items: { type: number }, description: [px,py,pz] }
+                            height: { type: number }
+                            trclRotationDeg: { type: number }
+                            positions:
+                              type: array
+                              items:
+                                type: object
+                                properties:
+                                  idx: { type: integer }
+                                  u: { type: string }
+                                  x: { type: number }
+                                  y: { type: number }
+                                  z: { type: number }
+                                  dx: { type: number }
+                                  dy: { type: number }
+                                  dz: { type: number }
+                            universes:
+                              type: object
+                              description: {u: {cellNum: STL base64}}
+                              additionalProperties:
+                                type: object
+                                additionalProperties: { type: string }
+                      leafInstances:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            path: { type: string }
+                            u: { type: string }
+                            cellNum: { type: integer, nullable: true }
+                            mat: { type: string }
+                            x: { type: number }
+                            y: { type: number }
+                            z: { type: number }
+                            depth: { type: integer }
+                      tree: { type: array, description: NESTED 保层次（hover/U 分组） }
+                      count: { type: integer }
+                      detailViable: { type: boolean }
+                      limit: { type: string, enum: [ok, depth_limit, too_many] }
+                      message: { type: string, description: 守卫分支才有 }
+        '500':
+          description: 未捕获异常（附 traceback）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
 components:
   schemas:
     OkEnvelope:

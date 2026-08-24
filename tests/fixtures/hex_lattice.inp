@@ -1,0 +1,29 @@
+c synthetic hex lattice (lat=2), pointy-top + axial +Z
+c pointy-top hex cell: unit side, center origin.  Six side planes (P) at
+c 30/90/150/210/270/330 deg (vertex at +X = pointy-top) + top/bottom caps.
+c Lattice cell fill = 2x2 hex array, single axial layer (0:0 in k).
+1  p   0.866  0.5   0  -0.866
+2  p   0.866 -0.5   0  -0.866
+3  p   0     -1.0   0  -0.866
+4  p  -0.866 -0.5   0  -0.866
+5  p  -0.866  0.5   0  -0.866
+6  p   0      1.0   0  -0.866
+7  pz  0.5
+8  pz -0.5
+9  rpp -10 10 -10 10 -10 10
+c ----- universe 1: fuel pin -----
+10 1  -2.7  -1 -2 -3 -4 -5 -6 -7 -8  u=1  imp:n=1
+c ----- universe 2: water pin -----
+11 0      -1 -2 -3 -4 -5 -6 -7 -8  u=2  imp:n=1
+c ----- hex lattice (lat=2) 2x2, pointy-top + axial +Z -----
+20 0  -1 -2 -3 -4 -5 -6 -7 -8  lat=2  u=10  imp:n=1  fill=0:1 0:1 0:0
+      1  2  1  2
+c ----- assembly window + graveyard -----
+30 0  -9  fill=10  imp:n=1
+31 0   9  imp:n=0
+
+c ===================== DATA =====================
+mode n
+m1  92235.80c 0.031  92238.80c 0.969  8016.80c 2.0
+m2  1001.80c 2.0  8016.80c 1.0
+nps 1000

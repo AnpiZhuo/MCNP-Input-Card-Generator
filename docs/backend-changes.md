@@ -1031,3 +1031,158 @@ dims ni=1 nj=2 nk=2 / grid_bounds [49,-10,90]~[51,10,110]；texture 同样 ok（
 ## §V.3 全量门禁
 
 **pytest 609/0**（基线 595 + 14 新增；复跑稳定）——含契约漂移闸门 `tests/integration/test_api_contract.py`（37 端点双向绿：handlers dict ↔ api.yaml operationId + contract.ts 字段 ⊆ models.py + 三核心端点 HTTP 往返 + 本批新增 sweep-run 预算 HTTP 拒绝）。**未 commit**（等 PM 统一提交）。
+
+# 附录 W：格阵 fill 阶段1 数据层（2026-08-24，PM 派发，架构师定稿，未 commit）
+
+> 设计权威：`C:\Users\13789\.claude\plans\fill-cell-lat-0-u-fill-cell-u-u-u-u-u-3-fluffy-lampson.md` 阶段1。深模块契约/跨阶段决策见 plan 第 1-6 条。依赖红线：零新增 Python 依赖（lattice.py 只 stdlib）。
+
+## §W.1 新增/修改接口
+
+无新 HTTP 端点。`fill_grid` 字段全链路透传（parse→deck→asdict 桥接→前端→`_cells_from_list`→generate），asdict 自动透传无需改桥接代码。
+
+## §W.2 文件改动明细
+
+| 文件 | 改动 |
+| :--- | :--- |
+| `app/lattice.py` | **保留精化（架构师裁决，248 行草稿）**：`format_fill_cards` 2 处必须修——① **raw 优先回放**（非 cells，保 `17r` 简写 / 字节贴近源 / R1 稳定）；② 回放 raw 时**剥离前导 `len(fg.range_)` 个范围 token**（首行已含范围串，续行不重复）。raw 空（手工构造/画布覆盖）才回落 `fg.cells` 展开 |
+| `app/models.py` | `CellData` 加 `fill_grid: str = ""`（render 之后、comment 之前；全仓关键字构造，安全） |
+| `app/generator/parsers/core.py` | 模块顶 `from app import lattice`；新增 `_consume_fill_tokens` helper（FILL= / FILL 两分支共用）；`FILL=`（原 273）与 `FILL`（原 313）两分支改调它：收集 FILL 之后全部剩余 token → `parse_fill_tokens`。格阵→`fill=范围串`+`fill_grid=JSON`+`idx=len(parts); break`；翻译→fill 保留单值；返回 None（单值填充）→ 走原循环零回归。`CellData` 构造加 `fill_grid=fill_grid`。**伴生修复**：`parse_data_cards` 连续 C 注释行先回落 other_cards 再覆盖 pending_c（防覆盖丢失，17×17/BEAVRS 数据段连续 C 行 R1 逐代保持） |
+| `app/generator/inp_generator.py` | 模块顶 `from app import lattice`；`_generate_cells` FILL 发射前分派 `lattice.FillGrid.from_json(cell.fill_grid or "")`（脏 JSON→None 优雅回退单值路径）；格阵/翻译路径（fg 非 None）：跳过通用 FILL、常规参数照旧、`lattice_lines[0]`（FILL= 首行）放 params_parts 最后（MCNP 要求 FILL 是 cell 卡最后参数）、`lattice_lines[1:]` 独立 append 续行（绕开通用续行不加 `&`）；格阵 cell 的 `$` 注释移到所有续行之后的尾行（不吞条目）。**伴生修复**：`_wrap_long_lines` 注释保护——行内 `$` 位于第 80 列内 → 卡体已合法、注释超长不拆（MCNP 忽略 80 列后；防 `&` 注入污染注释逐代漂移，BEAVRS 长注释实卡触发） |
+| `gui/backend/api_server.py` | `_cells_from_list`（407-428）CellData 构造加 `fill_grid=cell_dict.get("fill_grid","")`；其余 asdict 桥接自动透传无需改；`build_cells_data`（阶段3）**未动** |
+
+## §W.3 数据库变更 / 环境变量
+
+无（纯 Python 引擎 + 字段透传，无迁移脚本、无新增环境变量）。
+
+## §W.4 新增/修改测试
+
+- `tests/unit/test_lattice.py`（新，13 用例）：parse_fill_tokens（17×17 矩形 / 3D 偏移 `(9 0 9)` / `17r` 重复 / 翻译单填充 / 单宇宙 None）/ parse_fill_entries（Nr 重复 / 偏移）/ format_fill_cards（**raw 优先** + **范围剥离** / cells 回落 / 翻译 / None）/ FillGrid JSON 往返 + 脏 JSON / hex_lattice 夹具解析 + R1。
+- `tests/parser/test_core_cells.py`：单值回归（48-57）补 `assert c.fill_grid == ""`；新增 6 用例（17×17 范围 / `1 (9 0 9)` 偏移 / `17r` 重复 / 翻译单填充 / 条目同行 / 空格 `FILL` 语法）。
+- `tests/integration/test_roundtrip.py`：`_cell_fields` 加 `fill_grid`；新增 `test_r1_lattice_17x17_fixed_point`、`test_r1_lattice_prob41c_fixed_point`（R1 字节不动点闸门）。
+- `tests/conftest.py`：kitchen_sink cell1 加 `fill_grid=""`。
+- `tests/parser/test_owen_deck_fixtures.py`：17×17 基线加强断言——`fill_grid` 非空、`fill=="0:16 0:16 0:0"`、`dims==[17,17,1]`、`surface_expr=="50 -51 52 -53"`（无范围串污染）。
+- `tests/fixtures/hex_lattice.inp`（新）：合成 lat=2 六棱柱（pointy-top 默认 + 轴向 +Z，2×2 阵列）。
+
+## §W.5 本地启动验证
+
+```
+python -m pytest tests/ -q                          # 632 passed（基线 609 + 新增 23）
+# R1 字节不动点（prob41c / inp24 / hex_lattice / 17×17 / BEAVRS 五夹具全 True）：
+python - <<'PY'
+from app.generator.parsers import parse_inp_text
+from app.generator.inp_generator import generate_inp_from_deck
+from tests.conftest import load_sample
+from pathlib import Path
+for name, text in {
+    'prob41c': load_sample('prob41c.inp'),
+    'inp24': load_sample('inp24.inp'),
+    'hex_lattice': load_sample('hex_lattice.inp'),
+    '17x17': (Path('tests/fixtures/owen')/'assembly_17x17_mcnp.i').read_text(encoding='utf-8', errors='replace'),
+    'BEAVRS': (Path('tests/fixtures/owen')/'beavrs_fullcore_mcnp.i').read_text(encoding='utf-8', errors='replace'),
+}.items():
+    deck, _ = parse_inp_text(text)
+    g1 = generate_inp_from_deck(deck)
+    deck2, _ = parse_inp_text(g1)
+    g2 = generate_inp_from_deck(deck2)
+    print(name, g1 == g2)
+PY
+```
+
+## §W.6 终态
+
+**pytest 632/0**（609 基线 + 23 新增）——含 R1 不动点 2 条新闸门 + kitchen_sink R4 不回退 + 契约漂移闸门全绿。wire 链路实测：asdict 桥接 + `_cells_from_list` 反向构造 `fill_grid` 不丢。**未 commit**（等 PM 统一提交）。
+
+# 附录 X：格阵 fill 阶段2 后端（validate 预检测 + API + golden 配套，2026-08-24，PM 派发，架构师定稿，未 commit）
+
+> 设计权威：`C:\Users\13789\.claude\plans\fill-cell-lat-0-u-fill-cell-u-u-u-u-u-3-fluffy-lampson.md` 阶段2 + `PROJECT_MEMORY.md` §S1b-1（架构师阶段2设计契约）。QA 建议（parse_fill_entries nR 上限）一并落地。依赖红线：零新增 Python 依赖（lattice.py 只 stdlib）。改动纪律：只动 5 个文件，未动阶段1已验收的解析/生成逻辑与 `_expand_repeat`。
+
+## §X.1 新增接口
+
+- `app/lattice.py::validate_lattice_surfaces(surface_expr, lat, surfaces_text="") -> (ok, msg)`：
+  - 只认带符号整数曲面号交集（如 `-10 20 -30 40`）；拒绝 `#`（补集）/ `:` / 括号。
+  - `lat="1"` 六面体合法：单 RPP/BOX 宏体；或 6 个 PX/PY/PZ 平面（每轴一对±）；或 4 个平面（2D 延伸，两轴各一对±）。
+  - `lat="2"` 六棱柱合法：单 RHP/HEX 宏体；或 6 个竖直 P 平面（法向在水平面均布 6 向）+ 2 个 PZ 顶底（一正一负）。
+  - 自带曲面卡正则解析（`_parse_surface_cards` 读 `surfaces_text` 定位曲面号定义），不依赖 freecad/parsers 模块。
+  - 返回 `(True, "")` 或 `(False, 中文错误消息)`。
+- HTTP 端点 `POST /api/validate-lattice-surfaces`（operationId `validateLatticeSurfaces`）：
+  - 入参 `{surface_expr, lat, surfaces_text}`，出参 `{"status":"ok","ok":bool,"msg":string}`（对齐 validate-inp 扁平信封风格；ok=false 为正常校验结果，非 HTTP 错误）。
+
+## §X.2 文件改动明细
+
+| 文件 | 改动 |
+| :--- | :--- |
+| `app/lattice.py` | 追加 validate 段：`validate_lattice_surfaces` + `_parse_surface_cards`（曲面卡文本→{号:(关键字,参数)}，跳过注释行/内联 `$`/支持 `j*i` 前缀与 `*TRn` 后缀）+ `_plane_normal`（P 卡系数形 A B C D 或三点形取法向）+ `_check_axis_pairs`（按轴成对±、号互异、2D 恰好两轴）+ `_validate_lat1`/`_validate_lat2` + `_resolve_surfaces`（共享查号）。**QA 建议**：新增模块常量 `MAX_EXPANDED_ENTRIES = 1_000_000`；`parse_fill_entries` 加 `max_entries` 参数（默认常量）封顶 nR 展开（超限截断不抛异常，raw 兜底保留原始 `17r` 简写，R1 不受影响）；`parse_fill_tokens` 补 0 逻辑同样封顶（极端超大范围 dims 不爆内存） |
+| `gui/backend/api_server.py` | `handlers` dict 注册 `/api/validate-lattice-surfaces`；新增 `_handle_validate_lattice_surfaces`（`_import_app("lattice")` 惰性导入 → 调 validate → `_ok({"ok":…,"msg":…})`） |
+| `docs/contracts/api.yaml` | 加 `/api/validate-lattice-surfaces` path（operationId `validateLatticeSurfaces`，tag geometry，含入参/出参 schema） |
+| `tests/unit/test_lattice.py` | 新增 validate 用例 15 条（lat=1 单RPP/单BOX/6平面/4平面2D 合法；lat=2 单RHP/单HEX/6P+2PZ 合法；`#`/`:`/括号/非配对/缺 surfaces_text/未知曲面/非法 lat/非平面混入 拒绝）+ 跨语言 golden 断言 `test_validate_lattice_golden_cross_language`（读 `gui/src/utils/__golden__/latticeGolden.json`，文件缺失跳过）+ nR 上限 3 条（超大 nR 封顶 1M / max_entries 可注入 / 超大范围补 0 封顶 monkeypatch） |
+| `tests/integration/test_api_contract.py` | 新增 `test_http_validate_lattice_surfaces`（真实 HTTP：17×17 4 平面 2D → ok:true；含 `#` → ok:false；lat=2 8 平面 → ok:true） |
+
+## §X.3 数据库变更 / 环境变量
+
+无（纯 Python 逻辑 + 端点，无迁移脚本、无新增环境变量）。
+
+## §X.4 测试
+
+- 全量 pytest：**650 passed, 1 skipped**（基线 632 + 新增 18；1 skip = golden JSON 前端未产出，缺失跳过）。
+- 阶段1 门禁不回退：prob41c / inp24 / hex_lattice / 17×17 / BEAVRS R1 字节不动点 + kitchen_sink R4 全绿。
+- 契约漂移闸门：handlers dict ↔ api.yaml 双向一致（新端点两方向均覆盖）。
+
+## §X.5 本地启动验证
+
+```
+python -m pytest tests/ -q     # 650 passed, 1 skipped
+# 端点冒烟（真实 HTTP，集成测试已覆盖）：
+curl -s -X POST http://127.0.0.1:5001/api/validate-lattice-surfaces \
+  -H 'Content-Type: application/json' \
+  -d '{"surface_expr":"50 -51 52 -53","lat":"1","surfaces_text":"50 px -0.63\n51 px 0.63\n52 py -0.63\n53 py 0.63"}'
+# → {"status":"ok","ok":true,"msg":""}
+```
+
+## §X.6 终态
+
+**pytest 650/0（1 skip）**。未 commit（等 PM 统一提交）。**nR 上限已加：MAX_EXPANDED_ENTRIES=1_000_000**（QA 建议）。跨语言 golden 断言已就位（前端产出 `gui/src/utils/__golden__/latticeGolden.json` 后即自动生效）。
+
+# 附录 Y：格阵 fill 阶段3 后端（3D 预览 universe 实例化 + 嵌套 fill 递归，2026-08-24，PM 派发，架构师定稿，未 commit）
+
+## §Y.1 新增/修改接口
+
+- **POST /api/lattice-extent**（operationId `latticeExtent`，tag geometry）：入参 `{surface_expr, lat, surfaces_text}`，响应 `{ok, extent|null, msg}`。`lattice_cell_extent` 解析格元物理范围（lat=1 单 RPP/BOX 宏体 / 6 或 4 平面；lat=2 单 RHP/HEX / 6 竖直 P 两两求交 + 2 PZ），z 无界字段为 null。
+- **POST /api/preview-lattice**（operationId `previewLattice`，tag geometry）：入参 `{surfaces, cells, tr_cards, latticeNum?, pitch?, height?}`，响应 `{lattices:[{num,lat,kind,dims,range,center,pitch,height,trclRotationDeg,positions,universes}], leafInstances, tree, count, detailViable, limit}`。嵌套 fill 递归在后端 `compose_lattice_tree` 完成（双形态：NESTED tree + FLAT leafInstances），每格阵一条 lattices（含嵌套、按 cellNum 去重），universes = 该格阵直接引用叶 universe 的裁剪 STL（合成 6 个格元盒平面 max_surf+1..+6，universe 栅元 surface_expr=原式+盒内半空间）。
+- **改 `build_cells_data`**：第一遍捕获 u/fill/lat/trcl/render/fill_grid；第二遍 `render:false`→skip（修死代码：前端传 render 但此前被忽略）+ `fill_grid` 非空→skip（格阵栅元不产实体 STL）；`cells_by_num` 保留（#n 补集引用不受影响）。
+
+## §Y.2 文件改动明细
+
+| 文件 | 改动 |
+| :--- | :--- |
+| `app/lattice.py` | 阶段3深模块：`hex_ring_rows`/`hex_ring_cell_count`/`hex_center`（与前端逐字一致 golden 锁死）、`lattice_cell_extent`（复用 `_parse_surface_cards`）、`expand_positions`（rect 中心公式 / hex 矩形盒+hexCenter / TRCL 绕 Z / 超限返回 None）、`compose_lattice_tree`（嵌套 fill 递归，三参数 MAX_LATTICE_DEPTH=8 / MAX_TOTAL_INSTANCES=500000 / DETAIL_MAX_INSTANCES=20000）、`_cell_pz_bounds` 助手。纯 stdlib。 |
+| `gui/backend/api_server.py` | `build_cells_data` render/fill_grid skip；`_PREVIEW_CACHE_LATTICE=PreviewCache(max_entries=2)`；两端点 handler + 助手（`_resolved_extent` pitch/height 覆盖次序、`_cell_trcl_deg` TRCL 绕 Z、`_build_one_universe` 裁剪 STL + 指纹缓存）；handlers dict 注册。 |
+| `app/preview_cache.py` | `fingerprint` 加可选 `extra` 参（并入 canonical json；None 时与旧版指纹一致，向后兼容）。 |
+| `docs/contracts/api.yaml` | 两 path（operationId previewLattice / latticeExtent，tag geometry）。 |
+| `tests/unit/test_lattice.py` | 阶段3用例：hex_ring_rows/hex_center golden、lattice_cell_extent（rpp/box/9参数box/6/4平面/hex平面/不可解析）、expand_positions（rect 2D/3D、hex 环序、TRCL 90°、上限拒绝）、compose_lattice_tree（嵌套 10 叶绝对坐标、depth_limit、too_many、常量）、跨语言 golden positions/nested 断言。 |
+| `tests/integration/test_api_contract.py` | lattice-extent / preview-lattice 真实 HTTP shape。 |
+| `gui/src/utils/__golden__/latticeGolden.json` | 扩展 positions（rect 2D/3D、hex、TRCL90）+ nested（嵌套样例 10 叶坐标）。 |
+
+## §Y.3 数据库变更 / 环境变量
+
+无（纯 Python 逻辑 + 端点，无迁移脚本、无新增环境变量）。
+
+## §Y.4 测试
+
+- 全量 pytest：**673 passed, 0 failed**（基线 651 + 新增 22；阶段2 的 1 skip 已消除——golden 已产出）。
+- 契约漂移闸门：handlers dict ↔ api.yaml 双向一致（新端点两方向均覆盖），HTTP 用例 15/15。
+- 端到端冒烟：hex_lattice 夹具 parse-inp → preview-lattice（hex 格位 0/1.732/0.866/2.598 正确，u=1 燃料 pin 裁剪 STL，void u=2 不产叶）→ preview-3d（格阵 cell 20 不再产实体 STL，仅燃料 pin cell 10）。
+
+## §Y.5 本地启动验证
+
+```
+python -m pytest tests/ -q     # 673 passed
+# 端点冒烟（真实 HTTP，集成测试已覆盖；契约闸门 fixture 起子进程）：
+curl -s -X POST http://127.0.0.1:5001/api/lattice-extent \
+  -H 'Content-Type: application/json' \
+  -d '{"surface_expr":"50 -51 52 -53","lat":"1","surfaces_text":"50 px -0.63\n51 px 0.63\n52 py -0.63\n53 py 0.63"}'
+# → {"status":"ok","ok":true,"extent":{"x_min":-0.63,"x_max":0.63,"y_min":-0.63,"y_max":0.63,"z_min":null,"z_max":null},"msg":""}
+```
+
+## §Y.6 终态
+
+**pytest 673/0**。未 commit（等 PM 统一提交）。与前端已对齐响应 shape（前端提案的 compose 递归树被否决——嵌套递归在后端 compose_lattice_tree 完成，前端消费 flat leafInstances + 每格阵 positions/universes）。契约闸门 5001 端口本次空闲无劫持，全程真实端口验证通过。

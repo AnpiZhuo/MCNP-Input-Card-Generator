@@ -15,6 +15,7 @@ This module contains the main parsing logic for MCNP input card types:
 import json
 import math
 import re
+from app import lattice
 from app.models import CellData, CellRow, MaterialData, MaterialRow, SourceData, TallyDefinition, PTRACSettings
 from app.meshtal.fmesh_parser import parse_fmesh_lines
 from .lines import _SURFACE_TYPES, extract_comment, strip_comment
@@ -233,6 +234,7 @@ def parse_cells(cell_lines: list[str]) -> list[CellRow]:
         imp_e = ""
         vol = ""
         pwt = ext = fcl = u_ = fill = lat = trcl = tmp = other_params = ""
+        fill_grid = ""
 
         idx = surf_start
         while idx < len(parts):
@@ -271,7 +273,11 @@ def parse_cells(cell_lines: list[str]) -> list[CellRow]:
             elif upper.startswith("U="):
                 u_ = token.split("=", 1)[1]
             elif upper.startswith("FILL="):
-                fill = token.split("=", 1)[1]
+                # 格阵/翻译 fill：FILL= 之后全部剩余 token 收束（见 _consume_fill_tokens）。
+                fill_val = token.split("=", 1)[1]
+                fill, fill_grid, idx, _done = _consume_fill_tokens(parts, fill_val, idx, lat)
+                if _done:
+                    break
             elif upper.startswith("LAT="):
                 lat = token.split("=", 1)[1]
             elif upper.startswith("TRCL="):
@@ -313,7 +319,10 @@ def parse_cells(cell_lines: list[str]) -> list[CellRow]:
             elif upper == "FILL":
                 idx += 1
                 if idx < len(parts):
-                    fill = parts[idx]
+                    fill_val = parts[idx]
+                    fill, fill_grid, idx, _done = _consume_fill_tokens(parts, fill_val, idx, lat)
+                    if _done:
+                        break
             elif upper == "LAT":
                 idx += 1
                 if idx < len(parts):
@@ -340,7 +349,7 @@ def parse_cells(cell_lines: list[str]) -> list[CellRow]:
             vol=vol, pwt=pwt, ext=ext, fcl=fcl,
             u=u_, fill=fill, lat=lat, trcl=trcl,
             tmp=tmp, other_params=other_params,
-            comment=comment,
+            comment=comment, fill_grid=fill_grid,
         )))
 
     return cells
@@ -371,6 +380,21 @@ def _expand_repeat(tokens: list[str]) -> list[str]:
             prev = tok
             values.append(tok)
     return values
+
+
+def _consume_fill_tokens(parts: list[str], fill_val: str, idx: int, lat: str) -> tuple:
+    """格阵/翻译 fill 收束（FILL= / FILL 两分支共用）。
+
+    FILL 是 cell 卡最后参数：收集 FILL 之后全部剩余 token → lattice.parse_fill_tokens。
+    返回 (fill, fill_grid, new_idx, consumed)：
+      - 单宇宙填充（parse 返回 None）→ (fill_val, "", idx, False)，调用方维持原循环
+      - 格阵 → fill=范围串；翻译 → fill=单值；fill_grid=JSON；new_idx=len(parts) 收束
+    """
+    fg = lattice.parse_fill_tokens([fill_val] + parts[idx + 1:], lat)
+    if fg is None:
+        return fill_val, "", idx, False
+    fill = " ".join(fg.range_) if fg.kind == "lattice" else fill_val
+    return fill, fg.to_json(), len(parts), True
 
 
 def _parse_material(parts: list[str], m_str: str) -> MaterialData:
@@ -1068,8 +1092,12 @@ def parse_data_cards(data_lines: list[str]) -> dict:
             i += 1
             continue
 
-        # C 注释行缓冲（C 后跟至少一个空格，CUT 不是注释）；若后续非 M 卡则回落到 other_cards
+        # C 注释行缓冲（C 后跟至少一个空格，CUT 不是注释）；若后续非 M 卡则回落到 other_cards。
+        # 连续 C 注释块：前一 C 行未被 M 卡消费 → 先回落 other_cards，避免被覆盖丢失
+        # （R1 不动点：17×17/BEAVRS 数据段连续 C 行逐代保持，不丢行）。
         if re.match(r'^C\s', line, re.IGNORECASE):
+            if pending_c:
+                result["other_cards"].append(pending_c)
             pending_c = raw_line
             i += 1
             continue

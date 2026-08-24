@@ -283,3 +283,154 @@ def test_http_sweep_run_budget_rejected(backend_base_url):
     assert resp.get("code") == "budget_exceeded", resp
     assert "7" in resp.get("message", "")  # 当前组合数
     assert "预算" in resp.get("message", "")
+
+
+def test_http_validate_lattice_surfaces(backend_base_url):
+    """/api/validate-lattice-surfaces：17×17 4 平面 2D → ok:true；含 # 拒绝；lat=2 8 平面合法。"""
+    resp = _post(backend_base_url, "/api/validate-lattice-surfaces", {
+        "surface_expr": "50 -51 52 -53",
+        "lat": "1",
+        "surfaces_text": "50 px -0.63\n51 px 0.63\n52 py -0.63\n53 py 0.63",
+    })
+    assert resp.get("status") == "ok", resp
+    assert resp.get("ok") is True, resp
+    assert resp.get("msg") == "", resp
+    resp_bad = _post(backend_base_url, "/api/validate-lattice-surfaces", {
+        "surface_expr": "-10 #11", "lat": "1",
+        "surfaces_text": "10 px 0\n11 py 0",
+    })
+    assert resp_bad.get("ok") is False, resp_bad
+    resp_hex = _post(backend_base_url, "/api/validate-lattice-surfaces", {
+        "surface_expr": "-1 -2 -3 -4 -5 -6 -7 8",
+        "lat": "2",
+        "surfaces_text": (
+            "1 p 0.866 0.5 0 -0.866\n2 p 0.866 -0.5 0 -0.866\n"
+            "3 p 0 -1.0 0 -0.866\n4 p -0.866 -0.5 0 -0.866\n"
+            "5 p -0.866 0.5 0 -0.866\n6 p 0 1.0 0 -0.866\n"
+            "7 pz 0.5\n8 pz -0.5"),
+    })
+    assert resp_hex.get("status") == "ok", resp_hex
+    assert resp_hex.get("ok") is True, resp_hex
+
+
+# ── 格阵阶段3端点：lattice-extent / preview-lattice ──────
+LATTICE_FILL_GRID = {
+    "lat": "1", "kind": "lattice", "range": ["0:1", "0:1", "0:0"], "dims": [2, 2, 1],
+    "cells": [
+        {"u": "1", "dx": "", "dy": "", "dz": ""},
+        {"u": "2", "dx": "", "dy": "", "dz": ""},
+        {"u": "1", "dx": "", "dy": "", "dz": ""},
+        {"u": "2", "dx": "", "dy": "", "dz": ""},
+    ],
+    "raw": "0:1 0:1 0:0 1 2 1 2",
+}
+LATTICE_DECK = {
+    "surfaces": "1 px -1\n2 px 1\n3 py -1\n4 py 1\n5 cz 0.3\n6 cz 0.5",
+    "tr_cards": "",
+    "cells": [
+        {"kind": "cell", "cell": {"number": 20, "material": "0", "density": "",
+                                  "surface_expr": "1 -2 3 -4", "u": "10", "fill": "0:1 0:1 0:0",
+                                  "lat": "1", "trcl": "", "render": True,
+                                  "fill_grid": json.dumps(LATTICE_FILL_GRID)}},
+        {"kind": "cell", "cell": {"number": 1, "material": "1", "density": "-1.0",
+                                  "surface_expr": "-5", "u": "1", "render": True,
+                                  "fill_grid": ""}},
+        {"kind": "cell", "cell": {"number": 2, "material": "2", "density": "-1.0",
+                                  "surface_expr": "5 -6", "u": "2", "render": True,
+                                  "fill_grid": ""}},
+    ],
+}
+
+
+def test_http_lattice_extent(backend_base_url):
+    """/api/lattice-extent：rect 2D → ok + extent（z 无界）；含 # → ok:false + extent:null。"""
+    resp = _post(backend_base_url, "/api/lattice-extent", {
+        "surface_expr": "1 -2 3 -4", "lat": "1",
+        "surfaces_text": "1 px -1\n2 px 1\n3 py -1\n4 py 1",
+    })
+    assert resp.get("status") == "ok", resp
+    assert resp.get("ok") is True, resp
+    ext = resp.get("extent")
+    assert ext is not None, resp
+    assert ext["x_min"] == -1 and ext["x_max"] == 1
+    assert ext["y_min"] == -1 and ext["y_max"] == 1
+    assert ext["z_min"] is None and ext["z_max"] is None
+    bad = _post(backend_base_url, "/api/lattice-extent", {
+        "surface_expr": "-10 #11", "lat": "1", "surfaces_text": "10 px 0",
+    })
+    assert bad.get("status") == "ok", bad
+    assert bad.get("ok") is False, bad
+    assert bad.get("extent") is None, bad
+    assert bad.get("msg"), bad
+
+
+def test_http_preview_lattice_shape(backend_base_url):
+    """/api/preview-lattice：2×2 格阵 → lattices/positions/leafInstances/count shape。"""
+    resp = _post(backend_base_url, "/api/preview-lattice", LATTICE_DECK)
+    assert resp.get("status") == "ok", resp
+    assert resp.get("limit") in ("ok", "depth_limit", "too_many"), resp
+    lattices = resp.get("lattices", [])
+    assert len(lattices) == 1, resp
+    lat = lattices[0]
+    assert lat["num"] == 20, lat
+    assert lat["lat"] == "1"
+    assert lat["dims"] == [2, 2, 1], lat
+    positions = lat.get("positions", [])
+    assert len(positions) == 4, lat
+    assert positions[0]["u"] == "1" and positions[0]["idx"] == 0
+    assert positions[1]["u"] == "2"
+    assert set(positions[0].keys()) == {"idx", "u", "x", "y", "z", "dx", "dy", "dz"}
+    assert isinstance(lat.get("universes"), dict), lat
+    leaves = resp.get("leafInstances", [])
+    assert len(leaves) == 4, resp
+    for leaf in leaves:
+        assert set(leaf.keys()) == {"path", "u", "cellNum", "mat", "x", "y", "z", "depth"}
+    assert resp.get("count") == 4, resp
+    assert isinstance(resp.get("tree"), list), resp
+    assert isinstance(resp.get("detailViable"), bool), resp
+
+
+def _stl_triangle_count(raw: bytes) -> int:
+    """STL 字节 → 三角形数（ASCII 'facet' 计数 / 二进制头 offset80 uint32）。"""
+    if not raw:
+        return 0
+    if b"facet" in raw:
+        return raw.count(b"facet")
+    if len(raw) >= 84:
+        import struct
+        return struct.unpack("<I", raw[80:84])[0]
+    return 0
+
+
+def test_http_preview_lattice_universe_stl_nonempty(backend_base_url):
+    """回归：圆柱格元（燃料棒/导向管/仪表管）裁剪后 STL 非空。
+
+    致命缺陷根因：_build_one_universe 曾把 6 个盒平面塞进 cell 表达式做 CSG 交集，
+    FreeCAD/OCC 对「圆柱（C/CZ）∩ 平行轴平面（PX/PY）」的布尔 common 恒空 →
+    84B/0 三角形 STL。修复=格元盒改用单个 RPP 宏体（-num 盒内半空间）做
+    solid-solid 盒裁剪。本用例用含实心圆柱（u1 `-5`）与环形（u2 `5 -6`）的
+    LATTICE_DECK 直验：每个 universe cell 的 STL 三角形数必须 > 0。
+    FreeCAD 不可用时 skip（universe STL 依赖 FreeCAD 子进程）。
+    """
+    try:
+        from app.freecad_locator import bin_dir
+    except ImportError:
+        bin_dir = None
+    if not bin_dir:
+        pytest.skip("FreeCAD 不可用，跳过 universe STL 非空直验")
+    import base64
+    resp = _post(backend_base_url, "/api/preview-lattice", LATTICE_DECK)
+    assert resp.get("status") == "ok", resp
+    lattices = resp.get("lattices", [])
+    assert len(lattices) == 1, resp
+    universes = lattices[0].get("universes", {})
+    assert universes, f"universes 为空（FreeCAD 可用但未产出任何 STL）: {resp}"
+    for u in sorted(universes):
+        cells = universes[u]
+        assert cells, f"universe u{u} 无 STL"
+        for cell_num in sorted(cells):
+            raw = base64.b64decode(cells[cell_num])
+            tri = _stl_triangle_count(raw)
+            assert tri > 0, (
+                f"universe u{u} cell {cell_num} STL 空（{len(raw)}B/0 三角形）——"
+                "格元盒裁剪仍产出空几何")

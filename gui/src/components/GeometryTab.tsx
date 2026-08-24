@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import CellEditDialog, { type CellData } from "./CellEditDialog";
+import { deckToLocalCells, localToDeckCells, type LocalCellRow } from "../utils/cellBridge";
 import BatchCellEditDialog from "./BatchCellEditDialog";
 import McnpEditor from "./McnpEditor";
 import TextModeSection from "./TextModeSection";
@@ -9,9 +10,12 @@ import Preview3D from "./Preview3D";
 import StepImportDialog from "./StepImportDialog";
 import QuickCellDialog from "./QuickCellDialog";
 import FloatingDialog from "./FloatingDialog";
+import LatticeEditDialog from "./LatticeEditDialog";
 import { useDeck } from "../utils/DeckContext";
 import { useFreecadStatus } from "../utils/useFreecadStatus";
 import { useRowDrag } from "../utils/useRowDrag";
+import { useDragToGroup } from "../utils/useDragToGroup";
+import { groupByUniverse, groupHeaderLabel } from "../utils/universeGroups";
 import { openPreview3D, onMaterialChange, onQuickCellGenerate } from "../utils/windows";
 import { apiUrl } from "../utils/api";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
@@ -29,9 +33,6 @@ interface GeoProps {
   pendingCellFromMaterial?: number;
 }
 
-/** 本地栅元行：真正的栅元(camelCase) 或原样条件行 */
-type LocalCellRow = { kind: "cell"; cell: CellData } | { kind: "raw"; text: string };
-
 export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const [doc, setDoc] = useState<{path:string;title:string}|null>(null);
   const [cells, setCells] = useState<LocalCellRow[]>([]);
@@ -40,7 +41,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     const c = [...cells]; const [m] = c.splice(from, 1); c.splice(to, 0, m); setCells(c);
   };
   const cellDrag = useRowDrag(moveCellRow);
-  const addCellRow = () => setCells([...cells, { kind: "cell", cell: { num:String(cells.length+1), mat:"0", density:"", surfaces:"", impN:"", impP:"", impE:"", vol:"", pwt:"", ext:"", fcl:"", u:"", fill:"", lat:"", trcl:"", tmp:"", otherParams:"", render:false, comment:"" } }]);
+  const addCellRow = () => setCells([...cells, { kind: "cell", cell: { num:String(cells.length+1), mat:"0", density:"", surfaces:"", impN:"", impP:"", impE:"", vol:"", pwt:"", ext:"", fcl:"", u:"", fill:"", lat:"", trcl:"", tmp:"", otherParams:"", render:false, fill_grid:"", comment:"" } }]);
   const addRawCell = (text: string) => setCells([...cells, { kind: "raw", text }]);
   const addConditionalCells = () => {
     const name = window.prompt("条件名（如 ENDF7）", "ENDF7");
@@ -62,6 +63,16 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     existingNums: number[];
     zeroVolume: number[];
   } | null>(null);
+  // 格阵 fill 阶段2：栅格编辑器 + 按 U 分组显示
+  const [latticeOpen, setLatticeOpen] = useState(false);
+  const [latticeEditIdx, setLatticeEditIdx] = useState<number | null>(null);
+  const [groupByU, setGroupByU] = useState(false);
+  const groupDrag = useDragToGroup({
+    onMove: moveCellRow,
+    onDropOnGroup: (from, u) => {
+      setCells(prev => prev.map((c, i) => (i === from && c.kind === "cell" ? { ...c, cell: { ...c.cell, u: String(u) } } : c)));
+    },
+  });
   // T2：快捷添加重合检测失败 → 非阻塞警告（仍追加栅元，但告知未校验重叠）
   const [quickCheckWarn, setQuickCheckWarn] = useState<string | null>(null);
   // 栅元表材料列点击下拉：i=正在编辑材料号的栅元行索引，x/y=按钮位置（用于 portal 定点浮层）
@@ -80,12 +91,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const cellsText = useSectionTextMode("cells", {
     deck, patch, overrideKey: "cells",
     onBackToForm: (data) => {
-      const arr: any[] = data.cells || [];
-      const mapped = arr.map((c: any) => {
-        if (c?.kind === "raw") return { kind: "raw" as const, text: c.text };
-        const cell = c?.kind === "cell" ? c.cell : c;
-        return { kind: "cell" as const, cell: { num: String(cell?.number ?? cell?.num ?? ""), mat: cell?.material ?? cell?.mat ?? "", density: cell?.density ?? "", surfaces: cell?.surface_expr ?? cell?.surfaces ?? "", impN: cell?.imp_n ?? cell?.impN ?? "", impP: cell?.imp_p ?? cell?.impP ?? "", impE: cell?.imp_e ?? cell?.impE ?? "", vol: cell?.vol ?? "", pwt: cell?.pwt ?? "", ext: cell?.ext ?? "", fcl: cell?.fcl ?? "", u: cell?.u ?? "", fill: cell?.fill ?? "", lat: cell?.lat ?? "", trcl: cell?.trcl ?? "", tmp: cell?.tmp ?? "", otherParams: cell?.other_params ?? cell?.otherParams ?? "", render: cell?.render !== false, comment: cell?.comment ?? "" } };
-      });
+      const mapped = deckToLocalCells(data.cells || []);
       if (mapped.length) setCells(mapped);
     },
     initialText: deck.rawOverrides?.cells || "",
@@ -101,7 +107,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
         num: String(maxNum + 1), mat: String(pendingCellFromMaterial),
         density: "-1.0", surfaces: "", impN: "", impP: "", impE: "",
         vol: "", pwt: "", ext: "", fcl: "", u: "", fill: "", lat: "",
-        trcl: "", tmp: "", otherParams: "", render: true,
+        trcl: "", tmp: "", otherParams: "", render: true, fill_grid: "",
         comment: `材料 M${pendingCellFromMaterial} 对应栅元`,
       } }]);
     }
@@ -137,12 +143,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
       if (txt.trim()) {
         try {
           const data = await textToSection("cells", txt);
-          const arr: any[] = data.cells || [];
-          const mapped = arr.map((c: any) => {
-            if (c?.kind === "raw") return { kind: "raw" as const, text: c.text };
-            const cell = c?.kind === "cell" ? c.cell : c;
-            return { kind: "cell" as const, cell: { num: String(cell?.number ?? cell?.num ?? ""), mat: cell?.material ?? cell?.mat ?? "", density: cell?.density ?? "", surfaces: cell?.surface_expr ?? cell?.surfaces ?? "", impN: cell?.imp_n ?? cell?.impN ?? "", impP: cell?.imp_p ?? cell?.impP ?? "", impE: cell?.imp_e ?? cell?.impE ?? "", vol: cell?.vol ?? "", pwt: cell?.pwt ?? "", ext: cell?.ext ?? "", fcl: cell?.fcl ?? "", u: cell?.u ?? "", fill: cell?.fill ?? "", lat: cell?.lat ?? "", trcl: cell?.trcl ?? "", tmp: cell?.tmp ?? "", otherParams: cell?.other_params ?? cell?.otherParams ?? "", render: cell?.render !== false, comment: cell?.comment ?? "" } };
-          });
+          const mapped = deckToLocalCells(data.cells || []);
           if (mapped.length) setCells(mapped);
         } catch (e: any) {
           alert("栅元文本解析失败: " + (e?.message || e));
@@ -156,6 +157,8 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
         num: (c as any).cell.num, mat: (c as any).cell.mat,
         density: (c as any).cell.density, surfaces: (c as any).cell.surfaces,
         comment: (c as any).cell.comment, render: (c as any).cell.render,
+        u: (c as any).cell.u, fill: (c as any).cell.fill, lat: (c as any).cell.lat,
+        trcl: (c as any).cell.trcl, fill_grid: (c as any).cell.fill_grid,
       })),
       surfaces: surfText,
       trCards: trText,
@@ -348,6 +351,23 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     setBatchOpen(false);
     setSelectedCells([]);
   };
+
+  // 格阵 fill 阶段2：栅格编辑器保存（新建追加 / 编辑替换；自动生成的面卡追加到曲面卡）
+  const handleLatticeSave = (result: { cell: CellData; surfacesText: string }) => {
+    setSurfText(result.surfacesText);
+    setCells(prev => {
+      if (latticeEditIdx != null && latticeEditIdx >= 0 && prev[latticeEditIdx]?.kind === "cell") {
+        const next = [...prev];
+        next[latticeEditIdx] = { kind: "cell" as const, cell: result.cell };
+        return next;
+      }
+      return [...prev, { kind: "cell" as const, cell: result.cell }];
+    });
+    setLatticeOpen(false);
+    setLatticeEditIdx(null);
+  };
+  const openLatticeCreate = () => { setLatticeEditIdx(null); setLatticeOpen(true); };
+  const openLatticeEdit = (idx: number) => { setEditCell(null); setLatticeEditIdx(idx); setLatticeOpen(true); };
   // 栅元被删除/同步替换后，剔除勾选集中已不存在的栅元 num（重排不影响——存的是 num）
   useEffect(() => {
     setSelectedCells(prev => {
@@ -377,9 +397,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   trTextRef.current = trText;
   useEffect(() => {
     // local → deck：cells（CellRow 判别联合）/ surfaces / tr 全部受控推送
-    const curCells = JSON.stringify(cells.map(c => c.kind === "raw"
-      ? { kind: "raw", text: c.text }
-      : { kind: "cell", cell: { number: parseInt(c.cell.num) || 0, material: c.cell.mat, density: c.cell.density, surface_expr: c.cell.surfaces, imp_n: c.cell.impN, imp_p: c.cell.impP, imp_e: c.cell.impE, vol: c.cell.vol, pwt: c.cell.pwt, ext: c.cell.ext, fcl: c.cell.fcl, u: c.cell.u, fill: c.cell.fill, lat: c.cell.lat, trcl: c.cell.trcl, tmp: c.cell.tmp, other_params: c.cell.otherParams, render: c.cell.render, comment: c.cell.comment } }));
+    const curCells = JSON.stringify(localToDeckCells(cells));
     const p: Record<string, any> = {};
     if (curCells !== lastCellsRef.current) { lastCellsRef.current = curCells; p.cells = JSON.parse(curCells); }
     if (surfText !== lastSurfRef.current) { lastSurfRef.current = surfText; p.surfaces = surfText; }
@@ -389,12 +407,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   useEffect(() => {
     const newSurf = deck.surfaces || "";
     const newTr = deck.tr_cards || "";
-    const newCells = deck.cells?.length ? deck.cells.map((c: any) => {
-      if (c?.kind === "raw") return { kind: "raw" as const, text: c.text };
-      // CellRow（嵌套 cell）或旧平铺格式（STEP 导入）都兼容
-      const cell = c?.kind === "cell" ? c.cell : c;
-      return { kind: "cell" as const, cell: { num: String(cell?.number ?? cell?.num ?? ""), mat: cell?.material ?? cell?.mat ?? "", density: cell?.density ?? "", surfaces: cell?.surface_expr ?? cell?.surfaces ?? "", impN: cell?.imp_n ?? cell?.impN ?? "", impP: cell?.imp_p ?? cell?.impP ?? "", impE: cell?.imp_e ?? cell?.impE ?? "", vol: cell?.vol ?? "", pwt: cell?.pwt ?? "", ext: cell?.ext ?? "", fcl: cell?.fcl ?? "", u: cell?.u ?? "", fill: cell?.fill ?? "", lat: cell?.lat ?? "", trcl: cell?.trcl ?? "", tmp: cell?.tmp ?? "", otherParams: cell?.other_params ?? cell?.otherParams ?? "", render: cell?.render !== false, comment: cell?.comment ?? "" } };
-    }) : [];
+    const newCells = deckToLocalCells(deck.cells);
     if (newSurf !== surfText) setSurfText(newSurf);
     if (newTr !== trText) setTrText(newTr);
     if (newCells.length && JSON.stringify(newCells) !== JSON.stringify(cellsRef.current)) {
@@ -402,9 +415,72 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     }
   }, [deck.surfaces, deck.tr_cards, deck.cells]);
 
+  // 按 U 分组显示：raw 行原样 + 组间分隔头行（复用 raw 行分隔样式，拖到组头改 u）
+  const renderGroupedBody = () => {
+    const groups = groupByUniverse(cells);
+    const out: React.ReactNode[] = [];
+    const badgeStyle: React.CSSProperties = { display: "inline-block", marginRight: 4, padding: "0 4px", borderRadius: 3, fontSize: 10, fontWeight: 600, background: "rgba(76,159,232,0.18)", color: "#7db8f0", border: "1px solid rgba(76,159,232,0.4)", verticalAlign: "1px" };
+    cells.forEach((c, i) => {
+      if (c.kind !== "raw") return;
+      out.push(
+        <tr key={`raw-${i}`} style={{ background: "rgba(255,255,255,0.04)" }}>
+          <td style={{ textAlign: "center" }}><input type="checkbox" disabled /></td>
+          <td colSpan={6} style={{ fontFamily: "Consolas,monospace", fontSize: 12, color: "#ce93d8" }}>{c.text}</td>
+          <td style={{ whiteSpace: "nowrap" }}>
+            <button className="btn btn-danger btn-xs" onClick={() => setCells(cells.filter((_, j) => j !== i))}>×</button>
+          </td>
+        </tr>
+      );
+    });
+    for (const g of groups) {
+      out.push(
+        <tr key={`hdr-${g.u}`} {...groupDrag.groupHandlers(g.u)}
+          style={{ background: "rgba(255,255,255,0.04)", cursor: "grab", ...groupDrag.groupStyle(g.u) }}>
+          <td colSpan={8} style={{ fontFamily: "Consolas,monospace", fontSize: 12, color: "#ce93d8", fontWeight: 600 }}>
+            ⬚ {groupHeaderLabel(g.u, g.count)} · 拖拽栅元到此行改 U
+          </td>
+        </tr>
+      );
+      g.rows.forEach((row, k) => {
+        if (row.kind !== "cell") return; // 组内均为栅元行（类型收窄）
+        const r = row.cell;
+        const fi = g.indices[k];
+        out.push(
+          <tr key={`g-${g.u}-${fi}`} {...groupDrag.cellHandlers(fi)} style={groupDrag.cellStyle(fi)}>
+            <td style={{ textAlign: "center" }}>
+              <input type="checkbox" checked={selectedCells.includes(r.num)} onChange={() => toggleSelect(r.num)} />
+            </td>
+            <td style={{ fontWeight: 600, color: "var(--text-primary)" }}>{r.num}</td>
+            <td style={{ fontSize: 11, color: "var(--text-secondary)" }}>{r.mat}</td>
+            <td>{r.density}</td>
+            <td>
+              {r.fill_grid ? <span style={badgeStyle}>格阵</span> : null}
+              {r.surfaces}
+            </td>
+            <td>{r.impN}</td>
+            <td style={{ fontSize: 11, color: "var(--text-secondary)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.comment || "—"}</td>
+            <td style={{ whiteSpace: "nowrap" }}>
+              <button className="btn btn-ghost btn-xs" onClick={() => setEditCell(fi)}>✎</button>
+              <button className="btn btn-danger btn-xs" onClick={() => setCells(cells.filter((_, j) => j !== fi))}>×</button>
+            </td>
+          </tr>
+        );
+      });
+    }
+    return out;
+  };
+
   return (
     <>
-      {editCell !== null && cells[editCell]?.kind === "cell" && <CellEditDialog cell={cells[editCell].cell} onSave={(d) => { const c = [...cells]; c[editCell] = { kind: "cell", cell: d }; setCells(c); setEditCell(null); }} onClose={() => setEditCell(null)} availableMats={deck.materials} />}
+      {editCell !== null && cells[editCell]?.kind === "cell" && <CellEditDialog cell={cells[editCell].cell} onSave={(d) => { const c = [...cells]; c[editCell] = { kind: "cell", cell: d }; setCells(c); setEditCell(null); }} onClose={() => setEditCell(null)} availableMats={deck.materials} onOpenLattice={() => openLatticeEdit(editCell)} />}
+      {latticeOpen && <LatticeEditDialog
+        surfacesText={surfText}
+        deckCells={cells.filter(c => c.kind === "cell").map(c => c.cell)}
+        initialCell={latticeEditIdx != null && cells[latticeEditIdx]?.kind === "cell" ? cells[latticeEditIdx].cell : null}
+        nextCellNum={cells.filter(c => c.kind === "cell").reduce((m, c) => Math.max(m, parseInt(c.cell.num, 10) || 0), 0) + 1}
+        onSave={handleLatticeSave}
+        onClose={() => { setLatticeOpen(false); setLatticeEditIdx(null); }}
+      />}
       {batchOpen && selectedCellRows.length > 0 && <BatchCellEditDialog
         cells={selectedCellRows.map(c => ({ num: c.num, mat: c.mat, density: c.density }))}
         availableMats={deck.materials}
@@ -509,6 +585,11 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
                 ? { background: "var(--bg-glass)", color: "var(--text-tertiary)", cursor: "not-allowed", boxShadow: "none", opacity: 0.6 }
                 : undefined}
             >⚡ 批量编辑</button>
+            <button className="btn btn-ghost btn-xs" onClick={openLatticeCreate} title="创建/编辑格阵 FILL 栅元（矩形/六棱柱涂色画布）">⬚ 栅格编辑</button>
+            <label style={{ fontSize: 11, color: "var(--text-secondary)", display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer", marginLeft: 6 }}>
+              <input type="checkbox" checked={groupByU} onChange={(e) => setGroupByU(e.target.checked)} />
+              按 U 分组
+            </label>
           </div>
         </div>
         <div className="table-wrap">
@@ -526,7 +607,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
               <th>操作</th>
             </tr></thead>
             <tbody>
-              {cells.map((c, i) => c.kind === "raw" ? (
+              {groupByU ? renderGroupedBody() : cells.map((c, i) => c.kind === "raw" ? (
                 <tr key={i} {...cellDrag.rowHandlers(i)}
                   style={{ background: "rgba(255,255,255,0.04)", ...cellDrag.rowStyle(i) }}>
                   <td style={{ textAlign: "center" }}><input type="checkbox" disabled /></td>
@@ -571,7 +652,12 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
                       document.body
                     )}
                   </td>
-                  <td>{c.cell.density}</td><td>{c.cell.surfaces}</td><td>{c.cell.impN}</td>
+                  <td>{c.cell.density}</td>
+                  <td style={{ position: "relative" }}>
+                    {c.cell.fill_grid ? <span className="lattice-badge" style={{ display: "inline-block", marginRight: 4, padding: "0 4px", borderRadius: 3, fontSize: 10, fontWeight: 600, background: "rgba(76,159,232,0.18)", color: "#7db8f0", border: "1px solid rgba(76,159,232,0.4)", verticalAlign: "1px" }}>格阵</span> : null}
+                    {c.cell.surfaces}
+                  </td>
+                  <td>{c.cell.impN}</td>
                   <td style={{fontSize:11,color:"var(--text-secondary)",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.cell.comment||"—"}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button className="btn btn-ghost btn-xs" onClick={() => setEditCell(i)}>✎</button>
@@ -585,7 +671,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
         </>)}
       </div>
       {doc && <DocViewer path={doc.path} title={doc.title} onClose={() => setDoc(null)} />}
-      {show3D && <Preview3D cells={cells.filter(c => c.kind === "cell").map(c => ({ num: c.cell.num, mat: c.cell.mat, density: c.cell.density, surfaces: c.cell.surfaces, comment: c.cell.comment, render: c.cell.render }))} surfaces={surfText} trCards={trText} onClose={() => setShow3D(false)} onMaterialChange={handleCellMaterialChange} onQuickCellGenerate={handleQuickCellGenerate} />}
+      {show3D && <Preview3D cells={cells.filter(c => c.kind === "cell").map(c => ({ num: c.cell.num, mat: c.cell.mat, density: c.cell.density, surfaces: c.cell.surfaces, comment: c.cell.comment, render: c.cell.render, u: c.cell.u, fill: c.cell.fill, lat: c.cell.lat, trcl: c.cell.trcl, fill_grid: c.cell.fill_grid }))} surfaces={surfText} trCards={trText} onClose={() => setShow3D(false)} onMaterialChange={handleCellMaterialChange} onQuickCellGenerate={handleQuickCellGenerate} />}
       {showStepDlg && <StepImportDialog onImport={handleStepImport} onClose={() => setShowStepDlg(false)} />}
       {fc.showDialog && <FloatingDialog title="⚠ 需要 FreeCAD" onClose={fc.closeDialog} width={460}
         footer={React.createElement("button", { className: "btn btn-primary btn-sm", onClick: fc.closeDialog }, "知道了")}>

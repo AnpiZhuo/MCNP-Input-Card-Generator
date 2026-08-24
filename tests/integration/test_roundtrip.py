@@ -70,6 +70,28 @@ def test_r1_fixed_point_sample_avr13():
     assert g1 == g2, f"R1 在 avr13 上不成立（len {len(g1)} → {len(g2)}）。"
 
 
+def test_r1_lattice_17x17_fixed_point():
+    """R1：OWEN 17×17 格阵夹具第二代起字节稳定（阶段1 格阵不动点闸门）。
+
+    格阵 cell 经 format_fill_cards 回放 raw（范围串 + 条目续行），parse→gen→parse→gen
+    字节必须稳定；格阵 cell 的 $ 注释移到条目续行之后（不吞条目）。
+    """
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[1] / "fixtures" / "owen"
+            / "assembly_17x17_mcnp.i").read_text(encoding="utf-8", errors="replace")
+    deck, _w = parse_inp_text(text)
+    g1, _d2, g2 = roundtrip_generations(deck)
+    assert g1 == g2, f"17×17 格阵 R1 不动点不成立（len {len(g1)} → {len(g2)}）。"
+
+
+def test_r1_lattice_prob41c_fixed_point():
+    """R1：vendor 样例 prob41c（含格阵 fill + (9 0 9) 偏移条目）第二代起字节稳定。"""
+    text = load_sample("prob41c.inp")
+    deck, _w = parse_inp_text(text)
+    g1, _d2, g2 = roundtrip_generations(deck)
+    assert g1 == g2, f"prob41c 格阵 R1 不动点不成立（len {len(g1)} → {len(g2)}）。"
+
+
 def test_r1_output_does_not_grow_unboundedly():
     """R1 退化检查：输出长度第二代不应继续增长（近似不动点的必要不充分条件）。"""
     from tests.conftest import kitchen_sink_deck
@@ -84,6 +106,7 @@ def _cell_fields(c):
         "surface_expr": c.surface_expr, "imp_n": c.imp_n, "imp_p": c.imp_p,
         "imp_e": c.imp_e, "vol": c.vol, "pwt": c.pwt, "ext": c.ext, "fcl": c.fcl,
         "u": c.u, "fill": c.fill, "lat": c.lat, "trcl": c.trcl, "tmp": c.tmp,
+        "fill_grid": c.fill_grid,
     }
 
 

@@ -53,6 +53,7 @@ class CellData:
     other_params: str = ""  # Other unrecognized keywords (e.g. "TMP=2.53E-8") / 其他未识别关键词
     comment: str = ""    # Inline comment for this cell / 注释
     render: bool = True  # Whether to render this cell in 3D preview / 是否在 3D 预览中渲染
+    fill_grid: str = ""  # 格阵 FILL JSON 串（app.lattice.FillGrid.to_json；格阵/翻译单填充时非空）/ lattice FILL card JSON
 
 
 @dataclass

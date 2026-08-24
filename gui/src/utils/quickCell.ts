@@ -206,6 +206,7 @@ export interface QuickCellLocalRow {
     tmp: string;
     otherParams: string;
     render: boolean;
+    fill_grid: string;
     comment: string;
   };
 }
@@ -239,6 +240,7 @@ export function generatedCellToRow(c: GeneratedCell): QuickCellLocalRow {
       tmp: "",
       otherParams: "",
       render: true,
+      fill_grid: "",
       comment: c.comment,
     },
   };

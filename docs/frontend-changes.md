@@ -1153,3 +1153,41 @@ ormalizeImportedMaterials（核素行 zaid 剥后缀，raw 行原样，rows/nucl
 - **最小修复（必做，已完成）**：`gui/src/utils/quickCell.ts` 新增纯函数 `applyExistingExprPatch(cells, patch)`（num 命中 patch 的栅元 surfaces 替换为 p.surfaces，未命中/空 patch 原样返回，不改原数组）；`gui/src/components/Preview3DWindow.tsx` `handleQuickCellGenerate` 在追加新栅元**之前**先 `applyExistingExprPatch(prev, result.existingExprPatch || [])`（照 `GeometryTab.tsx:211-216` 主窗口补丁逻辑）。修复后：预览窗口内快捷建栅元 + 选补集决策 → 预览侧被侵占栅元表达式与主窗口一致（带 `#新`）→ 「重新检测重合」不再报陈旧重合。
 - **测试（红→绿）**：`gui/test/existingExprPatch.test.ts`（4：命中替换/多 patch/空 patch 原引用/数字字符串混用）+ `gui/test/preview3dWindowPatch.dom.test.tsx`（1：mock Preview3D 捕获 props，收到带 existingExprPatch 的 quickCellGenerate → 断言 deckCells 中命中 patch 的栅元 surfaces 已替换且新栅元追加；初跑红 `'-1'` 未变 `'-1 #4'`）。门禁 vitest **407/0**（402 基线 + 新增 5）+ tsc EXIT 0 + vite build EXIT 0。
 - **增强（可选，未做，方案待 PM 定夺）**：主窗口 deck 变更时同步到已打开的预览窗口（根治「不同步」）。方案：主窗口 deck.cells/surfaces/tr_cards 变化时经 `windows.ts` 写预览桥 + storage 事件，`Preview3DWindow` 监听刷新。**风险**：预览窗口内快捷建栅元已写回主窗口 deck（emitQuickCellGenerate → 主窗口应用补丁 + 追加），双向同步需防环路/竞态、且会改变「预览窗口=打开瞬间快照」的既有语义；改动面含 windows.ts 桥 + Preview3DWindow 监听 + 主窗口 deck-change effect，中高风险，本批不强做。
+
+## 格阵 fill 阶段1：前端 wire 透传（2026-08-24，PM 派发，未 commit）
+
+> 目标：`fill_grid`（字符串，JSON 内容，默认 `""`）在 parse→deck→localStorage→generate 全链路不丢。阶段1纯字段透传，无可见 UI、无画布（画布=阶段2）。契约字段名定死 `fill_grid`（snake_case，前后端统一），前端其余字段风格不变。
+
+- **新增 `gui/src/utils/cellBridge.ts`**（深模块纯函数）：`LocalCellRow` 类型（local camelCase 栅元行 | 原样行）+ 双向桥接——`localToDeckCells(cells)`（local→deck，snake_case，后端 /api/generate 请求契约，含 `fill_grid`）、`deckToLocalCells(cells)`（deck→local，parse/text-to-section/STEP 导入产物兼容，`fill_grid` 缺失兜底 `""` 兼容旧数据）。GeometryTab 原有 4 处重复映射（local→deck 1 处 + deck→local 3 处）全部收敛到本模块，净删 26 行。
+- **`gui/src/utils/DeckContext.tsx`**：deck 侧 `CellData` 加 `fill_grid: string;`（render 之后、comment 之前，对齐 models.py 顺序）。
+- **`gui/src/components/CellEditDialog.tsx`**：local `CellData` 加 `fill_grid: string;`（snake_case 保留，不转 camelCase）。
+- **`gui/src/components/GeometryTab.tsx`**：local→deck 桥（`localToDeckCells`）、deck→local 桥（`deckToLocalCells`）、文本模式切回表单 ×2（`deckToLocalCells`）四处映射替换；`addCellRow`/材料联动建栅元构造补 `fill_grid:""`。
+- **`gui/src/utils/quickCell.ts`**（tsc 必带）：`QuickCellLocalRow` 类型加 `fill_grid: string;`、`generatedCellToRow` 构造补 `fill_grid:""`。
+- **localStorage 保存/恢复核实**：`App.tsx` `saveWorkspace` 整体 `JSON.stringify({version:1,deck,...})`、恢复 `loadDeck(s.deck)` 整体展开——**无字段白名单/映射**，含 `fill_grid` 的 cell 随 `mcnp_workspace_v1` 键原样存取不丢。parse-inp 回填 `cells: d.cells || []` 直接进 deck，`cells[].fill_grid` 由后端 `_cells_from_list` 提供（已确认后端会做）。
+- **测试**：新增 `gui/test/cellBridge.test.ts`（5 用例：local→deck 含 fill_grid / deck→local 回填非空 / 旧数据缺 fill_grid 兜底空串 / 往返不丢 / raw 行原样透传）。门禁 vitest **412/0**（基线 407 + 新增 5）+ tsc EXIT 0。
+
+## 格阵 fill 阶段2：UI 画布（2026-08-24，PM 派发，未 commit）
+
+> 目标：主页面区分「含 fill 的 cell」；「⬚ 栅格编辑」完整流程（矩形/六棱柱 2D 涂色画布 + 3D 子预览）；「按 U 分组显示」+ 拖拽快捷分 U；曲面失焦后端校验。阶段1 数据层（fill_grid + cellBridge）已验收。
+
+- **新增 `gui/src/utils/lattice.ts`**（TS 镜像 app/lattice.py 深模块，键名逐字一致）：`FillGridJson`（lat/kind/range/dims/cells[{u,dx,dy,dz}]/raw）+ `parseFillGrid`/`serializeFillGrid`（脏 JSON → null，round-trip 键序一致）；`rectGrid`（idx=i+dims[0]*(j+dims[1]*k) 行主序 i 最快，idxOf/coordsOf 互逆）；`hexRingRows`（rings=1→[2,3,2]，总和 1+3r(r+1)，画布与阶段3共用权威）+ `hexGrid`/`hexCenter`（pointy-top 顶点+X：x=col*pitch+(row%2)*pitch/2，y=row*pitch*√3/2）；`buildUniversePalette`（u 数值升序取 12 色板，排除 void/0）+ `getUniverseColor`（未命中回退灰）；`estimateLatticeExtent`（单位 pitch 估算）；`rangeFromDims`/`initialRectCells`/`initialHexCells`/`resizeLatticeCells`/`cellsToRaw`（保存时 cells 反算覆盖 raw）；`autoGenerateSurfaces`（矩形 PX/PY/PZ 6 平面 / 六棱柱 6 侧 P + 2 PZ 盖，编号从曲面卡顺延）；`latticeMismatchMessage`（QA 建议3：条目流≠dims 乘积非阻塞提示）；`validateLatticeSurfaces`（POST /api/validate-lattice-surfaces，后端不可达兜底）。
+- **新增 `gui/src/components/LatticeEditDialog.tsx`**（5 步状态机 0→5）：0 选 lat 矩形/六棱柱 + 尺寸（矩形 列×行 / 六棱柱 环数）→ 1 材料锁死 0 + 密度空 + 曲面 textarea（失焦调 validate-lattice-surfaces）+「自动生成平面」（长宽高/边长+中心→显式平面，追加到曲面卡并填表达式）→ 2 延伸方向 2D（第三轴 0:0）/3D（第三轴 0:k）→ 3 宇宙调色板（从 deck.cells 去重收集 u=，每宇宙一色，可自定义）→ 4 LatticeCanvas 涂色 + LatticePreview3D 子预览 → 5 保存摘要。保存写回 fill=range.join(" ")、lat、fill_grid=serializeFillGrid(fg)（cells 反算覆盖 raw）、surface_expr、material="0"、density=""。
+- **新增 `gui/src/components/LatticeCanvas.tsx`**（props `{lat,dims,cells,palette,selectedU,onCellChange,disabled?}`）：矩形=CSS grid 表格；六棱柱=hexGrid 蜂窝交错（u="0" void 格位暗底占位）；点击格位 → onCellChange(idx, selectedU)；条目流≠dims 乘积显示非阻塞警告横幅。
+- **新增 `gui/src/components/LatticePreview3D.tsx`**：格阵子预览线框（矩形=盒线框；六棱柱=buildHexPrism pointy-top，外接半径 R=pitch/√3），复用 useThreeCanvas + computeCameraParams，跟手重建（dispose 旧 group）。
+- **新增 `gui/src/three/useThreeCanvas.ts`**：把 QuickCellDialog 的 `canvasRef+WebGLRenderer+OrbitControls` 挂载范式提取为共享 hook（按需渲染 + ResizeObserver + 清理）。
+- **新增 `gui/src/three/hexPrism.ts`**：`buildHexPrism(radius, height)` pointy-top 六棱柱线框。
+- **新增 `gui/src/utils/universeGroups.ts`**：`groupByUniverse`（u 数值升序，raw 行不进组，indices 记录原始下标）+ `groupHeaderLabel`（`U=n · N 栅元`）+ `resolveDrop`（落组头→regroup 改 u / 落普通行→reorder 行重排，纯函数）。
+- **新增 `gui/src/utils/useDragToGroup.ts`**：复用 useRowDrag 指针骨架；拖到组头改 u、拖普通行保持行重排。
+- **修改 `gui/src/components/GeometryTab.tsx`**：栅格徽标列（含 fill_grid 的 cell 显示「格阵」徽标）；「⬚ 栅格编辑」按钮（打开 LatticeEditDialog 新建）；「按 U 分组显示」toggle（开时按 u 分组、组间插分隔头行复用 raw 行分隔样式，拖栅元到组头改 u）；CellEditDialog 加 onOpenLattice 入口。
+- **修改 `gui/src/components/CellEditDialog.tsx`**：格阵字段分组（fill_grid 摘要 +「⬚ 打开栅格编辑器」入口，含 fill_grid 时显示）。
+- **跨语言 golden**：新增 `gui/src/utils/__golden__/latticeGolden.json`（单一权威数据集：rectGrid idx / hexRingRows / hexCenter 坐标 / validate 样例 expected；Python test_lattice.py 与 TS lattice.test.ts 读同一 JSON 断言，validate 段按 backend schema 键名产出）。
+- **测试**：新增 `gui/test/lattice.test.ts`（26，含 golden 断言 + autoGenerateSurfaces）、`gui/test/LatticeCanvas.test.tsx`（5，矩形/六棱柱渲染 + 涂色 + 不匹配警告）、`gui/test/universeGroups.test.ts`（6，分组 + 拖拽判定）。门禁 vitest **449/0**（基线 412 + 新增 37）+ tsc EXIT 0 + vite build EXIT 0；**画布不匹配提示已加**（QA 建议3）。
+
+## 格阵 fill 阶段3：跨语言 golden skip 修复 + TS composeNestedPositions 对齐 Python（2026-08-24，PM 派发，QA 打回问题2）
+
+> 根因：`gui/test/latticeInstances.test.ts` golden 用例按错误键名读 `(golden as any).positions` 上的 `compose/input/node` 与 `leafInstances`，但 `latticeGolden.json` 的 `positions` 是**数组**（id/lat/dims/extent/trclDeg/expected）、`nested` 段键名为 `outerLat/innerLat/outerExtent/innerExtent/universeCells/leafCount/leaves` → `hasGolden` 恒 false → 用例恒 skip（TS 跨语言 golden 成 dead test）。另 PM 裁决：TS `composeNestedPositions` 嵌套语义改对齐 Python，让嵌套 golden 真正双端逐位锁死。
+
+- **修改 `gui/src/three/latticeInstances.ts`**（PM 裁决后）：`composeNode` 子格阵递归 origin 由「=父格位中心」改为「=父格位中心 + 条目偏移 + 子格阵默认居中偏移」——子格阵**整体居中于父格位中心**（rect child cell(0,0,0)=父中心−子 pitch·(nx−1)/2；hex 默认偏移 0），与 Python `compose_lattice_tree` 逐位一致。更新模块 docstring。
+- **扩展 `gui/src/utils/__golden__/latticeGolden.json`**：新增 `composeCases` 段（TS `LatticeComposeNode` 输入样例，与 `nested` 段同源：2×2 外 pitch4 内嵌 2×2 pitch2；cellSize 由 extent 跨度推导）。既有键（positions/validate/nested）原样未动，Python `test_lattice.py` 不消费 composeCases。
+- **修改 `gui/test/latticeInstances.test.ts`**：①嵌套 fill 递归用例期望值更新为 Python 对齐坐标（"0.0"→(−3,−3)、"3.3"→(3.5,3.5) 等，含子格阵 box 更新）；②golden 用例改**真正跑 `composeNestedPositions(composeCases[].node)`** 断言 FLAT 叶 `=== nested.leaves`（10 叶 cellNum+x/y/z 双向集合相等 + 无重复），不再是只读 golden 值；positions 段保留参考重算断言。`hasGolden` 加 `composeCases` 非空判定 → 为真并真正跑起来，消除 skip。
+- **门禁**：vitest **466/0 无 skip**（原 465 passed / 1 skipped；`latticeInstances.test.ts` 17/0）+ tsc EXIT 0 + Python `test_lattice.py` golden/compose 7/7（positions/nested/validate 3 golden 未 skip）。非嵌套 positions/总览/点击/rect 基本用例不受影响。

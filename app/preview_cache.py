@@ -40,15 +40,21 @@ class PreviewCache:
         self._order = []   # fp 最近使用序，index 0 = 最旧
 
     # ── 指纹 ───────────────────────────────────────────────
-    def fingerprint(self, surfaces: str, cells: list, tr_cards: str) -> str:
+    def fingerprint(self, surfaces: str, cells: list, tr_cards: str,
+                    extra: dict | None = None) -> str:
         """canonical json (sort_keys) → sha256 hex。
 
         输入与 handler 收到的 preview-3d 请求一致（surfaces 文本、cells JSON
         列表、tr_cards 文本）。同一 deck 文本/结构 → 同指纹；任一字段变化 → 不同。
+        extra（可选 dict）并入 canonical json —— 格阵 universe STL 缓存用它携带
+        u/cellNum/pitch/height，防不同裁剪参数脏命中。extra 为 None 时行为与旧版
+        完全一致（既有 preview-3d 指纹不变）。
         """
+        payload = {"surfaces": surfaces, "cells": cells, "tr_cards": tr_cards}
+        if extra is not None:
+            payload["extra"] = extra
         canonical = json.dumps(
-            {"surfaces": surfaces, "cells": cells, "tr_cards": tr_cards},
-            sort_keys=True, ensure_ascii=False,
+            payload, sort_keys=True, ensure_ascii=False,
         )
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

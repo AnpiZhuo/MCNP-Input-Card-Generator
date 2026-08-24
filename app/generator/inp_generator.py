@@ -6,6 +6,7 @@ import json
 import math
 import re
 from pymcnp import inp as pymcnp_inp
+from app import lattice
 from app.models import (BasicSettings, CellData, CellRow, MaterialData, MaterialRow,
                         SourceData, AdvancedSettings, DeckData, TallySettings)
 from .banners import (
@@ -74,7 +75,12 @@ def _generate_cells(cells: list[CellRow]) -> list[str]:
             params_parts.append(f"FCL={cell.fcl}")
         if cell.u:
             params_parts.append(f"U={cell.u}")
-        if cell.fill:
+        # 格阵 fill 分派：fill_grid JSON 有效 → 走格阵/翻译路径（FILL 首行放 params
+        # 最后 = MCNP 要求 FILL 是 cell 卡最后参数；续行独立追加，绕开通用续行不加 &）。
+        # 脏 JSON → FillGrid.from_json 返回 None → 优雅回退单值路径（R1 字节不变）。
+        fg = lattice.FillGrid.from_json(cell.fill_grid or "")
+        lattice_lines = lattice.format_fill_cards(fg) if fg is not None else []
+        if cell.fill and fg is None:
             params_parts.append(f"FILL={cell.fill}")
         if cell.lat:
             params_parts.append(f"LAT={cell.lat}")
@@ -84,8 +90,17 @@ def _generate_cells(cells: list[CellRow]) -> list[str]:
             params_parts.append(f"TMP={cell.tmp}")
         if cell.other_params:
             params_parts.append(cell.other_params)
+        if lattice_lines:
+            params_parts.append(lattice_lines[0])
         params = "  " + "  ".join(params_parts) if params_parts else ""
-        comment = f"  $ {cell.comment}" if cell.comment else ""
+        # 格阵 cell：$ 注释不内联（FILL= 后是条目续行，解析 join 后 $ 注释会吞掉条目），
+        # 改放所有续行之后的尾行（MCNP $ 只到本行尾，条目前置不受影响；round-trip 稳定）。
+        lattice_comment_tail = ""
+        if lattice_lines and cell.comment:
+            comment = ""
+            lattice_comment_tail = f"     $ {cell.comment}"
+        else:
+            comment = f"  $ {cell.comment}" if cell.comment else ""
 
         core = f"{cell.number}  {mat}  {density}  {cell.surface_expr}"
         full_line = core + params + comment
@@ -98,6 +113,12 @@ def _generate_cells(cells: list[CellRow]) -> list[str]:
                 lines.append(continuation.rstrip())
         else:
             lines.append(full_line.rstrip())
+
+        # 格阵/翻译续行独立追加（FILL 卡条目行：5 空格续行、≤80 列、不加 &）
+        for _extra in lattice_lines[1:]:
+            lines.append(_extra)
+        if lattice_comment_tail:
+            lines.append(lattice_comment_tail)
 
     return lines
 
@@ -1221,10 +1242,18 @@ def _wrap_long_lines(text: str) -> str:
     """
     后处理：确保所有行不超过 80 列（MCNP 严格要求）。
     对已含 & 续行符但超长的行做二次拆分。
+    注释保护：行内 `$` 位于第 80 列内 → 卡体已合法，注释超长不拆
+    （MCNP 忽略 80 列后的注释；拆注释会注入 `&` 污染注释文本，
+    重解析后注释逐代漂移，破坏 R1 不动点——BEAVRS 长注释实卡触发）。
     """
     result = []
     for line in text.split("\n"):
         line = line.rstrip()
+        if len(line) > 80:
+            _dollar = line.find("$")
+            if 0 <= _dollar < 80:
+                result.append(line)
+                continue
         while len(line) > 80:
             # 暂时去掉末尾 &，找合适的空格拆分点，再加回 &
             has_cont = line.endswith("&")

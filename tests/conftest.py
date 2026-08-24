@@ -114,6 +114,7 @@ def kitchen_sink_deck() -> "DeckData":
                 imp_n="1", imp_p="0.5", imp_e="1", vol="3.14", pwt="1.0",
                 ext="2.0", fcl="0.5", u="1", fill="0", lat="1", trcl="1",
                 tmp="2.53e-8", other_params="GEO=2", comment="core",
+                fill_grid="",
             )),
             CellRow(kind="cell", cell=_cell(
                 number=2, material="0", density="", surface_expr="3 #1",
