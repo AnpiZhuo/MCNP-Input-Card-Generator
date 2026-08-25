@@ -13,7 +13,7 @@ from app.models import BasicSettings, CellRow, TallySettings, AdvancedSettings, 
 
 from .lines import normalize_lines
 from .sections import split_sections
-from .core import parse_cells, parse_surfaces, parse_data_cards
+from .core import parse_cells, parse_surfaces, parse_data_cards, extract_universe_comments
 
 
 def parse_inp_text(text: str) -> tuple[DeckData, list[str]]:
@@ -38,6 +38,14 @@ def parse_inp_text(text: str) -> tuple[DeckData, list[str]]:
     lines = normalize_lines(text)
     # Step 2: Split into title, cell lines, surface lines, and data card lines.
     title, cell_lines, surf_lines, data_lines = split_sections(lines)
+
+    # 项9：从栅元段先行提取 U-group 头注释 → deck.universe_comments（parse_cells
+    # 内部跳过这些行，防被吸收为 cell 注释）。
+    universe_comments = {}
+    try:
+        universe_comments = extract_universe_comments(cell_lines)
+    except Exception:
+        universe_comments = {}
 
     try:
         # Parse cell cards (e.g., "1 1 -1.0 -1 imp:n=1")
@@ -297,9 +305,14 @@ def parse_inp_text(text: str) -> tuple[DeckData, list[str]]:
         if data.get(_k):
             _apply_imp(cells, data[_k], _attr)
 
+    # 项9：合并数据段中的 U-group 注释（防重复覆盖 cell 段已提取的）
+    for _u, _t in (data.get("universe_comments") or {}).items():
+        universe_comments.setdefault(_u, _t)
+
     # Assemble the final DeckData object combining all parsed sections
     deck = DeckData(basic=basic, surfaces=surfaces, cells=cells,
                     materials=data["materials"], sources=data["sources"],
-                    tally=tally, adv=adv, tr_cards=tr_cards)
+                    tally=tally, adv=adv, tr_cards=tr_cards,
+                    universe_comments=universe_comments)
 
     return deck, warnings

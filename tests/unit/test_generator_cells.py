@@ -66,9 +66,12 @@ def test_long_line_wrapped_to_continuation():
         other_params="GEO=2  WWG=1  PD=1",
     ))
     lines = _generate_cells([row])
-    assert len(lines) >= 2, f"应产生续行: {lines}"
+    # 每 U 组都生成 U-group 头注释（未编辑也生成）——u=1 → 有 C 注释行
+    assert any(l.startswith("C  U-group U=1") for l in lines), lines
+    cont = [l for l in lines if l.startswith("     ")]
+    assert len(cont) >= 1, f"应产生续行: {lines}"
     # 续行必须 5 空格开头
-    assert lines[1].startswith("     "), lines[1]
+    assert cont[0].startswith("     "), lines
 
 
 def test_raw_condition_line_passthrough():

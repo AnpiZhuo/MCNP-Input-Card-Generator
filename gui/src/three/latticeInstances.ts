@@ -259,6 +259,14 @@ export function parseTrclDeg(trclStr?: string, lat?: string): number {
 
 /* ── InstancedMesh 构建 ── */
 
+/**
+ * 取景叶过滤（项 15）：void 叶（mat="0"）不计入相机包围盒（防巨型边界 void 如
+ * so 1000 撑大包围盒拉远相机——「针尖」）。纯函数，可测。
+ */
+export function nonVoidFrameLeaves(leaves: LatticeInstance[]): LatticeInstance[] {
+  return leaves.filter((p) => p.mat !== "0");
+}
+
 export interface LatticeInstancesOptions {
   /** FLAT 叶实例（绝对坐标；u="0"/空自动跳过不实例化） */
   positions: LatticeInstance[];
@@ -378,17 +386,32 @@ export function buildLatticeInstances(opts: LatticeInstancesOptions): LatticeIns
     for (const g of groups) {
       const matStr = opts.cellMaterials?.[g.u]?.[g.cellNum] ?? g.items[0].mat ?? "";
       const isVoid = matStr === "0";
+      const geometry = opts.universeStl?.[g.u]?.[g.cellNum] ?? new THREE.BoxGeometry(1, 1, 1);
+      // 元素填充格（水/慢化剂）：STL 包围盒 x/y ≈ 整个格元盒 → 半透明。z 高度全长后，
+      // 不透明水盒会遮挡后排阵格（用户看到「有的阵格显示、有的不显示」）。
+      let transparent = isVoid;
+      if (!transparent && opts.blockSize) {
+        try {
+          geometry.computeBoundingBox();
+          const bb = geometry.boundingBox;
+          if (bb) {
+            const sz = bb.getSize(new THREE.Vector3());
+            if (sz.x >= opts.blockSize.x * 0.9 && sz.y >= opts.blockSize.y * 0.9) {
+              transparent = true;
+            }
+          }
+        } catch (e) { /* 包围盒失败保持不透明 */ }
+      }
       const color = materialMode ? getMatColor(matStr) : getUniverseColor(g.u, opts.palette);
       const material = new THREE.MeshStandardMaterial({
         color: colorToNumber(color),
         roughness: 0.4,
         metalness: 0.0,
-        transparent: isVoid,
-        opacity: isVoid ? 0 : 1,
-        depthWrite: !isVoid,
+        transparent: transparent,
+        opacity: isVoid ? 0 : (transparent ? 0.35 : 1),
+        depthWrite: !transparent,
         side: THREE.FrontSide,
       });
-      const geometry = opts.universeStl?.[g.u]?.[g.cellNum] ?? new THREE.BoxGeometry(1, 1, 1);
       const mesh = new THREE.InstancedMesh(geometry, material, g.items.length);
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       const m = new THREE.Matrix4();

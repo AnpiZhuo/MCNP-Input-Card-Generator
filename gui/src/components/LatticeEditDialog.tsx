@@ -1,32 +1,48 @@
 /**
- * LatticeEditDialog — 格阵 FILL 编辑器（5 步状态机：0 类型尺寸 → 1 材料曲面 →
- * 2 延伸方向 → 3 宇宙调色板 → 4 画布涂色 → 5 保存）。
+ * LatticeEditDialog — 格阵 FILL 编辑器（Wave 2b 4 步状态机）：
+ *   0 类型与尺寸 + 延伸方向（lat 选择 + 六个方向层数空 -N:M：x 左/右、y 前/后、z 下/上）
+ *   1 材料与曲面（材料锁死 0 + 本格阵 U + 自动生成宏体 / 手动填写曲面 互斥 + 校验 + 宏体子预览）
+ *   2 画布涂色 + 调色板（同屏：LatticeCanvas + 常驻调色板侧栏 + 自定义宇宙号 + 3D 子预览）
+ *   3 保存摘要（体积告警 + 保存）
  *
+ * 范围层数按 MCNP 习惯：六个方向负/正层数 → -N:M 范围（六棱柱 I/J 对称，x/y 层数取环数）。
  * 保存写回：fill=range.join(" ")、lat、fill_grid=serializeFillGrid(fg)、surface_expr、
- * material="0"、density=""；保存时 cells 反算覆盖 raw。
- * 曲面失焦调后端 validate-lattice-surfaces（测试中 mock fetch）。
+ * material="0"、density=""；保存时 fg.raw = compressRaw(cellsToRaw(fg))（项12 编辑器路径 nR 压缩）；
+ * 保存前 detectFillCycle（项13）命中 → 阻止保存 + 提示。
  */
 import React, { useEffect, useMemo, useState } from "react";
 import FloatingDialog from "./FloatingDialog";
 import LatticeCanvas from "./LatticeCanvas";
 import LatticePreview3D from "./LatticePreview3D";
+import MacrobodyPreview from "./MacrobodyPreview";
 import type { CellData } from "./CellEditDialog";
 import {
+  autoGenMacrobody,
   autoGenerateSurfaces,
   buildUniversePalette,
   cellsToRaw,
+  collectFillUniverses,
+  compressRaw,
+  detectFillCycle,
+  dirCountsFromRange,
   getUniverseColor,
   initialHexCells,
   initialRectCells,
+  latticeVolumeWarning,
+  maxSurfaceNumber,
   parseFillGrid,
+  rangeFromDirCounts,
   rangeFromDims,
   resizeLatticeCells,
+  rhpCard,
+  rhpFromThreePoints,
+  rhpModeAError,
   serializeFillGrid,
   validateLatticeSurfaces,
 } from "../utils/lattice";
-import type { FillGridCellJson, FillGridJson, ValidateLatticeResult } from "../utils/lattice";
+import type { CycleCellLike, FillGridCellJson, FillGridJson, ValidateLatticeResult } from "../utils/lattice";
 
-const STEPS = ["类型与尺寸", "材料与曲面", "延伸方向", "宇宙调色板", "画布涂色", "保存"];
+const STEPS = ["类型与尺寸", "材料与曲面", "画布涂色", "保存"];
 
 interface Props {
   surfacesText: string;
@@ -44,6 +60,10 @@ const inp: React.CSSProperties = {
 };
 const tarea: React.CSSProperties = {
   ...inp, height: 64, resize: "vertical", fontFamily: "Consolas,monospace", fontSize: 11, paddingTop: 6, paddingBottom: 6,
+};
+const btn: React.CSSProperties = {
+  height: 32, padding: "0 14px", borderRadius: 6, cursor: "pointer",
+  fontSize: 12, color: "var(--text-primary)",
 };
 
 export default function LatticeEditDialog({ surfacesText, deckCells, initialCell, nextCellNum, onSave, onClose }: Props) {
@@ -63,8 +83,13 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
 
   const [step, setStep] = useState(0);
   const [lat, setLat] = useState<"1" | "2">(init ? (init.fg.lat === "2" ? "2" : "1") : "1");
-  const [rectCols, setRectCols] = useState<number>(init && init.fg.lat !== "2" ? init.fg.dims[0] || 17 : 17);
-  const [rectRows, setRectRows] = useState<number>(init && init.fg.lat !== "2" ? init.fg.dims[1] || 17 : 17);
+  // 项2：六个方向层数空（矩形用「方向块数 -N:M」；编辑旧 deck 从原 range 反派生，保持 0:16 角起写法）
+  const [xDir, setXDir] = useState<{ neg: number; pos: number }>(() =>
+    init && init.fg.lat !== "2" ? dirCountsFromRange(init.fg.range[0] || "0:16") : { neg: 8, pos: 8 });
+  const [yDir, setYDir] = useState<{ neg: number; pos: number }>(() =>
+    init && init.fg.lat !== "2" ? dirCountsFromRange(init.fg.range[1] || "0:16") : { neg: 8, pos: 8 });
+  const [zDir, setZDir] = useState<{ neg: number; pos: number }>(() =>
+    init ? dirCountsFromRange(init.fg.range[2] || "0:0") : { neg: 0, pos: 0 });
   const [hexRings, setHexRings] = useState<number>(
     init && init.fg.lat === "2"
       ? originalDims && originalDims[0] === originalDims[1] && originalDims[0] % 2 === 1
@@ -72,43 +97,51 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
         : 2
       : 1,
   );
-  const [ext3D, setExt3D] = useState<boolean>(init ? (init.fg.dims[2] || 1) > 1 : false);
-  const [layers, setLayers] = useState<number>(init ? Math.max(1, init.fg.dims[2] || 1) : 1);
   const [surfaceExpr, setSurfaceExpr] = useState<string>(init ? init.surfaceExpr : "");
   const [latticeU, setLatticeU] = useState<string>(init ? init.latticeU : "");
   const [localSurfaces, setLocalSurfaces] = useState<string>(surfacesText);
-  const [genLines, setGenLines] = useState<string[]>([]);
-  const [genParams, setGenParams] = useState({ L: 20, W: 20, H: 10, cx: 0, cy: 0, cz: 0, side: 2 });
   const [validateResult, setValidateResult] = useState<ValidateLatticeResult | null>(null);
 
-  /* ── 宇宙调色板：从 deck.cells 去重收集 u= ── */
-  const [universeList, setUniverseList] = useState<string[]>(() => {
-    const set = new Set<string>();
-    for (const c of deckCells) {
-      const u = (c.u ?? "").trim();
-      if (u && u !== "0") set.add(u);
-    }
-    return Array.from(set).sort((a, b) => Number(a) - Number(b));
-  });
+  // 项3：自动生成宏体 vs 手动填写曲面（互斥）
+  const [autoMode, setAutoMode] = useState<boolean>(true);
+  const [genLines, setGenLines] = useState<string[]>([]);
+  const [genCard, setGenCard] = useState("");
+  // 自动宏体参数：矩形 L/W/H/中心；六棱柱 模式 B（中心+外接半径+高）/ 模式 A（三点+高）
+  const [genRect, setGenRect] = useState({ L: 20, W: 20, H: 10, cx: 0, cy: 0, cz: 0 });
+  const [rhpMode, setRhpMode] = useState<"B" | "A">("B");
+  const [genHexB, setGenHexB] = useState({ R: 2, H: 10, cx: 0, cy: 0, cz: 0 });
+  const [genHexA, setGenHexA] = useState({ vx: 0, vy: 0, vz: 0, tx: 0, ty: 0, tz: 10, mx: 1.732, my: 1, mz: 0, h: 10 });
+  // 手动可选：旧 6 平面 / 6P+2PZ 生成参数
+  const [genPlanes, setGenPlanes] = useState({ L: 20, W: 20, H: 10, side: 2, cx: 0, cy: 0, cz: 0 });
+
+  // 项7：调色板 = void 0 ∪ deck u= ∪ 各格阵 fill_grid.cells[].u 去重，数值升序
+  const [universeList, setUniverseList] = useState<string[]>(() => collectFillUniverses(deckCells));
   const [customU, setCustomU] = useState("");
   const palette = useMemo(() => buildUniversePalette(universeList), [universeList]);
-  const defaultPaintU = universeList.length ? universeList[0] : "1";
+  const defaultPaintU = universeList.find((u) => u !== "0") ?? "1";
   const [selectedU, setSelectedU] = useState<string>(defaultPaintU);
   const [cells, setCells] = useState<FillGridCellJson[]>(() => (init ? init.fg.cells : []));
 
   /* ── dims / range 派生 + 尺寸变化保持已涂色格位 ── */
-  const dims = useMemo(
-    () => (lat === "2" ? [2 * hexRings + 1, 2 * hexRings + 1, layers] : [rectCols, rectRows, layers]),
-    [lat, rectCols, rectRows, hexRings, layers],
-  );
+  const dims = useMemo(() => {
+    if (lat === "2") {
+      const r = Math.max(1, hexRings);
+      return [2 * r + 1, 2 * r + 1, Math.max(1, zDir.neg + zDir.pos + 1)];
+    }
+    return [
+      xDir.neg + xDir.pos + 1,
+      yDir.neg + yDir.pos + 1,
+      Math.max(1, zDir.neg + zDir.pos + 1),
+    ];
+  }, [lat, hexRings, xDir, yDir, zDir]);
   const dimsKey = dims.join("x");
   useEffect(() => {
     if (!sizeEditable) return;
     setCells((prev) => {
       const fresh =
         lat === "2"
-          ? initialHexCells(hexRings, layers, defaultPaintU)
-          : initialRectCells(rectCols, rectRows, layers, defaultPaintU);
+          ? initialHexCells(Math.max(1, hexRings), dims[2], defaultPaintU)
+          : initialRectCells(dims[0], dims[1], dims[2], defaultPaintU);
       return resizeLatticeCells(prev, fresh);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -116,19 +149,78 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
 
   const effectiveDims = editing && !sizeEditable && originalDims ? originalDims : dims;
 
-  /* ── 曲面失焦校验（后端 validate-lattice-surfaces）── */
+  const currentRange = useMemo(() => {
+    const d = effectiveDims;
+    if (lat === "2") return rangeFromDims(d);
+    return [
+      rangeFromDirCounts(xDir.neg, xDir.pos),
+      rangeFromDirCounts(yDir.neg, yDir.pos),
+      rangeFromDirCounts(zDir.neg, zDir.pos),
+    ];
+  }, [lat, effectiveDims, xDir, yDir, zDir]);
+
+  /* ── 六棱柱 I/J 对称：环数层空互锁（改任一 → 四个同值） ── */
+  const setHexDir = (v: number) => {
+    const r = Math.max(1, Math.round(v));
+    setHexRings(r);
+  };
+  const handleLatChange = (v: "1" | "2") => {
+    setLat(v);
+    if (v === "2") {
+      const r = Math.max(1, Math.round((xDir.neg + xDir.pos) / 2));
+      setHexRings(r);
+    } else {
+      setXDir({ neg: hexRings, pos: hexRings });
+      setYDir({ neg: hexRings, pos: hexRings });
+    }
+  };
+
+  /* ── 曲面失焦校验（手动模式）── */
   const handleSurfaceBlur = async () => {
     const r = await validateLatticeSurfaces(surfaceExpr, lat, localSurfaces);
     setValidateResult(r);
   };
 
-  /* ── 自动生成平面（追加到曲面卡 + 填表达式）── */
+  /* ── 自动生成宏体（项3/4）：rect→RPP / hex→RHP（模式 A/B）── */
   const handleAutoGen = () => {
+    if (lat === "2" && rhpMode === "A") {
+      const V: [number, number, number] = [genHexA.vx, genHexA.vy, genHexA.vz];
+      const T: [number, number, number] = [genHexA.tx, genHexA.ty, genHexA.tz];
+      const M: [number, number, number] = [genHexA.mx, genHexA.my, genHexA.mz];
+      const err = rhpModeAError(V, T, M, genHexA.h);
+      if (err) { setValidateResult({ ok: false, msg: err }); return; }
+      const card = rhpCard(rhpFromThreePoints(V, T, M));
+      const n = maxSurfaceNumber(localSurfaces) + 1;
+      const line = `${n} ${card}`;
+      const next = localSurfaces.trim() ? `${localSurfaces.trimEnd()}\n${line}` : line;
+      setLocalSurfaces(next);
+      setSurfaceExpr(`-${n}`);
+      setGenCard(card);
+      setGenLines([line]);
+      setValidateResult(null);
+      return;
+    }
+    const res = autoGenMacrobody(
+      lat,
+      lat === "2"
+        ? { hex: { side: 2 * genHexB.R, H: genHexB.H, cx: genHexB.cx, cy: genHexB.cy, cz: genHexB.cz } }
+        : { rect: genRect },
+      localSurfaces,
+    );
+    setLocalSurfaces(res.surfacesText);
+    setSurfaceExpr(res.surfaceExpr);
+    setGenCard(res.card);
+    setGenLines([res.line]);
+    setValidateResult(null);
+  };
+
+  /* ── 手动模式可选：旧 6 平面 / 6P+2PZ 生成（「手动」可选项）── */
+  const handleGenPlanes = () => {
     const res = autoGenerateSurfaces(
       lat,
       lat === "2"
-        ? { hex: { side: genParams.side, H: genParams.H, cx: genParams.cx, cy: genParams.cy, cz: genParams.cz } }
-        : { rect: { L: genParams.L, W: genParams.W, H: genParams.H, cx: genParams.cx, cy: genParams.cy, cz: genParams.cz } },
+        ? { hex: { side: genPlanes.side, H: genPlanes.H, cx: genPlanes.cx, cy: genPlanes.cy, cz: genPlanes.cz } }
+        : { rect: { L: genPlanes.L, W: genPlanes.W, H: genPlanes.H, cx: genPlanes.cx, cy: genPlanes.cy, cz: genPlanes.cz } },
       localSurfaces,
     );
     setLocalSurfaces(res.surfacesText);
@@ -149,24 +241,54 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
     setCells((prev) => prev.map((c, i) => (i === idx ? { ...c, u } : c)));
   };
 
-  const numField = (label: string, value: number, setter: (v: number) => void, w = 74) => (
+  const numField = (label: string, value: number, setter: (v: number) => void, w = 74, disabled = false) => (
     <div style={{ flex: "0 0 auto", width: w }}>
       <label style={lbl}>{label}</label>
       <input
         type="number"
-        style={inp}
+        style={{ ...inp, opacity: disabled ? 0.5 : 1 }}
         value={value}
+        disabled={disabled}
         onChange={(e) => setter(parseInt(e.target.value, 10) || 0)}
       />
     </div>
   );
 
-  /* ── 保存 ── */
+  const dirField = (
+    negLabel: string,
+    posLabel: string,
+    dir: { neg: number; pos: number },
+    setter: (d: { neg: number; pos: number }) => void,
+    disabled = false,
+  ) => (
+    <div style={{ display: "flex", gap: 6, alignItems: "flex-end" }}>
+      {numField(negLabel, dir.neg, (v) => setter({ ...dir, neg: Math.max(0, v) }), 64, disabled)}
+      {numField(posLabel, dir.pos, (v) => setter({ ...dir, pos: Math.max(0, v) }), 64, disabled)}
+    </div>
+  );
+
+  /* ── 保存（项12 压缩 + 项13 判环阻止 + 体积告警）── */
   const handleSave = () => {
+    // 项13：基于当前 deck cells 构造 sub_by_u fill 图 → 判环 → 阻止保存
+    const subByU: Record<string, CycleCellLike[]> = {};
+    for (const c of deckCells) {
+      const u = (c.u ?? "").trim();
+      if (!u) continue;
+      (subByU[u] ??= []).push({ cellNum: c.num, material: c.mat, fill: c.fill, fill_grid: c.fill_grid });
+    }
+    const cyc = detectFillCycle(subByU);
+    if (cyc.cycle && cyc.chain.length >= 2) {
+      const [a, b] = cyc.chain;
+      const pen = cyc.chain[cyc.chain.length - 2];
+      alert(`U=${a} 的格元填了 U=${b}，而 U=${pen} 的格元又引用 U=${a}，存在循环嵌套`);
+      return;
+    }
     const d = effectiveDims;
-    const r = rangeFromDims(d);
+    const r = currentRange;
     const fg: FillGridJson = { lat, kind: "lattice", range: r, dims: d, cells, raw: "" };
-    fg.raw = cellsToRaw(fg); // 保存时 cells 反算覆盖 raw
+    // 项12：编辑器保存路径 nR 压缩（导入路径保持源 raw）；只压条目段，防相同 range token 被折叠
+    const entriesRaw = compressRaw(cellsToRaw({ ...fg, range: [] }));
+    fg.raw = `${fg.range.join(" ")} ${entriesRaw}`;
     const cell: CellData = {
       num: initialCell ? initialCell.num : String(nextCellNum),
       mat: "0",
@@ -186,16 +308,20 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
   };
 
   const cellCount = effectiveDims.reduce((a, b) => a * b, 1);
+  const volumeWarning = useMemo(
+    () => latticeVolumeWarning({ lat, kind: "lattice", range: currentRange, dims: effectiveDims, cells, raw: "" }),
+    [lat, currentRange, effectiveDims, cells],
+  );
 
   const footer = React.createElement(React.Fragment, null,
     React.createElement("button", { type: "button", className: "btn btn-ghost btn-sm", onClick: onClose }, "取消"),
     step > 0 &&
       React.createElement("button", { type: "button", className: "btn btn-ghost btn-sm", style: { marginLeft: 8 }, onClick: () => setStep(step - 1) },
         "上一步"),
-    step < 5 &&
+    step < 3 &&
       React.createElement("button", { type: "button", className: "btn btn-primary btn-sm", style: { marginLeft: 8 }, onClick: () => setStep(step + 1) },
         "下一步"),
-    step === 5 &&
+    step === 3 &&
       React.createElement("button", { type: "button", className: "btn btn-primary btn-sm", style: { marginLeft: 8 }, onClick: handleSave },
         "保存并写入栅元卡"),
   );
@@ -217,38 +343,50 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
       ),
     ),
     React.createElement("div", { style: { minHeight: 380 } },
-      /* 步骤0：类型与尺寸 */
+      /* 步骤0：类型与尺寸 + 六个方向层数空（MCNP 习惯 -N:M） */
       step === 0 &&
         React.createElement("div", null,
           React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 14 } },
             React.createElement("button", {
               type: "button",
-              onClick: () => setLat("1"),
+              onClick: () => handleLatChange("1"),
               style: { ...btn, border: lat === "1" ? "1px solid var(--accent)" : "1px solid var(--border-glass)", background: lat === "1" ? "rgba(76,159,232,0.15)" : "var(--bg-input)" },
             }, "矩形 (lat=1)"),
             React.createElement("button", {
               type: "button",
-              onClick: () => setLat("2"),
+              onClick: () => handleLatChange("2"),
               style: { ...btn, border: lat === "2" ? "1px solid var(--accent)" : "1px solid var(--border-glass)", background: lat === "2" ? "rgba(76,159,232,0.15)" : "var(--bg-input)" },
             }, "六棱柱 (lat=2)"),
           ),
-          lat === "1"
-            ? React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "flex-end", marginBottom: 8 } },
-                numField("列数 (i)", rectCols, setRectCols),
-                numField("行数 (j)", rectRows, setRectRows),
-              )
-            : React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "flex-end", marginBottom: 8 } },
-                numField("环数 (rings)", hexRings, setHexRings),
-                React.createElement("span", { style: { fontSize: 11, color: "var(--text-secondary)", paddingBottom: 6 } },
-                  `${hexRingCountLabel(hexRings)} 格 · 菱形角位自动补 void(0)`),
-              ),
+          React.createElement("div", { style: { display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 8 } },
+            lat === "1"
+              ? React.createElement(React.Fragment, null,
+                  dirField("x 向左", "x 向右", xDir, setXDir, !sizeEditable),
+                  dirField("y 向前", "y 向后", yDir, setYDir, !sizeEditable),
+                  dirField("z 向下", "z 向上", zDir, setZDir, !sizeEditable),
+                )
+              : React.createElement(React.Fragment, null,
+                  React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-end" } },
+                    numField("x 向左", hexRings, setHexDir, 64, !sizeEditable),
+                    numField("x 向右", hexRings, setHexDir, 64, !sizeEditable),
+                  ),
+                  React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-end" } },
+                    numField("y 向前", hexRings, setHexDir, 64, !sizeEditable),
+                    numField("y 向后", hexRings, setHexDir, 64, !sizeEditable),
+                  ),
+                  dirField("z 向下", "z 向上", zDir, setZDir, !sizeEditable),
+                ),
+          ),
+          lat === "2" && sizeEditable &&
+            React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 6 } },
+              `六棱柱 I/J 对称：x/y 方向负正层数取环数（${Math.max(1, hexRings)}），角位自动补 void(0)。`),
           !sizeEditable &&
             React.createElement("div", { style: { fontSize: 11, color: "#e0a12e", marginBottom: 6 } },
               "⚠ 编辑导入的矩形六棱柱：尺寸保持原样（仅可改涂色/曲面）。"),
           React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)" } },
-            `范围：${rangeFromDims(effectiveDims).join("  ")} · 共 ${cellCount} 格位`),
+            `范围：${currentRange.join("  ")} · 共 ${cellCount} 格位`),
         ),
-      /* 步骤1：材料锁死 + 曲面 */
+      /* 步骤1：材料锁死 + 曲面（宏体自动 vs 手动互斥，项3/4） */
       step === 1 &&
         React.createElement("div", null,
           React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 12 } },
@@ -265,92 +403,113 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
               React.createElement("input", { style: inp, value: latticeU, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setLatticeU(e.target.value), placeholder: "如 10" }),
             ),
           ),
-          React.createElement("label", { style: lbl }, "曲面表达式（格元几何，失焦校验）"),
-          React.createElement("textarea", {
-            style: { ...tarea, width: "100%" },
-            value: surfaceExpr,
-            onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => setSurfaceExpr(e.target.value),
-            onBlur: handleSurfaceBlur,
-            placeholder: lat === "2" ? "如 -1 -2 -3 -4 -5 -6 -7 -8" : "如 +1 -2 +3 -4 +5 -6",
-          }),
-          validateResult &&
-            React.createElement("div", { style: { fontSize: 11, marginTop: 4, color: validateResult.ok ? "#2e7d32" : "#e53935" } },
-              validateResult.ok ? "✓ 曲面通过" : `✗ ${validateResult.msg || "曲面不构成合法格元"}`),
-          React.createElement("div", { style: { marginTop: 14, border: "1px solid var(--border-glass)", borderRadius: 8, padding: 10 } },
-            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 } },
-              "自动生成平面（追加到曲面卡）"),
-            React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" } },
-              lat === "2"
-                ? React.createElement(React.Fragment, null,
-                    numField("边长", genParams.side, (v) => setGenParams({ ...genParams, side: v })),
-                    numField("高", genParams.H, (v) => setGenParams({ ...genParams, H: v })),
-                  )
-                : React.createElement(React.Fragment, null,
-                    numField("长", genParams.L, (v) => setGenParams({ ...genParams, L: v })),
-                    numField("宽", genParams.W, (v) => setGenParams({ ...genParams, W: v })),
-                    numField("高", genParams.H, (v) => setGenParams({ ...genParams, H: v })),
-                  ),
-              numField("中心X", genParams.cx, (v) => setGenParams({ ...genParams, cx: v })),
-              numField("中心Y", genParams.cy, (v) => setGenParams({ ...genParams, cy: v })),
-              numField("中心Z", genParams.cz, (v) => setGenParams({ ...genParams, cz: v })),
-              React.createElement("button", { type: "button", className: "btn btn-primary btn-sm", onClick: handleAutoGen },
-                "生成平面卡并填表达式"),
-            ),
-            genLines.length > 0 &&
-              React.createElement("div", { style: { marginTop: 8, fontSize: 11, fontFamily: "Consolas,monospace", color: "var(--text-secondary)", whiteSpace: "pre-wrap" } },
+          React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 10 } },
+            React.createElement("button", { type: "button", onClick: () => setAutoMode(true), style: { ...btn, border: autoMode ? "1px solid var(--accent)" : "1px solid var(--border-glass)", background: autoMode ? "rgba(76,159,232,0.15)" : "var(--bg-input)" } },
+              "自动生成宏体"),
+            React.createElement("button", { type: "button", onClick: () => setAutoMode(false), style: { ...btn, border: !autoMode ? "1px solid var(--accent)" : "1px solid var(--border-glass)", background: !autoMode ? "rgba(76,159,232,0.15)" : "var(--bg-input)" } },
+              "手动填写曲面"),
+          ),
+          autoMode ? (
+            /* ── 自动模式：宏体参数 + 生成 + 子预览 ── */
+            React.createElement("div", { style: { border: "1px solid var(--border-glass)", borderRadius: 8, padding: 10 } },
+              React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 } },
+                lat === "2" ? "六棱柱宏体 RHP（MCNP 全量参数）" : "矩形宏体 RPP（长宽高+中心）"),
+              React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 8 } },
+                lat === "2"
+                  ? (rhpMode === "B"
+                      ? React.createElement(React.Fragment, null,
+                          numField("外接半径 R", genHexB.R, (v) => setGenHexB({ ...genHexB, R: v })),
+                          numField("高 h", genHexB.H, (v) => setGenHexB({ ...genHexB, H: v })),
+                        )
+                      : React.createElement(React.Fragment, null,
+                          numField("Vx", genHexA.vx, (v) => setGenHexA({ ...genHexA, vx: v })),
+                          numField("Vy", genHexA.vy, (v) => setGenHexA({ ...genHexA, vy: v })),
+                          numField("Vz", genHexA.vz, (v) => setGenHexA({ ...genHexA, vz: v })),
+                          numField("Tx", genHexA.tx, (v) => setGenHexA({ ...genHexA, tx: v })),
+                          numField("Ty", genHexA.ty, (v) => setGenHexA({ ...genHexA, ty: v })),
+                          numField("Tz", genHexA.tz, (v) => setGenHexA({ ...genHexA, tz: v })),
+                          numField("Mx", genHexA.mx, (v) => setGenHexA({ ...genHexA, mx: v })),
+                          numField("My", genHexA.my, (v) => setGenHexA({ ...genHexA, my: v })),
+                          numField("Mz", genHexA.mz, (v) => setGenHexA({ ...genHexA, mz: v })),
+                          numField("高 h", genHexA.h, (v) => setGenHexA({ ...genHexA, h: v })),
+                        ))
+                  : React.createElement(React.Fragment, null,
+                      numField("长 L", genRect.L, (v) => setGenRect({ ...genRect, L: v })),
+                      numField("宽 W", genRect.W, (v) => setGenRect({ ...genRect, W: v })),
+                      numField("高 H", genRect.H, (v) => setGenRect({ ...genRect, H: v })),
+                    ),
+                numField("中心X", lat === "2" ? genHexB.cx : genRect.cx, (v) => lat === "2" ? setGenHexB({ ...genHexB, cx: v }) : setGenRect({ ...genRect, cx: v })),
+                numField("中心Y", lat === "2" ? genHexB.cy : genRect.cy, (v) => lat === "2" ? setGenHexB({ ...genHexB, cy: v }) : setGenRect({ ...genRect, cy: v })),
+                numField("中心Z", lat === "2" ? genHexB.cz : genRect.cz, (v) => lat === "2" ? setGenHexB({ ...genHexB, cz: v }) : setGenRect({ ...genRect, cz: v })),
+                React.createElement("button", { type: "button", className: "btn btn-primary btn-sm", onClick: handleAutoGen },
+                  "生成宏体卡并填表达式"),
+              ),
+              lat === "2" &&
+                React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 8 } },
+                  React.createElement("button", { type: "button", onClick: () => setRhpMode("B"), style: { ...btn, border: rhpMode === "B" ? "1px solid var(--accent)" : "1px solid var(--border-glass)", background: rhpMode === "B" ? "rgba(76,159,232,0.15)" : "var(--bg-input)" } },
+                    "模式 B：中心+外接半径+高"),
+                  React.createElement("button", { type: "button", onClick: () => setRhpMode("A"), style: { ...btn, border: rhpMode === "A" ? "1px solid var(--accent)" : "1px solid var(--border-glass)", background: rhpMode === "A" ? "rgba(76,159,232,0.15)" : "var(--bg-input)" } },
+                    "模式 A：三点+高度"),
+                  React.createElement("span", { style: { fontSize: 10, color: "var(--text-tertiary)", alignSelf: "center" } },
+                    "环数 R、轴向层数 k 已在第 0 步设置，不是 RHP 卡参数"),
+                ),
+              React.createElement("label", { style: lbl }, "曲面表达式（宏体，自动生成后只读）"),
+              React.createElement("textarea", {
+                style: { ...tarea, width: "100%" },
+                value: surfaceExpr,
+                readOnly: true,
+                placeholder: lat === "2" ? "如 -6（单 RHP）" : "如 -6（单 RPP）",
+              }),
+              genCard && React.createElement("div", { style: { marginTop: 6, fontSize: 11, fontFamily: "Consolas,monospace", color: "var(--text-secondary)", whiteSpace: "pre-wrap" } },
                 genLines.join("\n")),
+              genLines.length > 0 && genCard &&
+                React.createElement("div", { style: { marginTop: 8, display: "flex", gap: 10, alignItems: "flex-start" } },
+                  React.createElement(MacrobodyPreview, { lat, surfaceExpr, surfacesText: localSurfaces }),
+                ),
+              validateResult &&
+                React.createElement("div", { style: { fontSize: 11, marginTop: 4, color: validateResult.ok ? "#2e7d32" : "#e53935" } },
+                  validateResult.ok ? "✓ 曲面通过" : `✗ ${validateResult.msg || "曲面不构成合法格元"}`),
+            )
+          ) : (
+            /* ── 手动模式：可编辑 + 失焦校验 + 可选旧平面生成 ── */
+            React.createElement("div", null,
+              React.createElement("label", { style: lbl }, "曲面表达式（格元几何，失焦校验）"),
+              React.createElement("textarea", {
+                style: { ...tarea, width: "100%" },
+                value: surfaceExpr,
+                onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => setSurfaceExpr(e.target.value),
+                onBlur: handleSurfaceBlur,
+                placeholder: lat === "2" ? "如 -1 -2 -3 -4 -5 -6 -7 -8" : "如 +1 -2 +3 -4 +5 -6",
+              }),
+              validateResult &&
+                React.createElement("div", { style: { fontSize: 11, marginTop: 4, color: validateResult.ok ? "#2e7d32" : "#e53935" } },
+                  validateResult.ok ? "✓ 曲面通过" : `✗ ${validateResult.msg || "曲面不构成合法格元"}`),
+              React.createElement("div", { style: { marginTop: 14, border: "1px solid var(--border-glass)", borderRadius: 8, padding: 10 } },
+                React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 } },
+                  "手动可选：生成 6 平面 / 6P+2PZ（旧路径，可另存为「手动」写法）"),
+                React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" } },
+                  lat === "2"
+                    ? React.createElement(React.Fragment, null,
+                        numField("边长", genPlanes.side, (v) => setGenPlanes({ ...genPlanes, side: v })),
+                        numField("高", genPlanes.H, (v) => setGenPlanes({ ...genPlanes, H: v })),
+                      )
+                    : React.createElement(React.Fragment, null,
+                        numField("长", genPlanes.L, (v) => setGenPlanes({ ...genPlanes, L: v })),
+                        numField("宽", genPlanes.W, (v) => setGenPlanes({ ...genPlanes, W: v })),
+                        numField("高", genPlanes.H, (v) => setGenPlanes({ ...genPlanes, H: v })),
+                      ),
+                  numField("中心X", genPlanes.cx, (v) => setGenPlanes({ ...genPlanes, cx: v })),
+                  numField("中心Y", genPlanes.cy, (v) => setGenPlanes({ ...genPlanes, cy: v })),
+                  numField("中心Z", genPlanes.cz, (v) => setGenPlanes({ ...genPlanes, cz: v })),
+                  React.createElement("button", { type: "button", className: "btn btn-ghost btn-sm", onClick: handleGenPlanes },
+                    "生成平面卡"),
+                ),
+              ),
+            )
           ),
         ),
-      /* 步骤2：延伸方向 */
+      /* 步骤2：画布涂色 + 调色板（同屏，项6/7）+ 3D 子预览 */
       step === 2 &&
-        React.createElement("div", null,
-          React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 12 } },
-            React.createElement("button", { type: "button", onClick: () => { setExt3D(false); setLayers(1); }, style: { ...btn, border: !ext3D ? "1px solid var(--accent)" : "1px solid var(--border-glass)", background: !ext3D ? "rgba(76,159,232,0.15)" : "var(--bg-input)" } },
-              "2D 平面（第三轴 0:0）"),
-            React.createElement("button", { type: "button", onClick: () => setExt3D(true), style: { ...btn, border: ext3D ? "1px solid var(--accent)" : "1px solid var(--border-glass)", background: ext3D ? "rgba(76,159,232,0.15)" : "var(--bg-input)" } },
-              "3D 体积（第三轴 0:k）"),
-          ),
-          ext3D &&
-            React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "flex-end" } },
-              numField("轴向层数 k", layers, (v) => setLayers(Math.max(1, v))),
-            ),
-          React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 8 } },
-            `延伸后范围：${rangeFromDims(effectiveDims).join("  ")} · 共 ${effectiveDims.reduce((a, b) => a * b, 1)} 格位`),
-        ),
-      /* 步骤3：宇宙调色板 */
-      step === 3 &&
-        React.createElement("div", null,
-          React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 8 } },
-            `从 deck 收集 ${universeList.length} 个宇宙（u=）；点击选择涂色笔。`),
-          React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 } },
-            universeList.map((u) =>
-              React.createElement("button", {
-                key: u,
-                type: "button",
-                onClick: () => setSelectedU(u),
-                style: {
-                  minWidth: 56, height: 34, borderRadius: 6, border: selectedU === u ? "2px solid #fff" : "1px solid rgba(255,255,255,0.25)",
-                  background: getUniverseColor(u, palette), color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer",
-                  boxShadow: selectedU === u ? "0 0 0 2px var(--accent)" : "none",
-                },
-              }, `U=${u}`),
-            ),
-          ),
-          React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
-            React.createElement("input", {
-              style: { ...inp, width: 140 },
-              placeholder: "自定义宇宙号",
-              value: customU,
-              onChange: (e: React.ChangeEvent<HTMLInputElement>) => setCustomU(e.target.value),
-            }),
-            React.createElement("button", { type: "button", className: "btn btn-ghost btn-sm", onClick: addCustomUniverse },
-              "添加"),
-          ),
-          React.createElement("div", { style: { fontSize: 12, marginTop: 10, color: "var(--text-secondary)" } },
-            `当前涂色笔：U=${selectedU}`),
-        ),
-      /* 步骤4：画布涂色 + 3D 子预览 */
-      step === 4 &&
         React.createElement("div", { style: { display: "flex", gap: 14, alignItems: "flex-start" } },
           React.createElement("div", { style: { flex: "0 0 auto", maxWidth: 480, overflow: "auto" } },
             React.createElement(LatticeCanvas, {
@@ -363,12 +522,46 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
               pitch: 22,
             }),
           ),
+          React.createElement("div", { style: { flex: "0 0 190px" } },
+            React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 8 } },
+              `调色板（${universeList.length} 宇宙：void ∪ 格阵 fill 表 ∪ deck u=）`),
+            React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 } },
+              universeList.map((u) =>
+                React.createElement("button", {
+                  key: u,
+                  type: "button",
+                  "data-testid": `palette-${u}`,
+                  onClick: () => setSelectedU(u),
+                  title: u === "0" ? "void（涂透明格位）" : `U=${u}`,
+                  style: {
+                    minWidth: 46, height: 30, borderRadius: 6,
+                    border: selectedU === u ? "2px solid #fff" : "1px solid rgba(255,255,255,0.25)",
+                    background: u === "0" ? "rgba(255,255,255,0.08)" : getUniverseColor(u, palette),
+                    color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer",
+                    boxShadow: selectedU === u ? "0 0 0 2px var(--accent)" : "none",
+                  },
+                }, u === "0" ? "∅0" : `U=${u}`),
+              ),
+            ),
+            React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", marginBottom: 10 } },
+              React.createElement("input", {
+                style: { ...inp, width: 96 },
+                placeholder: "自定义宇宙号",
+                value: customU,
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setCustomU(e.target.value),
+              }),
+              React.createElement("button", { type: "button", className: "btn btn-ghost btn-sm", onClick: addCustomUniverse },
+                "添加"),
+            ),
+            React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)" } },
+              `当前涂色笔：U=${selectedU}`),
+          ),
           React.createElement("div", { style: { flex: 1, minWidth: 240, height: 380 } },
             React.createElement(LatticePreview3D, { lat, dims: effectiveDims, cells, palette, pitch: 1, height: Math.max(0.5, effectiveDims[2] || 1) }),
           ),
         ),
-      /* 步骤5：保存摘要 */
-      step === 5 &&
+      /* 步骤3：保存摘要（体积告警 + 判环已在保存时） */
+      step === 3 &&
         React.createElement("div", null,
           React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 8 } },
             "保存将写入栅元卡："),
@@ -376,26 +569,17 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
             React.createElement("div", null, `material = 0   density = ""`),
             React.createElement("div", null, `u = ${latticeU || "—"}`),
             React.createElement("div", null, `lat = ${lat}`),
-            React.createElement("div", null, `fill = ${rangeFromDims(effectiveDims).join(" ")}`),
+            React.createElement("div", null, `fill = ${currentRange.join(" ")}`),
             React.createElement("div", null, `surface_expr = ${surfaceExpr || "（空）"}`),
-            React.createElement("div", null, `fill_grid = ${serializeFillGrid({ lat, kind: "lattice", range: rangeFromDims(effectiveDims), dims: effectiveDims, cells, raw: "" })}`),
+            React.createElement("div", null, `fill_grid = ${serializeFillGrid({ lat, kind: "lattice", range: currentRange, dims: effectiveDims, cells, raw: "" })}`),
           ),
           !surfaceExpr.trim() &&
             React.createElement("div", { style: { fontSize: 11, color: "#e0a12e", marginTop: 8 } },
               "⚠ 曲面表达式为空，请回到「材料与曲面」填写或自动生成。"),
+          volumeWarning &&
+            React.createElement("div", { style: { fontSize: 11, color: "#e0a12e", marginTop: 8 } },
+              `⚠ ${volumeWarning}`),
         ),
     ),
   );
-}
-
-/** 按钮基础样式（弹窗内统一） */
-const btn: React.CSSProperties = {
-  height: 32, padding: "0 14px", borderRadius: 6, cursor: "pointer",
-  fontSize: 12, color: "var(--text-primary)",
-};
-
-function hexRingCountLabel(rings: number): string {
-  const rows = 2 * rings + 1;
-  const total = rows * rows; // 包围盒格位数
-  return `${total} 盒位`;
 }

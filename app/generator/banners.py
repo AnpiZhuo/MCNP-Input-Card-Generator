@@ -86,6 +86,31 @@ def multi_source_comment_banner(n: int) -> str:
     return f"C  {n} sources, probability keyed to D1"
 
 
+# ── U 分组头注释（项9：分组头可编辑 → INP 前 C 注释）──
+# 唯一发射源 = universe_group_banner（生成器调用）；解析器用 is_universe_group_comment /
+# parse_universe_group_comment 识别同一前缀（词汇冻结防漂移：生成器/解析器共享本模块）。
+
+def universe_group_banner(u, text: str) -> str:
+    """C  U-group U=<n>: <user text>（该 U 组首个栅元行之前插入）。"""
+    return f"C  U-group U={u}: {text}"
+
+
+_UNIVERSE_GROUP_RE = re.compile(r'^C\s+U-group\s+U=(\d+):\s*(.*)$', re.IGNORECASE)
+
+
+def is_universe_group_comment(line: str) -> bool:
+    """判断一行是否为 U-group C 注释（C  U-group U=<n>: ...）。"""
+    return bool(_UNIVERSE_GROUP_RE.match(line.strip()))
+
+
+def parse_universe_group_comment(line: str):
+    """匹配 → (u, text)；不匹配 → None。"""
+    m = _UNIVERSE_GROUP_RE.match(line.strip())
+    if not m:
+        return None
+    return m.group(1), m.group(2)
+
+
 # ── 识别：判断一行 C 注释是否为生成器节头 ────────────────────
 # 精确节头集合（大小写不敏感，锚定全行，防误伤用户注释如 "C  Cell Cards are useful"）
 _EXACT_BANNERS = (

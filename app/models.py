@@ -512,3 +512,4 @@ class DeckData:
     sources: list[SourceData] = field(default_factory=list)           # Source definitions / 源定义列表
     tally: TallySettings | None = None                                # Tally settings (optional) / 计数设置（可选）
     adv: AdvancedSettings = field(default_factory=AdvancedSettings)   # Advanced card settings / 高级卡片设置
+    universe_comments: dict = field(default_factory=dict)             # U 分组头注释 {u_str: text}（项9，随工作区保存/导入导出）

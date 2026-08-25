@@ -105,6 +105,20 @@ def _range_count(spec: str) -> int:
     return int(m.group(2)) - int(m.group(1)) + 1
 
 
+def _dir_counts_from_range(token: str) -> tuple:
+    """方向块数 -N:M 映射：token 'a:b' → (L, R) = (-a, b)；解析失败返回 (0, 0)。
+
+    与 _range_count 的 dims = b-a+1 自洽（dims[axis] = L+R+1）：
+      '-8:8' → (8, 8)（居中，dims=17）；'0:16' → (0, 16)（角起，dims=17）。
+    expand_positions rect 中心 ((i-(nx-1)/2)·px) 代入 i=0 → -(L+R)/2·px、i=nx-1 → +(L+R)/2·px，
+    -N:M 映射下格阵始终以几何中心居中于原点（项2 权威公式）。
+    """
+    m = re.match(r'^([+-]?\d+)\s*:\s*([+-]?\d+)$', token)
+    if not m:
+        return 0, 0
+    return -int(m.group(1)), int(m.group(2))
+
+
 def _parse_offset(stream: list[str], i: int) -> tuple[str, str, str, int]:
     """从 i 起解析 '(x y z)' 偏移（token 形如 '(9' '0' '9)' 或 '(9' '0' '9' ')'）。
     返回 (dx, dy, dz, new_i)；new_i 指向 ')' 之后。
@@ -235,6 +249,14 @@ def format_fill_cards(fg: "FillGrid | None") -> list[str]:
 
     调用方负责把第一行内联到 cell 行或作续行；条目行已是合法 MCNP 续行。
     fg 为 None → 返回空列表（单宇宙填充走 CellData.fill 普通路径）。
+
+    用户复验修复（2026-08-24）：MCNP 规范 FILL 每行一个 j 行——行主序 i 最快，
+    每行 = 固定 j 的一行 nx 个条目（17×17 → 每行 17 个、17 行）。**优先从 cells
+    结构化展开**按 dims[0]=nx 分组；某行超 75 字符（含 5 空格缩进 ≤80 列）再按
+    宽度拆子行（token 序不变）。raw 仅 cells 空或**截断**（len(cells) < dims 乘积，
+    MAX_EXPANDED_ENTRIES 封顶致 cells 不完整）时兜底——截断数据展开会丢源 token，
+    回落 raw 保 R1/保真。lat=2 六棱柱同样按 nx 行分组（token 序不变即 MCNP 合法，
+    生成确定）。translated 单填充路径不变。
     """
     if fg is None:
         return []
@@ -247,25 +269,42 @@ def format_fill_cards(fg: "FillGrid | None") -> list[str]:
     # lattice
     range_str = " ".join(fg.range_) if fg.range_ else ""
     lines = [f"FILL={range_str}"]
-    if fg.raw:
-        # raw 优先回放（R1 稳定）：raw = FILL= 之后全部原始 token（含 17r 简写、
-        # 字节贴近源）。首行已含范围串 → 续行剥离前导 len(range_) 个范围 token，
-        # 避免范围在续行重复。
-        tokens = fg.raw.split()
-        if len(fg.range_) > 0:
-            tokens = tokens[len(fg.range_):]
-        for row in _pack_entries(tokens):
-            lines.append("     " + row)
-    elif fg.cells:
-        # 手工构造/画布覆盖（raw 空）→ 回落结构化展开
-        entry_strs = []
-        for c in fg.cells:
-            s = c.u
-            if c.dx or c.dy or c.dz:
-                s += f" ({c.dx} {c.dy} {c.dz})"
-            entry_strs.append(s)
-        for row in _pack_entries(entry_strs):
-            lines.append("     " + row)
+    cells = fg.cells or []
+    # 截断判定：dims 乘积 > cells 长度（MAX_EXPANDED_ENTRIES 封顶）→ cells 不完整
+    truncated = False
+    if fg.dims:
+        _total = 1
+        for _d in fg.dims:
+            _total *= _d
+        truncated = _total > len(cells)
+    if not cells or truncated:
+        # raw 兜底：cells 空（手工空格阵）或截断（数据不完整）→ 原样 token 回放
+        if fg.raw:
+            tokens = fg.raw.split()
+            if len(fg.range_) > 0:
+                tokens = tokens[len(fg.range_):]
+            for row in _pack_entries(tokens):
+                lines.append("     " + row)
+        return lines
+    # 结构化展开：按 dims[0]（nx）每行分组（行主序 i 最快 → 每行一个 j 行）
+    nx = int(fg.dims[0]) if fg.dims else len(cells)
+    if nx <= 0:
+        nx = 1
+    entry_strs = []
+    for c in cells:
+        s = c.u
+        if c.dx or c.dy or c.dz:
+            s += f" ({c.dx} {c.dy} {c.dz})"
+        entry_strs.append(s)
+    for start in range(0, len(entry_strs), nx):
+        row_entries = entry_strs[start:start + nx]
+        row_len = sum(len(s) + (1 if k else 0) for k, s in enumerate(row_entries))
+        if row_len > 75:
+            # 行超 75 字符（含 5 空格缩进 ≤80 列）→ 按宽度拆子行（token 序不变）
+            for sub in _pack_entries(row_entries):
+                lines.append("     " + sub)
+        else:
+            lines.append("     " + " ".join(row_entries))
     return lines
 
 
@@ -385,13 +424,69 @@ def _validate_lat1(expr_ints: list, surfaces: dict) -> tuple:
         resolved, axes_required=({"x", "y", "z"} if len(expr_ints) == 6 else None))
 
 
+def _rhp_angle_deg(a: list, b: list) -> float:
+    """两向量夹角（度）。任一零向量 → 0.0（由调用方先验 |R|>0）。"""
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(x * x for x in b))
+    if na <= 1e-12 or nb <= 1e-12:
+        return 0.0
+    cosv = sum(a[i] * b[i] for i in range(3)) / (na * nb)
+    cosv = max(-1.0, min(1.0, cosv))
+    return math.degrees(math.acos(cosv))
+
+
+def _validate_rhp_params(params: list) -> tuple:
+    """RHP/HEX 单宏体参数合法性校验（项4，2026-08-24 破坏性变更）。
+
+    规则：合法参数数 ∈ {9,12,15,18}；|H|>0；|R1|>0；H·R1≈0（⊥）；
+    若给 R2（≥12 参）→ ⊥H 且 R1/R2 夹角 60°；若给 R3（≥15 参）→ ⊥H 且
+    R2/R3 夹角 60°（R1/R3 = 120° 为六棱柱第三个面位方向，合法）。
+    连续 60° 旋转语义与 _rhp_extent 的 Rodrigues 推断（R2=rot60(R1)、R3=rot120(R1)）
+    一致——真实正六棱柱 R1/R2/R3 取 0°/60°/120°。*TRn 等非数值 token 跳过。
+    """
+    nums = []
+    for p in params:
+        try:
+            nums.append(float(p))
+        except (ValueError, TypeError):
+            continue  # *TRn 等非数值 token 跳过
+    if len(nums) not in (9, 12, 15, 18):
+        return False, (f"RHP/HEX 宏体合法参数数为 9/12/15/18（V+H+R1[+R2[+R3]]）；"
+                       f"当前 {len(nums)} 个")
+    h = nums[3:6]
+    r1 = nums[6:9]
+    hnorm = math.sqrt(sum(x * x for x in h))
+    r1norm = math.sqrt(sum(x * x for x in r1))
+    if hnorm <= 1e-12:
+        return False, "RHP/HEX 高度向量 H 长度必须 >0（当前 0）"
+    if r1norm <= 1e-12:
+        return False, "RHP/HEX 第一面位向量 R1 长度必须 >0（当前 0）"
+    if abs(sum(h[i] * r1[i] for i in range(3))) / (hnorm * r1norm) > 1e-6:
+        return False, "RHP/HEX 的 H 与 R1 必须垂直（当前夹角非 90°）"
+    if len(nums) >= 12:
+        r2 = nums[9:12]
+        if abs(sum(h[i] * r2[i] for i in range(3))) / hnorm > 1e-6:
+            return False, "RHP/HEX 的 R2 必须垂直 H"
+        a12 = _rhp_angle_deg(r1, r2)
+        if abs(a12 - 60.0) > 0.5:
+            return False, f"RHP/HEX 的 R1/R2 夹角应 60°（当前 {a12:.1f}°）"
+    if len(nums) >= 15:
+        r3 = nums[12:15]
+        if abs(sum(h[i] * r3[i] for i in range(3))) / hnorm > 1e-6:
+            return False, "RHP/HEX 的 R3 必须垂直 H"
+        a23 = _rhp_angle_deg(nums[9:12], r3)
+        if abs(a23 - 60.0) > 0.5:
+            return False, f"RHP/HEX 的 R2/R3 夹角应 60°（当前 {a23:.1f}°）"
+    return True, ""
+
+
 def _validate_lat2(expr_ints: list, surfaces: dict) -> tuple:
     """lat=2 六棱柱：单 RHP/HEX 宏体，或 6 个竖直 P 平面（法向水平面均布 6 向）+ 2 个 PZ 顶底。"""
     if len(expr_ints) == 1:
         num, _sign = expr_ints[0]
-        kw, _p = surfaces.get(num, (None, []))
+        kw, params = surfaces.get(num, (None, []))
         if kw in ("RHP", "HEX"):
-            return True, ""
+            return _validate_rhp_params(params)
         return False, f"lat=2 单宏体必须是 RHP/HEX 六棱柱宏（曲面 {num} 为 {kw or '未定义'}）"
     if len(expr_ints) != 8:
         return False, (
@@ -507,11 +602,17 @@ def hex_ring_cell_count(rings: int) -> int:
 
 
 def hex_center(col: int, row: int, pitch: float):
-    """pointy-top 顶点朝 +X 的蜂窝格位中心（与前端 hexCenter 逐位一致，golden 锁死）。
+    """MCNP LAT=2 蜂窝格位中心（交叉验证自官方测试库 u233-comp-therm-001-case-6.i）。
 
-    x = col*pitch + (row%2)*pitch/2, y = row*pitch*√3/2
+    真实卡格元用 6 竖直平面（法向 0°/60°/120°，flat-top），基向量
+      a1=(2a,0)（0° 方向）、a2=(a, a·√3)（60° 方向），a=apothem，pitch=2a=中心距。
+    元素 (col,row) 位于 col·a1 + row·a2：
+      x = (col + row/2)·pitch,  y = row·pitch·√3/2
+    旧公式 x=col·p·√3/2, y=row·p+(col%2)·p/2 与此差 30° 旋转，已按 MCNP 修正
+    （2026-08-25 交叉验证后替换；golden hexCenter/positions.hex 同步更新）。
+    自洽：相邻 (0,0)→(1,0) 距=p，相邻 (0,0)→(0,1) 距=√((p/2)²+(p·√3/2)²)=p。
     """
-    return (col * pitch + (row % 2) * (pitch / 2.0),
+    return (col * pitch + row * (pitch / 2.0),
             row * pitch * (math.sqrt(3.0) / 2.0))
 
 
@@ -605,20 +706,52 @@ def _box_extent(params):
             "z_min": min(zs), "z_max": max(zs)}
 
 
+def _rotate_about(v, axis, theta):
+    """Rodrigues 旋转：向量 v 绕单位轴 axis 旋转 theta 弧度 → 新向量。
+
+    v' = v·cosθ + (k×v)·sinθ + k·(k·v)(1-cosθ)
+    """
+    kx, ky, kz = axis
+    c, s = math.cos(theta), math.sin(theta)
+    dot = kx * v[0] + ky * v[1] + kz * v[2]
+    cross = (ky * v[2] - kz * v[1],
+             kz * v[0] - kx * v[2],
+             kx * v[1] - ky * v[0])
+    return [v[0] * c + cross[0] * s + kx * dot * (1.0 - c),
+            v[1] * c + cross[1] * s + ky * dot * (1.0 - c),
+            v[2] * c + cross[2] * s + kz * dot * (1.0 - c)]
+
+
 def _rhp_extent(params):
     """RHP/HEX 宏体：六棱柱 AABB。h=全高向量（沿 ±h/2），v1/v2=外接半径向量（60° 夹角）。
 
     六个侧顶点 = center ± v1, ± v2, ± (v1-v2)。
+
+    参数数支持（项4，2026-08-24）：
+      9 参（V+H+R1）→ R2 按 MCNP 语义绕 H 转 60° 推断（Rodrigues）；
+      12/15/18 参原样读取前 12 个（R2 显式给出；R3 冗余于 AABB，无需读取）。
     """
-    if len(params) < 12:
+    if len(params) < 9:
         return None
     try:
         cx, cy, cz = [float(p) for p in params[:3]]
         h = [float(p) for p in params[3:6]]
         v1 = [float(p) for p in params[6:9]]
-        v2 = [float(p) for p in params[9:12]]
     except (ValueError, TypeError):
         return None
+    v2 = None
+    if len(params) >= 12:
+        try:
+            v2 = [float(p) for p in params[9:12]]
+        except (ValueError, TypeError):
+            v2 = None
+    if v2 is None:
+        # 9 参：R2 = R1 绕 H 转 60°（MCNP RHP 缺省推断，与 12 参路径 AABB 一致）
+        hnorm = math.sqrt(h[0] * h[0] + h[1] * h[1] + h[2] * h[2])
+        if hnorm <= 1e-12:
+            return None
+        axis = [h[0] / hnorm, h[1] / hnorm, h[2] / hnorm]
+        v2 = _rotate_about(v1, axis, math.pi / 3.0)
     dirs = [v1, [-v1[0], -v1[1], -v1[2]],
             v2, [-v2[0], -v2[1], -v2[2]],
             [v1[0] - v2[0], v1[1] - v2[1], v1[2] - v2[2]],
@@ -907,6 +1040,59 @@ def _find_lattice_cell_num(fg, sub_by_u):
     return None
 
 
+def detect_fill_cycle(sub_by_u: dict) -> dict:
+    """DFS 判环：基于 sub_by_u fill 图的 universe 循环嵌套检测（项13，跨语言锁死 L6）。
+
+    边 U→V：universe U 中任一 cell，其 fill_grid(kind=lattice/translated).cells[].u == V
+            或 fill 单值 == V（V≠"0"/""）。
+    递归栈成员表判环：chain = path[path.index(U):] + [U]；全图无环 → {"cycle":false,"chain":[]}。
+
+    返回 {"cycle": bool, "chain": list[str]}，chain 形如 ["1","2","1"]。
+    """
+    graph = {}
+    for u, cells in (sub_by_u or {}).items():
+        targets = []
+        for cell in cells or []:
+            fg = cell.get("fill_grid")
+            if fg is not None and fg.kind in ("lattice", "translated"):
+                for e in (fg.cells or []):
+                    v = str(getattr(e, "u", "") or "")
+                    if v and v != "0":
+                        targets.append(v)
+            else:
+                fv = str(cell.get("fill") or "").strip()
+                if fv and fv != "0":
+                    targets.append(fv)
+        graph[str(u)] = targets
+
+    visited = set()
+    stack = []
+    in_stack = set()
+
+    def _dfs(u):
+        stack.append(u)
+        in_stack.add(u)
+        for v in graph.get(u, []):
+            if v in in_stack:
+                idx = stack.index(v)
+                return {"cycle": True, "chain": stack[idx:] + [v]}
+            if v not in visited:
+                res = _dfs(v)
+                if res is not None:
+                    return res
+        stack.pop()
+        in_stack.discard(u)
+        visited.add(u)
+        return None
+
+    for u in sorted(graph):
+        if u not in visited:
+            res = _dfs(u)
+            if res is not None:
+                return res
+    return {"cycle": False, "chain": []}
+
+
 def compose_lattice_tree(outer_fg: "FillGrid | None", sub_by_u: dict,
                          extent: dict | None, trcl,
                          max_depth: int = MAX_LATTICE_DEPTH,
@@ -923,14 +1109,20 @@ def compose_lattice_tree(outer_fg: "FillGrid | None", sub_by_u: dict,
     递归规则：
       - 构建 universe U：若含格阵 cell（fill_grid.kind=="lattice"）→ 先递归展开子格阵
         （子元素裁各自格元盒、平移到父格位），再整体裁外层盒；
-      - fill=X 单值列（含 translated 偏移）也递归；
+      - fill=X 单值列（含 translated 偏移）也递归；fill="0" 的 cell = 装配容器不产 STL；
       - 叶级 = material≠0 且无 fill（去重 (叶u,cellNum) 一个 STL 由前端负责）；
-      - void（material=0 无 fill）跳过。
-    返回 {status:"ok"|"depth_limit"|"too_many", tree, leafInstances, count,
-          lattices, detailViable}。
+      - void 叶（material=0 无 fill）→ 产 {leaf, void:true} 透明占位（计入 count，规则4）。
+    入口先 detect_fill_cycle → 命中返回 {status:"cycle", cycle:chain, ...}（不递归）。
+    返回 {status:"ok"|"depth_limit"|"too_many"|"cycle", tree, leafInstances, count,
+          lattices, detailViable[, cycle, chain]}。
     """
     if outer_fg is None:
         return {"status": "ok", "tree": [], "leafInstances": [], "count": 0,
+                "lattices": [], "detailViable": True}
+    cyc = detect_fill_cycle(sub_by_u)
+    if cyc["cycle"]:
+        return {"status": "cycle", "cycle": cyc["chain"],
+                "tree": [], "leafInstances": [], "count": 0,
                 "lattices": [], "detailViable": True}
     state = {
         "sub_by_u": sub_by_u,
@@ -1034,25 +1226,43 @@ def _expand_universe(u, base_xyz, depth, path, state) -> dict | None:
             target_u = cell.get("fill")
             off = (0.0, 0.0, 0.0)
         fv = str(target_u or "").strip()
-        if fv and fv != "0":
-            nb = (bx + off[0], by + off[1], bz + off[2])
-            sub_node = _expand_universe(fv, nb, depth + 1, path, state)
-            if sub_node is not None:
-                node["children"].append(sub_node)
+        if fv:
+            # 装配容器：fill 非空（含 fill="0"，规则1/7）→ 不自产 STL；指向真实
+            # universe 才递归（fill="0"=void 填充，无 universe 可递归）。
+            if fv != "0":
+                nb = (bx + off[0], by + off[1], bz + off[2])
+                sub_node = _expand_universe(fv, nb, depth + 1, path, state)
+                if sub_node is not None:
+                    node["children"].append(sub_node)
             continue
-        mat = cell.get("material")
-        if mat is not None and str(mat).strip() not in ("0", ""):
-            # 叶级：material≠0 且无 fill
+        mat_s = str(cell.get("material") or "").strip()
+        if mat_s not in ("0", ""):
+            # 叶级：material≠0 且无 fill（规则2）
             leaf = {
                 "path": path,
                 "u": str(u),
                 "cellNum": cell.get("cellNum"),
-                "mat": str(mat),
+                "mat": mat_s,
                 "x": bx, "y": by, "z": bz,
                 "depth": depth,
             }
             state["leaves"].append(leaf)
             state["count"] += 1
             node["children"].append({"leaf": True, **leaf})
-        # 其余（void 无 fill）跳过
+        elif mat_s == "0":
+            # 纯 void 叶（material=0 无 fill）→ 透明占位 leaf（规则4，计入 count，
+            # detailViable 总览兜底；前端透明材质渲染、不参与取景 bbox）
+            void_leaf = {
+                "path": path,
+                "u": str(u),
+                "cellNum": cell.get("cellNum"),
+                "mat": "0",
+                "x": bx, "y": by, "z": bz,
+                "depth": depth,
+                "void": True,
+            }
+            state["leaves"].append(void_leaf)
+            state["count"] += 1
+            node["children"].append({"leaf": True, **void_leaf})
+        # 其余（material 空串且无 fill）跳过
     return node if node["children"] else None

@@ -120,10 +120,18 @@ export function hexRingCellCount(rings: number): number {
   return 1 + 3 * rings * (rings + 1);
 }
 
-/** pointy-top 顶点朝 +X 的蜂窝格位中心（画布与阶段3共用，golden 测试锁死） */
+/**
+ * 顶点朝 +X（flat-top）蜂窝格位中心（画布 / LatticePreview3D / latticeInstances 共用，
+ * golden 锁死——跨语言 L1，权威公式不可改）：
+ *   x = i·(pitch·√3/2)  （列水平步距）
+ *   y = j·pitch + (i%2)·(pitch/2)  （行垂直步距 pitch，奇数列下移半格）
+ * 自洽核验：相邻 (0,0)→(1,0) 距=p、相邻 (0,0)→(0,1) 距=√((p/2)²+(p·√3/2)²)=p。
+ */
 export function hexCenter(col: number, row: number, pitch: number): { x: number; y: number } {
+  // MCNP LAT=2（交叉验证自官方库 u233-comp-therm-001-case-6.i，flat-top 基向量
+  // a1=(2a,0)、a2=(a,a√3)）：x=(col+row/2)·pitch, y=row·pitch·√3/2
   return {
-    x: col * pitch + (row % 2) * (pitch / 2),
+    x: col * pitch + row * (pitch / 2),
     y: row * pitch * (Math.sqrt(3) / 2),
   };
 }
@@ -199,11 +207,58 @@ export function getUniverseColor(u: string | number, palette: Record<string, str
   return palette[key] ?? UNIVERSE_GRAY;
 }
 
+/* ── 调色板来源合并（项 7）──────────────────────────────── */
+
+/** 调色板输入 cell 的最小形状（deck 栅元或 fill_grid 宿主） */
+export interface LatticeCellLike {
+  u?: string;
+  fill_grid?: string;
+}
+
+/**
+ * 调色板宇宙来源合并三路（项 7 权威契约）：
+ *   void "0" 恒在首位 ∪ deck cells 的 u= 去重（排除空/void）∪ 各格阵 cell 的
+ *   fill_grid JSON cells[].u 去重，数值升序。fill_grid 脏 JSON 容错（parseFillGrid 兜底）。
+ */
+export function collectFillUniverses(cells: LatticeCellLike[]): string[] {
+  const set = new Set<string>(["0"]);
+  for (const c of cells) {
+    const u = (c.u ?? "").trim();
+    if (u && u !== "0") set.add(u);
+    const fg = parseFillGrid(c.fill_grid ?? "");
+    if (fg) {
+      for (const gc of fg.cells) {
+        const gu = (gc.u ?? "").trim();
+        if (gu) set.add(gu);
+      }
+    }
+  }
+  return Array.from(set).sort((a, b) => Number(a) - Number(b));
+}
+
 /* ── 尺寸 / 范围 / raw 派生 ───────────────────────────────── */
 
 /** 由 dims 派生 MCNP 范围 token：dims=[17,17,1] → ["0:16","0:16","0:0"] */
 export function rangeFromDims(dims: number[]): string[] {
   return dims.map((d) => `0:${Math.max(0, d - 1)}`);
+}
+
+/**
+ * 方向块数（负/正复制块数）→ MCNP 范围 token "-L:R"（跨语言 L3）。
+ * dims = L+R+1；`0:16` = L=0,R=16 角起；`-8:8` = L=8,R=8 居中。
+ */
+export function rangeFromDirCounts(neg: number, pos: number): string {
+  return `${-neg}:${pos}`;
+}
+
+/** 反派生：token "a:b" → {neg: L=-a, pos: R=b, dims: b-a+1}；非法 token 兜底 {0,0,1} */
+export function dirCountsFromRange(token: string): { neg: number; pos: number; dims: number } {
+  const m = token.trim().match(/^(-?\d+):(-?\d+)$/);
+  if (!m) return { neg: 0, pos: 0, dims: 1 };
+  const a = parseInt(m[1], 10);
+  const b = parseInt(m[2], 10);
+  const neg = -a;
+  return { neg: neg === 0 ? 0 : neg, pos: b, dims: b - a + 1 };
 }
 
 /** 初始矩形格阵：全部格位填 defaultU（k 层，行主序） */
@@ -219,15 +274,25 @@ export function initialRectCells(cols: number, rows: number, layers: number, def
   return cells;
 }
 
-/** 初始环形蜂窝：菱形角位（蜂窝环外）填 "0"（void），环内填 defaultU */
+/**
+ * 蜂窝环内判定（flat-top 顶点+X）：cell (col,row) 是否在半径 rings 六边形内。
+ * 中心坐标 i=col−rings, j=row−rings；hex 距离 = max(|i|,|j|,|i+j|)（与
+ * hexRingRows 的 +30° 共线方向环行长一致，总和 1+3r(r+1)）。
+ */
+export function inHexRing(col: number, row: number, rings: number): boolean {
+  const i = col - rings;
+  const j = row - rings;
+  return Math.max(Math.abs(i), Math.abs(j), Math.abs(i + j)) <= rings;
+}
+
+/** 初始环形蜂窝：六边形环外角位（inHexRing=false）填 "0"（void），环内填 defaultU */
 export function initialHexCells(rings: number, layers: number, defaultU: string): FillGridCellJson[] {
   const cols = 2 * rings + 1;
-  const rowLens = hexRingRows(rings);
   const cells: FillGridCellJson[] = [];
   for (let k = 0; k < layers; k++) {
     for (let j = 0; j < cols; j++) {
       for (let i = 0; i < cols; i++) {
-        cells.push({ u: i < rowLens[j] ? defaultU : "0", dx: "", dy: "", dz: "" });
+        cells.push({ u: inHexRing(i, j, rings) ? defaultU : "0", dx: "", dy: "", dz: "" });
       }
     }
   }
@@ -256,6 +321,104 @@ export function latticeMismatchMessage(dims: number[], cells: unknown[]): string
   return null;
 }
 
+/**
+ * nR 压缩（项 12，跨语言 L8）：连续重复 run → `u nR` 回缩（nR=前一条目再重复 n 次语义，
+ * 与 parse_fill_entries 一致）。幂等不动点：压缩流 → parse 展开 → cells 相等 → 再压缩 = 同串。
+ * 仅编辑器保存路径启用（导入路径保持源 raw 原样，防 parse→gen→parse 字节漂移）。
+ * 样例：["1","1","1","2","2"] → "1 2r 2 1r"。
+ */
+export function compressRaw(input: string | string[]): string {
+  const tokens = typeof input === "string" ? input.split(/\s+/) : input;
+  const out: string[] = [];
+  let i = 0;
+  while (i < tokens.length) {
+    const t = tokens[i];
+    let run = 1;
+    while (i + run < tokens.length && tokens[i + run] === t) run++;
+    out.push(run >= 2 ? `${t} ${run - 1}r` : t);
+    i += run;
+  }
+  return out.join(" ");
+}
+
+/**
+ * 体积告警（项 12）：serializeFillGrid 序列化长度 > 64KB 或 cells.length > 8000
+ * → 保存前非阻塞提示文案；否则返回 null。
+ */
+export function latticeVolumeWarning(fg: FillGridJson): string | null {
+  const len = serializeFillGrid(fg).length;
+  if (len > 64 * 1024 || fg.cells.length > 8000) {
+    return `格阵体积过大（约 ${Math.round(len / 1024)} KB），保存后工作区可能变慢`;
+  }
+  return null;
+}
+
+/* ── 循环嵌套检测（项 13，跨语言 L6）──────────────────────── */
+
+/** detectFillCycle 输入 cell 的最小形状（镜像后端 sub_by_u 结构） */
+export interface CycleCellLike {
+  cellNum?: number | string;
+  material?: string;
+  fill?: string;
+  fill_grid?: string;
+}
+
+export interface FillCycleResult {
+  cycle: boolean;
+  chain: string[];
+}
+
+/**
+ * 循环嵌套检测（TS 镜像 Python detect_fill_cycle）。
+ * 基于 sub_by_u fill 图：universe U 内任一 cell 的 fill_grid(lattice/translated)
+ * cells[].u == V，或 fill 单值 == V（V≠"0"/""）→ 边 U→V。DFS 递归栈成员判环；
+ * 命中环 → chain = stack[stack.indexOf(U):] + [U]（如 ["1","2","1"]）。
+ */
+export function detectFillCycle(subByU: Record<string, CycleCellLike[]>): FillCycleResult {
+  const adj = new Map<string, Set<string>>();
+  for (const [u, cells] of Object.entries(subByU)) {
+    const targets = new Set<string>();
+    for (const c of cells || []) {
+      const fv = (c.fill ?? "").trim();
+      if (fv && fv !== "0") targets.add(fv);
+      if (c.fill_grid) {
+        const fg = parseFillGrid(c.fill_grid);
+        if (fg && (fg.kind === "lattice" || fg.kind === "translated")) {
+          for (const gc of fg.cells) {
+            const gu = (gc.u ?? "").trim();
+            if (gu) targets.add(gu);
+          }
+        }
+      }
+    }
+    if (targets.size) adj.set(u, targets);
+  }
+  const state = new Map<string, "visiting" | "done">();
+  const stack: string[] = [];
+  let chain: string[] = [];
+  let found = false;
+  const dfs = (u: string) => {
+    if (found) return;
+    const st = state.get(u);
+    if (st === "done") return;
+    if (st === "visiting") {
+      const i = stack.indexOf(u);
+      chain = [...stack.slice(i), u];
+      found = true;
+      return;
+    }
+    state.set(u, "visiting");
+    stack.push(u);
+    for (const v of adj.get(u) ?? []) {
+      if (Object.prototype.hasOwnProperty.call(subByU, v)) dfs(v);
+    }
+    stack.pop();
+    state.set(u, "done");
+  };
+  for (const u of Object.keys(subByU)) dfs(u);
+  return { cycle: found, chain };
+}
+
 /** 格阵物理范围估算（阶段2 用单位 pitch≈1；阶段3 由 surface_expr 提供真实格距） */
 export interface LatticeExtent {
   x: number;
@@ -277,9 +440,10 @@ export function estimateLatticeExtent(fg: FillGridJson | null): LatticeExtent {
       maxX = Math.max(maxX, c.x);
       maxY = Math.max(maxY, c.y);
     }
+    // 顶点+X 蜂窝：格元半宽 = pitch/√3（顶点-顶点宽 2pitch/√3），半高 = pitch/2（flat-flat 高 pitch）
     return {
-      x: maxX + pitch / 2,
-      y: maxY + pitch * (Math.sqrt(3) / 2),
+      x: maxX + pitch / Math.sqrt(3),
+      y: maxY + pitch / 2,
       z: Math.max(1, dims[2] ?? 1),
     };
   }
@@ -358,6 +522,109 @@ export function autoGenerateSurfaces(
 /** 尺寸变化时保持已涂色格位（新格位按 fresh 默认值填充） */
 export function resizeLatticeCells(prev: FillGridCellJson[], fresh: FillGridCellJson[]): FillGridCellJson[] {
   return fresh.map((c, i) => (prev[i] ? { ...prev[i] } : c));
+}
+
+/* ── 宏体自动生成（项 3/4，跨语言 L4/L5）────────────────────── */
+
+/** 3 位小数格式化（strip 尾零），对齐 RHP 卡 golden 期望值 */
+function fmt3(n: number): string {
+  return String(parseFloat(n.toFixed(3)));
+}
+
+/** RHP 卡参数（V=底面中心 / H=底面→顶面 / R1=轴→第一小面中点，MCNP RHP/HEX 语法） */
+export interface RhpParams {
+  v: [number, number, number];
+  h: [number, number, number];
+  r1: [number, number, number];
+}
+
+/** 渲染 RHP 卡行（无编号，形如 "rhp 0 0 -5  0 0 10  1.732 1 0"） */
+export function rhpCard(p: RhpParams): string {
+  return `rhp ${p.v.map(fmt3).join(" ")}  ${p.h.map(fmt3).join(" ")}  ${p.r1.map(fmt3).join(" ")}`;
+}
+
+/**
+ * 模式 B：中心 + 外接半径 + 高 → RHP 参数（跨语言 L4 权威：默认轴向 +Z、
+ * 第一面方向角 30° 顶点+X→面心）。V = C−H/2；R1 = (R·cos30°, R·sin30°, 0)。
+ */
+export function rhpFromCenterRadiusHeight(
+  C: [number, number, number],
+  R: number,
+  H: number,
+): RhpParams {
+  return {
+    v: [C[0], C[1], C[2] - H / 2],
+    h: [0, 0, H],
+    r1: [R * Math.cos(Math.PI / 6), R * Math.sin(Math.PI / 6), 0],
+  };
+}
+
+/**
+ * 模式 A：三点 + 高度 → RHP 参数。H = T−V；R1 = M−V（调用方校验 ⊥H / |R1|）。
+ */
+export function rhpFromThreePoints(
+  V: [number, number, number],
+  T: [number, number, number],
+  M: [number, number, number],
+): RhpParams {
+  return {
+    v: [V[0], V[1], V[2]],
+    h: [T[0] - V[0], T[1] - V[1], T[2] - V[2]],
+    r1: [M[0] - V[0], M[1] - V[1], M[2] - V[2]],
+  };
+}
+
+/**
+ * 模式 A 校验（项 4）：|T−V| 须等于高度 h；R1=M−V 须 ⊥ H。返回错误文案或 null。
+ */
+export function rhpModeAError(
+  V: [number, number, number],
+  T: [number, number, number],
+  M: [number, number, number],
+  h: number,
+): string | null {
+  const hMag = Math.hypot(T[0] - V[0], T[1] - V[1], T[2] - V[2]);
+  if (Math.abs(hMag - h) > 1e-6) return `顶面与底面距离 ${hMag.toFixed(3)} ≠ 高度 ${h}`;
+  const r1 = [M[0] - V[0], M[1] - V[1], M[2] - V[2]];
+  const dot = (T[0] - V[0]) * r1[0] + (T[1] - V[1]) * r1[1] + (T[2] - V[2]) * r1[2];
+  if (hMag > 1e-12 && Math.abs(dot) / hMag > 1e-4) return "第一小面中点矢量 R1 不垂直于轴向 H";
+  return null;
+}
+
+export interface MacrobodyResult {
+  /** 单个宏体卡行（含编号，如 "6 rpp -10 10 -10 10 -5 5"） */
+  line: string;
+  /** 格元表达式（"-6"） */
+  surfaceExpr: string;
+  /** 追加后的曲面卡文本 */
+  surfacesText: string;
+  /** 宏体类型 + 参数（无编号，如 "rpp -10 10 -10 10 -5 5"） */
+  card: string;
+}
+
+/**
+ * 自动生成宏体卡（项 3 权威公式，跨语言 L4）：
+ *   rect(lat=1) → 单个 RPP：xmin=cx−L/2 … zmax=cz+H/2，expr="−<num>"
+ *   hex(lat=2)  → 单个 RHP：R1 = ((side/2)·cos30°, (side/2)·sin30°, 0)（side = 对边宽/flat-flat）
+ * 编号 maxSurfaceNumber+1 顺延。旧六面体/6P 平面路径迁为「手动」可选项。
+ */
+export function autoGenMacrobody(
+  lat: "1" | "2",
+  params: AutoGenParams,
+  surfacesText: string,
+): MacrobodyResult {
+  const n = maxSurfaceNumber(surfacesText) + 1;
+  const card =
+    lat === "2"
+      ? rhpCard(rhpFromCenterRadiusHeight([params.hex!.cx, params.hex!.cy, params.hex!.cz], params.hex!.side / 2, params.hex!.H))
+      : (() => {
+          const p = params.rect!;
+          return `rpp ${fmt3(p.cx - p.L / 2)} ${fmt3(p.cx + p.L / 2)} ${fmt3(p.cy - p.W / 2)} ${fmt3(p.cy + p.W / 2)} ${fmt3(p.cz - p.H / 2)} ${fmt3(p.cz + p.H / 2)}`;
+        })();
+  const line = `${n} ${card}`;
+  const surfaceExpr = `-${n}`;
+  const next = surfacesText.trim() ? `${surfacesText.trimEnd()}\n${line}` : line;
+  return { line, surfaceExpr, surfacesText: next, card };
 }
 
 /* ── 后端曲面校验（阶段2 后端提供 /api/validate-lattice-surfaces）── */

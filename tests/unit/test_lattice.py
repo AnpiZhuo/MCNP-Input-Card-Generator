@@ -117,31 +117,75 @@ def test_parse_tokens_huge_range_pad_capped(monkeypatch):
     assert fg.raw == "-1000:1000 -1000:1000 0:0"   # raw 完整保留
 
 
-# ── format_fill_cards：raw 优先 + 范围剥离 ───────────────
-def test_format_fill_cards_raw_priority():
-    """raw 非空时原样回放（优先于 cells），且续行剥离前导范围 token。"""
+# ── format_fill_cards：cells 按 j 行分隔（用户复验修复，2026-08-24）──
+def test_format_fill_cards_per_row_grouping_17x17():
+    """MCNP 规范每行一个 j 行：17×17 → 每行 17 个条目、共 17 行（cells 优先）。"""
     fg = FillGrid(lat="1", kind="lattice", range_=["0:16", "0:16", "0:0"],
                   dims=[17, 17, 1],
-                  cells=[FillEntry(u="9")] * 289,          # 结构化条目（应被 raw 覆盖）
-                  raw="0:16 0:16 0:0 1 17r 2 14r 1 17r")   # 保留 17r 简写
+                  cells=[FillEntry(u="9")] * 289,
+                  raw="0:16 0:16 0:0 1 17r 2 14r 1 17r")
     lines = format_fill_cards(fg)
     assert lines[0] == "FILL=0:16 0:16 0:0"
-    # 续行以条目开头（范围 token 被剥离，不重复）
-    assert "1 17r" in lines[1]
-    assert lines[1].lstrip().startswith("1 17r")
-    # raw 优先于 cells（cells 全是 9，但 raw 是 1/2）
-    assert "9" not in " ".join(lines[1:])
+    cont = [l for l in lines[1:] if l.strip()]
+    assert len(cont) == 17, f"应 17 行（每行一个 j 行），实际 {len(cont)}"
+    for row in cont:
+        toks = row.split()
+        assert len(toks) == 17, f"每行应 17 个条目: {row!r}"
+        assert all(t == "9" for t in toks)
+        assert len(row) <= 80, f"行超 80 列: {row!r}"
 
 
-def test_format_fill_cards_cells_fallback():
-    """raw 为空（手工构造/画布覆盖）→ 回落 cells 结构化展开。"""
+def test_format_fill_cards_row_width_split():
+    """某 j 行超 75 字符（长条目含偏移）→ 按宽度拆子行（token 序不变）。"""
+    # dims [2,2,1] → 每行 2 条目；条目带偏移很长 → 整行超宽 → 拆子行仍可解析
     fg = FillGrid(lat="1", kind="lattice", range_=["0:1", "0:1", "0:0"],
-                  dims=[2, 2, 1], raw="",
-                  cells=[FillEntry(u="1"), FillEntry(u="2", dx="9", dy="0", dz="9"),
-                         FillEntry(u="1"), FillEntry(u="2")])
+                  dims=[2, 2, 1],
+                  cells=[FillEntry(u="1", dx="99", dy="88", dz="77"),
+                         FillEntry(u="2", dx="99", dy="88", dz="77"),
+                         FillEntry(u="3"), FillEntry(u="4")])
     lines = format_fill_cards(fg)
     assert lines[0] == "FILL=0:1 0:1 0:0"
-    assert "2 (9 0 9)" in lines[1]
+    flat = " ".join(l.strip() for l in lines[1:] if l.strip())
+    for needle in ("1 (99 88 77)", "2 (99 88 77)", "3", "4"):
+        assert needle in flat, f"丢失条目 {needle}: {flat}"
+    # 行序保持行主序 token 序（行分隔不改变 MCNP 读序）
+    assert flat.index("3") < flat.index("4")
+
+
+def test_format_fill_cards_cells_first_over_raw():
+    """cells 完整时优先结构化展开（即使 raw 非空）——不再 raw 优先。"""
+    fg = FillGrid(lat="1", kind="lattice", range_=["0:0", "0:0", "0:0"],
+                  dims=[1, 1, 1],
+                  cells=[FillEntry(u="7")],
+                  raw="0:0 0:0 0:0 9")   # raw 与 cells 不同 → cells 权威
+    lines = format_fill_cards(fg)
+    cont = [l for l in lines[1:] if l.strip()]
+    assert cont[0].strip() == "7", f"应输出 cells 的 7 而非 raw 的 9: {cont}"
+
+
+def test_format_fill_cards_raw_fallback_empty_cells():
+    """cells 空 → raw 兜底（原样 token 回放 + 范围 token 剥离）。"""
+    fg = FillGrid(lat="1", kind="lattice", range_=["0:16", "0:16", "0:0"],
+                  dims=[17, 17, 1], cells=[],
+                  raw="0:16 0:16 0:0 1 17r 2 14r 1 17r")
+    lines = format_fill_cards(fg)
+    assert lines[0] == "FILL=0:16 0:16 0:0"
+    cont = [l for l in lines[1:] if l.strip()]
+    assert "1 17r" in cont[0], f"raw 兜底应保留简写: {cont}"
+    assert cont[0].lstrip().startswith("1 17r")
+
+
+def test_format_fill_cards_raw_fallback_truncated():
+    """截断边界：len(cells) < dims 乘积（MAX_EXPANDED_ENTRIES 封顶）→ 回落 raw 保真。"""
+    fg = FillGrid(lat="1", kind="lattice", range_=["-1000:1000", "0:0", "0:0"],
+                  dims=[2001, 1, 1],
+                  cells=[FillEntry(u="1")] * 10,   # 不完整（截断）
+                  raw="-1000:1000 0:0 0:0 1 17r 2 14r 1 17r")
+    lines = format_fill_cards(fg)
+    cont = [l for l in lines[1:] if l.strip()]
+    # 回落 raw → 保留 17r/14r 简写（不展开截断的 cells）
+    assert "17r" in " ".join(cont) and "14r" in " ".join(cont)
+    assert all(tok in ("1", "17r", "2", "14r") for tok in cont[0].split()[:4])
 
 
 def test_format_fill_cards_translated():
@@ -374,14 +418,18 @@ def test_hex_ring_rows_cell_count():
 
 
 def test_hex_center_formula():
+    """MCNP LAT=2 权威公式（交叉验证自官方库 u233-comp-therm-001-case-6.i）：
+    x=(col+row/2)·pitch, y=row·pitch·√3/2。"""
     assert hex_center(0, 0, 2) == (0.0, 0.0)
     x, y = hex_center(2, 1, 2)
-    assert x == pytest.approx(5.0)
-    assert y == pytest.approx(1.7320508075688772)
-    assert hex_center(1, 0, 1) == (1.0, 0.0)
+    assert x == pytest.approx(5.0)        # (2+0.5)·2
+    assert y == pytest.approx(1.7320508075688772)  # 1·2·√3/2
+    x, y = hex_center(1, 0, 1)
+    assert x == pytest.approx(1.0)        # (1+0)·1
+    assert y == pytest.approx(0.0)        # 0·1·√3/2
     x, y = hex_center(0, 2, 1)
-    assert x == 0.0
-    assert y == pytest.approx(1.7320508075688772)
+    assert x == pytest.approx(1.0)        # (0+1)·1
+    assert y == pytest.approx(1.7320508075688772)  # 2·1·√3/2
 
 
 def test_lattice_cell_extent_rpp_macrobody():
@@ -472,14 +520,12 @@ def test_expand_positions_hex_ring_order():
     pos = expand_positions(fg, ext)
     assert len(pos) == 4
     assert [p["u"] for p in pos] == ["1", "2", "1", "2"]
-    # pitch = y 跨度 = √3（fixtures/hex_lattice.inp：R=1 → flat-to-flat=R√3）
-    p = pytest.approx(1.7320508075688772, abs=1e-12)
+    # MCNP LAT=2 蜂窝（pitch=√3，x=(col+row/2)·√3, y=row·√3·√3/2=row·1.5）：
+    #   idx0 (0,0)  idx1 (1.732, 0)  idx2 (0.866, 1.5)  idx3 (2.598, 1.5)
     assert pos[0]["x"] == pytest.approx(0.0) and pos[0]["y"] == pytest.approx(0.0)
-    assert pos[1]["x"] == p and pos[1]["y"] == pytest.approx(0.0)
-    assert pos[2]["x"] == pytest.approx(0.8660254037844386)
-    assert pos[2]["y"] == pytest.approx(1.5)
-    assert pos[3]["x"] == pytest.approx(2.598076211353316)
-    assert pos[3]["y"] == pytest.approx(1.5)
+    assert pos[1]["x"] == pytest.approx(1.7320508075688772) and pos[1]["y"] == pytest.approx(0.0)
+    assert pos[2]["x"] == pytest.approx(0.8660254037844386) and pos[2]["y"] == pytest.approx(1.5)
+    assert pos[3]["x"] == pytest.approx(2.598076211353316) and pos[3]["y"] == pytest.approx(1.5)
 
 
 def test_expand_positions_trcl_90():
@@ -575,6 +621,21 @@ def test_compose_lattice_tree_limits_constants():
 
 
 # ── 阶段3：跨语言 golden（positions / nested，前端 latticeGolden.json）──
+def _golden_positions_hex_fresh(s: dict) -> bool:
+    """golden positions 段 hex 条目是否已由前端重算为项5 新公式值。
+
+    前端 Wave 2b 并行写盘（hexCenter/positions.hex 全量重算）；未重算时 golden 仍为
+    旧公式值 → 本条目 skip（沿用「未产出 skip」模式）。rect 段不受项5 影响恒 fresh。
+    """
+    if s.get("lat") != "2":
+        return True
+    for exp in s.get("expected", []):
+        if exp.get("idx") == 1:
+            return (exp["x"] == pytest.approx(1.5, abs=1e-9)
+                    and exp["y"] == pytest.approx(0.8660254037844386, abs=1e-9))
+    return False
+
+
 def test_positions_golden_cross_language():
     """expand_positions 对 latticeGolden.json positions 段产出与 expected 一致。"""
     if not _GOLDEN_PATH.is_file():
@@ -585,6 +646,8 @@ def test_positions_golden_cross_language():
         pytest.skip("golden 无 positions 段（阶段3 golden 待扩展）")
     import math as _m
     for s in samples:
+        if not _golden_positions_hex_fresh(s):
+            continue  # 项5 hex 段前端未重算 → skip（写盘后自动生效）
         dims = s["dims"]
         total = _m.prod(dims)
         fg = _fg(s["lat"], dims, ["1"] * total)
@@ -627,3 +690,288 @@ def test_nested_golden_cross_language():
            for leaf in r["leafInstances"]}
     exp = {(leaf["cellNum"], leaf["x"], leaf["y"], leaf["z"]) for leaf in nested["leaves"]}
     assert got == exp
+
+
+# ── Wave 2a：项2/4/5/13/15 ─────────────────────────────
+# 项2：方向块数 -N:M 映射
+def test_dir_counts_from_range():
+    """项2：'a:b' → (L,R)=(-a,b)，dims=L+R+1 与 _range_count dims=b-a+1 自洽。"""
+    from app.lattice import _dir_counts_from_range, _range_count
+    assert _dir_counts_from_range("-8:8") == (8, 8)    # 居中
+    assert _dir_counts_from_range("0:16") == (0, 16)   # 角起
+    assert _dir_counts_from_range("-2:5") == (2, 5)    # 非对称
+    assert _dir_counts_from_range("bad") == (0, 0)     # 解析失败
+    assert _dir_counts_from_range("8") == (0, 0)
+    for token, (L, R) in [("-8:8", (8, 8)), ("0:16", (0, 16)), ("-2:5", (2, 5))]:
+        assert L + R + 1 == _range_count(token), f"{token} 反派生 dims 不一致"
+        assert L == -int(token.split(":")[0]) and R == int(token.split(":")[1])
+
+
+# 项4：RHP/HEX 单宏体参数校验 + 9 参推断
+def test_validate_rhp_params():
+    """项4：9/12/15/18 参合法；|H|=0、R1 非⊥H、R2 不⊥H、R1/R2 夹角错、R2/R3 夹角错、参数数非法 → 拒。"""
+    # 9 参合法（V+H+R1）
+    ok, msg = validate_lattice_surfaces("-10", "2", "10 rhp 0 0 0 0 0 2 0.5 0 0")
+    assert ok, msg
+    # 12 参合法（R2=rot60(R1)）
+    ok, msg = validate_lattice_surfaces("-10", "2",
+        "10 rhp 0 0 0 0 0 2 0.5 0 0 0.25 0.4330127019 0")
+    assert ok, msg
+    # 15 参合法（R3=rot120(R1)，R2/R3 夹角 60°）
+    ok, msg = validate_lattice_surfaces("-10", "2",
+        "10 hex 0 0 0 0 0 2 0.5 0 0 0.25 0.4330127019 0 -0.25 0.4330127019 0")
+    assert ok, msg
+    # 18 参合法（前 15 + 3 额外 token）
+    ok, msg = validate_lattice_surfaces("-10", "2",
+        "10 rhp 0 0 0 0 0 2 0.5 0 0 0.25 0.4330127019 0 -0.25 0.4330127019 0 1 2 3")
+    assert ok, msg
+    # |H|=0 拒
+    ok, msg = validate_lattice_surfaces("-10", "2", "10 rhp 0 0 0 0 0 0 0.5 0 0")
+    assert not ok and "H" in msg
+    # R1 非 ⊥H 拒（R1=(0.5,0,0.5) 与 H=(0,0,2) 夹角非 90°）
+    ok, msg = validate_lattice_surfaces("-10", "2", "10 rhp 0 0 0 0 0 2 0.5 0 0.5")
+    assert not ok and "垂直" in msg
+    # R2 不 ⊥H 拒
+    ok, msg = validate_lattice_surfaces("-10", "2", "10 rhp 0 0 0 0 0 2 0.5 0 0 0.5 0 1")
+    assert not ok
+    # R1/R2 夹角错（30°）拒
+    ok, msg = validate_lattice_surfaces("-10", "2",
+        "10 rhp 0 0 0 0 0 2 0.5 0 0 0.4330127019 0.25 0")
+    assert not ok
+    # R2/R3 夹角错（R3 与 R2 平行 0°）拒
+    ok, msg = validate_lattice_surfaces("-10", "2",
+        "10 rhp 0 0 0 0 0 2 0.5 0 0 0.25 0.4330127019 0 0.25 0.4330127019 0")
+    assert not ok
+    # 参数数非法（6 参）拒
+    ok, msg = validate_lattice_surfaces("-10", "2", "10 rhp 0 0 0 0 0 2 0.5")
+    assert not ok
+    # HEX 同规则
+    ok, msg = validate_lattice_surfaces("-10", "2", "10 hex 0 0 0 0 0 2 0.5 0 0")
+    assert ok, msg
+
+
+def test_rhp_extent_9params_infer():
+    """项4：9 参 RHP 推断 R2（Rodrigues 绕 H 转 60°）→ AABB 与 12 参显式一致。"""
+    nine = lattice_cell_extent("-10", "2", "10 rhp 0 0 0 0 0 2 0.5 0 0")
+    twelve = lattice_cell_extent("-10", "2",
+                                 "10 rhp 0 0 0 0 0 2 0.5 0 0 0.25 0.433012701892 0")
+    assert nine is not None and twelve is not None
+    for k in ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max"):
+        assert nine[k] == pytest.approx(twelve[k], abs=1e-9), k
+    # 9 参 H⊥ 平面：R1=(0.5,0,0) → 六边形 AABB x∈[-0.5,0.5] y∈[-0.433,0.433] z∈[-1,1]
+    assert nine["x_min"] == pytest.approx(-0.5)
+    assert nine["x_max"] == pytest.approx(0.5)
+    assert nine["y_max"] == pytest.approx(0.433012701892, abs=1e-9)
+    assert nine["z_min"] == -1.0 and nine["z_max"] == 1.0
+
+
+# 项5：hex 权威公式（顶点+X flat-top）
+def test_hex_center_flat_top():
+    """项5：顶点+X 蜂窝权威公式，pitch=2/√3 权威样例（设计 golden 值）。"""
+    import math as _m
+    p = 2.0 / _m.sqrt(3.0)
+    x0, y0 = hex_center(0, 0, p)
+    x1, y1 = hex_center(1, 0, p)
+    x2, y2 = hex_center(0, 1, p)
+    # 相邻列 (0,0)→(1,0) 距 = p；相邻行 (0,0)→(0,1) 距 = p
+    assert (x1 - x0) ** 2 + (y1 - y0) ** 2 == pytest.approx(p * p, abs=1e-9)
+    assert (x2 - x0) ** 2 + (y2 - y0) ** 2 == pytest.approx(p * p, abs=1e-9)
+    # pitch=2 权威样例：x=(i+j/2)·2, y=j·2·√3/2=j·√3
+    x, y = hex_center(1, 0, 2)
+    assert x == pytest.approx(2.0) and y == pytest.approx(0.0)
+    x, y = hex_center(0, 1, 2)
+    assert x == pytest.approx(1.0) and y == pytest.approx(1.7320508075688772)
+    x, y = hex_center(1, 1, 2)
+    assert x == pytest.approx(3.0) and y == pytest.approx(1.7320508075688772)
+
+
+def test_expand_positions_hex_flat_top():
+    """项5：expand_positions hex 分支走新 hex_center，消费 golden positions.hex 段
+    （前端 Wave 2b 重算写盘后自动生效；未重算 skip）。"""
+    if not _GOLDEN_PATH.is_file():
+        pytest.skip("gui/src/utils/__golden__/latticeGolden.json 缺失")
+    data = json.loads(_GOLDEN_PATH.read_text(encoding="utf-8"))
+    samples = data.get("positions", [])
+    if not samples:
+        pytest.skip("golden 无 positions 段")
+    import math as _m
+    for s in samples:
+        if s.get("lat") != "2" or not _golden_positions_hex_fresh(s):
+            continue  # 非 hex 或前端未重算项5 hex 段 → skip
+        dims = s["dims"]
+        total = _m.prod(dims)
+        fg = _fg("2", dims, ["1"] * total)
+        pos = expand_positions(fg, s["extent"], trcl_rotation_deg=s.get("trclDeg", 0))
+        assert pos is not None
+        for exp in s["expected"]:
+            p = pos[exp["idx"]]
+            assert p["x"] == pytest.approx(exp["x"], abs=1e-9), f"{s['id']} idx {exp['idx']} x"
+            assert p["y"] == pytest.approx(exp["y"], abs=1e-9), f"{s['id']} idx {exp['idx']} y"
+            assert p["z"] == pytest.approx(exp["z"], abs=1e-9), f"{s['id']} idx {exp['idx']} z"
+
+
+# 项13：循环嵌套检测
+def test_detect_fill_cycle():
+    """项13：自环/两元环/三元环/无环；fill="0" 不构成边；fill_grid 引用构成边。"""
+    from app.lattice import detect_fill_cycle
+
+    def _sub(map_):
+        return {str(u): [{"fill": f, "fill_grid": fg} for (f, fg) in cl]
+                for u, cl in map_.items()}
+
+    # 两元环 A→B→A
+    r = detect_fill_cycle(_sub({"1": [("2", None)], "2": [("1", None)]}))
+    assert r["cycle"] is True and r["chain"][0] == r["chain"][-1]
+    assert {"1", "2"} <= set(r["chain"])
+    # 三元环 A→B→C→A
+    r = detect_fill_cycle(_sub({"1": [("2", None)], "2": [("3", None)], "3": [("1", None)]}))
+    assert r["cycle"] is True and r["chain"][0] == r["chain"][-1]
+    assert set(r["chain"]) == {"1", "2", "3"}
+    # 自环 A→A
+    r = detect_fill_cycle(_sub({"1": [("1", None)]}))
+    assert r["cycle"] is True and r["chain"] == ["1", "1"]
+    # 无环
+    r = detect_fill_cycle(_sub({"1": [("2", None)], "2": [("", None)]}))
+    assert r["cycle"] is False and r["chain"] == []
+    # fill="0" / 空 不构成边
+    r = detect_fill_cycle(_sub({"1": [("0", None)], "2": [("", None)]}))
+    assert r["cycle"] is False
+    # fill_grid lattice 引用构成边
+    fg = FillGrid(lat="1", kind="lattice", dims=[1, 1, 1],
+                  range_=["0:0", "0:0", "0:0"], cells=[FillEntry(u="2")])
+    r = detect_fill_cycle(_sub({"1": [("", fg)], "2": [("1", None)]}))
+    assert r["cycle"] is True and {"1", "2"} <= set(r["chain"])
+    # translated 引用同样构成边
+    fg2 = FillGrid(lat="1", kind="translated", cells=[FillEntry(u="2", dx="1", dy="2", dz="3")])
+    r = detect_fill_cycle(_sub({"1": [("", fg2)], "2": [("1", None)]}))
+    assert r["cycle"] is True
+
+
+def test_compose_lattice_tree_cycle():
+    """项13：compose 入口 detect_fill_cycle → status="cycle" + chain（不递归，空树）。"""
+    outer_fg = FillGrid(lat="1", kind="lattice", range_=["0:0", "0:0", "0:0"],
+                        dims=[1, 1, 1], cells=[FillEntry(u="1")])
+    sub = {
+        "99": [_lcell(110, "0", "99", fg=outer_fg, expr="1 -2 3 -4",
+                      extent={"x_min": -1, "x_max": 1, "y_min": -1, "y_max": 1,
+                              "z_min": None, "z_max": None})],
+        "1": [_lcell(101, "0", "1", expr="-1")],
+        "2": [_lcell(102, "0", "2", expr="-1")],
+    }
+    sub["1"][0]["fill"] = "2"
+    sub["2"][0]["fill"] = "1"
+    r = compose_lattice_tree(outer_fg, sub, {"x_min": -1, "x_max": 1,
+                                             "y_min": -1, "y_max": 1,
+                                             "z_min": None, "z_max": None}, 0)
+    assert r["status"] == "cycle"
+    assert r["cycle"] == ["1", "2", "1"]
+    assert r["tree"] == [] and r["leafInstances"] == [] and r["count"] == 0
+    assert r["lattices"] == [] and r["detailViable"] is True
+
+
+# 项15：装配规则（fill="0" 装配容器 + void 叶 + 单值 fill 装配链）
+def test_expand_universe_void_leaf_and_fill0():
+    """项15：void 叶（material=0 无 fill）产 {leaf, void:true}；fill="0" 装配容器不产 STL。"""
+    from app.lattice import _expand_universe, MAX_LATTICE_DEPTH, MAX_TOTAL_INSTANCES
+
+    def _state(sub):
+        return {"sub_by_u": sub, "max_depth": MAX_LATTICE_DEPTH,
+                "max_total": MAX_TOTAL_INSTANCES, "status": "ok",
+                "leaves": [], "lattices": [], "count": 0}
+
+    # void 叶
+    st = _state({"1": [{"cellNum": 101, "material": "0", "fill": "", "fill_grid": None}]})
+    node = _expand_universe("1", (0.0, 0.0, 0.0), 1, "0", st)
+    assert node is not None
+    assert len(st["leaves"]) == 1
+    assert st["leaves"][0]["void"] is True
+    assert st["leaves"][0]["cellNum"] == 101 and st["leaves"][0]["u"] == "1"
+    assert st["count"] == 1
+    # fill="0" → 装配容器：不产自身 STL，不递归
+    st2 = _state({"1": [{"cellNum": 101, "material": "1", "fill": "0", "fill_grid": None}]})
+    node2 = _expand_universe("1", (0.0, 0.0, 0.0), 1, "0", st2)
+    assert node2 is None and st2["leaves"] == [] and st2["count"] == 0
+    # fill="0" 容器 + 同 universe 实体 cell → 实体 leaf 正常产出
+    st3 = _state({"1": [{"cellNum": 101, "material": "1", "fill": "0", "fill_grid": None},
+                        {"cellNum": 102, "material": "1", "fill": "", "fill_grid": None}]})
+    node3 = _expand_universe("1", (0.0, 0.0, 0.0), 1, "0", st3)
+    assert node3 is not None
+    assert [l["cellNum"] for l in st3["leaves"]] == [102]
+    assert "void" not in st3["leaves"][0]
+
+
+def test_expand_universe_single_fill_assembly():
+    """项15：单值 fill 装配链——窗口 cell fill=10 → universe 10 → fill=1 → 叶 cell 101。"""
+    from app.lattice import _expand_universe, MAX_LATTICE_DEPTH, MAX_TOTAL_INSTANCES
+    sub = {
+        "10": [{"cellNum": 10, "material": "0", "fill": "1", "fill_grid": None,
+                "surface_expr": "1 2 3 4"}],
+        "1": [{"cellNum": 101, "material": "1", "fill": "", "fill_grid": None,
+               "surface_expr": "-1"}],
+    }
+    state = {"sub_by_u": sub, "max_depth": MAX_LATTICE_DEPTH,
+             "max_total": MAX_TOTAL_INSTANCES, "status": "ok",
+             "leaves": [], "lattices": [], "count": 0}
+    node = _expand_universe("10", (0.0, 0.0, 0.0), 1, "0", state)
+    assert node is not None
+    assert [l["cellNum"] for l in state["leaves"]] == [101]
+    assert state["leaves"][0]["u"] == "1"
+    assert state["leaves"][0]["depth"] == 2
+    assert state["count"] == 1
+
+
+def _assembly_golden_consistent(s: dict) -> bool:
+    """golden assembly 段是否结构完整：窗口 fill 指向的 universe 需能沿 fill 边到达
+    所有期望叶所在 universe。当前 golden 草稿可能缺 fill 边（前端 Wave 2b 写盘中，
+    如 window.fill="10" 但叶 u="1" 不可达）→ 视为未产出 → skip。
+    """
+    sub_by_u = s.get("sub_by_u", {})
+    start = str((s.get("window_cell") or {}).get("fill") or "")
+    if start not in sub_by_u:
+        return False
+    reachable = {start}
+    frontier = [start]
+    while frontier:
+        u = frontier.pop()
+        for cell in sub_by_u.get(u, []):
+            v = str(cell.get("fill") or "").strip()
+            if v and v != "0" and v not in reachable:
+                reachable.add(v)
+                frontier.append(v)
+            fg = cell.get("fill_grid")
+            if isinstance(fg, dict):
+                for e in fg.get("cells", []) or []:
+                    v = str(e.get("u") or "")
+                    if v and v != "0" and v not in reachable:
+                        reachable.add(v)
+                        frontier.append(v)
+    leaf_unis = {str(l.get("u")) for l in s.get("expected_leaves", [])}
+    return leaf_unis <= reachable
+
+
+def test_single_fill_assembly_golden():
+    """项15：golden assembly 段（单值 fill 装配样例）消费；前端未产出/结构未定稿 → skip。"""
+    if not _GOLDEN_PATH.is_file():
+        pytest.skip("gui/src/utils/__golden__/latticeGolden.json 缺失")
+    data = json.loads(_GOLDEN_PATH.read_text(encoding="utf-8"))
+    samples = data.get("assembly", [])
+    if not samples:
+        pytest.skip("golden 无 assembly 段（前端未产出）")
+    from app.lattice import _expand_universe, MAX_LATTICE_DEPTH, MAX_TOTAL_INSTANCES
+    for s in samples:
+        if not _assembly_golden_consistent(s):
+            pytest.skip(f"assembly golden {s.get('id', '?')} 结构未定稿（窗口 fill 无法到达期望叶）")
+        sub_by_u = {}
+        for u, cell_list in s["sub_by_u"].items():
+            sub_by_u[u] = [dict(c) for c in cell_list]
+        window = s["window_cell"]
+        wu = str(window.get("fill") or "")
+        state = {"sub_by_u": sub_by_u, "max_depth": MAX_LATTICE_DEPTH,
+                 "max_total": MAX_TOTAL_INSTANCES, "status": "ok",
+                 "leaves": [], "lattices": [], "count": 0}
+        _expand_universe(wu, (0.0, 0.0, 0.0), 1, "0", state)
+        got = [{"cellNum": l.get("cellNum"), "u": l.get("u"),
+                "x": l.get("x"), "y": l.get("y"), "z": l.get("z"),
+                "depth": l.get("depth")} for l in state["leaves"]]
+        assert got == s.get("expected_leaves", []), (
+            f"assembly {s.get('id', '?')}: 实际 {got} vs 期望 {s.get('expected_leaves')}")

@@ -1558,7 +1558,9 @@ paths:
         - leafInstances: FLAT 绝对坐标 [{path,u,cellNum,mat,x,y,z,depth}]。
         - tree: NESTED 保层次。count = 叶实例数。detailViable = count≤20000。
         - limit: "ok" | "depth_limit"（递归超 MAX_LATTICE_DEPTH=8）|
-          "too_many"（叶超 MAX_TOTAL_INSTANCES=500000）。
+          "too_many"（叶超 MAX_TOTAL_INSTANCES=500000）| "cycle"（循环嵌套，项13）。
+        - cycle/chain：limit=cycle 时 cycle=true + chain=循环链 universe 号序列；
+          无环恒为 cycle=false + chain=[]。
         各类守卫（无格阵/无 FreeCAD）在 HTTP 200 下返回空 lattices + message。
       requestBody:
         required: true
@@ -1632,7 +1634,12 @@ paths:
                       tree: { type: array, description: NESTED 保层次（hover/U 分组） }
                       count: { type: integer }
                       detailViable: { type: boolean }
-                      limit: { type: string, enum: [ok, depth_limit, too_many] }
+                      limit: { type: string, enum: [ok, depth_limit, too_many, cycle] }
+                      cycle: { type: boolean, description: "嵌套 fill 存在循环引用（项13）" }
+                      chain:
+                        type: array
+                        items: { type: string }
+                        description: "循环链 universe 号序列，如 [1,2,1]"
                       message: { type: string, description: 守卫分支才有 }
         '500':
           description: 未捕获异常（附 traceback）

@@ -41,6 +41,10 @@ function SeedAndTab({ onLoad }: { onLoad?: (load: (d: DeckData) => void) => void
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  // 项 8：分组默认开启（localStorage mcnp_groupbyu_v1 初始 true）——本测试验证批量编辑×拖拽重排，
+  // 显式关闭分组，保持「扁平行 = 每个栅元一行」的既有行结构断言（组头行会额外占一行）。
+  localStorage.clear();
+  localStorage.setItem("mcnp_groupbyu_v1", "false");
   fetchMock = vi.fn(async (url: unknown, opts: unknown) => {
     const u = String(url);
     if (u.includes("/api/check-freecad")) return { json: async () => ({ status: "ok", found: true }) };

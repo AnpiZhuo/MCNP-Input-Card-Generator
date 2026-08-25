@@ -390,6 +390,42 @@ def test_http_preview_lattice_shape(backend_base_url):
     assert isinstance(resp.get("detailViable"), bool), resp
 
 
+# 项13 cycle：外层格阵 → universe 1 → fill=2 → fill=1（U=1→U=2→U=1 循环）。
+CYCLE_FILL_GRID = {
+    "lat": "1", "kind": "lattice", "range": ["0:0", "0:0", "0:0"], "dims": [1, 1, 1],
+    "cells": [{"u": "1", "dx": "", "dy": "", "dz": ""}],
+    "raw": "0:0 0:0 0:0 1",
+}
+CYCLE_DECK = {
+    "surfaces": "1 px -1\n2 px 1\n3 py -1\n4 py 1\n5 cz 0.3",
+    "tr_cards": "",
+    "cells": [
+        {"kind": "cell", "cell": {"number": 20, "material": "0", "density": "",
+                                  "surface_expr": "1 -2 3 -4", "u": "10", "fill": "0:0 0:0 0:0",
+                                  "lat": "1", "trcl": "", "render": True,
+                                  "fill_grid": json.dumps(CYCLE_FILL_GRID)}},
+        {"kind": "cell", "cell": {"number": 1, "material": "0", "density": "",
+                                  "surface_expr": "-5", "u": "1", "fill": "2",
+                                  "lat": "", "trcl": "", "render": True, "fill_grid": ""}},
+        {"kind": "cell", "cell": {"number": 2, "material": "0", "density": "",
+                                  "surface_expr": "-5", "u": "2", "fill": "1",
+                                  "lat": "", "trcl": "", "render": True, "fill_grid": ""}},
+    ],
+}
+
+
+def test_http_preview_lattice_cycle(backend_base_url):
+    """项13：循环嵌套 → status 200 + limit=cycle + cycle=true + chain 闭合链断言。"""
+    resp = _post(backend_base_url, "/api/preview-lattice", CYCLE_DECK)
+    assert resp.get("status") == "ok", resp
+    assert resp.get("limit") == "cycle", resp
+    assert resp.get("cycle") is True, resp
+    chain = resp.get("chain", [])
+    assert len(chain) >= 3, f"cycle 链应至少 3 个节点（首尾闭合）: {chain}"
+    assert chain[0] == chain[-1], f"cycle 链应首尾闭合: {chain}"
+    assert {"1", "2"} <= set(chain), f"cycle 链应含 1/2: {chain}"
+
+
 def _stl_triangle_count(raw: bytes) -> int:
     """STL 字节 → 三角形数（ASCII 'facet' 计数 / 二进制头 offset80 uint32）。"""
     if not raw:

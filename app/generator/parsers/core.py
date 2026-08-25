@@ -18,6 +18,7 @@ import re
 from app import lattice
 from app.models import CellData, CellRow, MaterialData, MaterialRow, SourceData, TallyDefinition, PTRACSettings
 from app.meshtal.fmesh_parser import parse_fmesh_lines
+from ..banners import is_universe_group_comment, parse_universe_group_comment
 from .lines import _SURFACE_TYPES, extract_comment, strip_comment
 
 
@@ -183,6 +184,20 @@ def _merge_sisp_entry(existing_json: str, new_entry: dict) -> str:
     return json.dumps(list(acc.values()), ensure_ascii=False)
 
 
+def extract_universe_comments(cell_lines: list[str]) -> dict:
+    """从栅元段行中提取 U-group C 注释 → {u: text}（项9）。
+
+    生成器按 universe_group_banner 发射 `C  U-group U=<n>: <user text>`，解析时
+    在 parse_cells 之前先行提取（parse_cells 内部也跳过这些行，防被吸收为 cell 注释）。
+    """
+    result = {}
+    for line in cell_lines:
+        parsed = parse_universe_group_comment(line)
+        if parsed:
+            result[parsed[0]] = parsed[1]
+    return result
+
+
 def parse_cells(cell_lines: list[str]) -> list[CellRow]:
     """解析栅元卡行 → CellRow 列表（cell | raw；C 注释关联下一个栅元，$ 注释优先）"""
     cells = []
@@ -190,6 +205,10 @@ def parse_cells(cell_lines: list[str]) -> list[CellRow]:
     for line in cell_lines:
         stripped = line.strip()
         if not stripped:
+            continue
+        if is_universe_group_comment(stripped):
+            # 项9：U-group 头注释不属于 cell 注释（由 deck.universe_comments 承载），
+            # 不设 pending_c、不关联下一个栅元，防注释被吞进 cell.comment。
             continue
         if stripped.upper().startswith("C ") or stripped.upper().startswith("C\t"):
             pending_c = stripped
@@ -1096,6 +1115,13 @@ def parse_data_cards(data_lines: list[str]) -> dict:
         # 连续 C 注释块：前一 C 行未被 M 卡消费 → 先回落 other_cards，避免被覆盖丢失
         # （R1 不动点：17×17/BEAVRS 数据段连续 C 行逐代保持，不丢行）。
         if re.match(r'^C\s', line, re.IGNORECASE):
+            # 项9：U-group 头注释 → deck.universe_comments（从 other_cards/cell 注释路径排除）
+            if is_universe_group_comment(line):
+                parsed = parse_universe_group_comment(line)
+                if parsed:
+                    result.setdefault("universe_comments", {})[parsed[0]] = parsed[1]
+                i += 1
+                continue
             if pending_c:
                 result["other_cards"].append(pending_c)
             pending_c = raw_line

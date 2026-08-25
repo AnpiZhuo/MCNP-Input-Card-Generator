@@ -323,6 +323,7 @@ function AppInner() {
         },
         surfaces: deck.surfaces || "", tr_cards: deck.tr_cards || "",
         cells: deck.cells, materials: deck.materials, sources: deck.sources,
+        universe_comments: deck.universeComments || {},
         tally: {
           tallies: deck.tallies,
           ...gridPayload,

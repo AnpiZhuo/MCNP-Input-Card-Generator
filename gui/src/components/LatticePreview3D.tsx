@@ -9,6 +9,7 @@ import React, { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { useThreeCanvas } from "../three/useThreeCanvas";
 import { buildHexPrism } from "../three/hexPrism";
+import { disposeObjectGroup } from "../three/disposeObject";
 import { computeCameraParams } from "../three/cameraParams";
 import { getUniverseColor, hexCenter } from "../utils/lattice";
 import type { FillGridCellJson } from "../utils/lattice";
@@ -49,19 +50,6 @@ function buildBoxWireframe(w: number, d: number, h: number, color: number) {
   };
 }
 
-function disposeGroup(group: THREE.Group): void {
-  group.traverse((obj) => {
-    const anyObj = obj as any;
-    anyObj.geometry?.dispose?.();
-    const mat = anyObj.material;
-    if (mat) {
-      if (Array.isArray(mat)) mat.forEach((m: any) => m?.dispose?.());
-      else mat.dispose?.();
-    }
-  });
-  group.clear();
-}
-
 export default function LatticePreview3D({ lat, dims, cells, palette, pitch = 1, height = 1 }: Props) {
   const { canvasRef, wrapRef, sceneRef, cameraRef, controlsRef, markDirty } = useThreeCanvas();
   const groupRef = useRef<THREE.Group | null>(null);
@@ -71,7 +59,7 @@ export default function LatticePreview3D({ lat, dims, cells, palette, pitch = 1,
     if (!scene) return;
     if (groupRef.current) {
       scene.remove(groupRef.current);
-      disposeGroup(groupRef.current);
+      disposeObjectGroup(groupRef.current);
       groupRef.current = null;
     }
 

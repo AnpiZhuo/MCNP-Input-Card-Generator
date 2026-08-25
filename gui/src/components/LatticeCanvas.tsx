@@ -20,6 +20,7 @@ interface Props {
 }
 
 const VOID_BG = "rgba(255,255,255,0.04)";
+/* 顶点朝 +X（flat-top）蜂窝：clipPath 顶点在左/右中点（±X 顶点），顶/底为平边 */
 const HEX_CLIP = "polygon(0% 50%, 25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%)";
 
 export default function LatticeCanvas({ lat, dims, cells, palette, selectedU, onCellChange, disabled, pitch = 18 }: Props) {
@@ -75,16 +76,18 @@ export default function LatticeCanvas({ lat, dims, cells, palette, selectedU, on
     </div>
   );
 
-  /* 六棱柱：每层绝对定位的蜂窝（hexCenter 交错排布） */
+  /* 六棱柱：每层绝对定位的蜂窝（hexCenter 项5 权威公式交错排布，顶点+X） */
   const renderHexLayer = (k: number) => {
     const layerCells = hexCells.filter((c) => c.layer === k);
     const maxX = layerCells.length ? Math.max(...layerCells.map((c) => c.x)) : 0;
     const maxY = layerCells.length ? Math.max(...layerCells.map((c) => c.y)) : 0;
-    const cellH = (2 * pitch) / Math.sqrt(3);
+    // 顶点+X 格元盒：顶点-顶点宽 = 2pitch/√3（=2R），flat-flat 高 = pitch
+    const cellW = (2 * pitch) / Math.sqrt(3);
+    const cellH = pitch;
     return (
       <div key={k} className="lattice-layer">
         {layers > 1 && <div className="lattice-layer-label">层 {k}</div>}
-        <div style={{ position: "relative", width: maxX + pitch, height: maxY + pitch / Math.sqrt(3) + 2 }}>
+        <div style={{ position: "relative", width: maxX + cellW, height: maxY + cellH }}>
           {layerCells.map((h) => {
             const c = cells[h.idx];
             if (!c) return null;
@@ -99,9 +102,9 @@ export default function LatticeCanvas({ lat, dims, cells, palette, selectedU, on
                 disabled={disabled}
                 style={{
                   position: "absolute",
-                  left: h.x - pitch / 2,
-                  top: h.y - pitch / Math.sqrt(3),
-                  width: pitch,
+                  left: h.x - cellW / 2,
+                  top: h.y - cellH / 2,
+                  width: cellW,
                   height: cellH,
                   clipPath: HEX_CLIP,
                   background: cellBg(c.u),

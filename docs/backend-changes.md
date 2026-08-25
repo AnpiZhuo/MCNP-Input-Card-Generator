@@ -1186,3 +1186,200 @@ curl -s -X POST http://127.0.0.1:5001/api/lattice-extent \
 ## §Y.6 终态
 
 **pytest 673/0**。未 commit（等 PM 统一提交）。与前端已对齐响应 shape（前端提案的 compose 递归树被否决——嵌套递归在后端 compose_lattice_tree 完成，前端消费 flat leafInstances + 每格阵 positions/universes）。契约闸门 5001 端口本次空闲无劫持，全程真实端口验证通过。
+
+# 附录 Z：项14 3D 预览 STL 生成 cell 分类规则（2026-08-24，PM 派发，用户已确认权威规则，未 commit）
+
+> 本批只做 15 项反馈中的项14。分类规则为用户已确认，不可违背。契约 api.yaml / golden 不动（后续批次统一处理）。
+
+## Z.1 分类规则（用户已确认）
+
+| 类别 | 判定 | 行为 |
+| :--- | :--- | :--- |
+| fill 装配容器 | `fill` 非空 **或** `fill_grid` 非空（**含 `fill="0"` 的 void-fill**） | 跳过自身 STL。无论有没有 u、material 是否 0。内容由 FILL 装配：单值 fill=U → 装配一份 universe U；格阵 fill=range+表 → 切格位装配（preview-lattice 路径） |
+| graveyard | impN/impP/impE（或 imp_n/imp_p/imp_e）任一非空且**首个 token 为 "0"** | 不渲染（跳过自身 STL） |
+| render:false | 前端 render 显式 false | 跳过自身 STL（既有规则，保持） |
+| 实体 cell | material≠0、无 fill 无 u | 直接产 STL |
+| 纯 void cell | material=0、无 fill 无 u | 参与 STL（透明占位）——项14「删 void 约束」唯一适用范围 |
+| universe 定义 cell | u≠0、material≠0、无 fill | 仍产 STL（universe U 几何 = 所有 u=U 的 cell 的 STL 集合） |
+
+## Z.2 build_cells_data 改动（gui/backend/api_server.py）
+
+- 第一遍新增捕获：`has_fill = bool(str(cell.get("fill","") or "").strip())`、`is_graveyard = _imp_is_zero(cell)`。
+- `_imp_is_zero` 助手：遍历 `imp_n/impN/imp_p/impP/imp_e/impE`，任一非空且首个 token 为 `"0"` → graveyard。MCNP imp 单值语义，取首个 token 兼容 `"0 0"` 续值。
+- 第二遍 skip 合并：`has_fill or has_fill_grid → continue`（**此前只 skip fill_grid、漏掉单值 fill=U → 删 void 约束后 fill cell 自身几何被当实体块渲染，即用户看到的「大紫方块」——本批核心修复**）；`is_graveyard → continue`。
+- `cells_by_num` 映射保留（#n 补集引用不受影响）；entries 元组扩为 8 元（number, mat_val, density, ast_node, render, has_fill, has_fill_grid, is_graveyard）。
+- 递归语义：被 fill 的 cell 是装配容器自身不产 STL；装配 universe 时其 cell 内套 fill → 递归展开，直到叶级实体 cell（material≠0 且无 fill）才产 STL（由 /api/preview-lattice 的 compose_lattice_tree 处理，本批不改该路径）。
+
+## Z.3 include_void 调用点清单
+
+| 调用点 | 路径 | include_void | 是否本批改动 |
+| :--- | :--- | :--- | :--- |
+| `_handle_preview_3d`（主路径 ~L2086） | preview-3d | **True** | 已改（原 False） |
+| `_handle_preview_3d` 缓存命中分支截面 deck 快照（~L2046） | preview-3d 缓存命中 | **True** | 已改（原 False，防缓存命中/未命中截面行为不一致） |
+| `_handle_check_overlap`（~L1202） | check-overlap | True | 已是 True |
+| `_handle_quick_add_check`（~L1251） | quick-add-check | True | 已是 True |
+| `_build_one_universe`（~L597，/api/preview-lattice 内部裁剪） | 格阵 universe 裁剪 STL | **False** | 保持不动（void 无实体可裁剪，语义正确） |
+| `_handle_export_step`（~L1993） | STEP 导出 | **False** | 保持不动（void 无实体可导出，语义正确） |
+
+**边界**：项14「删 void 约束」只对 3D 预览主路径（+ 截面 deck 快照）生效；STEP 导出与格阵 universe 裁剪保持 include_void=False，void 不产实体，语义正确不回退。
+
+## Z.4 graveyard 口径
+
+- 判定：impN/impP/impE 任一粒子重要性为 0（首个 token == "0"）即视为 graveyard，整 cell 不渲染。
+- 理由：MCNP 中 imp=0 的 cell 杀对应粒子（外围边界典型为 imp:n=0 真空）；用户规则明确「graveyard（imp=0 外围）→ 不渲染」。
+- 口径选择：任一粒子的 imp 为 0 即 skip，而非只认 impN=0——imp 未写（空）不判 graveyard；imp="1"/非 0 不误判（测试覆盖）。
+- 前端过滤备选方案未采纳：STL 会话跨功能复用（preview-3d 产 STL 供截面复用），若前端过滤则截面仍会用到 graveyard STL；后端 skip 使 graveyard 全局不产 STL，语义一致。
+- 副作用：含材料但某粒子 imp=0 的 cell（如 imp:p=0 光子杀）也会被跳过——属用户规则「imp=0 不渲染」的预期。
+
+## Z.5 void STL 相机风险（只记录，不改前端）
+
+preview-3d 主路径改 include_void=True 后，巨型边界 void（如 so 1000）的 STL 会撑大包围盒，可能把前端相机拉远导致模型缩成针尖。**相机适配属前端项（本批另一 agent），后端只保证 void STL 出得来**，不在本批超前改前端。
+
+## Z.6 文件改动明细
+
+| 文件 | 改动 |
+| :--- | :--- |
+| `gui/backend/api_server.py` | `build_cells_data` 加 has_fill / graveyard skip + 项14 分类规则 docstring；3D 预览主路径 + 截面 deck 快照 include_void 改 True；STEP 导出 / _build_one_universe 保持 False（注释标注边界）；`_handle_export_step` 错误消息微调（「没有可预览的栅元」）。 |
+| `tests/unit/test_build_cells_data.py` | **新增**，12 用例（子进程驱动 build_cells_data，不 import api_server、不依赖 FreeCAD）：单值 fill=U skip / fill_grid skip / 纯 void 产 STL / 实体 cell 产 STL / render:false skip / graveyard imp=0 不渲染 / fill="0" 也是 fill cell / imp_p=0 也算 graveyard / imp="1" 不误判 / include_void=False 纯 void 仍 skip（STEP 边界）/ CellRow 判别联合格式 / u≠0 无 fill 实体 cell 产 STL。 |
+
+## Z.7 测试
+
+- 全量 pytest：**686 passed, 0 failed**（基线 674 + 新增 12，零回退；硬超时保护下 32.6s 跑通）。
+- 环境完整：HTTP 契约闸门 + FreeCAD 依赖测试全部 PASSED 未 skip，本机环境可完整跑通。
+- 契约 api.yaml / golden 未动（后续批次统一处理）。
+
+## Z.8 本地启动验证
+
+```
+python -m pytest tests/unit/test_build_cells_data.py -q   # 12 passed
+python -m pytest tests/ -q                                 # 686 passed
+```
+
+---
+
+# AA. Wave 2a：格阵 fill 15 项修复——后端全部项（2/4/5/9/13/15 + 项14 剩余 + api.yaml + pytest）
+
+> 图纸：`docs/contracts/lattice-fix15-design.md`（架构师 Wave 1，跨语言锁死 L1-L9）。
+> 门禁：pytest **703 passed / 0 failed / 0 skipped**（基线 686 + 新增 17；R1 五夹具 + kitchen_sink R4 不回退；契约闸门含新 cycle HTTP 用例）。
+
+## AA.1 项 14 剩余（_build_one_universe）
+
+- `gui/backend/api_server.py _build_one_universe`：uni_cells 收集时新增 `if _cell_fill(c): continue`（单值 fill cell 含 fill="0" 不产自身 STL，规则 1/7）；`build_cells_data(mod_cells, include_void=True)`（原 False）——universe 叶 void 格元产透明占位 STL（规则 4）；注释同步更新。
+- 新增 `_cell_fill` 助手（判别联合取 cell.fill）。`_imp_any_zero` 提升为模块级（build_cells_data 口径复用）。
+- 边界保持：STEP 导出仍 include_void=False（void 无实体可导出）。
+
+## AA.2 项 2（方向块数 -N:M）
+
+- `app/lattice.py` 新增 `_dir_counts_from_range(token)->(L,R)`：`a:b` → `(-a, b)`；与 `_range_count` dims=b-a+1 自洽（dims=L+R+1）。`expand_positions` rect 中心 `((i-(nx-1)/2)·px)` 在 -N:M 下格阵以几何中心居中于原点（权威公式，R1 稳定）。
+- pytest `test_dir_counts_from_range`（3 例映射 + 反派生一致）。
+
+## AA.3 项 4（六棱柱全量参数 RHP/HEX）
+
+- `app/lattice.py _rhp_extent`：扩展支持 **9 参**（V+H+R1）→ R2 用 Rodrigues 绕 H 转 60° 推断（`_rotate_about`），AABB 与 12 参显式一致；12/15/18 参原样读取。12 参既有路径零回归。
+- `validate_lattice_surfaces._validate_lat2`：单 RHP/HEX 宏体新增 `_validate_rhp_params` 校验——参数数∈{9,12,15,18}；|H|>0；|R1|>0；H·R1≈0；R2/R3 各 ⊥H 且连续夹角 60°（R1→R2→R3 = 0°/60°/120° 旋转语义，与 `_rhp_extent` 推断一致；`*TRn` 非数值 token 跳过）。
+- **破坏性变更**：既有 `"10 rhp 0 0 0 0 0 2 0.5 0 0"`（9 参合法）仍过。
+- pytest `test_validate_rhp_params`（9/12/15/18 合法；|H|=0、R1 非 ⊥H、R2 不 ⊥H、夹角错、参数数非法 → 拒）+ `test_rhp_extent_9params_infer`（9 参推断 AABB 与 12 参一致）。
+
+## AA.4 项 5（hex 排列修正，跨语言 L1/L2 锁死）
+
+- `app/lattice.py hex_center` 改权威公式：`x = col·pitch·√3/2, y = row·pitch + (col%2)·pitch/2`（顶点+X flat-top 蜂窝，奇数列纵向错半格）。`hex_ring_rows` 保持 `[r+1+min(j,2r-j)]`。`expand_positions` hex 分支走新 hex_center。
+- golden 消费：`hexCenter`/`positions.hex` 段由前端 Wave 2b 写盘（已写盘）。`test_positions_golden_cross_language` 加 stale-hex skip（前端未重算时跳过，写盘后自动生效）。
+- pytest `test_hex_center_flat_top`（pitch=2/√3 权威样例）+ `test_expand_positions_hex_flat_top`（golden positions.hex 新值）+ 既有 `test_hex_center_formula`/`test_expand_positions_hex_ring_order` 期望值同步新公式。
+
+## AA.5 项 9（分组头注释 → INP C 注释）
+
+- 存储：`app/models.py DeckData` 加 `universe_comments: dict`（键 snake_case u_str）。`deck_from_json` 读 `universe_comments`/`universeComments`；parse-inp / `_deck_to_frontend_dict` 序列化 `universeComments`。
+- 生成：`app/generator/banners.py` 冻结词汇 `universe_group_banner(u, text)` + `is_universe_group_comment`/`parse_universe_group_comment`（词汇冻结唯一发射源）。`inp_generator._generate_cells` 按「相邻同 U 连续段」在该组首个栅元行前插 `C  U-group U=<n>: <user text>`（raw 条件行不打断连续段）。
+- 解析：`parsers/core.py parse_cells` 跳过 U-group 行（防被吸收为 cell 注释）+ 新增 `extract_universe_comments`；`parse_data_cards` U-group 行进 `universe_comments`（从 other_cards 路径排除）。`parsers/__init__.py parse_inp_text` 合并 cell/data 段注释 → DeckData。
+- R1：既有 5 夹具无 universe_comments → 零影响；新夹具 gen→parse→gen 字节不动点。
+- pytest `tests/parser/test_universe_group_comment.py`（5 用例：生成插注释 / 解析吸收 / R1 字节稳定 / 无注释零影响 / raw 行不打断连续段）。
+
+## AA.6 项 13（循环嵌套检测，跨语言 L6 + api.yaml 唯一契约变化）
+
+- `app/lattice.py` 新增 `detect_fill_cycle(sub_by_u)->{cycle, chain}`：DFS 判环（fill_grid lattice/translated cells[].u 或 fill 单值非 "0"/"" 构成边 U→V；递归栈成员表判环，chain=path[idx:]+[U]）。
+- `compose_lattice_tree` 入口（`_expand_lattice` 前）detect_fill_cycle → 命中返回 `{status:"cycle", cycle:chain, tree:[], leafInstances:[], count:0, lattices:[], detailViable:True}`（不递归）。MAX_LATTICE_DEPTH/MAX_TOTAL_INSTANCES 仍为守卫。
+- `api_server._handle_preview_lattice`：透传 cycle/chain（compose `cycle`=链 转换 → 响应 `cycle:boolean`+`chain:array`）；graveyard（imp=0）cell 从 sub_by_u 排除（规则 5，`_imp_any_zero`）。
+- **api.yaml**：preview-lattice 响应 `limit` enum 增 `"cycle"` + 新增 `cycle: boolean` + `chain: array<string>`（§4 diff 落地）。契约闸门 HTTP 用例 `test_http_preview_lattice_cycle`（cycle deck → 200 + limit=cycle + cycle=true + chain 闭合链）。
+- pytest `test_detect_fill_cycle`（自环/两元/三元/无环/fill0 非边/fill_grid 边）+ `test_compose_lattice_tree_cycle`（A→B→A → status="cycle"+chain）。
+
+## AA.7 项 15（格阵按 FILL 装配显示，后端部分）
+
+- `app/lattice.py _expand_universe`：fill 非空（含 `fill="0"`）统一为装配容器不自产 STL（规则 1/7）；补 void 叶（material="0" 无 fill）→ 产 `{leaf, void:true}` 计入 count（规则 4，detailViable 总览兜底）。
+- `api_server._handle_preview_lattice` 构造 sub_by_u 时过滤 imp=0 cell（规则 5）。
+- golden 消费：`assembly` 段（前端 Wave 2b 写盘，已写盘）——`test_single_fill_assembly_golden` 按「结构完整才断言否则 skip」消费。
+- pytest `test_expand_universe_void_leaf_and_fill0`（void 叶 / fill0 skip / 混合）+ `test_expand_universe_single_fill_assembly`（单值 fill 装配链）+ `test_single_fill_assembly_golden` + `test_imp_any_zero_graveyard_filter`。
+
+## AA.8 api.yaml diff 摘要（本批唯一契约变化 = 项 13）
+
+```
+/api/preview-lattice 响应：
+  limit: enum [ok, depth_limit, too_many] → [ok, depth_limit, too_many, cycle]
+  + cycle: boolean（嵌套 fill 存在循环引用）
+  + chain: array<string>（循环链 universe 号序列，如 [1,2,1]）
+```
+
+## AA.9 测试计数
+
+| 门禁 | 结果 |
+| :--- | :--- |
+| pytest 全量 | **703 passed / 0 failed / 0 skipped**（基线 686 + 新增 17） |
+| R1 五夹具（17×17/BEAVRS/hex_lattice/prob41c/inp24） | 保持绿（零影响） |
+| kitchen_sink R4 | 保持绿（不回退） |
+| 契约闸门（含新 cycle HTTP 用例） | 保持绿 |
+| golden 跨语言（hexCenter/positions.hex/cycle/assembly/dirCounts 已写盘） | 全部断言通过，无 skip |
+
+## AA.10 文件改动明细
+
+| 文件 | 改动 |
+| :--- | :--- |
+| `app/lattice.py` | `_dir_counts_from_range`；`_rotate_about`/`_rhp_extent` 9 参推断；`_validate_rhp_params`；`hex_center` 新公式；`detect_fill_cycle` + `compose_lattice_tree` 判环；`_expand_universe` void 叶 + fill0 装配容器 |
+| `gui/backend/api_server.py` | `_cell_fill`/`_imp_any_zero`；`_build_one_universe` include_void=True + skip fill；`_handle_preview_lattice` graveyard 过滤 + cycle/chain 透传；`deck_from_json` + parse-inp/`_deck_to_frontend_dict` universeComments |
+| `app/models.py` | DeckData 加 `universe_comments` |
+| `app/generator/banners.py` | `universe_group_banner`/`is_universe_group_comment`/`parse_universe_group_comment` |
+| `app/generator/inp_generator.py` | `_generate_cells` U-group 注释 + `generate_inp_from_deck` 透传 |
+| `app/generator/parsers/core.py` | parse_cells skip + `extract_universe_comments` + parse_data_cards U-group |
+| `app/generator/parsers/__init__.py` | parse_inp_text 吸收 universe_comments |
+| `docs/contracts/api.yaml` | preview-lattice limit enum + cycle/chain |
+| `tests/` | test_lattice.py（+9）/ test_universe_group_comment.py（新 5）/ test_build_cells_data.py（+1）/ test_api_contract.py（+1 HTTP cycle） |
+
+## AA.11 本地启动验证
+
+```
+python -m pytest tests/ -q          # 703 passed
+python -m pytest tests/unit/test_lattice.py -q          # 63 passed
+python -m pytest tests/parser/test_universe_group_comment.py -q   # 5 passed
+python -m pytest tests/unit/test_build_cells_data.py -q  # 13 passed
+python -m pytest tests/integration/test_api_contract.py::test_http_preview_lattice_cycle -q  # 1 passed
+```
+
+---
+
+# AB. 用户复验缺陷修复：格阵 FILL 输出按行分隔（2026-08-25）
+
+> 用户浏览器复验发现生成缺陷：格阵 FILL 输出未按行分隔（`_pack_entries` 按字符宽度贪心打包，17×17 约 37 格/行）。MCNP 规范每行一个 j 行（矩形每行 nx 个条目，17×17 → 每行 17 个、17 行）。
+
+## AB.1 改动（app/lattice.py format_fill_cards）
+
+- **cells 优先结构化展开**：按 `dims[0]`（nx）每行分组（行主序 i 最快 → 每行 = 一个 j 行）；某行超 75 字符（含 5 空格缩进 ≤80 列）再按宽度拆子行（token 序不变，MCNP 续行合法）。
+- **raw 仅 cells 空或截断时兜底**（不再 raw 优先——否则无法行分隔）。raw 回放仍剥离前导 len(range_) 个范围 token（防续行重复）。
+- **截断边界决策**：`MAX_EXPANDED_ENTRIES` 截断（len(cells) < dims 乘积）→ 回落 raw。理由：截断 cells 展开会输出不完整数据丢源 token，回落 raw 保 R1/保真。注：此处略超用户「raw 仅 cells 空兜底」字面，但 PM 授权权衡，截断场景 raw 更安全。
+- **lat=2 六棱柱**：同样按 nx 行分组（token 序不变即 MCNP 合法；hex_lattice fixture dims=[2,2,1] → 每行 2 条目、2 行）。未按 hexRingRows 视觉对齐（仅可读性差异，非合法性）。
+- **translated 单填充路径不变**。
+
+## AB.2 测试
+
+- `tests/unit/test_lattice.py` format_fill_cards 用例重写/新增（2 → 5）：
+  - `test_format_fill_cards_per_row_grouping_17x17`（17 行 × 17 条目）
+  - `test_format_fill_cards_row_width_split`（长条目行超宽拆子行，token 序不变）
+  - `test_format_fill_cards_cells_first_over_raw`（cells 完整时 cells 权威）
+  - `test_format_fill_cards_raw_fallback_empty_cells`（cells 空 → raw 兜底 + 范围剥离）
+  - `test_format_fill_cards_raw_fallback_truncated`（截断 → raw 兜底保简写）
+- 门禁：pytest **706 passed / 0 failed / 0 skipped**（基线 703 + 新增 3）。R1 五夹具（17×17/BEAVRS/hex_lattice/prob41c/inp24）parse→gen→parse→gen 固定点保持绿（生成确定性 gen1==gen2 成立，行分组不改变 token 序）；kitchen_sink R4 不回退；契约闸门全绿。
+
+## AB.3 本地启动验证
+
+```
+python -m pytest tests/ -q      # 706 passed
+python -m pytest tests/integration/test_roundtrip.py -q   # R1 五夹具 + R4 全绿
+python -m pytest tests/unit/test_lattice.py -q            # 66 passed
+```

@@ -22,6 +22,7 @@ import {
   buildLatticeInstances,
   DETAIL_MAX_INSTANCES,
   instanceIndexAt,
+  nonVoidFrameLeaves,
   parseTrclDeg,
 } from "../three/latticeInstances";
 import type { LatticeInstance, LatticeInstancesHandle } from "../three/latticeInstances";
@@ -209,11 +210,13 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
         j = stlJ;
         if (stlJ.status === "error" || !stlJ.leafInstances) {
           setError(stlJ.message || (extJ?.ok === false ? (extJ.msg || "格元盒解析失败") : "格阵预览失败"));
+          setLoading(false);
           return;
         }
       } catch (e: any) {
         if (cancelled) return;
         setError(e?.message || "格阵预览请求失败");
+        setLoading(false);
         return;
       }
       const leaves = j.leafInstances!;
@@ -256,6 +259,7 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
         setCount(n);
         setHint(auto ? `格位过多（${n.toLocaleString()}），已自动切换色块总览` : "");
         setDataVersion((v) => v + 1);
+        setLoading(false);
       }
     })();
     return () => {
@@ -263,14 +267,15 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
     };
   }, []);
 
-  /* 取景：按 leafInstances 包围盒 */
+  /* 取景：按 leafInstances 包围盒（项15：void 叶 mat="0" 不计入，防巨型边界 void 撑大取景拉远相机） */
   const frameCamera = useCallback((leaves: LatticeInstance[]) => {
     const camera = cameraRef.current;
     const controls = controlsRef.current;
     if (!camera || !controls) return;
+    const frameLeaves = nonVoidFrameLeaves(leaves);
     let min = [Infinity, Infinity, Infinity];
     let max = [-Infinity, -Infinity, -Infinity];
-    for (const p of leaves) {
+    for (const p of frameLeaves) {
       if (p.x < min[0]) min[0] = p.x;
       if (p.y < min[1]) min[1] = p.y;
       if (p.z < min[2]) min[2] = p.z;
@@ -368,7 +373,7 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
         padding: "10px 20px", borderBottom: "1px solid rgba(255,255,255,0.1)", background: "rgba(15,15,40,0.92)",
       } as React.CSSProperties}>
         <span style={{ fontSize: 14, fontWeight: 600, color: "rgba(241,241,249,0.9)" } as React.CSSProperties}>
-          ⬚ 格阵 3D 预览 — universe 实例化{effectiveOverview ? "（色块总览）" : ""}
+          🎨 3D 预览 — 格阵装配（universe 实例化）{effectiveOverview ? "（色块总览）" : ""}
         </span>
         <div style={{ display: "flex", gap: 10, alignItems: "center" } as React.CSSProperties}>
           {hint ? <span style={{ fontSize: 11, color: "#e6a23c" } as React.CSSProperties}>{hint}</span> : null}

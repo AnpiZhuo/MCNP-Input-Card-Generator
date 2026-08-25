@@ -9,6 +9,7 @@ MCNP 生成器 API 服务 — 桥接 React 前端与 Python 后端
 import json
 import math
 import os
+import re
 import sys
 from http.server import ThreadingHTTPServer as HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
@@ -259,13 +260,37 @@ def build_cells_data(cell_list: list, include_void: bool = True) -> list:
       1. 先收集所有栅元（含真空）的 AST，供 #n 栅元补集引用解析；
       2. 再逐个解析 #n → 栅元 n 的完整几何补集，输出 cells_data。
 
-    include_void=True（3D 预览）时保留真空栅元（材料 0），前端染成透明色；
-    include_void=False（STEP 导出）时跳过真空栅元，但 #n 解析仍会用到其几何。
-    pymcnp 几何 AST 解析失败时 ast 置 None（预览时该栅元不渲染）。
+    include_void=True（3D 预览主路径 / 截面 deck 快照）时保留真空栅元（材料 0），
+    前端染成透明色；include_void=False（STEP 导出 / 格阵 universe 裁剪 STL）时跳过
+    真空栅元，但 #n 解析仍会用到其几何。pymcnp 几何 AST 解析失败时 ast 置 None
+    （预览时该栅元不渲染）。
+
+    项14 cell 分类规则（用户已确认，2026-08-24）：
+      - fill 装配容器（fill 非空 或 fill_grid 非空，含 fill="0"）→ 跳过自身 STL，
+        无论有没有 u、material 是否 0；内容由 FILL 装配（preview-lattice 路径）。
+      - graveyard（impN/impP/impE 任一为 0）→ 不渲染（跳过自身 STL）。
+      - render:false → 跳过。
+      - 其余实体 cell（material≠0）与纯 void cell（material=0，无 fill 无 u）
+        → 参与 STL（include_void=True 时）。
     """
     from pymcnp.types.Geometry import Geometry
     from freecad_preview import resolve_cell_complements, parenthesize_unions
-    entries = []  # (number, mat_val, density, ast_node, render, has_fill_grid)
+
+    def _imp_is_zero(c):
+        """graveyard 判 0：impN/impP/impE（或 deck 侧 imp_n/imp_p/imp_e）任一非空且
+        首个 token 为 "0" → 该粒子重要性 0（MCNP 在该 cell 杀粒子）= graveyard，不渲染。
+        MCNP imp 单值语义（每 cell 每粒子一个数字），取首个 token 兼容 "0 0" 等续值。
+        """
+        for key in ("imp_n", "impN", "imp_p", "impP", "imp_e", "impE"):
+            v = c.get(key)
+            if v is None:
+                continue
+            s = str(v).strip()
+            if s and s.split()[0] == "0":
+                return True
+        return False
+
+    entries = []  # (number, mat_val, density, ast_node, render, has_fill, has_fill_grid, is_graveyard)
     seen_numbers = set()
     for cell in cell_list:
         if not isinstance(cell, dict):
@@ -285,27 +310,36 @@ def build_cells_data(cell_list: list, include_void: bool = True) -> list:
         raw_mat_raw = cell.get("material") or cell.get("mat") or ""
         raw_mat = str(raw_mat_raw).strip().split()[0] if raw_mat_raw else ""
         mat_val = raw_mat or raw_mat_raw
-        # 第一遍捕获 render / fill_grid（第二遍 skip 用）
+        # 第一遍捕获 render / fill / fill_grid / graveyard（第二遍 skip 用）
         render = bool(cell.get("render", True))
+        has_fill = bool(str(cell.get("fill", "") or "").strip())
         has_fill_grid = bool(cell.get("fill_grid"))
+        is_graveyard = _imp_is_zero(cell)
         try:
             ast = Geometry.from_mcnp(parenthesize_unions(expr))
             ast_node = ast.ast
         except Exception:
             ast_node = None
         entries.append((number, mat_val, cell.get("density", ""), ast_node,
-                        render, has_fill_grid))
+                        render, has_fill, has_fill_grid, is_graveyard))
 
     # #n 栅元补集引用解析：先建 number → ast_node 映射（含真空/不渲染/格阵栅元）
-    cells_by_num = {num: node for num, _, _, node, _, _ in entries}
+    cells_by_num = {num: node for num, _, _, node, _, _, _, _ in entries}
     cells_data = []
-    for number, mat_val, density, ast_node, render, has_fill_grid in entries:
+    for (number, mat_val, density, ast_node, render,
+         has_fill, has_fill_grid, is_graveyard) in entries:
         if not include_void and str(mat_val).split()[0] == "0":
             continue  # STEP 导出跳过真空；其几何已在上面的映射里用于 #n 解析
         if not render:
             continue  # render:false → 跳过（死代码修复：此前前端传 render 但被忽略）
-        if has_fill_grid:
-            continue  # 格阵栅元不产实体 STL（由 /api/preview-lattice 展开）
+        if has_fill or has_fill_grid:
+            # 项14：fill 装配容器不产自身 STL——单值 fill=U（含 fill="0"）由
+            # FILL 装配 /api/preview-lattice 展开；格阵 fill_grid 同。与有没有 u、
+            # material 是否 0 无关。此前只 skip fill_grid、漏掉单值 fill → 用户
+            # 看到「大紫方块」（fill cell 自身几何被当实体渲染）。
+            continue
+        if is_graveyard:
+            continue  # 项14：graveyard（imp=0 外围）不渲染
         if ast_node is not None:
             ast_node = resolve_cell_complements(ast_node, cells_by_num)
         # 包回 Geometry 对象（下游 _geometry_ast_to_json 用 c["ast"].ast）
@@ -329,10 +363,121 @@ def _cell_u(c: dict) -> str:
     return str(c.get("u", "") or "")
 
 
+def _cell_fill(c: dict) -> str:
+    """CellRow dict → fill 字段（cell 判别联合嵌套取 cell.fill）。"""
+    if c.get("kind") == "cell" and isinstance(c.get("cell"), dict):
+        c = c.get("cell") or {}
+    return str(c.get("fill", "") or "")
+
+
 def _cell_fill_grid(c: dict) -> str:
     if c.get("kind") == "cell" and isinstance(c.get("cell"), dict):
         c = c.get("cell") or {}
     return str(c.get("fill_grid", "") or "")
+
+
+def _cell_bounded_radius(surface_expr: str, surfaces: dict) -> float:
+    """栅元实心外边界半径：表面表达式含负引用（有界）时，取所引用 cz/cy/cx/S 圆柱/球
+    的最大半径。无界格（如 pin 外围水 `3` 只有正引用）→ 0（由格元盒裁剪，不参与 fit）。
+    """
+    has_neg = any(t.startswith("-") for t in str(surface_expr or "").split())
+    if not has_neg:
+        return 0.0
+    max_r = 0.0
+    for tok in str(surface_expr).split():
+        m = re.match(r"^[+-]?(\d+)$", tok)
+        if not m:
+            continue
+        spec = surfaces.get(int(m.group(1)))
+        if not spec:
+            continue
+        k, params = str(spec[0]).upper(), spec[1]
+        try:
+            if k in ("CZ", "CY", "CX"):
+                max_r = max(max_r, float(params[0]))
+            elif k == "S" and len(params) >= 4:
+                max_r = max(max_r, float(params[3]))
+            elif k in ("SX", "SY", "SZ") and params:
+                max_r = max(max_r, float(params[-1]))
+        except (ValueError, IndexError):
+            pass
+    return max_r
+
+
+def _lattice_pin_fit_overlaps(cell_list, surf_text, lattice) -> list:
+    """格阵装配后的真实重叠检测（首版）：实心 pin 几何超出格元盒（半径 > pitch/2）
+    会与相邻格元相撞。逐格阵、逐非空格位检查其 universe 实心栅元最大半径 vs 半宽。
+
+    返回 [{a, b, volumeFraction, method:"lattice-fit", reason}]。
+    """
+    surfaces = lattice._parse_surface_cards(surf_text)
+    out = []
+    for c in cell_list or []:
+        if not isinstance(c, dict) or c.get("kind") == "raw":
+            continue
+        cell = c.get("cell") if c.get("kind") == "cell" and isinstance(c.get("cell"), dict) else c
+        if not isinstance(cell, dict):
+            continue
+        fg = lattice.FillGrid.from_json(cell.get("fill_grid", "") or "")
+        if fg is None or fg.kind != "lattice":
+            continue
+        ext = lattice.lattice_cell_extent(cell.get("surface_expr", ""), cell.get("lat", ""), surf_text)
+        if not ext or ext.get("x_min") is None or ext.get("x_max") is None:
+            continue
+        half_x = (ext["x_max"] - ext["x_min"]) / 2.0
+        half_y = ((ext.get("y_max", ext.get("y_min")) - ext.get("y_min", ext.get("x_min"))) / 2.0
+                  if ext.get("y_min") is not None else half_x)
+        seen_u = set()
+        for e in fg.cells:
+            u = str(e.u or "")
+            if u in ("0", "") or u in seen_u:
+                continue
+            seen_u.add(u)
+            max_r = 0.0
+            for ucell in cell_list or []:
+                if not isinstance(ucell, dict):
+                    continue
+                ucc = ucell.get("cell") if ucell.get("kind") == "cell" and isinstance(ucell.get("cell"), dict) else ucell
+                if not isinstance(ucc, dict) or str(ucc.get("u", "") or "").strip() != u:
+                    continue
+                if str(ucc.get("material", "") or "0").strip() == "0":
+                    continue
+                r = _cell_bounded_radius(ucc.get("surface_expr", ""), surfaces)
+                if r:
+                    max_r = max(max_r, r)
+            if max_r > 0 and (max_r > half_x or max_r > half_y):
+                out.append({
+                    "a": int(cell.get("number", 0)), "b": f"格阵U{u}",
+                    "volumeFraction": 1.0, "method": "lattice-fit",
+                    "reason": (f"universe {u} 实心几何半径 {max_r:.3f} 超出格元盒半宽 "
+                               f"{min(half_x, half_y):.3f}（pitch 半宽 {half_x:.3f}/{half_y:.3f}），"
+                               f"可能与相邻格元相撞"),
+                })
+    return out
+
+
+def _cell_u_of(c: dict) -> str:
+    """从 CellRow（{kind,cell} 嵌套 或 平铺）取 u；无 → ""。"""
+    if not isinstance(c, dict):
+        return ""
+    cc = c.get("cell") if c.get("kind") == "cell" and isinstance(c.get("cell"), dict) else c
+    return str((cc or {}).get("u", "") or "").strip()
+
+
+def _imp_any_zero(cell: dict) -> bool:
+    """graveyard 判 0（模块级，与 build_cells_data._imp_is_zero 口径一致）：imp_n/imp_p/
+    imp_e（或 deck 侧 impN/impP/impE）任一非空且首 token 为 "0" → graveyard。
+
+    项15 规则5：handler 构造 sub_by_u 时过滤 imp=0 的 cell（与项14 排除口径一致）。
+    """
+    for key in ("imp_n", "impN", "imp_p", "impP", "imp_e", "impE"):
+        v = cell.get(key)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s and s.split()[0] == "0":
+            return True
+    return False
 
 
 def _max_surface_num(surf_text: str) -> int:
@@ -436,8 +581,39 @@ def _scan_lattice_z(surf_text: str, info: dict, sub_by_u: dict, lattice) -> tupl
     return lo, hi
 
 
+def _scan_embedding_z(cell_list, surf_text, lattice_u, lattice):
+    """扫描引用该格阵 universe 的嵌入 cell（单值 fill == lattice_u）的 z 跨度。
+
+    2D 格阵（格阵 cell 与 universe 栅元均无 PZ 约束）的 pin 高度由嵌入窗口 cell
+    决定——如 owen 17×17：cell 30 `fill=10` RPP z=±182.88，pin 应长 365.76 而非
+    默认裁剪成扁平片。→ (zlo, zhi)；无 → (None, None)。
+    """
+    if not lattice_u:
+        return None, None
+    lu = str(lattice_u)
+    lo, hi = None, None
+    for c in cell_list or []:
+        if not isinstance(c, dict):
+            continue
+        cc = c.get("cell") if c.get("kind") == "cell" else c
+        if not isinstance(cc, dict):
+            continue
+        fill = str(cc.get("fill", "") or "").strip()
+        if fill != lu:
+            continue
+        ext = lattice.lattice_cell_extent(cc.get("surface_expr", ""), "1", surf_text)
+        if ext:
+            zlo, zhi = ext.get("z_min"), ext.get("z_max")
+            if zlo is not None and zhi is not None:
+                if lo is None or zlo < lo:
+                    lo = zlo
+                if hi is None or zhi > hi:
+                    hi = zhi
+    return lo, hi
+
+
 def _resolved_extent(raw_extent, lat, req_pitch, req_height,
-                     surf_text, info, sub_by_u, lattice) -> dict:
+                     surf_text, info, sub_by_u, lattice, cell_list=None) -> dict:
     """格阵 cell 范围 → 解析后 extent（pitch/height 覆盖 + 缺省填充）。
 
     pitch 覆盖次序：请求 > extent/dims > 默认 1；
@@ -471,6 +647,12 @@ def _resolved_extent(raw_extent, lat, req_pitch, req_height,
             slo, shi = _scan_lattice_z(surf_text, info, sub_by_u, lattice)
             if slo is not None and shi is not None:
                 ext["z_min"], ext["z_max"] = slo, shi
+        if ext.get("z_min") is None or ext.get("z_max") is None:
+            # 嵌入窗口 cell（fill == 格阵 universe）的 z 跨度兜底（2D 格阵 pin 高度）
+            elo, ehi = _scan_embedding_z(cell_list or [], surf_text,
+                                         info.get("u"), lattice)
+            if elo is not None and ehi is not None:
+                ext["z_min"], ext["z_max"] = elo, ehi
         if ext.get("z_min") is None or ext.get("z_max") is None:
             ext["z_min"], ext["z_max"] = -0.5, 0.5
     return ext
@@ -523,13 +705,18 @@ def _build_one_universe(surf_text, tr_text, cell_list, u, box,
     空 STL（0 三角形）显式丢弃不产出——前端对缺失 (u,cellNum) 回退占位盒
     （显式降级，不静默给 84B 空 STL）。按 u/cellNum/pitch/height 指纹缓存。
     """
-    # 1. 收集 universe u 的实体栅元（跳过格阵 cell）
+    # 1. 收集 universe u 的实体栅元（跳过格阵 cell + 单值 fill cell）
+    #    项14/15：单值 fill cell（含 fill="0"）= 装配容器，不产自身 STL（规则1/7）；
+    #    fill_grid 格阵 cell 同（由嵌套展开负责）。universe 叶 void 格元保留
+    #    （include_void=True，规则4 → 透明占位 STL）。
     uni_cells = []
     for c in cell_list:
         if not isinstance(c, dict) or c.get("kind") == "raw":
             continue
         cell = c.get("cell") if c.get("kind") == "cell" and isinstance(c.get("cell"), dict) else c
         if _cell_u(c) != str(u):
+            continue
+        if _cell_fill(c):
             continue
         if _cell_fill_grid(c):
             continue
@@ -564,7 +751,11 @@ def _build_one_universe(surf_text, tr_text, cell_list, u, box,
     import tempfile, base64
     surfs = parse_surfaces(new_surf_text)
     tr_cards = parse_tr_cards(tr_text)
-    cells_data = [cd for cd in build_cells_data(mod_cells, include_void=False)
+    # 格阵 universe 裁剪 STL（_build_one_universe，/api/preview-lattice 内部用）：
+    # 项14/15（2026-08-24）：include_void=True——universe 叶 void 格元（material=0
+    # 无 fill 无 u）也产透明占位 STL（规则4，前端透明材质渲染）。STEP 导出保持
+    # include_void=False（void 无实体可导出，语义正确）。
+    cells_data = [cd for cd in build_cells_data(mod_cells, include_void=True)
                   if cd.get("ast") is not None]
     if not surfs or not cells_data:
         return {}
@@ -896,6 +1087,8 @@ def deck_from_json(data: dict) -> DeckData:
         sources=_sources_from_list(data.get("sources", [])),
         tally=_tally_from_dict(data.get("tally", {})),
         adv=_adv_from_dict(data.get("adv", {})),
+        universe_comments=(data.get("universe_comments")
+                           or data.get("universeComments") or {}),
     )
 
 
@@ -912,6 +1105,8 @@ def _deck_to_frontend_dict(deck: DeckData) -> dict:
             return [to_dict(x) for x in obj]
         return obj
     deck_dict = to_dict(deck)
+    # 项9：backend universe_comments → 前端 universeComments（与 DeckContext 类型同步）
+    deck_dict["universeComments"] = deck_dict.pop("universe_comments", {})
     # 后端用 rows，前端用 nuclides → 加入映射（行含 kind 判别）
     for m in deck_dict.get("materials", []):
         if "rows" in m and "nuclides" not in m:
@@ -1172,7 +1367,10 @@ class MCNPHandler(BaseHTTPRequestHandler):
         try:
             data = self._read_body()
             surf_text = data.get("surfaces", "")
-            cell_list = data.get("cells", [])
+            # 格阵感知：排除 universe 栅元（u 非空）——它们是经 fill 装配的组件，
+            # 本地坐标下所有 pin 都在原点 → 会误报假重叠；真实装配位置检查属格阵级。
+            cell_list = [c for c in (data.get("cells", []) or [])
+                         if not _cell_u_of(c)]
             tr_text = data.get("tr_cards", "")
             fp = _PREVIEW_CACHE.fingerprint(surf_text, cell_list, tr_text)
             cached = _PREVIEW_CACHE.get_overlaps(fp)
@@ -1180,30 +1378,36 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 self._ok(cached)
                 return
 
+            # 格阵装配后真实重叠（首版，FreeCAD 无关先算）：实心 pin 超出格元盒
+            # （半径 > pitch/2 撞邻居）。需完整 cell_list（含格阵 cell 与 universe 栅元）。
+            lattice = _import_app("lattice")
+            fit = _lattice_pin_fit_overlaps(data.get("cells", []) or [],
+                                            surf_text, lattice)
+
             StepImporter = _import_app("step_importer").StepImporter
             FreeCADEngine = _import_app("freecad_preview").FreeCADEngine
             freecad_bin = StepImporter.detect_freecad()
             if not freecad_bin:
-                self._ok({"status": "ok", "overlaps": [], "truncated": False,
+                self._ok({"status": "ok", "overlaps": fit, "truncated": False,
                           "unresolved": [],
-                          "message": "未检测到 FreeCAD，请安装后重试"})
+                          "message": "未检测到 FreeCAD（格阵 pin 适配检测已返回）"})
                 return
             surfs = parse_surfaces(surf_text)
             if not surfs:
-                self._ok({"status": "ok", "overlaps": [], "truncated": False,
+                self._ok({"status": "ok", "overlaps": fit, "truncated": False,
                           "unresolved": [], "message": "未解析到有效曲面"})
                 return
             tr_cards = parse_tr_cards(tr_text)
             cells_data = build_cells_data(cell_list, include_void=True)
             if not cells_data:
-                self._ok({"status": "ok", "overlaps": [], "truncated": False,
+                self._ok({"status": "ok", "overlaps": fit, "truncated": False,
                           "unresolved": [], "message": "没有可检测的栅元"})
                 return
             engine = FreeCADEngine(freecad_bin)
             engine.build_geometry(surfs, cells_data, tr_cards, fmt="stl",
                                   check_overlaps=True)
             engine.cleanup()
-            report = {"status": "ok", "overlaps": engine.overlaps,
+            report = {"status": "ok", "overlaps": list(engine.overlaps) + fit,
                       "truncated": engine.overlap_truncated,
                       "unresolved": engine.overlap_unresolved,
                       "zero_volume": engine.zero_volume}
@@ -1361,6 +1565,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 if isinstance(obj, list): return [to_dict(x) for x in obj]
                 return obj
             deck_dict = to_dict(deck)
+            # 项9：backend universe_comments → 前端 universeComments（与 DeckContext 类型同步）
+            deck_dict["universeComments"] = deck_dict.pop("universe_comments", {})
             # 后端用 rows，前端用 nuclides → 加入映射（行含 kind 判别）
             for m in deck_dict.get("materials", []):
                 if "rows" in m and "nuclides" not in m:
@@ -1956,7 +2162,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
             surfs = parse_surfaces(surf_text)
 
             # 解析栅元（共享 build_cells_data；导出需几何可解析，剔除 ast=None；
-            # 真空栅元不导出为实体——它们只参与 #n 补集解析，不进入 STEP）
+            # 真空栅元不导出为实体——它们只参与 #n 补集解析，不进入 STEP。
+            # 项14 边界：STEP 导出保持 include_void=False 不动，仅 3D 预览改 True）
             cells_data = [c for c in build_cells_data(cell_list, include_void=False)
                           if c["ast"] is not None]
 
@@ -2008,9 +2215,12 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 # 缓存目录作为本会话 STL 源（供 serve-file/截面复用）
                 _STL_SESSION = {"dir": cached["dir"], "cells": cached["cells"]}
                 # deck 快照（GQ/SQ 解析截面用）：缓存不存 deck，从请求重建
+                # 注意：本处是 preview-3d 缓存命中分支的截面 deck 快照，并非 STEP 导出。
+                # 项14 后与主路径一致 include_void=True（void 也参与截面），避免缓存
+                # 命中/未命中路径截面行为不一致（第一/二次打开 GQ/SQ void 栅元）。
                 try:
                     surfs_c = parse_surfaces(surf_text)
-                    cells_c = build_cells_data(cell_list, include_void=False)
+                    cells_c = build_cells_data(cell_list, include_void=True)
                     if surfs_c and cells_c:
                         _STL_SESSION["deck"] = _deck_snapshot(
                             surfs_c, cells_c, parse_tr_cards(tr_text))
@@ -2045,12 +2255,14 @@ class MCNPHandler(BaseHTTPRequestHandler):
             tr_cards = parse_tr_cards(tr_text)
 
             # 4. 构建栅元（共享 build_cells_data；ast 解析失败的不渲染但保留）
-            # 真空栅元参与 #n 补集解析，但不生成 STL（透明不可见，且巨型边界
-            # void 的 STL 会把前端相机拉远导致模型缩成针尖）。include_void=False
-            # 时真空仍在 entries 映射里供 #n 解析，只是不输出。
-            cells_data = build_cells_data(cell_list, include_void=False)
+            # 项14（2026-08-24 用户反馈）：真空栅元（材料 0）也产出 STL 参与 3D 预览，
+            # include_void=True 不再跳过 void。已知风险：巨型边界 void（如 so 1000）
+            # 的 STL 会撑大包围盒，可能把前端相机拉远导致模型缩成针尖——相机适配属
+            # 前端项（本批另一 agent 处理），后端本批只保证 void STL 出得来。
+            # 格阵 cell（fill_grid）与 render:false 仍跳过（见 build_cells_data 内部过滤）。
+            cells_data = build_cells_data(cell_list, include_void=True)
             if not cells_data:
-                self._ok({"stl_files": {}, "message": "没有可预览的栅元（非 void）"})
+                self._ok({"stl_files": {}, "message": "没有可预览的栅元"})
                 return
 
             # 5. FreeCAD CSG → STL
@@ -2333,11 +2545,14 @@ class MCNPHandler(BaseHTTPRequestHandler):
                     continue
                 cell = (c.get("cell") if c.get("kind") == "cell"
                         and isinstance(c.get("cell"), dict) else c)
+                if _imp_any_zero(cell):
+                    continue  # 项15 规则5：graveyard（imp=0 外围）排除，与项14 口径一致
                 u = str(cell.get("u", "") or "")
                 fg_json = cell.get("fill_grid", "")
                 fg = lattice.FillGrid.from_json(fg_json) if fg_json else None
                 info = {
                     "cellNum": cell.get("number"),
+                    "u": u,
                     "material": str(cell.get("material", "") or "0"),
                     "fill": str(cell.get("fill", "") or ""),
                     "fill_grid": fg,
@@ -2381,7 +2596,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
                         lattice.lattice_cell_extent(
                             info.get("surface_expr", ""), info.get("lat", ""), surf_text),
                         info.get("lat", ""), req_pitch, req_height,
-                        surf_text, info, sub_by_u, lattice)
+                        surf_text, info, sub_by_u, lattice, cell_list)
 
             # 3. compose 嵌套树/叶/各格阵 positions（outer 的 trcl_deg 已在上面子循环里算好）
             outer = lattice_infos[0]
@@ -2390,6 +2605,15 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 outer["fill_grid"], sub_by_u, outer["extent"], trcl_deg,
                 lattice.MAX_LATTICE_DEPTH, lattice.MAX_TOTAL_INSTANCES)
             limit = composed.pop("status", "ok")
+            # 项13 api.yaml：响应恒带 cycle/chain。compose 的 status="cycle" 分支把
+            # 循环链放在 `cycle` 键（与 api.yaml 的 `cycle: boolean` 命名冲突）→
+            # 转换：cycle=true + chain=链；非 cycle → cycle=false + chain=[]。
+            if limit == "cycle":
+                composed["chain"] = composed.pop("cycle", [])
+                composed["cycle"] = True
+            else:
+                composed["cycle"] = False
+                composed["chain"] = []
 
             # 4. 每个格阵 → 直接引用叶 universe 的裁剪 STL
             for entry in composed.get("lattices", []):

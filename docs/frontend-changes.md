@@ -1,3 +1,64 @@
+# 前端改动清单 — 格阵 fill 15 项修复（Wave 2b，2026-08-24）
+
+> 施工方：前端 | 图纸：`docs/contracts/lattice-fix15-design.md`（Wave 1 架构师产出，唯一蓝图）
+> 范围：前端全部项 + golden 写盘 + vitest。后端 Wave 2a 已并行落地（项 2/4/5/9/13/14/15 后端 + api.yaml + pytest），本批与后端零代码重叠。
+> **项 8/10/11 已在 Wave 1 完成，本批未重做**（组头编辑已兼容）。
+
+## 一、改动文件与函数
+
+| 文件 | 改动 |
+| :--- | :--- |
+| `gui/src/utils/lattice.ts` | **项5** `hexCenter` 权威公式（`x=i·p·√3/2, y=j·p+(i%2)·p/2`，顶点+X flat-top 蜂窝，跨语言 L1）；新增 `inHexRing`（hex 距离 max(\|i\|,\|j\|,\|i+j\|)≤r，替代旧 `i<rowLens[j]` 横向行）；`initialHexCells` 改用 inHexRing；`estimateLatticeExtent` hex 同步（半宽 pitch/√3 + 半高 pitch/2）。**项2** 新增 `rangeFromDirCounts(neg,pos)` / `dirCountsFromRange(token)`（`-L:R`，dims=L+R+1，L3）。**项3/4** 新增 `autoGenMacrobody`（rect→单 RPP / hex→单 RHP，编号 maxSurfaceNumber+1 顺延，L4）+ RHP 双模式 `rhpFromCenterRadiusHeight`（模式 B）/`rhpFromThreePoints`+`rhpModeAError`（模式 A）+`rhpCard`。**项7** 新增 `collectFillUniverses(cells)`（void 恒首位 ∪ deck u= ∪ 各格阵 fill_grid.cells[].u 去重，数值升序）。**项12** 新增 `compressRaw`（连续 run → `u nR` 回缩，幂等不动点，L8）+ `latticeVolumeWarning`（>64KB 或 >8000 cells）。**项13** 新增 `detectFillCycle(subByU)`（DFS 栈成员判环 → `{cycle, chain}`，L6）。 |
+| `gui/src/components/LatticeEditDialog.tsx` | **项1/6** 6 步 → **4 步**状态机（0 类型尺寸+延伸方向 → 1 材料曲面 → 2 画布涂色+调色板同屏 → 3 保存摘要；footer step<3 下一步 / step===3 保存）。**项2** 矩形尺寸 UI 改「x 向左/向右、y 向前/向后、z 向下/向上」负/正方向块数（编辑旧 deck 从原 range 反派生保持 0:16）。**项3** 自动生成宏体 / 手动填写曲面 radio 互斥（自动=只读表达式+宏体卡+MacrobodyPreview；手动=可编辑+失焦校验+旧 6 平面/6P 可选）。**项4** hex RHP 模式 A（三点+高）/模式 B（中心+外接半径+高）双表单。**项7** `universeList` 改调 `collectFillUniverses`。**项12** 保存 `fg.raw = compressRaw(cellsToRaw(fg))` + 保存摘要体积告警。**项13** 保存前 `detectFillCycle` 命中 → 阻止保存 + 提示。 |
+| `gui/src/components/MacrobodyPreview.tsx`（新） | **项3/4** 宏体子预览：复用 `useThreeCanvas` + `/api/lattice-extent` 拿盒，RPP→盒线框 / RHP→`buildHexPrism` 六棱柱线框，实时显示自动生成的宏体。 |
+| `gui/src/components/LatticeCanvas.tsx` | **项5** hex 格元盒改顶点+X：`width=2pitch/√3`、`height=pitch`、`clipPath` 顶点在左/右中点、绝对定位 `left=h.x-width/2`、`top=h.y-height/2`（clipPath 原本即 ±X 顶点，仅盒尺寸/定位修正）。 |
+| `gui/src/components/LatticePreview3D.tsx` | **项5** hex 走新 `hexCenter`（公式已改自动同步）；复用 `three/disposeObject.ts`。 |
+| `gui/src/three/latticeInstances.ts` | **项5** hex `defaultOrigin` 保持 [0,0,0]、`gridCenter` 走新 `hexCenter`（已自动同步，无需改）；**项15** 新增 `nonVoidFrameLeaves(leaves)` 纯函数（mat="0" void 叶不计入取景 bbox，防巨型边界 void「针尖」）。 |
+| `gui/src/components/Preview3D.tsx` | **项15** `hasLattice` = 任一 `fill_grid` 非空 **或** 任一 `fill` 非空且 ≠"0"；`latticeView` 默认 = hasLattice（有装配 → 默认进 Preview3DLattice 装配视图，toggle 保留单 cell/装配切换）；装配视图内不请求 preview-3d。 |
+| `gui/src/components/Preview3DLattice.tsx` | **项15** `frameCamera` 用 `nonVoidFrameLeaves` 过滤 void 叶；void 叶透明渲染由 `buildLatticeInstances` M0 分支承担（既有）。 |
+| `gui/src/utils/DeckContext.tsx` | **项9** `DeckData` 加 `universeComments?: Record<string,string>`（snake_case，可选向后兼容旧 deck）。 |
+| `gui/src/utils/universeGroups.ts` | **项9** `groupHeaderLabel(u, count, comment?)` 追加可选注释（`U=n · N 栅元 · 「text」`；未分组不追加）。 |
+| `gui/src/components/GeometryTab.tsx` | **项9** U 组头行双击 → 内联 `<input>`（data-testid `group-comment-{u}`），失焦 `patch({universeComments})` 清空即删键；与项 8/10/11 兼容。 |
+| `gui/src/three/disposeObject.ts`（新） | simplify：提取 `disposeObjectGroup` 共享（LatticePreview3D / MacrobodyPreview 复用，去重复）。 |
+
+## 二、golden 写盘段清单（`gui/src/utils/__golden__/latticeGolden.json`）
+
+- **重算**：`hexCenter`（项5 权威 pitch=2 样例 4 例）+ `positions.hex_2x2_pitch_sqrt3`（项5 新公式：idx0 (0,0) / idx1 (1.5, 0.8660254) / idx2 (0, 1.7320508) / idx3 (1.5, 2.5980762)）。
+- **新增段**：`dirCounts`（center_-8:8 / corner_0:16 / asym_-2:5）、`macrobody`（rect_rpp / hex_rhp）、`rhpMacro`（rhp_modeB_vertexX + expectedExtent）、`collectFillUniverses`（merge_17x17 / empty_deck / dirty_fill_grid）、`compressRaw`（runs / idempotent）、`cycle`（cycle_a_b_a / no_cycle_tree）、`assembly`（single_fill_assembly）。
+- **validate 段追加**：`lat1_rpp_macro` / `lat2_rhp_macro`（expectedOk=true，宏体单卡合法样例）。
+- **后端只读断言**：未产出段后端 skip，写盘后自动生效；既有键名未改。
+
+## 三、⚠️ 项 5 显示歧义（待用户确认，本批未做 90° 旋转）
+
+用户期望的「行长 [2,3,2]」是**点朝上取向**的行模式；权威顶点+X 蜂窝（项5 跨语言锁死公式）下对称环水平行长为 `[1,2,1,2,1]`。**本批按权威顶点+X 蜂窝实现**（格元几何 / LatticeCanvas / 3D / expand_positions 三方自洽），未实现任何 90° 旋转显示。若用户确认要 [2,3,2] 视觉，需整体 90° 旋转显示（另排期，项目经理 SendMessage 纠正后执行）。
+
+## 四、golden assembly 段修正（与后端对齐）
+
+设计 §1 项15 golden 样例内部不一致（`window_cell.fill="10"` 但从 sub_by_u 无法到达叶 101 —— sub_by_u["10"][0].fill="" 无指向 universe 1 的边）。后端 `_expand_universe` 消费时该段结构断裂会 skip。**已按后端推荐方案 A 修正**：`window_cell.fill` "10" → "1"（窗口直接单值 fill 叶 universe 1，与 expected_leaves depth=1 逐字段吻合）。未改设计文档。
+
+## 五、vitest 新增用例（图纸 §6 前端清单）
+
+- `gui/test/lattice.test.ts`：hexCenter/hexGrid/inHexRing 新公式权威值、estimateLatticeExtent hex 重算、initialHexCells inHexRing 角位、dirCounts 3 例、autoGenMacrobody golden（rect/hex 宏体 + 编号顺延）、RHP 模式 A/B、collectFillUniverses 3 例、compressRaw 幂等+parse 等价、detectFillCycle 4 例、validate 宏体样例。
+- `gui/test/latticeInstances.test.ts`：`nonVoidFrameLeaves`（项15 void 取景排除 2 例）。
+- `gui/test/universeGroups.test.ts`：`groupHeaderLabel` comment 参数（项9）。
+- `gui/test/latticeEditDialog.dom.test.tsx`（新 9 例）：4 步状态机 + 第 0 步含 k、方向块数输入、调色板同屏点选涂色、宏体互斥 + RHP 双模式、体积告警、保存前判环阻止。
+- `gui/test/preview3dLatticeRouting.dom.test.tsx`（新 3 例）：fill_grid/fill≠0 → 默认装配视图、fill=0 → 单 cell、无 fill → 单 cell。
+- `gui/test/groupHeaderEdit.dom.test.tsx`（新 2 例）：组头双击内联编辑 → patch universeComments、清空删键。
+
+## 六、门禁
+
+vitest **512/0 无 skip**（基线 476 + 新增 36，含 Wave 1 项 8/10/11 的 10 例）/ tsc EXIT 0 / vite build EXIT 0。已知 flaky：colorize 128³ 计时用例隔离单跑即绿（本批未触）。
+
+## 七、本地运行验证步骤
+
+```
+cd gui
+npx vitest run                      # 512/0 无 skip
+npx tsc --noEmit                     # EXIT 0
+npx vite build                       # EXIT 0（dist 产物）
+```
+浏览器验证（后端 5001 + 前端静态 dist 已运行）：几何标签页「⬚ 栅格编辑」→ 4 步弹窗：第 0 步方向块数 / hex 环数+3D k；第 1 步自动生成宏体 → RPP/RHP 子预览；第 2 步调色板同屏点选涂色；第 3 步保存摘要（大格阵体积告警；循环嵌套保存被阻止）。导入 17×17 示例 → 「3D 预览」默认进格阵装配视图。
+
 # 前端改动清单 — 3D 预览性能修复（perf/preview3d）
 
 > 施工方：前端 | 契约：`docs/contracts/preview3d-performance.md` | 分支：`perf/preview3d`
@@ -1191,3 +1252,22 @@ ormalizeImportedMaterials（核素行 zaid 剥后缀，raw 行原样，rows/nucl
 - **扩展 `gui/src/utils/__golden__/latticeGolden.json`**：新增 `composeCases` 段（TS `LatticeComposeNode` 输入样例，与 `nested` 段同源：2×2 外 pitch4 内嵌 2×2 pitch2；cellSize 由 extent 跨度推导）。既有键（positions/validate/nested）原样未动，Python `test_lattice.py` 不消费 composeCases。
 - **修改 `gui/test/latticeInstances.test.ts`**：①嵌套 fill 递归用例期望值更新为 Python 对齐坐标（"0.0"→(−3,−3)、"3.3"→(3.5,3.5) 等，含子格阵 box 更新）；②golden 用例改**真正跑 `composeNestedPositions(composeCases[].node)`** 断言 FLAT 叶 `=== nested.leaves`（10 叶 cellNum+x/y/z 双向集合相等 + 无重复），不再是只读 golden 值；positions 段保留参考重算断言。`hasGolden` 加 `composeCases` 非空判定 → 为真并真正跑起来，消除 skip。
 - **门禁**：vitest **466/0 无 skip**（原 465 passed / 1 skipped；`latticeInstances.test.ts` 17/0）+ tsc EXIT 0 + Python `test_lattice.py` golden/compose 7/7（positions/nested/validate 3 golden 未 skip）。非嵌套 positions/总览/点击/rect 基本用例不受影响。
+
+## 格阵 fill 用户反馈 B 板块三项：项 8 分组默认开+状态保持 / 项 10 无 U cell 进「未分组」/ 项 11 拖拽改 U 弹回修复（2026-08-24，PM 派发 Wave 1 前端，未 commit）
+
+> 目标：修用户浏览器实测反馈 B 板块三项（仅项 8/10/11；项 9/12 等留后续批次）。不修改 `lattice.ts` / `LatticeEditDialog.tsx` / `LatticeCanvas.tsx` / golden / 后端 / api.yaml。
+
+- **项 8（分组默认开启 + 状态保持）**：`gui/src/components/GeometryTab.tsx` `groupByU` 初始值改 **true**（默认开），改为从 localStorage 读——`useState(() => localStorage.getItem("mcnp_groupbyu_v1") === null ? true : stored === "true")`，`useEffect` 写回 `mcnp_groupbyu_v1`（键名固定，初始 true；不跨标签页/多窗口实时同步）。用户操作/导入不重置（读写纯本地，与工作区 deck 无关）。
+- **项 10（无 U 的 cell 进「未分组」组，不被吞）**：`gui/src/utils/universeGroups.ts` 增加「未分组」兜底组——哨兵 `UNGROUPED_U = -1`（真实 MCNP U 非负整数，-1 绝不冲突），`groupByUniverse` 对 u 空/空白/非有限数值的 cell 归入哨兵组且数值升序时**排最前**；`groupHeaderLabel(UNGROUPED_U, n)` → 「未分组 · n 栅元」；新增 `isUngroupedU(u)`。raw 行仍不进组（保持现状）。
+  - **未分组组的拖拽语义**：拖栅元到「未分组」组头 = **清空该栅元的 u**（未分组=无宇宙，交互自然）。`resolveDrop` 落未分组组头 → `{kind:"regroup", u: UNGROUPED_U}`（携带「清空 u」语义）；GeometryTab `onDropOnGroup` 对 UNGROUPED_U 映射为 `u:""`。
+  - **深模块收敛**：新增纯函数 `applyRegroupToRows(rows, from, u)`（不可变，UNGROUPED_U → 清空 u），组件侧用它**同时驱动 setCells 与 patch deck**，消除此前 setCells 内联映射 + patch 闭包映射两处重复（单一事实来源）。
+- **项 11（拖拽改 U 弹回根因与修复）**：
+  - **根因确认**：GeometryTab `onDropOnGroup` 旧实现只 `setCells` 改本地 u、未提交 deck；deck→local 同步 useEffect（deck.cells 变化时 `deckToLocalCells` 覆盖 `setCells`）把未入库的 u 改动覆盖回弹（新组不反映、拖拽像没生效）。
+  - **修复**：`onDropOnGroup` 改 u 后**同时 `patch({ cells: localToDeckCells(applyRegroupToRows(cells, from, u)) })`** 提交 deck（单一权威），渲染不回弹——`groupByUniverse` 按新 u 立即重算，新组立即反映。`useDragToGroup` groupHandlers.onMouseUp 接线确认正确（cell 松手 → `onDropOnGroup(from, u)` 正常触发，未改动）。
+- **既有 T1 测试适配（项 8 默认开影响）**：`gui/test/geometryBatchEditReorder.dom.test.tsx` seed 3 个无 u cell 且断言 `tbody tr === 3` 扁平行——分组默认开后这些 cell 进「未分组」组（组头行 + 3 行 = 4 行且行 0 变组头）会破坏其批量编辑×拖拽重排语义。修复：该测试 beforeEach 显式 `localStorage.setItem("mcnp_groupbyu_v1","false")` 关分组，保持扁平行结构断言不变。
+- **测试（红→绿）**：
+  - `gui/test/universeGroups.test.ts` 6→12（+6）：项 10 空/空白/非数值 u 进未分组兜底组（哨兵排最前）、全部有效 u 无兜底组、`groupHeaderLabel` 未分组文案、`isUngroupedU` 判定、落未分组组头 resolveDrop 携带 UNGROUPED_U、`applyRegroupToRows`（改 u 不可变 + UNGROUPED_U 清空 + raw 行不动）。
+  - 新增 `gui/test/geometryGroupDrag.dom.test.tsx`（4，`@vitest-environment jsdom`，复用 DeckProvider+loadDeck 模式）：项 8 默认分组视图 + localStorage 记录 true；取消勾选 → localStorage false → 重挂载保持关闭；项 11 拖 cell1 → U=10 组头 → u=10、DOM 归入 U=10 组、`deckRef.cells` 已 patch（不回弹）；项 10 拖 cell3 → 未分组组头 → u 清空 + deck patch。waitFor 超时 10s（全量并行负载下防 jsdom flaky）。
+- **localStorage 键名**：`mcnp_groupbyu_v1`（初始 true；只读 useState + useEffect 写回；不跨标签页同步）。
+- **未分组组设计**：哨兵 `UNGROUPED_U=-1` 数值升序排最前；组头文案「未分组 · N 栅元」+ 提示「拖拽栅元到此行清空 U」；未分组组内 cell 可正常拖出（cellHandlers 复用原行拖动）。
+- **门禁**：vitest **476/0 无 skip**（基线 466 + 新增 10：universeGroups +6 / geometryGroupDrag +4）+ tsc EXIT 0 + vite build EXIT 0。已知 flaky 不变：colorize 128³ 计时用例隔离单跑即绿。

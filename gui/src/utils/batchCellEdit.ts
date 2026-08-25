@@ -46,7 +46,8 @@ export function applyBatchCellEdit(cell: CellData, values: BatchCellEditValues):
     pwt: pick(cell.pwt, values.pwt),
     ext: pick(cell.ext, values.ext),
     fcl: pick(cell.fcl, values.fcl),
-    u: pick(cell.u, values.u),
+    // U=0 视为「留空」（MCNP 无 0 宇宙）→ 清空 u，而非写入 "0"
+    u: values.u === "0" ? "" : pick(cell.u, values.u),
     fill: pick(cell.fill, values.fill),
     lat: pick(cell.lat, values.lat),
     trcl: pick(cell.trcl, values.trcl),

@@ -69,6 +69,9 @@ export interface DeckData {
   rawOverrides: Record<string, string>;  // key: "materials"|"cells"|"sdef"|"tally"|"phys"|"e0"|"cut"
   // 各标签页当前是否处于文本模式（生成时决定用文本还是表单数据）
   textMode: Record<string, boolean>;     // key: "materials"|"cells"|"tally"|"sdef"
+  // U 组头文字（项9，snake_case 与后端一致）：universeComments[U] = 用户自定义组头文本。
+  // 可选（旧 deck / 旧 loadDeck 数据无此字段，向后兼容；DEFAULT 恒提供 {}）
+  universeComments?: Record<string, string>;
 }
 
 const DEFAULT: DeckData = {
@@ -80,6 +83,7 @@ const DEFAULT: DeckData = {
   sswFields: { surf: "", sym: "", pty: "", cel: "" },
   ssrFields: { surf: "", mode: "", cel: "", pty: "", col: "", wgt: "", tr: "", psc: "" },
   kcodeFields: {}, ksrcPoints: "", rawOverrides: {}, textMode: {},
+  universeComments: {},
 };
 
 interface Ctx {

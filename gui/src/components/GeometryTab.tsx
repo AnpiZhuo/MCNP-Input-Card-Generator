@@ -15,7 +15,7 @@ import { useDeck } from "../utils/DeckContext";
 import { useFreecadStatus } from "../utils/useFreecadStatus";
 import { useRowDrag } from "../utils/useRowDrag";
 import { useDragToGroup } from "../utils/useDragToGroup";
-import { groupByUniverse, groupHeaderLabel } from "../utils/universeGroups";
+import { applyRegroupToRows, groupByUniverse, groupHeaderLabel, isUngroupedU } from "../utils/universeGroups";
 import { openPreview3D, onMaterialChange, onQuickCellGenerate } from "../utils/windows";
 import { apiUrl } from "../utils/api";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
@@ -66,11 +66,38 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   // 格阵 fill 阶段2：栅格编辑器 + 按 U 分组显示
   const [latticeOpen, setLatticeOpen] = useState(false);
   const [latticeEditIdx, setLatticeEditIdx] = useState<number | null>(null);
-  const [groupByU, setGroupByU] = useState(false);
+  // 项 8：分组默认开启 + localStorage 持久化（键 mcnp_groupbyu_v1，初始 true；不跨标签页/多窗口同步）
+  const [groupByU, setGroupByU] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem("mcnp_groupbyu_v1");
+      return stored === null ? true : stored === "true";
+    } catch {
+      return true;
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("mcnp_groupbyu_v1", String(groupByU)); } catch { /* ignore */ }
+  }, [groupByU]);
+  // 项9：U 组头文字可编辑（双击内联 input → patch deck.universeComments）
+  const [editingGroupU, setEditingGroupU] = useState<number | null>(null);
+  const [groupDraft, setGroupDraft] = useState("");
+  const commitGroupComment = () => {
+    if (editingGroupU == null || editingGroupU < 0) { setEditingGroupU(null); return; }
+    const key = String(editingGroupU);
+    const next = { ...(deck.universeComments || {}) };
+    const text = groupDraft.trim();
+    if (text) next[key] = text;
+    else delete next[key];
+    patch({ universeComments: next });
+    setEditingGroupU(null);
+  };
   const groupDrag = useDragToGroup({
     onMove: moveCellRow,
     onDropOnGroup: (from, u) => {
-      setCells(prev => prev.map((c, i) => (i === from && c.kind === "cell" ? { ...c, cell: { ...c.cell, u: String(u) } } : c)));
+      // 纯函数应用归组（未分组组头=清空 u）：本地显示 + deck 单一权威同时更新（项 11 防回弹）
+      const nextCells = applyRegroupToRows(cells, from, u);
+      setCells(nextCells);
+      patch({ cells: localToDeckCells(nextCells) });
     },
   });
   // T2：快捷添加重合检测失败 → 非阻塞警告（仍追加栅元，但告知未校验重叠）
@@ -433,11 +460,43 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
       );
     });
     for (const g of groups) {
+      const groupComment = g.u >= 0 ? (deck.universeComments?.[String(g.u)] ?? "") : "";
+      const groupNums = g.indices.map((fi) => {
+        const gr = cells[fi];
+        return gr && gr.kind === "cell" ? gr.cell.num : undefined;
+      }).filter(Boolean) as string[];
+      const groupAllSel = groupNums.length > 0 && groupNums.every((n) => selectedCells.includes(n));
       out.push(
         <tr key={`hdr-${g.u}`} {...groupDrag.groupHandlers(g.u)}
           style={{ background: "rgba(255,255,255,0.04)", cursor: "grab", ...groupDrag.groupStyle(g.u) }}>
-          <td colSpan={8} style={{ fontFamily: "Consolas,monospace", fontSize: 12, color: "#ce93d8", fontWeight: 600 }}>
-            ⬚ {groupHeaderLabel(g.u, g.count)} · 拖拽栅元到此行改 U
+          <td style={{ textAlign: "center" }}>
+            <input type="checkbox"
+              checked={groupAllSel}
+              onChange={() => {
+                setSelectedCells(prev => groupAllSel
+                  ? prev.filter((n) => !groupNums.includes(n))
+                  : Array.from(new Set([...prev, ...groupNums])));
+              }}
+              title="勾选 / 取消该 U 组全部栅元"
+            />
+          </td>
+          <td colSpan={7} style={{ fontFamily: "Consolas,monospace", fontSize: 12, color: "#ce93d8", fontWeight: 600 }}
+            onDoubleClick={g.u < 0 ? undefined : () => { setEditingGroupU(g.u); setGroupDraft(groupComment); }}
+            title={g.u < 0 ? undefined : "双击编辑组头文字（生成 INP 时输出 C 注释）"}>
+            {editingGroupU === g.u ? (
+              <input
+                autoFocus
+                value={groupDraft}
+                onChange={(e) => setGroupDraft(e.target.value)}
+                onBlur={commitGroupComment}
+                onKeyDown={(e) => { if (e.key === "Enter") commitGroupComment(); if (e.key === "Escape") setEditingGroupU(null); }}
+                placeholder="组头文字（如 燃料棒）"
+                data-testid={`group-comment-${g.u}`}
+                style={{ fontFamily: "inherit", fontSize: 12, background: "var(--bg-input)", border: "1px solid var(--accent)", color: "var(--text-primary)", borderRadius: 4, padding: "2px 6px", width: 260 }}
+              />
+            ) : (
+              <>⬚ {groupHeaderLabel(g.u, g.count, g.u >= 0 ? groupComment : undefined)}{g.u >= 0 ? " · 双击编辑" : ""}</>
+            )}
           </td>
         </tr>
       );

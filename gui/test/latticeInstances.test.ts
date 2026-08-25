@@ -15,6 +15,7 @@ import {
   composeNestedPositions,
   DETAIL_MAX_INSTANCES,
   instanceIndexAt,
+  nonVoidFrameLeaves,
   parseTrclDeg,
 } from "../src/three/latticeInstances";
 import type { LatticeComposeNode, LatticeInstance } from "../src/three/latticeInstances";
@@ -272,6 +273,27 @@ describe("instanceIndexAt", () => {
     // 反向射线（未命中任何实例）→ null
     const rayMiss = new THREE.Raycaster(new THREE.Vector3(10, 0, 0), new THREE.Vector3(1, 0, 0));
     expect(instanceIndexAt(rayMiss, meshes)).toBeNull();
+  });
+});
+
+/* ── nonVoidFrameLeaves（项15：void 叶不计入取景 bbox，防巨型边界 void 撑大取景） ── */
+
+describe("nonVoidFrameLeaves（项15 取景过滤）", () => {
+  it("mat='0' 的 void 叶被滤除，实体叶保留", () => {
+    const leaves: LatticeInstance[] = [
+      { path: "0", u: "10", cellNum: "1", mat: "1", x: 0, y: 0, z: 0, depth: 0 },
+      { path: "1", u: "10", cellNum: "2", mat: "0", x: 1000, y: 1000, z: 1000, depth: 0 }, // 巨型边界 void（so 1000）
+      { path: "2", u: "10", cellNum: "3", mat: "0", x: 0, y: 0, z: 0, depth: 0 },            // 普通 void 叶
+      { path: "3", u: "20", cellNum: "4", mat: "2", x: 5, y: 5, z: 0, depth: 1 },
+    ];
+    const frame = nonVoidFrameLeaves(leaves);
+    expect(frame.map((p) => p.cellNum)).toEqual(["1", "4"]);
+  });
+  it("全 void → 空数组（取景兜底 0..1）", () => {
+    const leaves: LatticeInstance[] = [
+      { path: "0", u: "10", cellNum: "1", mat: "0", x: 10, y: 10, z: 10, depth: 0 },
+    ];
+    expect(nonVoidFrameLeaves(leaves)).toEqual([]);
   });
 });
 
