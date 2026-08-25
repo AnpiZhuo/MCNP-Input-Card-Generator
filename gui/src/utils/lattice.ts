@@ -634,6 +634,20 @@ export function hexLatticePitch(apothem: number, iNeg: number, iPos: number, jNe
   return apothem / (maxProj + 0.5);
 }
 
+/**
+ * 六棱柱画布格距适配（项 16）：hex 画布在给定可用宽度内完整显示全部格位。
+ * 格位中心 x=(i+j/2)·pitch，跨距（pitch 单位）= (cols−1) + (rows−1)/2；加左右半格(2/√3)。
+ * 返回夹在 [6, 22] 的格距 px。矩形画布固定 26px 格不参与。
+ */
+export function fitHexPitch(dims: number[], targetWidth: number): number {
+  const cols = Math.max(1, dims[0] ?? 1);
+  const rows = Math.max(1, dims[1] ?? 1);
+  const spanUnits = cols - 1 + (rows - 1) / 2;
+  const widthUnits = spanUnits + 2 / Math.sqrt(3);
+  const p = targetWidth / widthUnits;
+  return Math.max(6, Math.min(22, p));
+}
+
 export interface MacrobodyResult {
   /** 单个宏体卡行（含编号，如 "6 rpp -10 10 -10 10 -5 5"） */
   line: string;

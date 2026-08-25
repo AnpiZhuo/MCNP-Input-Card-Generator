@@ -25,6 +25,7 @@ import {
   compressRaw,
   detectFillCycle,
   dirCountsFromRange,
+  fitHexPitch,
   getUniverseColor,
   hexLatticePitch,
   hexPrismCircumradius,
@@ -501,7 +502,8 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
               palette,
               selectedU,
               onCellChange: paintCell,
-              pitch: 22,
+              // 六棱柱：格距按可用宽度适配（440px 内完整显示全部格位）；矩形固定 22
+              pitch: lat === "2" ? fitHexPitch(effectiveDims, 440) : 22,
             }),
           ),
           React.createElement("div", { style: { flex: "0 0 190px" } },

@@ -69,7 +69,7 @@ export default function LatticePreview3D({ lat, dims, cells, palette, pitch = 1,
     const group = new THREE.Group();
 
     if (lat === "2") {
-      const R = pitch / Math.sqrt(3);
+      const R = pitch / 2; // buildHexPrism 参数=半对边距（外接半径 = pitch/√3，相邻格面相切）
       cells.forEach((c, idx) => {
         const i = idx % cols;
         const j = Math.floor(idx / cols) % rows;
