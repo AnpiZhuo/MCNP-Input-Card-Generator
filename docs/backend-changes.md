@@ -1383,3 +1383,20 @@ python -m pytest tests/ -q      # 706 passed
 python -m pytest tests/integration/test_roundtrip.py -q   # R1 五夹具 + R4 全绿
 python -m pytest tests/unit/test_lattice.py -q            # 66 passed
 ```
+
+## Wave 3c 补充：材料 #ifdef 块 R1 修复
+
+> 日期：2026-08-25 | 触发：官方验收样例 `u233-comp-therm-001-case-6.i`（含 R 的 lat=2 + 材料 `#ifdef ENDF7`）整文件 R1 失败。
+
+**根因**：`#ifdef ENDF7` + 条件核素（如 Zircaloy 的 Sn 50112-50124）被续行合并成单条逻辑行，
+`parse_data_cards` 把整块作为一条 raw 行挂到当前材料；`#endif` 又被 lookahead（下一非 C 行为
+新 `M{n}`）误挂到**下一**材料。一进一出材料卡变形（`#ifdef` 与核素同列、`&` 续行、`#endif` 错位）。
+
+**修复**（`app/generator/parsers/core.py` parse_data_cards `#`-分支）：
+- `#ifdef/#ifndef/#if` 块归属两路：紧跟未出现 `M{n}` → pending（包裹 M 头，原逻辑保留）；
+  否则归属**当前材料**，且合并行拆回 `raw 宏 + 核素对`（按首个数字 token 切分，兼容 `50112.70c`）。
+- 新增 `ifdef_routes` 栈：块起压栈（True=当前材料 / False=pending），匹配 `#endif` 弹栈；
+  `#else/#endif` 按栈顶归属，避免 lookahead 误挂下一材料。
+
+**验证**：u233 官方样例整文件 `parse→gen→parse→gen` **字节全等**（R1）；lat=2 cell 19 仍
+1849 格完整。全量 pytest **707/0**（新增 `test_parse_ifdef_block_within_material_splits_macro_and_nuclides`）。

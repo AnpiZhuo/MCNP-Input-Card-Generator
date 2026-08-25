@@ -1104,6 +1104,10 @@ def parse_data_cards(data_lines: list[str]) -> dict:
     pending_c = ""  # 最近的 C 注释行（关联到下一个 M 卡）
     current_mat = None   # 当前正在构建的材料（条件行/裸核素行归属）
     pending_raw = []     # 材料开始前的预处理器行缓冲（#ifdef 等，前置到材料头后）
+    # 条件块归属栈：#ifdef 块起时压栈（True=块在当前材料内 / False=块在 pending 包裹 M 头），
+    # 匹配 #endif 弹栈。用于 #else/#endif 归属判定——避免 lookahead 把当前材料内的
+    # "#ifdef ENDF7 50112… / #endif" 误挂到紧随其后的下一材料（u233 条件 Sn 块）。
+    ifdef_routes = []  # list[bool]
     while i < len(data):
         raw_line = data[i]
         line = strip_comment(raw_line.strip())
@@ -1492,8 +1496,12 @@ def parse_data_cards(data_lines: list[str]) -> dict:
             i += 1
         elif line.startswith("#"):
             # MCNP 预处理器/条件行：#ifdef/#else/#endif/#define 等。
-            # 若紧随其后是【尚未出现过的】M{n} 材料头 → 进 pending_raw（前置到该材料，
-            # 实现"M 头提到 #ifdef 前"）；否则归属当前材料（如 #else/#endif）。
+            # 块归属两路：
+            #  A) 紧随其后是【尚未出现过的】M{n} 材料头 → 进 pending_raw（前置到该材料，
+            #     实现"M 头提到 #ifdef 前"；块内 #else/#endif 同归 pending）。
+            #  B) 否则归属当前材料（如材料内条件核素块 "#ifdef ENDF7 50112…"）；续行合并
+            #     可能把宏与核素并入同一行 → 拆回 raw 宏 + 核素对。块内 #else/#endif 用
+            #     ifdef_routes 栈判定归属（True=当前材料），避免 lookahead 误挂到后续 M。
             nxt_first = None
             for _ni in range(i + 1, min(i + 4, len(data))):
                 _ns = data[_ni].strip()
@@ -1502,10 +1510,55 @@ def parse_data_cards(data_lines: list[str]) -> dict:
                 nxt_first = _ns.split()[0].upper()
                 break
             _m = re.match(r'^M(\d+)$', nxt_first or "")
-            if _m and not any(mm.number == int(_m.group(1)) for mm in result["materials"]):
-                pending_raw.append(line)
+            _nxt_is_fresh_m = bool(_m) and not any(mm.number == int(_m.group(1)) for mm in result["materials"])
+            _tok0 = line.split()[0].upper()
+            _is_opener = _tok0 in ("#IFDEF", "#IFNDEF", "#IF")
+            if _is_opener:
+                if _nxt_is_fresh_m:
+                    pending_raw.append(line)
+                    ifdef_routes.append(False)  # 块在 pending（包裹 M 头）
+                elif current_mat is not None:
+                    # 块在当前材料内：续行合并可能把宏与核素并入同一行（"#ifdef ENDF7 50112. …"）
+                    _toks = line.split()
+                    _cut = 0
+                    while _cut < len(_toks) and not re.match(r'^\d', _toks[_cut]):
+                        _cut += 1
+                    if _cut < len(_toks):
+                        current_mat.rows.append(MaterialRow(kind="raw", text=" ".join(_toks[:_cut])))
+                        _j = _cut
+                        while _j + 1 < len(_toks):
+                            current_mat.rows.append(MaterialRow(kind="nuclide", zaid=_toks[_j], fraction=_toks[_j + 1]))
+                            _j += 2
+                    else:
+                        current_mat.rows.append(MaterialRow(kind="raw", text=line))
+                    ifdef_routes.append(True)  # 块在当前材料内
+                else:
+                    pending_raw.append(line)
+                    ifdef_routes.append(False)
+            elif _tok0 in ("#ENDIF", "#ELSE"):
+                if ifdef_routes and ifdef_routes[-1]:
+                    # 所属块在当前材料内 → 归属当前材料（含 #endif）
+                    if current_mat is not None:
+                        current_mat.rows.append(MaterialRow(kind="raw", text=line))
+                    else:
+                        pending_raw.append(line)
+                    if _tok0 == "#ENDIF":
+                        ifdef_routes.pop()
+                else:
+                    # pending 块或未知：沿用旧 lookahead 逻辑（块内 #else/#endif 进 pending）
+                    if _nxt_is_fresh_m:
+                        pending_raw.append(line)
+                    elif current_mat is not None:
+                        current_mat.rows.append(MaterialRow(kind="raw", text=line))
+                    else:
+                        pending_raw.append(line)
+                    if _tok0 == "#ENDIF" and ifdef_routes:
+                        ifdef_routes.pop()
             else:
-                if current_mat is not None:
+                # 其他预处理器行（#define 等）：沿用旧逻辑
+                if _nxt_is_fresh_m:
+                    pending_raw.append(line)
+                elif current_mat is not None:
                     current_mat.rows.append(MaterialRow(kind="raw", text=line))
                 else:
                     pending_raw.append(line)

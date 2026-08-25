@@ -112,6 +112,31 @@ def test_parse_preprocessor_lines_attach_to_material():
     assert "#ifdef MOD1" in texts
 
 
+def test_parse_ifdef_block_within_material_splits_macro_and_nuclides():
+    """条件核素块归属当前材料：#ifdef 块（宏+核素可能被续行合并成一行）拆回 raw 宏 + 核素对，
+    #endif 也归属当前材料而非误挂到后续 M（u233 官方样例 Zircaloy 条件 Sn 块回归）。"""
+    r = parse_data_cards([
+        "m1 40090 2.1885e-2",
+        "#ifdef ENDF7 50112. 4.8420e-6 50114. 3.2447e-6 50115. 1.6972e-6",
+        "#endif",
+        "m2 1001 7.8854e-2 6000 3.9427e-2",
+    ])
+    assert len(r["materials"]) == 2
+    m1, m2 = r["materials"]
+    # M1：40090 + raw #ifdef ENDF7 + 50112/50114/50115 核素对 + raw #endif（#endif 不跳 M2）
+    rows1 = [(x.kind, x.zaid or x.text, x.fraction) for x in m1.rows]
+    assert rows1[0] == ("nuclide", "40090", "2.1885e-2")
+    assert rows1[1] == ("raw", "#ifdef ENDF7", "")
+    assert rows1[2] == ("nuclide", "50112.", "4.8420e-6")
+    assert rows1[3] == ("nuclide", "50114.", "3.2447e-6")
+    assert rows1[4] == ("nuclide", "50115.", "1.6972e-6")
+    assert rows1[-1] == ("raw", "#endif", "")
+    # M2 干净，不带 #endif
+    rows2 = [(x.kind, x.zaid or x.text) for x in m2.rows]
+    assert rows2 == [("nuclide", "1001"), ("nuclide", "6000")]
+    assert not any(x.kind == "raw" for x in m2.rows)
+
+
 def test_parse_unknown_cards_to_other_cards():
     r = parse_data_cards(["dbcn 28j 0 13j 0", "prdmp 2j -1 j -1"])
     assert any("dbcn" in c.lower() for c in r["other_cards"])

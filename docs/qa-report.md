@@ -180,3 +180,15 @@
 ### 8.4 结论
 
 format_fill_cards 缺陷修复**已重验通过**：每 j 行 = dims[0] 条目符合 MCNP 规范，R1 五夹具 / R4 / 全量 pytest 基线不回退。QA 报告定稿，可交用户浏览器复验。
+
+## Wave 3c 补充核验：材料 #ifdef 块 R1（u233 官方样例）
+
+> 日期：2026-08-25 | 触发：用户要求验证含 `R` 重复的 lat=2 卡能否使用，顺带发现整文件 R1 被材料 `#ifdef` 卡住。
+
+**结论**：✅ 含 R 的 lat=2 卡**可用**——解析 1849 格全还原、生成 fill 块完整（1852 token）、
+格阵段 round-trip 字节全等。材料 `#ifdef ENDF7` R1 已修复（`#ifdef` 块归属当前材料、
+合并行拆回 raw 宏 + 核素对、`#endif` 不再误挂下一材料）。
+
+**独立复跑**：
+- `python -m pytest tests/ -q` → **707 passed / 0 failed**（新增 1 用例）
+- u233 官方样例 `parse→gen→parse→gen` 字节全等
