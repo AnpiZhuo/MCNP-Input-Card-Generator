@@ -81,13 +81,13 @@ describe("项1：4 步状态机 + 第 0 步六个方向层数空恒显示", () =
     expect(screen.queryByText("2D 平面")).toBeNull();
     expect(screen.queryByText("3D 体积")).toBeNull();
     expect(screen.queryByText("轴向层数 k")).toBeNull();
-    // 切六棱柱 → x/y 层数取环数（从矩形 8/8 派生 → 8），z 仍在
+    // 切六棱柱 → 水平/斜向（a1/a2 格矢）层数取环数（从矩形 8/8 派生 → 8），轴向 k 仍在
     fireEvent.click(screen.getByText("六棱柱 (lat=2)"));
-    expect(numInput("x 向左").value).toBe("8");
-    expect(numInput("x 向右").value).toBe("8");
-    expect(numInput("y 向前").value).toBe("8");
-    expect(numInput("y 向后").value).toBe("8");
-    expect(numInput("z 向下")).toBeTruthy();
+    expect(numInput("水平 向左").value).toBe("8");
+    expect(numInput("水平 向右").value).toBe("8");
+    expect(numInput("斜向 向左下").value).toBe("8");
+    expect(numInput("斜向 向右上").value).toBe("8");
+    expect(numInput("轴向 向下")).toBeTruthy();
   });
 
   it("下一步 x3 → 保存步出现「保存并写入栅元卡」，上一步回退", () => {
