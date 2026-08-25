@@ -487,7 +487,8 @@ export function autoGenerateSurfaces(
     const p = params.hex!;
     const R = p.side; // 正六边形外接半径 = 边长
     const apo = (R * Math.sqrt(3)) / 2;
-    for (const deg of [30, 90, 150, 210, 270, 330]) {
+    // 面法向 0°/60°/120°/180°/240°/300°（⊥ 六条格矢方向，对齐 a1=0° 蜂窝；原 30° 序列错）
+    for (const deg of [0, 60, 120, 180, 240, 300]) {
       const a = (deg * Math.PI) / 180;
       const nx = Number(Math.cos(a).toFixed(6));
       const ny = Number(Math.sin(a).toFixed(6));
@@ -545,7 +546,9 @@ export function rhpCard(p: RhpParams): string {
 
 /**
  * 模式 B：中心 + 外接半径 + 高 → RHP 参数（跨语言 L4 权威：默认轴向 +Z、
- * 第一面方向角 30° 顶点+X→面心）。V = C−H/2；R1 = (R·cos30°, R·sin30°, 0)。
+ * 第一面法向 0°（沿 a1）——hexCenter a1=(pitch,0) 邻位共享 0° 面，R1 必须 ∥ a1，
+ * 否则棱柱面会切进格子（项 16 方向修正：原 30° 是几何错误）。V = C−H/2；
+ * R1 = (R·cos30°, 0, 0)（R=外接半径，R1 长=apothem）。
  */
 export function rhpFromCenterRadiusHeight(
   C: [number, number, number],
@@ -555,7 +558,7 @@ export function rhpFromCenterRadiusHeight(
   return {
     v: [C[0], C[1], C[2] - H / 2],
     h: [0, 0, H],
-    r1: [R * Math.cos(Math.PI / 6), R * Math.sin(Math.PI / 6), 0],
+    r1: [R * Math.cos(Math.PI / 6), 0, 0],
   };
 }
 
@@ -589,6 +592,46 @@ export function rhpModeAError(
   const dot = (T[0] - V[0]) * r1[0] + (T[1] - V[1]) * r1[1] + (T[2] - V[2]) * r1[2];
   if (hMag > 1e-12 && Math.abs(dot) / hMag > 1e-4) return "第一小面中点矢量 R1 不垂直于轴向 H";
   return null;
+}
+
+/**
+ * 六棱柱外接半径建议（项 16）：给定 i/j 格矢范围（负/正层数）与格距 pitch，返回恰好
+ * 包住全部格位的 RHP 外接半径。格位中心 = i·a1 + j·a2（a1=(pitch,0), a2=(pitch/2,√3·pitch/2)），
+ * R = max 四角 |中心| + 单格外接半径(pitch/√3)。
+ */
+export function hexPrismCircumradius(iNeg: number, iPos: number, jNeg: number, jPos: number, pitch: number): number {
+  const c = Math.sqrt(3) / 2;
+  let maxD = 0;
+  for (const i of [iNeg, iPos]) {
+    for (const j of [jNeg, jPos]) {
+      const x = i * pitch + (j * pitch) / 2;
+      const y = j * pitch * c;
+      maxD = Math.max(maxD, Math.hypot(x, y));
+    }
+  }
+  return maxD + pitch / Math.sqrt(3);
+}
+
+/**
+ * 格距推导（项 16）：给定 RHP apothem（= 外接半径·√3/2）与 i/j 范围，求格距 pitch 使
+ * 六棱柱面恰好切到最外圈格子外缘：apothem = p·(max 面投影/格距单位) + p/2。
+ * 面法向 0°/60°/120°（⊥ 格矢，负向对称）；格位单位中心 = (i + j/2, j·√3/2)。
+ */
+export function hexLatticePitch(apothem: number, iNeg: number, iPos: number, jNeg: number, jPos: number): number {
+  if (apothem <= 0) return 1;
+  const c = Math.sqrt(3) / 2;
+  let maxProj = 0;
+  for (const [nx, ny] of [
+    [1, 0], [0.5, c], [-0.5, c],
+  ] as const) {
+    for (const i of [iNeg, iPos]) {
+      for (const j of [jNeg, jPos]) {
+        const proj = nx * (i + j / 2) + ny * (j * c);
+        maxProj = Math.max(maxProj, proj);
+      }
+    }
+  }
+  return apothem / (maxProj + 0.5);
 }
 
 export interface MacrobodyResult {

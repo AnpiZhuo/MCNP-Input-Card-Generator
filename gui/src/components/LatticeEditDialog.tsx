@@ -26,13 +26,13 @@ import {
   detectFillCycle,
   dirCountsFromRange,
   getUniverseColor,
-  initialHexCells,
+  hexLatticePitch,
+  hexPrismCircumradius,
   initialRectCells,
   latticeVolumeWarning,
   maxSurfaceNumber,
   parseFillGrid,
   rangeFromDirCounts,
-  rangeFromDims,
   resizeLatticeCells,
   rhpCard,
   rhpFromThreePoints,
@@ -76,27 +76,18 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
   }, [initialCell]);
   const editing = !!init;
   const originalDims = init ? init.fg.dims : null;
-  const ringShaped =
-    editing && originalDims && originalDims.length >= 2 && originalDims[0] === originalDims[1] && originalDims[0] % 2 === 1;
-  // 编辑导入的矩形六棱柱（非环形）时锁定尺寸，避免破坏原格阵
-  const sizeEditable = editing ? init?.fg.lat !== "2" || ringShaped : true;
+  // 六字段独立（矩形/六棱柱统一）：编辑导入格阵也可改尺寸，范围由负/正层数反派生
+  const sizeEditable = true;
 
   const [step, setStep] = useState(0);
   const [lat, setLat] = useState<"1" | "2">(init ? (init.fg.lat === "2" ? "2" : "1") : "1");
-  // 项2：六个方向层数空（矩形用「方向块数 -N:M」；编辑旧 deck 从原 range 反派生，保持 0:16 角起写法）
+  // 项2：六个方向层数空（负/正层数 → -N:M 范围；编辑旧 deck 从原 range 反派生，保持 0:16 角起写法）
   const [xDir, setXDir] = useState<{ neg: number; pos: number }>(() =>
-    init && init.fg.lat !== "2" ? dirCountsFromRange(init.fg.range[0] || "0:16") : { neg: 8, pos: 8 });
+    init ? dirCountsFromRange(init.fg.range[0] || "0:16") : { neg: 8, pos: 8 });
   const [yDir, setYDir] = useState<{ neg: number; pos: number }>(() =>
-    init && init.fg.lat !== "2" ? dirCountsFromRange(init.fg.range[1] || "0:16") : { neg: 8, pos: 8 });
+    init ? dirCountsFromRange(init.fg.range[1] || "0:16") : { neg: 8, pos: 8 });
   const [zDir, setZDir] = useState<{ neg: number; pos: number }>(() =>
     init ? dirCountsFromRange(init.fg.range[2] || "0:0") : { neg: 0, pos: 0 });
-  const [hexRings, setHexRings] = useState<number>(
-    init && init.fg.lat === "2"
-      ? originalDims && originalDims[0] === originalDims[1] && originalDims[0] % 2 === 1
-        ? (originalDims[0] - 1) / 2
-        : 2
-      : 1,
-  );
   const [surfaceExpr, setSurfaceExpr] = useState<string>(init ? init.surfaceExpr : "");
   const [latticeU, setLatticeU] = useState<string>(init ? init.latticeU : "");
   const [localSurfaces, setLocalSurfaces] = useState<string>(surfacesText);
@@ -122,58 +113,53 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
   const [selectedU, setSelectedU] = useState<string>(defaultPaintU);
   const [cells, setCells] = useState<FillGridCellJson[]>(() => (init ? init.fg.cells : []));
 
+  /* ── 项16：六棱柱宏体外接半径自动随格阵（OWEN 模式：宏体尺寸由格阵范围推导，
+   * 参考格距 REF_PITCH 是相对基准；用户手动改 R 后不再覆盖，可点「按格阵重算」恢复）。 ── */
+  const [rManual, setRManual] = useState(false);
+  const REF_PITCH = 2; // 参考格距（中心距 cm）
+  useEffect(() => {
+    if (lat !== "2" || !autoMode || rhpMode !== "B" || rManual) return;
+    const R = hexPrismCircumradius(xDir.neg, xDir.pos, yDir.neg, yDir.pos, REF_PITCH);
+    setGenHexB((prev) => ({ ...prev, R: Number(R.toFixed(3)) }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lat, autoMode, rhpMode, xDir, yDir, rManual]);
+  const suggestR = () => {
+    setRManual(false);
+    const R = hexPrismCircumradius(xDir.neg, xDir.pos, yDir.neg, yDir.pos, REF_PITCH);
+    setGenHexB((prev) => ({ ...prev, R: Number(R.toFixed(3)) }));
+  };
+  // 按当前 RHP 外接半径推导格距（p：六棱柱面恰好切到最外圈格子外缘）
+  const hexPitch = useMemo(
+    () => (lat === "2" ? hexLatticePitch((genHexB.R * Math.sqrt(3)) / 2, xDir.neg, xDir.pos, yDir.neg, yDir.pos) : 0),
+    [lat, genHexB.R, xDir, yDir],
+  );
+
   /* ── dims / range 派生 + 尺寸变化保持已涂色格位 ── */
   const dims = useMemo(() => {
-    if (lat === "2") {
-      const r = Math.max(1, hexRings);
-      return [2 * r + 1, 2 * r + 1, Math.max(1, zDir.neg + zDir.pos + 1)];
-    }
     return [
       xDir.neg + xDir.pos + 1,
       yDir.neg + yDir.pos + 1,
       Math.max(1, zDir.neg + zDir.pos + 1),
     ];
-  }, [lat, hexRings, xDir, yDir, zDir]);
+  }, [xDir, yDir, zDir]);
   const dimsKey = dims.join("x");
   useEffect(() => {
-    if (!sizeEditable) return;
-    setCells((prev) => {
-      const fresh =
-        lat === "2"
-          ? initialHexCells(Math.max(1, hexRings), dims[2], defaultPaintU)
-          : initialRectCells(dims[0], dims[1], dims[2], defaultPaintU);
-      return resizeLatticeCells(prev, fresh);
-    });
+    setCells((prev) => resizeLatticeCells(prev, initialRectCells(dims[0], dims[1], dims[2], defaultPaintU)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dimsKey, sizeEditable]);
+  }, [dimsKey]);
 
-  const effectiveDims = editing && !sizeEditable && originalDims ? originalDims : dims;
+  const effectiveDims = dims;
 
-  const currentRange = useMemo(() => {
-    const d = effectiveDims;
-    if (lat === "2") return rangeFromDims(d);
-    return [
+  const currentRange = useMemo(
+    () => [
       rangeFromDirCounts(xDir.neg, xDir.pos),
       rangeFromDirCounts(yDir.neg, yDir.pos),
       rangeFromDirCounts(zDir.neg, zDir.pos),
-    ];
-  }, [lat, effectiveDims, xDir, yDir, zDir]);
+    ],
+    [xDir, yDir, zDir],
+  );
 
-  /* ── 六棱柱 I/J 对称：环数层空互锁（改任一 → 四个同值） ── */
-  const setHexDir = (v: number) => {
-    const r = Math.max(1, Math.round(v));
-    setHexRings(r);
-  };
-  const handleLatChange = (v: "1" | "2") => {
-    setLat(v);
-    if (v === "2") {
-      const r = Math.max(1, Math.round((xDir.neg + xDir.pos) / 2));
-      setHexRings(r);
-    } else {
-      setXDir({ neg: hexRings, pos: hexRings });
-      setYDir({ neg: hexRings, pos: hexRings });
-    }
-  };
+  const handleLatChange = (v: "1" | "2") => setLat(v);
 
   /* ── 曲面失焦校验（手动模式）── */
   const handleSurfaceBlur = async () => {
@@ -366,23 +352,14 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
                   dirField("z 向下", "z 向上", zDir, setZDir, !sizeEditable),
                 )
               : React.createElement(React.Fragment, null,
-                  React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-end" } },
-                    numField("水平 向左", hexRings, setHexDir, 64, !sizeEditable),
-                    numField("水平 向右", hexRings, setHexDir, 64, !sizeEditable),
-                  ),
-                  React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-end" } },
-                    numField("斜向 向左下", hexRings, setHexDir, 64, !sizeEditable),
-                    numField("斜向 向右上", hexRings, setHexDir, 64, !sizeEditable),
-                  ),
-                  dirField("轴向 向下", "轴向 向上", zDir, setZDir, !sizeEditable),
+                  dirField("水平 向左", "水平 向右", xDir, setXDir),
+                  dirField("斜向 向左下", "斜向 向右上", yDir, setYDir),
+                  dirField("轴向 向下", "轴向 向上", zDir, setZDir),
                 ),
           ),
-          lat === "2" && sizeEditable &&
+          lat === "2" &&
             React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 6 } },
-              `六棱柱 i:j:k 是沿两条 60° 格矢（a1 水平 / a2 斜向）的格位号 + 轴向 k，不是笛卡尔 x/y；格位中心 x=(i+j/2)·pitch、y=j·pitch·√3/2。I/J 对称取环数（${Math.max(1, hexRings)}），角位自动补 void(0)。`),
-          !sizeEditable &&
-            React.createElement("div", { style: { fontSize: 11, color: "#e0a12e", marginBottom: 6 } },
-              "⚠ 编辑导入的矩形六棱柱：尺寸保持原样（仅可改涂色/曲面）。"),
+              `六棱柱 i:j:k 是沿两条 60° 格矢（a1 水平 / a2 斜向）的格位号 + 轴向 k，不是笛卡尔 x/y；格位中心 x=(i+j/2)·pitch、y=j·pitch·√3/2。三轴层数独立，六边形物理边界由 RHP 宏体截断。`),
           React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)" } },
             `范围：${currentRange.join("  ")} · 共 ${cellCount} 格位`),
         ),
@@ -418,8 +395,10 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
                 lat === "2"
                   ? (rhpMode === "B"
                       ? React.createElement(React.Fragment, null,
-                          numField("外接半径 R", genHexB.R, (v) => setGenHexB({ ...genHexB, R: v })),
+                          numField("外接半径 R", genHexB.R, (v) => { setRManual(true); setGenHexB({ ...genHexB, R: v }); }),
                           numField("高 h", genHexB.H, (v) => setGenHexB({ ...genHexB, H: v })),
+                          React.createElement("button", { type: "button", className: "btn btn-ghost btn-sm", onClick: suggestR, title: "按当前 i/j 格阵范围重算外接半径（OWEN 模式：宏体包住全部格位）" },
+                            "按格阵重算"),
                         )
                       : React.createElement(React.Fragment, null,
                           numField("Vx", genHexA.vx, (v) => setGenHexA({ ...genHexA, vx: v })),
@@ -444,6 +423,9 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
                 React.createElement("button", { type: "button", className: "btn btn-primary btn-sm", onClick: handleAutoGen },
                   "生成宏体卡并填表达式"),
               ),
+              lat === "2" && rhpMode === "B" &&
+                React.createElement("div", { style: { fontSize: 10, color: "var(--text-tertiary)", marginBottom: 6 } },
+                  `按格阵 i±${xDir.neg}/${xDir.pos}、j±${yDir.neg}/${yDir.pos} 自动建议 R≈${genHexB.R}（参考格距 2cm），RHP 面恰好包住全部格位；格距 p≈${hexPitch.toFixed(3)}cm（面切最外圈格子外缘）。`),
               lat === "2" &&
                 React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 8 } },
                   React.createElement("button", { type: "button", onClick: () => setRhpMode("B"), style: { ...btn, border: rhpMode === "B" ? "1px solid var(--accent)" : "1px solid var(--border-glass)", background: rhpMode === "B" ? "rgba(76,159,232,0.15)" : "var(--bg-input)" } },

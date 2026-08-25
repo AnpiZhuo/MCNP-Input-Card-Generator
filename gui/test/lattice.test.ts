@@ -20,6 +20,8 @@ import {
   getUniverseColor,
   hexCenter,
   hexGrid,
+  hexLatticePitch,
+  hexPrismCircumradius,
   hexRingCellCount,
   hexRingRows,
   inHexRing,
@@ -321,6 +323,34 @@ describe("RHP 宏体参数（项4 权威模式 B，跨语言 L4）", () => {
   it("模式 A 校验：|T−V|≠h 报错；R1 不 ⊥H 报错", () => {
     expect(rhpModeAError([0, 0, 0], [0, 0, 8], [0.866, 0.5, 0], 10)).toContain("≠ 高度");
     expect(rhpModeAError([0, 0, 0], [0, 0, 10], [1, 0, 5], 10)).toContain("不垂直于轴向");
+  });
+  it("项16 方向：模式 B 第一面法向 0°（R1 ∥ a1，原 30° 几何错）", () => {
+    const p = rhpFromCenterRadiusHeight([0, 0, 0], 2, 10);
+    expect(p.r1[0]).toBeCloseTo(2 * Math.cos(Math.PI / 6), 9); // apothem 沿 +x
+    expect(p.r1[1]).toBeCloseTo(0, 9);
+    expect(p.r1[2]).toBeCloseTo(0, 9);
+    expect(rhpCard(p)).toBe("rhp 0 0 -5  0 0 10  1.732 0 0");
+  });
+});
+
+describe("项16：宏体尺寸随格阵（OWEN 模式）", () => {
+  it("hexPrismCircumradius 恰好包住格阵四角 + 单格外接半径", () => {
+    // i/j ±8，格距 2：角格 (8,8) 距 = hypot(2·8+8, 8·√3) = hypot(24, 13.856)=27.713
+    const R = hexPrismCircumradius(-8, 8, -8, 8, 2);
+    expect(R).toBeCloseTo(Math.hypot(24, 8 * Math.sqrt(3)) + 2 / Math.sqrt(3), 9);
+  });
+  it("R→格距→R 往返自洽（六棱柱面切最外圈格子外缘）", () => {
+    const R0 = hexPrismCircumradius(-8, 8, -8, 8, 2);
+    const p = hexLatticePitch((R0 * Math.sqrt(3)) / 2, -8, 8, -8, 8);
+    const R1 = hexPrismCircumradius(-8, 8, -8, 8, p);
+    expect(R1).toBeCloseTo(R0, 6);
+  });
+  it("六棱柱面法向 0°/60°/120°（autoGenerateSurfaces 对齐 a1）", () => {
+    const r = autoGenerateSurfaces("2", { hex: { side: 2, H: 2, cx: 0, cy: 0, cz: 0 } }, "");
+    const nx = r.lines.slice(0, 6).map((l) => l.split(/\s+/)[2]);
+    expect(nx[0]).toBe("1"); // 面 1 法向 (1,0) = 0°
+    expect(nx[1]).toBe("0.5"); // 面 2 法向 60°
+    expect(nx[2]).toBe("-0.5"); // 面 3 法向 120°
   });
 });
 
