@@ -23,7 +23,9 @@ import {
   hexLatticePitch,
   hexPrismCircumradius,
   hexRingCellCount,
+  hexRingRadius,
   hexRingRows,
+  inHexRegion,
   inHexRing,
   initialHexCells,
   initialRectCells,
@@ -333,16 +335,23 @@ describe("RHP 宏体参数（项4 权威模式 B，跨语言 L4）", () => {
   });
 });
 
-describe("项16：宏体尺寸随格阵（OWEN 模式）", () => {
-  it("hexPrismCircumradius 恰好包住格阵四角 + 单格外接半径", () => {
-    // i/j ±8，格距 2：角格 (8,8) 距 = hypot(2·8+8, 8·√3) = hypot(24, 13.856)=27.713
-    const R = hexPrismCircumradius(-8, 8, -8, 8, 2);
-    expect(R).toBeCloseTo(Math.hypot(24, 8 * Math.sqrt(3)) + 2 / Math.sqrt(3), 9);
+describe("项16：hex 物理格阵=正六边形环（universal）+ 宏体尺寸随格阵", () => {
+  it("hexRingRadius/inHexRegion：43×43 → 环半径 21，角位在物理外", () => {
+    expect(hexRingRadius(43, 43)).toBe(21);
+    expect(hexRingRadius(17, 17)).toBe(8);
+    expect(inHexRegion(21, 21, 43, 43)).toBe(true); // 中心
+    expect(inHexRegion(0, 21, 43, 43)).toBe(true); // 环边
+    expect(inHexRegion(0, 0, 43, 43)).toBe(false); // 平行四边形角（物理外）
   });
-  it("R→格距→R 往返自洽（六棱柱面切最外圈格子外缘）", () => {
-    const R0 = hexPrismCircumradius(-8, 8, -8, 8, 2);
-    const p = hexLatticePitch((R0 * Math.sqrt(3)) / 2, -8, 8, -8, 8);
-    const R1 = hexPrismCircumradius(-8, 8, -8, 8, p);
+  it("hexPrismCircumradius 按环半径包住六边形（不包平行四边形角）", () => {
+    // i/j 各 ±8（17×17 环 R=8，格距 2）：R_rhp = 2·(8+0.5)·2/√3 = 34/√3 ≈ 19.63
+    const R = hexPrismCircumradius(8, 8, 8, 8, 2);
+    expect(R).toBeCloseTo(34 / Math.sqrt(3), 9);
+  });
+  it("R→格距→R 往返自洽（六棱柱面切六边形环最外格面）", () => {
+    const R0 = hexPrismCircumradius(8, 8, 8, 8, 2);
+    const p = hexLatticePitch((R0 * Math.sqrt(3)) / 2, 8, 8, 8, 8);
+    const R1 = hexPrismCircumradius(8, 8, 8, 8, p);
     expect(R1).toBeCloseTo(R0, 6);
   });
   it("六棱柱面法向 0°/60°/120°（autoGenerateSurfaces 对齐 a1）", () => {

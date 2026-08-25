@@ -594,44 +594,50 @@ export function rhpModeAError(
   return null;
 }
 
-/**
- * 六棱柱外接半径建议（项 16）：给定 i/j 格矢范围（负/正层数）与格距 pitch，返回恰好
- * 包住全部格位的 RHP 外接半径。格位中心 = i·a1 + j·a2（a1=(pitch,0), a2=(pitch/2,√3·pitch/2)），
- * R = max 四角 |中心| + 单格外接半径(pitch/√3)。
- */
-export function hexPrismCircumradius(iNeg: number, iPos: number, jNeg: number, jPos: number, pitch: number): number {
-  const c = Math.sqrt(3) / 2;
-  let maxD = 0;
-  for (const i of [iNeg, iPos]) {
-    for (const j of [jNeg, jPos]) {
-      const x = i * pitch + (j * pitch) / 2;
-      const y = j * pitch * c;
-      maxD = Math.max(maxD, Math.hypot(x, y));
+/** 六边形环半径：cols×rows 平行四边形内最大正六边形环半径（项16，hex 物理格阵=六边形） */
+export function hexRingRadius(cols: number, rows: number): number {
+  return Math.min(Math.floor(cols / 2), Math.floor(rows / 2));
+}
+
+/** 格位是否在平行四边形中心的正六边形环内（项16：hex 物理格阵=六边形，角位不实/void） */
+export function inHexRegion(col: number, row: number, cols: number, rows: number): boolean {
+  const R = hexRingRadius(cols, rows);
+  const di = col - (cols - 1) / 2;
+  const dj = row - (rows - 1) / 2;
+  return Math.max(Math.abs(di), Math.abs(dj), Math.abs(di + dj)) <= R;
+}
+
+/** 初始六边形环格位：环内 defaultU、角位 "0"（void）——universal，不要求对称范围 */
+export function initialHexRegionCells(cols: number, rows: number, layers: number, defaultU: string): FillGridCellJson[] {
+  const cells: FillGridCellJson[] = [];
+  for (let k = 0; k < layers; k++) {
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        cells.push({ u: inHexRegion(i, j, cols, rows) ? defaultU : "0", dx: "", dy: "", dz: "" });
+      }
     }
   }
-  return maxD + pitch / Math.sqrt(3);
+  return cells;
+}
+
+/**
+ * 六棱柱外接半径建议（项 16）：按六边形环半径 R（=min(i/j 范围)/2）推，恰好包住六边形
+ * 物理格阵。apothem = p·(R+0.5)（环最外格面），外接半径 = apothem·2/√3。
+ * 角位（平行四边形角）在物理外，不包。
+ */
+export function hexPrismCircumradius(iNeg: number, iPos: number, jNeg: number, jPos: number, pitch: number): number {
+  const R = hexRingRadius(iNeg + iPos + 1, jNeg + jPos + 1);
+  return (2 * (R + 0.5) * pitch) / Math.sqrt(3);
 }
 
 /**
  * 格距推导（项 16）：给定 RHP apothem（= 外接半径·√3/2）与 i/j 范围，求格距 pitch 使
- * 六棱柱面恰好切到最外圈格子外缘：apothem = p·(max 面投影/格距单位) + p/2。
- * 面法向 0°/60°/120°（⊥ 格矢，负向对称）；格位单位中心 = (i + j/2, j·√3/2)。
+ * 六棱柱面恰好切到六边形环最外圈格子外缘：apothem = p·(R + 0.5)（R=环半径，0.5=单格半对边/格距单位）。
  */
 export function hexLatticePitch(apothem: number, iNeg: number, iPos: number, jNeg: number, jPos: number): number {
   if (apothem <= 0) return 1;
-  const c = Math.sqrt(3) / 2;
-  let maxProj = 0;
-  for (const [nx, ny] of [
-    [1, 0], [0.5, c], [-0.5, c],
-  ] as const) {
-    for (const i of [iNeg, iPos]) {
-      for (const j of [jNeg, jPos]) {
-        const proj = nx * (i + j / 2) + ny * (j * c);
-        maxProj = Math.max(maxProj, proj);
-      }
-    }
-  }
-  return apothem / (maxProj + 0.5);
+  const R = hexRingRadius(iNeg + iPos + 1, jNeg + jPos + 1);
+  return apothem / (R + 0.5);
 }
 
 /**
