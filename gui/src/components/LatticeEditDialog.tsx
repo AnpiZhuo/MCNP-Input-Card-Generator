@@ -29,7 +29,6 @@ import {
   getUniverseColor,
   hexLatticePitch,
   hexPrismCircumradius,
-  initialHexRegionCells,
   initialRectCells,
   latticeVolumeWarning,
   maxSurfaceNumber,
@@ -146,17 +145,10 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
   }, [xDir, yDir, zDir]);
   const dimsKey = dims.join("x");
   useEffect(() => {
-    setCells((prev) => {
-      // 项16：hex 物理格阵=正六边形环（universal，不要求对称），角位 void；
-      // 矩形 → 全填充
-      const fresh =
-        lat === "2"
-          ? initialHexRegionCells(dims[0], dims[1], dims[2], defaultPaintU)
-          : initialRectCells(dims[0], dims[1], dims[2], defaultPaintU);
-      return resizeLatticeCells(prev, fresh);
-    });
+    // fill 语法=平行四边形：hex 与矩形一致，默认全格位填充（不强制六边形）
+    setCells((prev) => resizeLatticeCells(prev, initialRectCells(dims[0], dims[1], dims[2], defaultPaintU)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dimsKey, lat]);
+  }, [dimsKey]);
 
   const effectiveDims = dims;
 

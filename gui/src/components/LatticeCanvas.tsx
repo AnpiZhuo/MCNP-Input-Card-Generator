@@ -5,7 +5,7 @@
  * void 格位（u 空 / "0"）渲染为暗底占位。条目流 ≠ dims 乘积时显示非阻塞警告（QA 建议3）。
  */
 import React, { useMemo } from "react";
-import { getUniverseColor, hexGrid, inHexRegion, latticeMismatchMessage } from "../utils/lattice";
+import { getUniverseColor, hexGrid, latticeMismatchMessage } from "../utils/lattice";
 import type { FillGridCellJson } from "../utils/lattice";
 
 interface Props {
@@ -95,17 +95,15 @@ export default function LatticeCanvas({ lat, dims, cells, palette, selectedU, on
           {layerCells.map((h) => {
             const c = cells[h.idx];
             if (!c) return null;
-            // 项16：hex 物理格阵=正六边形，角位（平行四边形角）不实 → 暗底占位、不可涂
-            const outside = !inHexRegion(h.col, h.row, cols, rows);
             return (
               <button
                 key={h.idx}
                 type="button"
                 data-testid={`lcell-${h.idx}`}
                 aria-label={`格位 ${h.idx} U=${c.u}`}
-                title={outside ? `(col${h.col},row${h.row}) 物理外（六边形角位）` : `(col${h.col},row${h.row},k${k}) U=${c.u}`}
-                onClick={() => !outside && handleClick(h.idx)}
-                disabled={disabled || outside}
+                title={`(col${h.col},row${h.row},k${k}) U=${c.u}`}
+                onClick={() => handleClick(h.idx)}
+                disabled={disabled}
                 style={{
                   position: "absolute",
                   left: h.x - minX,
@@ -113,13 +111,13 @@ export default function LatticeCanvas({ lat, dims, cells, palette, selectedU, on
                   width: cellW,
                   height: cellH,
                   clipPath: HEX_CLIP,
-                  background: outside ? "rgba(255,255,255,0.02)" : cellBg(c.u),
+                  background: cellBg(c.u),
                   border: "none",
-                  cursor: disabled || outside ? "default" : "pointer",
-                  color: "var(--text-tertiary)", fontSize: Math.max(7, pitch * 0.45), lineHeight: 1,
+                  cursor: disabled ? "default" : "pointer",
+                  color: "var(--text-secondary)", fontSize: Math.max(7, pitch * 0.45), lineHeight: 1,
                   padding: 0,
                 }}
-              >{outside ? "" : cellLabel(c.u)}</button>
+              >{cellLabel(c.u)}</button>
             );
           })}
         </div>
