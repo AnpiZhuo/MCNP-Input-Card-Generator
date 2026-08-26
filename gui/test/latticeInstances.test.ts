@@ -315,7 +315,8 @@ function expandPositionsRef(s: any): { idx: number; x: number; y: number; z: num
   let py = span("y");
   const pz = span("z");
   if (s.lat === "2") {
-    const hp = py > 0 ? py : px > 0 ? px : 1;
+    // 面法向 0°/60°/120°：格距 = 平面对边距 = x 跨度（镜像 Python _lattice_pitch 修复）
+    const hp = px > 0 ? px : py > 0 ? py : 1;
     px = hp;
     py = hp;
   }

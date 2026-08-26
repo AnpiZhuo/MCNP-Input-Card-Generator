@@ -574,10 +574,12 @@ def _scan_lattice_z(surf_text: str, info: dict, sub_by_u: dict, lattice) -> tupl
         seen.add(u)
         for cell in sub_by_u.get(u, []):
             clo, chi = lattice._cell_pz_bounds(cell.get("surface_expr", ""), surf_text)
+            # 并集（全针高度）：lo=所有栅元最低 z，hi=最高 z；原 max/min 取交集会把
+            # 燃料针裁成聚乙烯环中段（±0.3175），丢大半针 → 3D 预览 z 错乱
             if clo is not None:
-                lo = clo if lo is None else max(lo, clo)
+                lo = clo if lo is None else min(lo, clo)
             if chi is not None:
-                hi = chi if hi is None else min(hi, chi)
+                hi = chi if hi is None else max(hi, chi)
     return lo, hi
 
 

@@ -642,13 +642,13 @@ def _nums_of(params) -> list:
 def _plane_const(params):
     """P 卡参数 → (法向 n, 常数 D)，满足 n·p = D（D 已按 MCNP 符号约定换算）。
 
-    MCNP P 卡系数形 A B C D 定义 Ax+By+Cz+D = 0 → n·p = -D；
+    MCNP P 卡系数形 A B C D 定义 Ax+By+Cz−D = 0 → n·p = +D；
     三点形 (p1 p2 p3) → n = (p2-p1)×(p3-p1), D = n·p1。
     负侧（-surf）= n·p < D。参数不足返回 (None, None)。
     """
     nums = _nums_of(params)
-    if len(nums) >= 4:  # 系数形 A B C D → n·p = -D
-        return (nums[0], nums[1], nums[2]), -nums[3]
+    if len(nums) >= 4:  # 系数形 A B C D → n·p = +D（MCNP Ax+By+Cz−D=0）
+        return (nums[0], nums[1], nums[2]), nums[3]
     if len(nums) >= 9:  # 三点形
         x1, y1, z1, x2, y2, z2, x3, y3, z3 = nums[:9]
         ux, uy, uz = x2 - x1, y2 - y1, z2 - z1
@@ -793,24 +793,16 @@ def _plane_box_extent(expr_ints, surfaces):
 
 
 def _hex_plane_extent(expr_ints, surfaces):
-    """lat=2 6 侧 P + 2 PZ：侧平面两两求交得六边形顶点 → x/y AABB；PZ 给 z 界。"""
+    """lat=2 6 侧 P/PX/PY + 2 PZ：侧平面两两求交得六边形顶点 → x/y AABB；PZ 给 z 界。
+
+    PX/PY 作为法向 (1,0,0)/(0,1,0) 的特例处理（u233 cell 19 用 2 PX + 4 P 定六棱柱，
+    原实现只认 P 导致 x/y extent 解析失败 → 3D 预览 STL 被裁成 1×1 小盒错乱）。
+    """
     sides = []   # (angle, nx, ny, D) 半空间 n·p < D
     pz_lo, pz_hi = None, None
     for num, sign in expr_ints:
         kw, params = surfaces.get(num, (None, []))
-        if kw == "P":
-            n, D = _plane_const(params)
-            if n is None:
-                return None
-            nx, ny, nz = n
-            if abs(nz) > 1e-9:
-                return None  # 侧平面须水平
-            # 负侧 → n·p < D；正侧 → (-n)·p < -D
-            eff_n = (-nx, -ny) if sign > 0 else (nx, ny)
-            eff_D = (-D) if sign > 0 else D
-            angle = math.degrees(math.atan2(eff_n[1], eff_n[0])) % 360.0
-            sides.append((angle, eff_n[0], eff_n[1], eff_D))
-        elif kw == "PZ":
+        if kw == "PZ":
             z0 = _float0(params)
             if z0 is None:
                 return None
@@ -818,8 +810,31 @@ def _hex_plane_extent(expr_ints, surfaces):
                 pz_hi = z0 if pz_hi is None else min(pz_hi, z0)
             else:         # z > z0 → 下界
                 pz_lo = z0 if pz_lo is None else max(pz_lo, z0)
+            continue
+        if kw == "P":
+            n, D = _plane_const(params)
+            if n is None:
+                return None
+            nx, ny, nz = n
+        elif kw == "PX":
+            v = _float0(params)
+            if v is None:
+                return None
+            nx, ny, nz, D = 1.0, 0.0, 0.0, v
+        elif kw == "PY":
+            v = _float0(params)
+            if v is None:
+                return None
+            nx, ny, nz, D = 0.0, 1.0, 0.0, v
         else:
             return None
+        if abs(nz) > 1e-9:
+            return None  # 侧平面须水平
+        # 负侧 → n·p < D；正侧 → (-n)·p < -D
+        eff_n = (-nx, -ny) if sign > 0 else (nx, ny)
+        eff_D = (-D) if sign > 0 else D
+        angle = math.degrees(math.atan2(eff_n[1], eff_n[0])) % 360.0
+        sides.append((angle, eff_n[0], eff_n[1], eff_D))
     if len(sides) < 3:
         return None
     sides.sort(key=lambda s: s[0])
@@ -906,7 +921,9 @@ def _lattice_pitch(extent: dict | None, lat: str):
     py = _extent_span(extent, "y", 1.0)
     pz = _extent_span(extent, "z", 1.0)
     if str(lat) == "2":
-        p = py if py > 0 else (px if px > 0 else 1.0)
+        # 面法向 0°/60°/120°（对齐 a1）：格距 = 平面对边距 = x 跨度（px）；
+        # 原用 py（顶点距）会把格位间距撑大 → 预览格子间有空隙错乱
+        p = px if px > 0 else (py if py > 0 else 1.0)
         px = p
         py = p
     return px, py, pz
@@ -980,7 +997,8 @@ def expand_positions(fg: "FillGrid | None", extent: dict | None,
     py = _extent_span(extent, "y", 1.0)
     pz = _extent_span(extent, "z", 1.0)
     if lat == "2":
-        hp = py if py > 0 else (px if px > 0 else 1.0)
+        # 格距 = 平面对边距 = x 跨度（面法向 0°/60°/120°，对齐 a1）；原用 py=顶点距会撑大间距
+        hp = px if px > 0 else (py if py > 0 else 1.0)
         px = hp
         py = hp
     theta = math.radians(float(trcl_rotation_deg or 0))

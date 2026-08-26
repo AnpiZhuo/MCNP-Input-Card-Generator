@@ -474,9 +474,10 @@ def test_lattice_cell_extent_rect_planes_3d():
 
 
 def test_lattice_cell_extent_hex_planes():
-    st = ("1 p 0.866 0.5 0 -0.866\n2 p 0.866 -0.5 0 -0.866\n"
-          "3 p 0 -1.0 0 -0.866\n4 p -0.866 -0.5 0 -0.866\n"
-          "5 p -0.866 0.5 0 -0.866\n6 p 0 1.0 0 -0.866\n"
+    # MCNP 约定 n·p = +D：`-`（内侧）= n·p < D；D=+0.866 → 内接六边形 apothem 0.866
+    st = ("1 p 0.866 0.5 0 0.866\n2 p 0.866 -0.5 0 0.866\n"
+          "3 p 0 -1.0 0 0.866\n4 p -0.866 -0.5 0 0.866\n"
+          "5 p -0.866 0.5 0 0.866\n6 p 0 1.0 0 0.866\n"
           "7 pz 0.5\n8 pz -0.5")
     e = lattice_cell_extent("-1 -2 -3 -4 -5 -6 -7 8", "2", st)
     assert e is not None
@@ -515,8 +516,9 @@ def test_expand_positions_rect_3d():
 def test_expand_positions_hex_ring_order():
     """hex 用矩形盒模型（hexGrid 交错），角位 void 由 u="0" 承载（不排除）。"""
     fg = _fg("2", [2, 2, 1], ["1", "2", "1", "2"])
-    ext = {"x_min": -1, "x_max": 1, "y_min": -0.8660254037844386, "y_max": 0.8660254037844386,
-           "z_min": -0.5, "z_max": 0.5}
+    # 面法向 0°/60°/120°：flat-to-flat=x（格距），pointy-to-pointy=y
+    ext = {"x_min": -0.8660254037844386, "x_max": 0.8660254037844386,
+           "y_min": -1, "y_max": 1, "z_min": -0.5, "z_max": 0.5}
     pos = expand_positions(fg, ext)
     assert len(pos) == 4
     assert [p["u"] for p in pos] == ["1", "2", "1", "2"]
