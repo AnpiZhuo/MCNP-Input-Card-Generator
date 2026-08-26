@@ -2655,6 +2655,13 @@ class MCNPHandler(BaseHTTPRequestHandler):
                             universes[u] = stls
                 entry["universes"] = universes
 
+            # 超详细上限（将自动切色块总览）→ 裁掉叶/树，只留 lattices[].positions 供总览，
+            # 避免 50 万叶+树节点几十 MB 响应把前端卡死（全堆芯 289×289 场景）。
+            if composed.get("count", 0) > lattice.DETAIL_MAX_INSTANCES:
+                composed["leafInstances"] = []
+                composed["tree"] = []
+                composed["detailViable"] = False
+
             self._ok({**composed, "limit": limit})
         except Exception as e:
             import traceback

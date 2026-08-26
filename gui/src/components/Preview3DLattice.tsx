@@ -250,16 +250,17 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
         if (m != null) (cellMaterials[p.u] ??= {})[p.cellNum] = m;
       }
 
-      const palette = buildUniversePalette(leaves.map((p) => p.u));
       const trclDeg = primary ? (primary.trclRotationDeg ?? 0) : parseTrclDeg(latCell.trcl, latCell.lat);
       const blockSize = blockSizeFrom(primary, latCell.lat || "");
       const detailViable = j.detailViable !== false;
       const auto = isOverview(false, detailViable, n);
-      // 色块总览用根格阵 positions（含截断时完整）；叶子可能因实例上限被截断
+      // 色块总览用根格阵 positions（完整）；叶子超上限时后端已裁空
       const overviewPositions = (primary?.positions ?? []).map((p) => ({
         path: String(p.idx), u: p.u, cellNum: "", mat: "",
         x: p.x + (p.dx ?? 0), y: p.y + (p.dy ?? 0), z: p.z + (p.dz ?? 0), depth: 1,
       }));
+      // 调色板：总览模式用根格阵 positions 的宇宙（leaves 已裁空）；否则用叶宇宙
+      const palette = buildUniversePalette((auto ? overviewPositions : leaves).map((p) => p.u));
 
       dataRef.current = { leaves, overviewPositions, universeStl, cellMaterials, palette, trclDeg, blockSize, count: n, detailViable };
       if (!cancelled) {

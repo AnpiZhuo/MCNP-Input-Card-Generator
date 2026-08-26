@@ -135,7 +135,8 @@ function initScene(
   camera.up.set(0, 0, 1); // Z-up
 
   /* 渲染器 — 不设 CSS 尺寸（让 flex 布局控制），避免 1x1 钉死 */
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  // powerPreference: high-performance → 优先独显（全堆芯等大场景集显卡死）
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
   renderer.setSize(w, h, false);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = false;

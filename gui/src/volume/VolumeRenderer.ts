@@ -192,7 +192,7 @@ export function createVolumeRenderer(
   const camera = new THREE.PerspectiveCamera(45, w / h, initCam.near, initCam.far);
   camera.up.set(0, 0, 1); // Z-up
 
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
   renderer.setSize(w, h, false);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
