@@ -2598,8 +2598,21 @@ class MCNPHandler(BaseHTTPRequestHandler):
                         info.get("lat", ""), req_pitch, req_height,
                         surf_text, info, sub_by_u, lattice, cell_list)
 
-            # 3. compose 嵌套树/叶/各格阵 positions（outer 的 trcl_deg 已在上面子循环里算好）
-            outer = lattice_infos[0]
+            # 3. compose 嵌套树/叶/各格阵 positions（outer 的 trcl_deg 已在上面子循环里算好）。
+            #    外层格阵 = 未被任何其他格阵 fill 引用的格阵（全堆芯：堆芯 u=100，而非组件 u=201，
+            #    否则预览只展开一个组件、整个堆芯缺失）；用户指定 latticeNum 时用指定格阵。
+            if req_lattice is None and len(lattice_infos) > 1:
+                referenced = set()
+                for _info in lattice_infos:
+                    _fg = _info.get("fill_grid")
+                    if _fg is not None:
+                        for _e in _fg.cells:
+                            referenced.add(str(_e.u or ""))
+                outer = next(
+                    (info for info in lattice_infos if str(info.get("u", "")) not in referenced),
+                    lattice_infos[0])
+            else:
+                outer = lattice_infos[0]
             trcl_deg = outer.get("trcl_deg", 0.0)
             composed = lattice.compose_lattice_tree(
                 outer["fill_grid"], sub_by_u, outer["extent"], trcl_deg,

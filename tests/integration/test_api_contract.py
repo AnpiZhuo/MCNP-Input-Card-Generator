@@ -342,6 +342,48 @@ LATTICE_DECK = {
 }
 
 
+# 嵌套格阵：堆芯 u=100 → 组件 u=201 → 针 u=1/2。cells 顺序组件(600)在前 → 复现 lattice_infos[0] 误选组件
+_ASSEMBLY_FG = {
+    "lat": "1", "kind": "lattice", "range": ["0:1", "0:1", "0:0"], "dims": [2, 2, 1],
+    "cells": [{"u": "1", "dx": "", "dy": "", "dz": ""}, {"u": "2", "dx": "", "dy": "", "dz": ""},
+              {"u": "1", "dx": "", "dy": "", "dz": ""}, {"u": "2", "dx": "", "dy": "", "dz": ""}],
+    "raw": "0:1 0:1 0:0 1 2 1 2",
+}
+_CORE_FG = {
+    "lat": "1", "kind": "lattice", "range": ["0:1", "0:1", "0:0"], "dims": [2, 2, 1],
+    "cells": [{"u": "201", "dx": "", "dy": "", "dz": ""}, {"u": "5", "dx": "", "dy": "", "dz": ""},
+              {"u": "5", "dx": "", "dy": "", "dz": ""}, {"u": "201", "dx": "", "dy": "", "dz": ""}],
+    "raw": "0:1 0:1 0:0 201 5 5 201",
+}
+NESTED_DECK = {
+    "surfaces": "1 px -1\n2 px 1\n3 py -1\n4 py 1\n5 pz -1\n6 pz 1\n7 cz 0.3\n8 cz 0.5",
+    "tr_cards": "",
+    "cells": [
+        {"kind": "cell", "cell": {"number": 600, "material": "0", "density": "", "surface_expr": "1 -2 3 -4 5 -6",
+                                  "u": "201", "fill": "0:1 0:1 0:0", "lat": "1", "trcl": "", "render": True,
+                                  "fill_grid": json.dumps(_ASSEMBLY_FG)}},
+        {"kind": "cell", "cell": {"number": 410, "material": "0", "density": "", "surface_expr": "1 -2 3 -4 5 -6",
+                                  "u": "100", "fill": "0:1 0:1 0:0", "lat": "1", "trcl": "", "render": True,
+                                  "fill_grid": json.dumps(_CORE_FG)}},
+        {"kind": "cell", "cell": {"number": 1, "material": "1", "density": "-1.0", "surface_expr": "-7", "u": "1", "render": True, "fill_grid": ""}},
+        {"kind": "cell", "cell": {"number": 2, "material": "2", "density": "-1.0", "surface_expr": "7 -8", "u": "2", "render": True, "fill_grid": ""}},
+        {"kind": "cell", "cell": {"number": 5, "material": "5", "density": "-1.0", "surface_expr": "1 -2 3 -4 5 -6", "u": "5", "render": True, "fill_grid": ""}},
+    ],
+}
+
+
+def test_http_preview_lattice_outermost_root(backend_base_url):
+    """/api/preview-lattice 嵌套：外层格阵=未被任何格阵 fill 引用的堆芯 u=100（cells 顺序组件在前也不误选）。"""
+    resp = _post(backend_base_url, "/api/preview-lattice", NESTED_DECK)
+    assert resp.get("status") == "ok", resp
+    lattices = resp.get("lattices", [])
+    assert lattices, resp
+    # 根格阵应为堆芯 cell 410（u=100），而非列表中第一个格阵 cell 600（组件）
+    assert lattices[0]["num"] == 410, lattices
+    assert len(lattices[0]["positions"]) == 4, lattices[0]
+    assert all(p["u"] in ("201", "5") for p in lattices[0]["positions"]), lattices[0]
+
+
 def test_http_lattice_extent(backend_base_url):
     """/api/lattice-extent：rect 2D → ok + extent（z 无界）；含 # → ok:false + extent:null。"""
     resp = _post(backend_base_url, "/api/lattice-extent", {

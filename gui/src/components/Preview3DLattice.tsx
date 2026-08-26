@@ -89,6 +89,8 @@ interface LatticeExtentResponse {
 
 interface LatticeData {
   leaves: LatticeInstance[];
+  /** 色块总览位置 = 根（最外层）格阵 positions（完整；leaves 超限截断时仍完整） */
+  overviewPositions: LatticeInstance[];
   universeStl: Record<string, Record<string, THREE.BufferGeometry>>;
   cellMaterials: Record<string, Record<string, string>>;
   palette: Record<string, string>;
@@ -253,8 +255,13 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
       const blockSize = blockSizeFrom(primary, latCell.lat || "");
       const detailViable = j.detailViable !== false;
       const auto = isOverview(false, detailViable, n);
+      // 色块总览用根格阵 positions（含截断时完整）；叶子可能因实例上限被截断
+      const overviewPositions = (primary?.positions ?? []).map((p) => ({
+        path: String(p.idx), u: p.u, cellNum: "", mat: "",
+        x: p.x + (p.dx ?? 0), y: p.y + (p.dy ?? 0), z: p.z + (p.dz ?? 0), depth: 1,
+      }));
 
-      dataRef.current = { leaves, universeStl, cellMaterials, palette, trclDeg, blockSize, count: n, detailViable };
+      dataRef.current = { leaves, overviewPositions, universeStl, cellMaterials, palette, trclDeg, blockSize, count: n, detailViable };
       if (!cancelled) {
         setCount(n);
         setHint(auto ? `格位过多（${n.toLocaleString()}），已自动切换色块总览` : "");
@@ -317,8 +324,10 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
       handleRef.current = null;
     }
     const effOverview = isOverview(overviewUser, data.detailViable, data.count);
+    // 总览：用根格阵 positions（完整），不用截断的 leaves
+    const positions = effOverview ? data.overviewPositions : data.leaves;
     const handle = buildLatticeInstances({
-      positions: data.leaves,
+      positions,
       universeStl: data.universeStl,
       cellMaterials: data.cellMaterials,
       palette: data.palette,
@@ -329,8 +338,8 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
     });
     scene.add(handle.group);
     handleRef.current = handle;
-    positionsRef.current = data.leaves;
-    frameCamera(data.leaves);
+    positionsRef.current = positions;
+    frameCamera(positions);
     markDirty();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataVersion, overviewUser]);
