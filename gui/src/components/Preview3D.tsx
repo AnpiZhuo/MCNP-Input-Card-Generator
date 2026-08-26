@@ -12,7 +12,7 @@
 import React, { useRef, useEffect, useState, useCallback } from "react";
 import CrossSectionView from "./CrossSectionView";
 import QuickCellForm from "./QuickCellForm";
-import { buildLatticeInstances } from "../three/latticeInstances";
+import { buildLatticeInstances, DETAIL_MAX_INSTANCES } from "../three/latticeInstances";
 import { buildUniversePalette } from "../utils/lattice";
 
 /** base64 STL → THREE.BufferGeometry（格阵装配 STL 解码，与 loadStlMeshes 同法） */
@@ -525,6 +525,12 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   const [seeThrough, setSeeThrough] = useState(false);  // 半透明查看（默认关 → opaque）
   const [sceneReady, setSceneReady] = useState(false);  // 场景初始化完成（装配加载前置）
   const [latticeLoading, setLatticeLoading] = useState(false);  // 格阵装配加载中（覆盖层 + 禁交互）
+  const [latticeOverview, setLatticeOverview] = useState(false); // 色块总览（手动切换）
+  const latticeDataRef = useRef<{
+    positions: any[]; overviewPositions: any[]; universeStl: any; cellMaterials: any;
+    palette: Record<string, string>; trclDeg: number; blockSize: any; count: number; detailViable: boolean;
+  } | null>(null);
+  const [latticeDataVersion, setLatticeDataVersion] = useState(0); // 数据变更触发重建
   const seeThroughRef = useRef(false);
   useEffect(() => { seeThroughRef.current = seeThrough; }, [seeThrough]);
   const [csPlane, setCsPlane] = useState({A:0,B:0,C:1,D:0});
@@ -683,7 +689,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       };
       try {
         const r = await fetch(apiUrl("/api/preview-lattice"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then((x) => x.json());
-        if (cancelled || r.status === "error" || !r.leafInstances) { console.warn("[3D] lattice assembly failed", r); if (!cancelled) setLatticeLoading(false); return; }
+        if (cancelled || r.status === "error" || !r.lattices) { console.warn("[3D] lattice assembly failed", r); if (!cancelled) setLatticeLoading(false); return; }
         const universeStl: Record<string, Record<string, THREE.BufferGeometry>> = {};
         for (const lt of r.lattices || []) {
           for (const u of Object.keys(lt.universes || {})) {
@@ -696,29 +702,50 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         const matByNum: Record<string, string> = {};
         for (const c of p.cells) matByNum[String(c.num)] = c.mat;
         const cellMaterials: Record<string, Record<string, string>> = {};
-        for (const leaf of r.leafInstances) { const m = matByNum[String(leaf.cellNum)]; if (m != null) (cellMaterials[leaf.u] ??= {})[String(leaf.cellNum)] = m; }
+        for (const leaf of r.leafInstances || []) { const m = matByNum[String(leaf.cellNum)]; if (m != null) (cellMaterials[leaf.u] ??= {})[String(leaf.cellNum)] = m; }
         const primary = r.lattices?.[0];
         const blockSize = { x: primary?.pitch?.[0] || 1, y: primary?.pitch?.[1] || primary?.pitch?.[0] || 1, z: primary?.height || 1, hex: String(primary?.lat || "1") === "2" };
-        const handle = buildLatticeInstances({
-          positions: r.leafInstances,
-          universeStl, cellMaterials,
-          palette: buildUniversePalette(r.leafInstances.map((x: any) => x.u)),
-          materialMode: true,
-          trclRotationDeg: primary?.trclRotationDeg ?? 0,
-          overviewMode: false,
-          blockSize,
-        });
-        if (cancelled) { handle.dispose(); setLatticeLoading(false); return; }
-        if (latticeAssemblyRef.current) { ctrl.scene.remove(latticeAssemblyRef.current.group); latticeAssemblyRef.current.dispose(); }
-        ctrl.scene.add(handle.group);
-        latticeAssemblyRef.current = handle;
-        ctrl.frameCamera(handle.group);  // 以装配为取景目标（格阵 deck 无 STL 网格）
-        ctrl.markDirty();
-        if (!cancelled) setLatticeLoading(false);
+        const leaves = r.leafInstances || [];
+        const n = r.count ?? leaves.length;
+        const detailViable = r.detailViable !== false;
+        // 色块总览用根格阵 positions（完整）；总览模式调色板取自根格阵宇宙
+        const overviewPositions = (primary?.positions ?? []).map((x: any) => ({
+          path: String(x.idx), u: x.u, cellNum: "", mat: "",
+          x: x.x + (x.dx ?? 0), y: x.y + (x.dy ?? 0), z: x.z + (x.dz ?? 0), depth: 1,
+        }));
+        const autoOverview = detailViable === false || n > DETAIL_MAX_INSTANCES;
+        const palette = buildUniversePalette((autoOverview ? overviewPositions : leaves).map((x: any) => x.u));
+        latticeDataRef.current = { positions: leaves, overviewPositions, universeStl, cellMaterials, palette, trclDeg: primary?.trclRotationDeg ?? 0, blockSize, count: n, detailViable };
+        if (!cancelled) { setLatticeDataVersion(v => v + 1); setLatticeLoading(false); }
       } catch (e) { console.warn("[3D] lattice assembly load failed", e); if (!cancelled) setLatticeLoading(false); }
     })();
     return () => { cancelled = true; };
   }, [hasLattice, genTick, sceneReady]);
+
+  /* 格阵装配构建（数据或总览 toggle 变化时重建） */
+  useEffect(() => {
+    const data = latticeDataRef.current;
+    const ctrl = ctrlRef.current;
+    if (!data || !ctrl || !sceneReady) return;
+    const effOverview = latticeOverview || data.detailViable === false || data.count > DETAIL_MAX_INSTANCES;
+    const positions = effOverview ? data.overviewPositions : data.positions;
+    const handle = buildLatticeInstances({
+      positions,
+      universeStl: data.universeStl,
+      cellMaterials: data.cellMaterials,
+      palette: data.palette,
+      materialMode: true,
+      trclRotationDeg: data.trclDeg,
+      overviewMode: effOverview,
+      blockSize: data.blockSize,
+    });
+    if (latticeAssemblyRef.current) { ctrl.scene.remove(latticeAssemblyRef.current.group); latticeAssemblyRef.current.dispose(); }
+    ctrl.scene.add(handle.group);
+    latticeAssemblyRef.current = handle;
+    ctrl.frameCamera(handle.group);  // 以装配为取景目标（格阵 deck 无 STL 网格）
+    ctrl.markDirty();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latticeDataVersion, latticeOverview, sceneReady]);
 
   // 宿主追加新栅元后，把 cellViews 同步补齐（可见性/颜色）
   useEffect(() => {
@@ -983,6 +1010,17 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         React.createElement("span", {
           style: { fontSize: 11, color: "var(--text-tertiary)" },
         }, "🖱 拖拽旋转 · 滚轮缩放 · 右键平移"),
+        hasLattice && React.createElement("label", {
+          style: { display: "flex", gap: 6, alignItems: "center", fontSize: 11, color: "rgba(241,241,249,0.75)", cursor: "pointer" },
+        },
+          React.createElement("input", {
+            type: "checkbox",
+            checked: latticeOverview,
+            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setLatticeOverview(e.target.checked),
+            style: { accentColor: "#ff4d6d" },
+          }),
+          "色块总览",
+        ),
         React.createElement("button", {
           className: "btn btn-ghost btn-xs",
           onClick: onClose,

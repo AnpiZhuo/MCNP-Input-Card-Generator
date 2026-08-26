@@ -560,26 +560,44 @@ def _cell_trcl_deg(trcl_field, tr_cards) -> float:
         return 0.0
 
 
-def _scan_lattice_z(surf_text: str, info: dict, sub_by_u: dict, lattice) -> tuple:
-    """扫描格阵引用的 universe 栅元 PZ 约束 → (z_lower, z_upper)；无 → (None, None)。"""
+def _scan_lattice_z(surf_text: str, info: dict, sub_by_u: dict, lattice,
+                    _seen: set | None = None) -> tuple:
+    """扫描格阵引用的 universe 栅元 PZ 约束 → (z_lower, z_upper)；无 → (None, None)。
+
+    递归进嵌套格阵（全堆芯：根→组件格阵→针 PZ）；并集取全针高度。
+    """
     fg = info.get("fill_grid")
     if fg is None:
         return None, None
     lo, hi = None, None
-    seen = set()
+    seen = set(_seen) if _seen else set()
     for e in fg.cells:
         u = str(e.u or "")
         if u in ("0", "") or u in seen:
             continue
         seen.add(u)
-        for cell in sub_by_u.get(u, []):
-            clo, chi = lattice._cell_pz_bounds(cell.get("surface_expr", ""), surf_text)
-            # 并集（全针高度）：lo=所有栅元最低 z，hi=最高 z；原 max/min 取交集会把
-            # 燃料针裁成聚乙烯环中段（±0.3175），丢大半针 → 3D 预览 z 错乱
-            if clo is not None:
-                lo = clo if lo is None else min(lo, clo)
-            if chi is not None:
-                hi = chi if hi is None else max(hi, chi)
+        if _universe_has_lattice(sub_by_u, u):
+            # 嵌套格阵：取该 universe 的格阵 fill_grid 递归扫描
+            sub_fg = next((c.get("fill_grid") for c in sub_by_u.get(u, [])
+                           if c.get("fill_grid") is not None), None)
+            if sub_fg is not None:
+                clo, chi = _scan_lattice_z(surf_text, {"fill_grid": sub_fg},
+                                           sub_by_u, lattice, seen)
+            else:
+                clo, chi = None, None
+        else:
+            clo, chi = None, None
+            for cell in sub_by_u.get(u, []):
+                c_lo, c_hi = lattice._cell_pz_bounds(cell.get("surface_expr", ""), surf_text)
+                # 并集：lo=所有栅元最低 z，hi=最高 z
+                if c_lo is not None:
+                    clo = c_lo if clo is None else min(clo, c_lo)
+                if c_hi is not None:
+                    chi = c_hi if chi is None else max(chi, c_hi)
+        if clo is not None:
+            lo = clo if lo is None else min(lo, clo)
+        if chi is not None:
+            hi = chi if hi is None else max(hi, chi)
     return lo, hi
 
 
