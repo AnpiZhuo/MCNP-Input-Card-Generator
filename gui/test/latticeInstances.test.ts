@@ -268,6 +268,51 @@ describe("buildLatticeInstances（总览模式）", () => {
   });
 });
 
+/* ── buildLatticeInstances：disc 降级（每 pin 单盘/外壳，步骤2） ── */
+
+describe("buildLatticeInstances（disc 降级模式）", () => {
+  const positions: LatticeInstance[] = [
+    { path: "0", u: "5", cellNum: "1", mat: "1", x: 0, y: 0, z: 230, depth: 0 },
+    { path: "1", u: "5", cellNum: "1", mat: "1", x: 1, y: 0, z: 230, depth: 0 },
+    { path: "2", u: "6", cellNum: "2", mat: "0", x: 2, y: 0, z: 230, depth: 0 },
+  ];
+  const palette = { "5": "#ff0000", "6": "#00ff00" };
+  const block = { x: 2, y: 2, z: 4, hex: false };
+
+  it("disc=true 用程序化盘几何（CylinderGeometry，非 STL/Box），按 (u,cellNum) 分组", () => {
+    const { group } = buildLatticeInstances({
+      positions, universeStl: {}, cellMaterials: {}, palette,
+      overviewMode: false, disc: true, blockSize: block,
+    });
+    const meshes = group.userData.instancedMeshes as THREE.InstancedMesh[];
+    expect(meshes).toHaveLength(2);
+    // 5:1 两个实例 + 6:2 一个实例（u=6 mat=0 仍在，但 disc 用 universe 色）
+    expect(meshes[0].count).toBe(2);
+    expect(meshes[1].count).toBe(1);
+    const g0 = meshes[0].geometry;
+    expect((g0 as any).type).toBe("CylinderGeometry");
+  });
+
+  it("disc 色 = getUniverseColor（每 universe 一色）", () => {
+    const { group } = buildLatticeInstances({
+      positions, universeStl: {}, cellMaterials: {}, palette,
+      overviewMode: false, disc: true, blockSize: block,
+    });
+    const meshes = group.userData.instancedMeshes as THREE.InstancedMesh[];
+    const m0 = meshes[0].material as THREE.MeshStandardMaterial;
+    expect(m0.color.getHex()).toBe(new THREE.Color("#ff0000").getHex()); // u=5
+  });
+
+  it("不使用 universeStl（无 STL 也能渲染盘）", () => {
+    const { group } = buildLatticeInstances({
+      positions, universeStl: undefined as any, cellMaterials: {}, palette,
+      overviewMode: false, disc: true, blockSize: block,
+    });
+    const meshes = group.userData.instancedMeshes as THREE.InstancedMesh[];
+    expect(meshes.length).toBeGreaterThan(0);
+  });
+});
+
 /* ── instanceIndexAt：点击实例 id → 格位索引（void 过滤语义） ── */
 
 describe("instanceIndexAt", () => {

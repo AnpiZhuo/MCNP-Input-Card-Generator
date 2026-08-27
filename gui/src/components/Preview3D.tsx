@@ -545,7 +545,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   const [latticeOverview, setLatticeOverview] = useState(false); // 色块总览（手动切换）
   const latticeDataRef = useRef<{
     positions: any[]; overviewPositions: any[]; universeStl: any; cellMaterials: any;
-    palette: Record<string, string>; trclDeg: number; blockSize: any; count: number; detailViable: boolean; outerBound: any;
+    palette: Record<string, string>; trclDeg: number; blockSize: any; count: number; detailViable: boolean; outerBound: any; disc: boolean;
   } | null>(null);
   const [latticeDataVersion, setLatticeDataVersion] = useState(0); // 数据变更触发重建
   const seeThroughRef = useRef(false);
@@ -725,7 +725,11 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         const leaves = r.leafInstances || [];
         const n = r.count ?? leaves.length;
         const detailViable = r.detailViable !== false;
-        const autoOverview = detailViable === false || n > DETAIL_MAX_INSTANCES;
+        // disc 降级（步骤2）：detail=fidelity.detail==='disc' 时叶数已大降（BEAVRS 5.6 万），
+        // InstancedMesh 可实例化，不再受 DETAIL_MAX_INSTANCES(2万) 强制切总览。
+        const fidelity = (r as any).fidelity || {};
+        const isDisc = fidelity.detail === 'disc';
+        const autoOverview = detailViable === false || (!isDisc && n > DETAIL_MAX_INSTANCES);
         // 项3：色块用「实际几何坐标」而非默认几何中心——
         // 详细可折叠（detailViable 且未超限）时直接用叶实例绝对坐标（与详细模式逐位对齐），
         // 自动总览（超大规模/嵌套 BEAVRS）回落到根格阵完整 positions（根 grid 中心，代表装配格位）。
@@ -736,7 +740,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
               x: x.x + (x.dx ?? 0), y: x.y + (x.dy ?? 0), z: x.z + (x.dz ?? 0), depth: 1,
             }));
         const palette = buildUniversePalette((autoOverview ? overviewPositions : leaves).map((x: any) => x.u));
-        latticeDataRef.current = { positions: leaves, overviewPositions, universeStl, cellMaterials, palette, trclDeg: primary?.trclRotationDeg ?? 0, blockSize, count: n, detailViable, outerBound: r.outer_bound || null };
+        latticeDataRef.current = { positions: leaves, overviewPositions, universeStl, cellMaterials, palette, trclDeg: primary?.trclRotationDeg ?? 0, blockSize, count: n, detailViable, outerBound: r.outer_bound || null, disc: isDisc };
         if (!cancelled) { setLatticeDataVersion(v => v + 1); setLatticeLoading(false); }
       } catch (e) { console.warn("[3D] lattice assembly load failed", e); if (!cancelled) setLatticeLoading(false); }
     })();
@@ -748,7 +752,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
     const data = latticeDataRef.current;
     const ctrl = ctrlRef.current;
     if (!data || !ctrl || !sceneReady) return;
-    const effOverview = latticeOverview || data.detailViable === false || data.count > DETAIL_MAX_INSTANCES;
+    const effOverview = latticeOverview || data.detailViable === false || (!data.disc && data.count > DETAIL_MAX_INSTANCES);
     // 项：色块总览按外壳裁剪——只显示落在外壳（最外层容器 cell）内的格位，角部超壳剔除
     const positions = effOverview
       ? (data.outerBound ? data.overviewPositions.filter((p: any) => inOuter(p, data.outerBound)) : data.overviewPositions)
@@ -762,6 +766,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       trclRotationDeg: data.trclDeg,
       overviewMode: effOverview,
       blockSize: data.blockSize,
+      disc: data.disc,
     });
     if (latticeAssemblyRef.current) { ctrl.scene.remove(latticeAssemblyRef.current.group); latticeAssemblyRef.current.dispose(); }
     ctrl.scene.add(handle.group);

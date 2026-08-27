@@ -99,6 +99,7 @@ interface LatticeData {
   count: number;
   detailViable: boolean;
   outerBound: any;
+  disc: boolean;
 }
 
 /* ── 纯辅助 ── */
@@ -165,8 +166,8 @@ function blockSizeFrom(lattice: LatticeItem | undefined, lat: string): { x: numb
 }
 
 /** 有效总览判定：用户强制总览，或后端 detailViable=false，或叶数超 DETAIL_MAX_INSTANCES */
-function isOverview(overviewUser: boolean, detailViable: boolean | undefined, count: number): boolean {
-  return overviewUser || detailViable === false || count > DETAIL_MAX_INSTANCES;
+function isOverview(overviewUser: boolean, detailViable: boolean | undefined, count: number, disc = false): boolean {
+  return overviewUser || detailViable === false || (!disc && count > DETAIL_MAX_INSTANCES);
 }
 
 /* ── 组件 ── */
@@ -270,7 +271,9 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
       const trclDeg = primary ? (primary.trclRotationDeg ?? 0) : parseTrclDeg(latCell.trcl, latCell.lat);
       const blockSize = blockSizeFrom(primary, latCell.lat || "");
       const detailViable = j.detailViable !== false;
-      const auto = isOverview(false, detailViable, n);
+      const jf = (j as any).fidelity || {};
+      const isDisc = jf.detail === 'disc';
+      const auto = isOverview(false, detailViable, n, isDisc);
       // 项3：色块用「实际几何坐标」而非默认几何中心（见 Preview3D 同注释）——详细可折叠时
       // 直接用叶实例绝对坐标（逐位对齐详细模式）；自动总览回落到根格阵完整 positions。
       const overviewPositions = (!auto && leaves.length > 0)
@@ -282,7 +285,7 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
       // 调色板：总览模式用根格阵 positions 的宇宙（leaves 已裁空）；否则用叶宇宙
       const palette = buildUniversePalette((auto ? overviewPositions : leaves).map((p) => p.u));
 
-      dataRef.current = { leaves, overviewPositions, universeStl, cellMaterials, palette, trclDeg, blockSize, count: n, detailViable, outerBound: (j as any).outer_bound || null };
+      dataRef.current = { leaves, overviewPositions, universeStl, cellMaterials, palette, trclDeg, blockSize, count: n, detailViable, outerBound: (j as any).outer_bound || null, disc: isDisc };
       if (!cancelled) {
         setCount(n);
         setHint(auto ? `格位过多（${n.toLocaleString()}），已自动切换色块总览` : "");
@@ -344,7 +347,7 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
       handleRef.current.dispose();
       handleRef.current = null;
     }
-    const effOverview = isOverview(overviewUser, data.detailViable, data.count);
+    const effOverview = isOverview(overviewUser, data.detailViable, data.count, data.disc);
     // 总览：用根格阵 positions（完整），不用截断的 leaves；按外壳裁剪超壳格位
     const positions = effOverview
       ? (data.outerBound ? data.overviewPositions.filter((p) => inOuter(p, data.outerBound)) : data.overviewPositions)
@@ -358,6 +361,7 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
       trclRotationDeg: data.trclDeg,
       overviewMode: effOverview,
       blockSize: data.blockSize,
+      disc: data.disc,
     });
     scene.add(handle.group);
     handleRef.current = handle;

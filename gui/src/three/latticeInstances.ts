@@ -284,6 +284,9 @@ export interface LatticeInstancesOptions {
   overviewMode?: boolean;
   /** 总览色块尺寸（格元盒）；hex: true 用六棱柱块 */
   blockSize?: { x: number; y: number; z: number; hex?: boolean };
+  /** true=disc 降级（每 pin 单盘/外壳，不展开内部径向层；OWEN placePin disc）。
+     详细模式专用：忽略 universeStl，每个 (u,cellNum) 分组用程序化盘几何实例化。 */
+  disc?: boolean;
 }
 
 export interface LatticeInstancesHandle {
@@ -298,6 +301,14 @@ function colorToNumber(c: string): number {
   if (!c || c === "transparent") return 0x888888;
   const n = parseInt(c.replace("#", ""), 16);
   return Number.isFinite(n) ? n : 0x888888;
+}
+
+/** disc 单盘/外壳几何（OWEN placePin disc）：圆柱，半径 = 格元盒 x/y 的一半×0.47，
+ *  高 = blockSize.z。轴向 +Z。无 STL 依赖（不炸 FreeCAD），GPU 实例化。 */
+function buildDiscGeometry(block: { x: number; y: number; z: number; hex?: boolean }): THREE.BufferGeometry {
+  const r = Math.max((Math.min(block.x, block.y) / 2) * 0.47, 1e-3);
+  const h = Math.max(block.z, 1e-3);
+  return new THREE.CylinderGeometry(r, r, h, 16, 1, false);
 }
 
 /** pointy-top 六棱柱实心几何（顶点朝 +X，轴向 +Z；外接半径 R，宽(对边)≈2R·cos30°） */
@@ -382,11 +393,17 @@ export function buildLatticeInstances(opts: LatticeInstancesOptions): LatticeIns
       g.items.push(p);
     }
     const materialMode = opts.materialMode ?? true;
+    const disc = opts.disc ?? false;
+    const block = opts.blockSize ?? { x: 1, y: 1, z: 1, hex: false };
     let base = 0;
     for (const g of groups) {
       const matStr = opts.cellMaterials?.[g.u]?.[g.cellNum] ?? g.items[0].mat ?? "";
       const isVoid = matStr === "0";
-      const geometry = opts.universeStl?.[g.u]?.[g.cellNum] ?? new THREE.BoxGeometry(1, 1, 1);
+      // disc 模式（OWEN placePin disc）：每 universe 用程序化单盘/外壳几何实例化，
+      // 不展开内部径向层、不依赖 universeStl（不炸 FreeCAD）。
+      const geometry = disc
+        ? buildDiscGeometry(block)
+        : (opts.universeStl?.[g.u]?.[g.cellNum] ?? new THREE.BoxGeometry(1, 1, 1));
       // 元素填充格（水/慢化剂）：STL 包围盒 x/y ≈ 整个格元盒 → 半透明。z 高度全长后，
       // 不透明水盒会遮挡后排阵格（用户看到「有的阵格显示、有的不显示」）。
       let transparent = isVoid;
@@ -402,7 +419,9 @@ export function buildLatticeInstances(opts: LatticeInstancesOptions): LatticeIns
           }
         } catch (e) { /* 包围盒失败保持不透明 */ }
       }
-      const color = materialMode ? getMatColor(matStr) : getUniverseColor(g.u, opts.palette);
+      const color = disc
+        ? getUniverseColor(g.u, opts.palette)
+        : (materialMode ? getMatColor(matStr) : getUniverseColor(g.u, opts.palette));
       const material = new THREE.MeshStandardMaterial({
         color: colorToNumber(color),
         roughness: 0.4,
