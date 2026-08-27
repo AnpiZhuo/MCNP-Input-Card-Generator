@@ -545,14 +545,18 @@ def test_expand_positions_too_many_returns_none():
     assert expand_positions(fg, ext, max_positions=1000) is None
 
 
-def test_expand_positions_single_layer_z_uses_extent_center():
+def test_expand_positions_single_layer_z_uses_z_origin():
     """1 - container z non-symmetric (BEAVRS pz 0->460, center +230): single-layer lattice
-    grid z should land at lattice z midpoint (z_base = _extent_center[2]), not 0.
-    Pre-fix z was always 0 (block-overview center at z=0 vs shell at z>0 bug)."""
+    grid z = z_origin（根格阵 context 传容器 z 中点 230）。不带 z_origin（缺省 0，嵌套
+    格阵相对父格位）→ 相对偏移 0。Pre-fix 内置 z_base 使嵌套格阵在父绝对 z 上再叠加，
+    导致组件 pin 全被推成 z=460（只看到"两排横向棒子"）。"""
     fg = _fg("1", [2, 2, 1], ["1", "2", "1", "2"])
     ext = {"x_min": -2, "x_max": 2, "y_min": -2, "y_max": 2, "z_min": 0.0, "z_max": 460.0}
-    pos = expand_positions(fg, ext)
+    pos = expand_positions(fg, ext, z_origin=230.0)
     assert all(p["z"] == pytest.approx(230.0) for p in pos)
+    # 嵌套格阵（z_origin 缺省 0）：单层相对偏移 0，不叠加容器中点
+    pos2 = expand_positions(fg, ext)
+    assert all(p["z"] == pytest.approx(0.0) for p in pos2)
 
 
 def test_expand_positions_symmetric_z_center_stays_zero():

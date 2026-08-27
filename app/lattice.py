@@ -1011,7 +1011,8 @@ def _extent_center(extent: dict | None) -> list:
 
 def expand_positions(fg: "FillGrid | None", extent: dict | None,
                      trcl_rotation_deg: float = 0,
-                     max_positions: int = MAX_EXPANDED_ENTRIES) -> list | None:
+                     max_positions: int = MAX_EXPANDED_ENTRIES,
+                     z_origin: float = 0.0) -> list | None:
     """格阵 → 每格位中心 [{idx,u,x,y,z,dx,dy,dz}, ...]。
 
     - rect 中心 = ((i-(nx-1)/2)*px, (j-(ny-1)/2)*py, (k-(nz-1)/2)*pz)（pitch 来自 extent）
@@ -1038,7 +1039,8 @@ def expand_positions(fg: "FillGrid | None", extent: dict | None,
         hp = px if px > 0 else (py if py > 0 else 1.0)
         px = hp
         py = hp
-    z_base = _extent_center(extent)[2]  # 格阵 z 原点 = 容器 z 中点（BEAVRS [0,460]→230；无界/对称→0）
+    # z 原点（z_origin）只由根格阵传送（容器 z 中点）；嵌套格阵 z_origin=0（相对父格位），
+    # 避免在父格位绝对 z 上再叠加自身 z 中点（BEAVRS 组件 pin 被推成 z=460 的 bug）。
     theta = math.radians(float(trcl_rotation_deg or 0))
     cos_t, sin_t = math.cos(theta), math.sin(theta)
     out = []
@@ -1050,11 +1052,11 @@ def expand_positions(fg: "FillGrid | None", extent: dict | None,
                 entry = cells[idx] if idx < len(cells) else FillEntry()
                 if lat == "2":
                     hx, hy = hex_center(i, j, px)
-                    cz = z_base + (k - (nz - 1) / 2.0) * pz
+                    cz = z_origin + (k - (nz - 1) / 2.0) * pz
                 else:
                     hx = (i - (nx - 1) / 2.0) * px
                     hy = (j - (ny - 1) / 2.0) * py
-                    cz = z_base + (k - (nz - 1) / 2.0) * pz
+                    cz = z_origin + (k - (nz - 1) / 2.0) * pz
                 if theta:
                     x = hx * cos_t - hy * sin_t
                     y = hx * sin_t + hy * cos_t
@@ -1204,7 +1206,8 @@ def compose_lattice_tree(outer_fg: "FillGrid | None", sub_by_u: dict,
         state["axial_cache"].setdefault(
             str(_u), _build_axial_segments(str(_u), _cells, state["surf_text"], state["surfaces"]))
     root_ctx = {"base": (0.0, 0.0, 0.0), "depth": 1, "path": "",
-                "trcl": float(trcl or 0)}
+                "trcl": float(trcl or 0),
+                "z_origin": _extent_center(extent)[2]}
     tree = _expand_lattice(outer_fg, extent, outer_num, root_ctx, state)
     return {
         "status": state["status"],
@@ -1220,7 +1223,8 @@ def compose_lattice_tree(outer_fg: "FillGrid | None", sub_by_u: dict,
 
 def _expand_lattice(fg, extent, cell_num, ctx, state) -> list:
     """展开一个格阵：返回该格阵的 NESTED 节点列表；同时填 state.lattices/leaves。"""
-    positions = expand_positions(fg, extent, trcl_rotation_deg=ctx["trcl"])
+    positions = expand_positions(fg, extent, trcl_rotation_deg=ctx["trcl"],
+                                  z_origin=ctx.get("z_origin", 0.0))
     if positions is None:
         state["status"] = "too_many"
         return []

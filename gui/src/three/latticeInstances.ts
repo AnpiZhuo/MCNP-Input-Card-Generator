@@ -304,11 +304,15 @@ function colorToNumber(c: string): number {
 }
 
 /** disc 单盘/外壳几何（OWEN placePin disc）：圆柱，半径 = 格元盒 x/y 的一半×0.47，
- *  高 = blockSize.z。轴向 +Z。无 STL 依赖（不炸 FreeCAD），GPU 实例化。 */
+ *  高 = blockSize.z。项目 Z-up（数学/物理/MCNP 坐标），圆柱已 rotateX 到 +Z。无 STL 依赖（不炸 FreeCAD），GPU 实例化。 */
 function buildDiscGeometry(block: { x: number; y: number; z: number; hex?: boolean }): THREE.BufferGeometry {
   const r = Math.max((Math.min(block.x, block.y) / 2) * 0.47, 1e-3);
   const h = Math.max(block.z, 1e-3);
-  return new THREE.CylinderGeometry(r, r, h, 16, 1, false);
+  // 项目 3D 用数学/物理坐标系（Z-up，全项目 camera.up=(0,0,1)，MCNP 轴向=Z）。
+  // CylinderGeometry 默认沿 Y，rotateX(90°) 使 pin 沿 +Z，否则横躺（Y 向）呈"横向棒子"。
+  const geo = new THREE.CylinderGeometry(r, r, h, 16, 1, false);
+  geo.rotateX(Math.PI / 2);
+  return geo;
 }
 
 /** pointy-top 六棱柱实心几何（顶点朝 +X，轴向 +Z；外接半径 R，宽(对边)≈2R·cos30°） */

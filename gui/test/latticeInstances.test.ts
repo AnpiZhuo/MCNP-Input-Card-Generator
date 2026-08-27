@@ -291,6 +291,12 @@ describe("buildLatticeInstances（disc 降级模式）", () => {
     expect(meshes[1].count).toBe(1);
     const g0 = meshes[0].geometry;
     expect((g0 as any).type).toBe("CylinderGeometry");
+    // 项目 Z-up（数学/物理/MCNP 坐标）：CylinderGeometry 默认沿 Y，必须 rotateX(90°)
+    // 到 +Z，否则 pin 横躺（Y 向）呈"横向棒子"。block.h(=4) > 2r 时 bbox z 应 > x/y。
+    (g0 as THREE.BufferGeometry).computeBoundingBox();
+    const sz = (g0 as THREE.BufferGeometry).boundingBox!.getSize(new THREE.Vector3());
+    expect(sz.z).toBeGreaterThan(sz.x);
+    expect(sz.z).toBeGreaterThan(sz.y);
   });
 
   it("disc 色 = getUniverseColor（每 universe 一色）", () => {
