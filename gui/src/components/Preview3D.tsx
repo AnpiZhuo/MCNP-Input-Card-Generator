@@ -975,6 +975,11 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   }, []);
 
   const visibleCount = cellViews.filter((c) => c.visible).length;
+  // 自动总览锁定：detailViable=false 或叶数超限（如 BEAVRS 全堆芯 50 万叶）→ 只允许总览，
+  // 手动「色块总览」开关不再可切（明示为何点了没反应），避免误导。
+  const latticeAuto = latticeDataRef.current
+    ? (latticeDataRef.current.detailViable === false || latticeDataRef.current.count > DETAIL_MAX_INSTANCES)
+    : false;
   const CellType = "div"; // placeholder type
   // 格阵装配适配：右侧栅元列表过滤 universe 栅元（u 非空，经 fill 装配显示）；
   // displayOrigIdx = 过滤后列表每行对应的 cellViews 原始索引
@@ -1132,17 +1137,19 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
           React.createElement("input", {
             type: "checkbox",
             id: "lattice-overview-toggle",
-            checked: latticeOverview,
+            checked: latticeOverview || latticeAuto,
+            disabled: latticeAuto,
             onChange: (e: React.ChangeEvent<HTMLInputElement>) => setLatticeOverview(e.target.checked),
             style: { accentColor: "var(--accent)" } as React.CSSProperties,
           }),
           React.createElement("label", {
             htmlFor: "lattice-overview-toggle",
-            style: { fontSize: 11, color: "var(--text-secondary)", cursor: "pointer", display: "flex", flexDirection: "column", gap: 2 } as React.CSSProperties,
+            style: { fontSize: 11, color: "var(--text-secondary)", cursor: latticeAuto ? "default" : "pointer", display: "flex", flexDirection: "column", gap: 2 } as React.CSSProperties,
           },
-            React.createElement("span", null, "色块总览"),
+            React.createElement("span", null, latticeAuto ? "色块总览（自动·超大）" : "色块总览"),
             React.createElement("span", { style: { fontSize: 10, color: "var(--text-tertiary)" } },
-              latticeOverview ? "按宇宙色块显示装配格位（省性能）" : "显示真实几何（性能优先）"),
+              latticeAuto ? "格位过多，已自动用色块总览（无法显示详细几何）"
+                : (latticeOverview ? "按宇宙色块显示装配格位（省性能）" : "显示真实几何（性能优先）")),
           ),
         ),
         /* 截面控制 */

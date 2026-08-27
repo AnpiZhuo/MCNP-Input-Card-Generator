@@ -348,8 +348,8 @@ export function buildLatticeInstances(opts: LatticeInstancesOptions): LatticeIns
   if (overview) {
     const block = opts.blockSize ?? { x: 1, y: 1, z: 1, hex: false };
     const geometry = block.hex
-      ? buildHexPrismGeometry(block.x / Math.sqrt(3), block.z)
-      : new THREE.BoxGeometry(block.x, block.y, block.z);
+      ? buildHexPrismGeometry(block.x / Math.sqrt(3), Math.min(block.z, block.hex ? block.x : Math.max(block.x, block.y)))
+      : new THREE.BoxGeometry(block.x, block.y, Math.min(block.z, block.hex ? block.x : Math.max(block.x, block.y)));
     const material = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6, metalness: 0.0 });
     const mesh = new THREE.InstancedMesh(geometry, material, Math.max(1, nonVoid.length));
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
