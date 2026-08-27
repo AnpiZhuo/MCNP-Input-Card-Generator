@@ -2866,6 +2866,41 @@ class MCNPHandler(BaseHTTPRequestHandler):
                             universes[u] = stls
                 entry["universes"] = universes
 
+            # disc 降级：补建「叶 universe」(径向 pin) 的 STL。每格阵 fill_grid 引用的是
+            # 「轴向列 universe」（如 BEAVRS u=116/124/131/…，cell 全带 fill=，被
+            # _build_one_universe 的 if _cell_fill: continue 跳过 → 返回空）；但轴向折叠后
+            # 叶 universe 是「径向 pin universe」（u=1/2/3/12/5/6，真实燃料棒/导向管/仪表管
+            # 几何）。前端 disc 分支按叶 universe 查 universeStl[u][cellNum]，缺失时回退
+            # BoxGeometry 占位方块 → 燃料棒显示成方块（"显示与理论出入大"根因）。这里按叶
+            # universe（未建 STL 的径向 pin）用 pin 格元盒补建 STL 放进对应格阵，使
+            # universeStl[leaf.u][leaf.cellNum] 命中真实 pin 几何。
+            if composed.get("detail") == "disc":
+                built = set()
+                for _entry in composed.get("lattices", []) or []:
+                    built.update(str(k) for k in (_entry.get("universes") or {}).keys())
+                leaf_us = []
+                for _leaf in composed.get("leafInstances", []) or []:
+                    _u = str(_leaf.get("u") or "")
+                    if _u and _u not in ("0", "") and _u not in built and _u not in leaf_us:
+                        leaf_us.append(_u)
+                if leaf_us:
+                    pin_entry = next(
+                        (_e for _e in (composed.get("lattices", []) or [])
+                         if str(_e.get("num")) != str(outer.get("cellNum")) and _e.get("extent")),
+                        None)
+                    if pin_entry is not None:
+                        pin_box = _clip_box_from_extent(pin_entry.get("extent"))
+                        _pitch = pin_entry.get("pitch", [1, 1, 1])
+                        _height = pin_entry.get("height", 1.0)
+                        _univ = pin_entry.setdefault("universes", {})
+                        for _u in leaf_us:
+                            _st = _build_one_universe(
+                                surf_text, tr_text, cell_list, _u, pin_box,
+                                pin_entry.get("num"), _pitch, _height, lattice,
+                                container_expr)
+                            if _st:
+                                _univ.setdefault(_u, {}).update(_st)
+
             # 超详细上限（将自动切色块总览）→ 裁掉叶/树，只留 lattices[].positions 供总览，
             # 避免 50 万叶+树节点几十 MB 响应把前端卡死（全堆芯 289×289 场景）。
             # disc 模式（步骤2）：每 pin 1 盘、每 universe 1 几何 —— 实例数已大降
