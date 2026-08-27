@@ -32,24 +32,16 @@ A desktop application for visually creating, editing, and validating **MCNP** in
 | 功能 Feature | 说明 Description |
 |-------------|-----------------|
 | **表单化编辑 Form-based editing** | 8 个标签页覆盖所有 MCNP 输入段 |
-| **INP 生成 INP generation** | 自动生成标准 MCNP 输入卡，含 C/`$` 注释、En/Tn/E0/T0 网格 |
-| **INP 导入 INP import** | Windows 原生文件对话框选择 `.INP/.I/.TXT`，或直接拖入窗口；解析后一次性回填所有字段 |
-| **文本↔表单双向互转** | 材料/几何/计数支持一键在"表单"与"原始文本"间切换，互转不丢数据 |
-| **计数乘子 FMn** | 计数卡支持 FMn 乘子（导入自动识别 + 表单直接编辑，自动生成/回放） |
-| **STEP 导入（GEOUNED）** | 几何标签页导入 `.STEP/.STP`，经 FreeCAD + GEOUNED 自动转换为 MCNP 曲面/栅元 |
-| **工作区保存/恢复 Save/Restore** | 关闭自动保存、手动保存按钮、一键清空；刷新/重开自动恢复全部输入 |
-| **3D 预览 / 截面** | FreeCAD 精确几何渲染，独立窗口可边编辑边看；截面由 STL 直接切出，支持 `#n` 栅元补集 |
-| **格阵 3D 装配** | 嵌套 fill 展开 + InstancedMesh 实例化渲染 BEAVRS 全堆芯（轴向折叠 / disc 降级 / subPitch 尺寸）；按 MCNP「窗口」机制裁剪（实体 = universe ∩ 格元盒 ∩ 容器 cell），不超壳、无虚假外块；3D 预览侧边栏按 U 分组显示（+ 保留未分组栅元） |
-| **条件编译行** | 材料/栅元支持 `#ifdef/#else/#endif`，所有行可拖拽排序 |
-| **材料下拉选择** | 栅元表格与 3D 预览中点击材料号下拉选择，**自动填充材料密度** |
-| **自定义窗口 Custom window** | 无系统边框 + 自绘标题栏（拖拽、最小化/最大化/关闭），类似 VSCode |
+| **INP 生成 / 导入 INP generation/import** | 自动生成标准输入卡（含注释、En/Tn/E0/T0 网格）；拖入或对话框导入 `.INP/.I/.TXT`，解析后一次性回填所有字段 |
+| **文本 ↔ 表单双向互转** | 材料/几何/计数支持一键在"表单"与"原始文本"间切换，互转不丢数据 |
+| **3D 预览 / 截面** | FreeCAD 精确几何渲染，独立窗口边编辑边看；截面由 STL 直接切出，支持 `#n` 栅元补集 |
+| **格阵 3D 装配** | 嵌套 fill 展开 + InstancedMesh 实例化渲染全堆芯；按 MCNP「窗口」机制裁剪（实体 = universe ∩ 格元盒 ∩ 容器 cell），不超壳、无虚假外块；3D 预览侧边栏按 U 分组显示（+ 保留未分组栅元） |
+| **STEP 导入（GEOUNED）** | `.STEP/.STP` 经 FreeCAD + GEOUNED 自动转换为 MCNP 曲面/栅元 |
 | **材料库 Material library** | 50+ 预设材料 + 化学式换算，xsdir 校验 |
-| **E0/En/T0/Tn 网格** | 全局能谱/时间网格 + 每计数独立 En/Tn，线性/对数/自定义三模式 |
 | **源模式 Source modes** | 固定多源 / SDEF 分布源（SI/SP）/ KCODE 临界源 |
-| **主题 Themes** | 4 套 CSS 主题：夜之城（霓虹）/ 青空 / 护眼 / 多巴胺 |
 | **MCNP 检测与运行** | 自动检测 mcnp6.exe，一键运行、跑完清理临时文件；默认走独显 GPU |
-| **内联参考文档 Inline references** | 曲面卡、计数卡等结构参考一键查看 |
 | **输出分析 Output analysis** | 解析 MCNP 输出文件并绘图 |
+| **高级特性 Advanced** | 计数乘子 FMn、材料/栅元条件编译行、能谱/时间网格（E0/En/T0/Tn）、栅元拖拽排序、文字内容一键切换 |
 
 ---
 
@@ -167,6 +159,7 @@ python api_server.py
 | [Vite](https://vitejs.dev/) | 前端构建工具 | MIT |
 | [Tauri](https://tauri.app/) | 桌面窗口外壳 | MIT/Apache-2.0 |
 | [Three.js](https://threejs.org/) | 3D 渲染 | MIT |
+| [OWEN](https://github.com/BelvoirDynamics) | MCNP 全堆芯 3D 预览参考（格阵 fill 位置 / 轴向折叠 / disc 降级 / LOD 预算 `budget.ts`、`codes/mcnp.ts`） | MIT (© 2026 BelvoirDynamics) |
 | [PyMCNP](https://github.com/FSIBT/PyMCNP) | MCNP 核心库（几何、生成、解析） | BSD-3-Clause |
 | [FreeCAD](https://www.freecad.org/) | 3D CAD 几何处理（CSG 求值引擎） | LGPL v2+ |
 | [GEOUNED](https://geouned-org.github.io/GEOUNED/) | STEP → MCNP 几何转换引擎（随程序打包） | EUPL-1.2 |
