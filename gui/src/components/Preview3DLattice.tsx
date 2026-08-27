@@ -98,6 +98,7 @@ interface LatticeData {
   blockSize: { x: number; y: number; z: number; hex: boolean };
   count: number;
   detailViable: boolean;
+  outerBound: any;
 }
 
 /* ── 纯辅助 ── */
@@ -137,6 +138,22 @@ function decodeStl(base64: string): THREE.BufferGeometry {
   const geo = new STLLoader().parse(bytes.buffer);
   geo.computeBoundingBox();
   return geo;
+}
+
+/** 格位是否落在最外层容器（外壳）边界内——色块总览裁剪超壳格位（17×17 方形格阵角部）。 */
+function inOuter(p: { x: number; y: number; z: number }, ob: any): boolean {
+  if (!ob) return true;
+  if (ob.shape === "cylinder") {
+    const dx = p.x - (ob.cx || 0);
+    const dy = p.y - (ob.cy || 0);
+    return dx * dx + dy * dy <= ob.r * ob.r;
+  }
+  if (ob.shape === "box") {
+    if (p.x < ob.x[0] || p.x > ob.x[1] || p.y < ob.y[0] || p.y > ob.y[1]) return false;
+    if (ob.z && (p.z < ob.z[0] || p.z > ob.z[1])) return false;
+    return true;
+  }
+  return true;
 }
 
 /** 格元盒（pitch×pitch×高度），总览色块尺寸：hex 用 x 为对边宽 */
@@ -265,7 +282,7 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
       // 调色板：总览模式用根格阵 positions 的宇宙（leaves 已裁空）；否则用叶宇宙
       const palette = buildUniversePalette((auto ? overviewPositions : leaves).map((p) => p.u));
 
-      dataRef.current = { leaves, overviewPositions, universeStl, cellMaterials, palette, trclDeg, blockSize, count: n, detailViable };
+      dataRef.current = { leaves, overviewPositions, universeStl, cellMaterials, palette, trclDeg, blockSize, count: n, detailViable, outerBound: (j as any).outer_bound || null };
       if (!cancelled) {
         setCount(n);
         setHint(auto ? `格位过多（${n.toLocaleString()}），已自动切换色块总览` : "");
@@ -328,8 +345,10 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
       handleRef.current = null;
     }
     const effOverview = isOverview(overviewUser, data.detailViable, data.count);
-    // 总览：用根格阵 positions（完整），不用截断的 leaves
-    const positions = effOverview ? data.overviewPositions : data.leaves;
+    // 总览：用根格阵 positions（完整），不用截断的 leaves；按外壳裁剪超壳格位
+    const positions = effOverview
+      ? (data.outerBound ? data.overviewPositions.filter((p) => inOuter(p, data.outerBound)) : data.overviewPositions)
+      : data.leaves;
     const handle = buildLatticeInstances({
       positions,
       universeStl: data.universeStl,

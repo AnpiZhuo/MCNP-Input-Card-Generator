@@ -25,6 +25,23 @@ function decodeStlBase64(b64: string): THREE.BufferGeometry {
   return geo;
 }
 
+/** 格位是否落在最外层容器（外壳）边界内——超外壳格位（如 17×17 方形格阵角部
+ *  超出圆柱壳）不显示，保证色块总览不冒出原卡规定的外壳尺寸。 */
+function inOuter(p: { x: number; y: number; z: number }, ob: any): boolean {
+  if (!ob) return true;
+  if (ob.shape === "cylinder") {
+    const dx = p.x - (ob.cx || 0);
+    const dy = p.y - (ob.cy || 0);
+    return dx * dx + dy * dy <= ob.r * ob.r;
+  }
+  if (ob.shape === "box") {
+    if (p.x < ob.x[0] || p.x > ob.x[1] || p.y < ob.y[0] || p.y > ob.y[1]) return false;
+    if (ob.z && (p.z < ob.z[0] || p.z > ob.z[1])) return false;
+    return true;
+  }
+  return true;
+}
+
 /* ---- 类型定义 ---- */
 interface CellView {
   num: string;
@@ -528,7 +545,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   const [latticeOverview, setLatticeOverview] = useState(false); // 色块总览（手动切换）
   const latticeDataRef = useRef<{
     positions: any[]; overviewPositions: any[]; universeStl: any; cellMaterials: any;
-    palette: Record<string, string>; trclDeg: number; blockSize: any; count: number; detailViable: boolean;
+    palette: Record<string, string>; trclDeg: number; blockSize: any; count: number; detailViable: boolean; outerBound: any;
   } | null>(null);
   const [latticeDataVersion, setLatticeDataVersion] = useState(0); // 数据变更触发重建
   const seeThroughRef = useRef(false);
@@ -719,7 +736,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
               x: x.x + (x.dx ?? 0), y: x.y + (x.dy ?? 0), z: x.z + (x.dz ?? 0), depth: 1,
             }));
         const palette = buildUniversePalette((autoOverview ? overviewPositions : leaves).map((x: any) => x.u));
-        latticeDataRef.current = { positions: leaves, overviewPositions, universeStl, cellMaterials, palette, trclDeg: primary?.trclRotationDeg ?? 0, blockSize, count: n, detailViable };
+        latticeDataRef.current = { positions: leaves, overviewPositions, universeStl, cellMaterials, palette, trclDeg: primary?.trclRotationDeg ?? 0, blockSize, count: n, detailViable, outerBound: r.outer_bound || null };
         if (!cancelled) { setLatticeDataVersion(v => v + 1); setLatticeLoading(false); }
       } catch (e) { console.warn("[3D] lattice assembly load failed", e); if (!cancelled) setLatticeLoading(false); }
     })();
@@ -732,7 +749,10 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
     const ctrl = ctrlRef.current;
     if (!data || !ctrl || !sceneReady) return;
     const effOverview = latticeOverview || data.detailViable === false || data.count > DETAIL_MAX_INSTANCES;
-    const positions = effOverview ? data.overviewPositions : data.positions;
+    // 项：色块总览按外壳裁剪——只显示落在外壳（最外层容器 cell）内的格位，角部超壳剔除
+    const positions = effOverview
+      ? (data.outerBound ? data.overviewPositions.filter((p: any) => inOuter(p, data.outerBound)) : data.overviewPositions)
+      : data.positions;
     const handle = buildLatticeInstances({
       positions,
       universeStl: data.universeStl,

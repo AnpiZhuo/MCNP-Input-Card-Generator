@@ -691,6 +691,68 @@ def _clip_box_from_extent(extent: dict | None) -> dict:
     return box
 
 
+def _parse_outer_bound(surface_expr: str, surf_text: str, lattice) -> dict | None:
+    """解析最外层容器 cell 的几何边界（供色块总览裁剪超壳格位）。
+
+    支持：CZ 圆柱（径向 ≤ r，轴心 0,0）→ {"shape":"cylinder","r","cx","cy"}；
+    6 平面盒 PX/PY/PZ → {"shape":"box","x","y","z"}；无法解析 → None。
+    """
+    if not surface_expr:
+        return None
+    try:
+        surfaces = lattice._parse_surface_cards(surf_text)
+    except Exception:
+        surfaces = {}
+    px: list[float] = []
+    py: list[float] = []
+    pz: list[float] = []
+    cz_r: float | None = None
+    for tok in surface_expr.split():
+        if not lattice._INT_RE.match(tok):
+            continue
+        n = int(tok)
+        kw, params = surfaces.get(abs(n), (None, []))
+        if not params:
+            continue
+        try:
+            v = float(params[0])
+        except (TypeError, ValueError):
+            continue
+        if kw == "CZ" and v > 0:
+            cz_r = v
+        elif kw == "PX":
+            px.append(v)
+        elif kw == "PY":
+            py.append(v)
+        elif kw == "PZ":
+            pz.append(v)
+    if cz_r is not None:
+        return {"shape": "cylinder", "r": cz_r, "cx": 0.0, "cy": 0.0}
+    if px and py:
+        return {"shape": "box", "x": sorted(px), "y": sorted(py),
+                "z": sorted(pz) if pz else None}
+    return None
+
+
+def _lattice_outer_bound(cell_list, outer_u: str, surf_text: str, lattice) -> dict | None:
+    """找 fill 指向 outer_u 的最外层容器 cell（无 u 无 lat 的空 cell），解析其边界。"""
+    if not outer_u:
+        return None
+    for c in cell_list:
+        if not isinstance(c, dict) or c.get("kind") == "raw":
+            continue
+        cell = c.get("cell") if c.get("kind") == "cell" and isinstance(c.get("cell"), dict) else c
+        if str(cell.get("u", "") or "") != "":
+            continue  # 容器 cell 无 u
+        if cell.get("lat"):
+            continue  # 容器 cell 无 lat
+        if str(cell.get("fill", "") or "").strip() != str(outer_u):
+            continue
+        expr = str(cell.get("surface_expr", "") or "").strip()
+        return _parse_outer_bound(expr, surf_text, lattice) if expr else None
+    return None
+
+
 def _universe_has_lattice(sub_by_u: dict, u: str) -> bool:
     """universe u 是否含格阵 cell（是 → 嵌套子格阵，不由外层直接产 STL）。"""
     for cell in sub_by_u.get(str(u), []):
@@ -2655,6 +2717,10 @@ class MCNPHandler(BaseHTTPRequestHandler):
             composed = lattice.compose_lattice_tree(
                 outer["fill_grid"], sub_by_u, outer["extent"], trcl_deg,
                 lattice.MAX_LATTICE_DEPTH, lattice.MAX_TOTAL_INSTANCES)
+            # 最外层容器 cell（fill 指向根格阵 universe 的空 cell，如 BEAVRS cell 343）
+            # 的几何边界 → 供前端色块总览裁剪超外壳格位（17×17 方形格阵 vs 圆柱壳）。
+            composed["outer_bound"] = _lattice_outer_bound(
+                cell_list, str(outer.get("u", "") or ""), surf_text, lattice)
             limit = composed.pop("status", "ok")
             # 项13 api.yaml：响应恒带 cycle/chain。compose 的 status="cycle" 分支把
             # 循环链放在 `cycle` 键（与 api.yaml 的 `cycle: boolean` 命名冲突）→
