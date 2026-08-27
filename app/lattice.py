@@ -1001,6 +1001,7 @@ def expand_positions(fg: "FillGrid | None", extent: dict | None,
         hp = px if px > 0 else (py if py > 0 else 1.0)
         px = hp
         py = hp
+    z_base = _extent_center(extent)[2]  # 格阵 z 原点 = 容器 z 中点（BEAVRS [0,460]→230；无界/对称→0）
     theta = math.radians(float(trcl_rotation_deg or 0))
     cos_t, sin_t = math.cos(theta), math.sin(theta)
     out = []
@@ -1012,11 +1013,11 @@ def expand_positions(fg: "FillGrid | None", extent: dict | None,
                 entry = cells[idx] if idx < len(cells) else FillEntry()
                 if lat == "2":
                     hx, hy = hex_center(i, j, px)
-                    cz = (k - (nz - 1) / 2.0) * pz
+                    cz = z_base + (k - (nz - 1) / 2.0) * pz
                 else:
                     hx = (i - (nx - 1) / 2.0) * px
                     hy = (j - (ny - 1) / 2.0) * py
-                    cz = (k - (nz - 1) / 2.0) * pz
+                    cz = z_base + (k - (nz - 1) / 2.0) * pz
                 if theta:
                     x = hx * cos_t - hy * sin_t
                     y = hx * sin_t + hy * cos_t

@@ -243,6 +243,26 @@ describe("buildLatticeInstances（总览模式）", () => {
     expect(group.rotation.z).toBeCloseTo((30 * Math.PI) / 180, 9);
   });
 
+
+  it("总览模式 void 格位（u=0）不实例化（空阵格不渲染）", () => {
+    const withVoid: LatticeInstance[] = [
+      { path: "0", u: "5", cellNum: "1", mat: "1", x: 0, y: 0, z: 0, depth: 0 },
+      { path: "1", u: "0", cellNum: "", mat: "", x: 1, y: 0, z: 0, depth: 0 }, // 空阵格
+      { path: "2", u: "6", cellNum: "", mat: "", x: 2, y: 0, z: 0, depth: 0 },
+    ];
+    const { group } = buildLatticeInstances({
+      positions: withVoid,
+      universeStl: {},
+      cellMaterials: {},
+      palette,
+      overviewMode: true,
+      blockSize: { x: 2, y: 2, z: 2, hex: false },
+    });
+    const meshes = group.userData.instancedMeshes as THREE.InstancedMesh[];
+    expect(meshes).toHaveLength(1);
+    expect(meshes[0].count).toBe(2); // 只有 u=5 / u=6 两个非空阵格被实例化
+  });
+
   it("DETAIL_MAX_INSTANCES = 20000（超限自动切总览的阈值常量，与后端一致）", () => {
     expect(DETAIL_MAX_INSTANCES).toBe(20000);
   });

@@ -545,6 +545,24 @@ def test_expand_positions_too_many_returns_none():
     assert expand_positions(fg, ext, max_positions=1000) is None
 
 
+def test_expand_positions_single_layer_z_uses_extent_center():
+    """1 - container z non-symmetric (BEAVRS pz 0->460, center +230): single-layer lattice
+    grid z should land at lattice z midpoint (z_base = _extent_center[2]), not 0.
+    Pre-fix z was always 0 (block-overview center at z=0 vs shell at z>0 bug)."""
+    fg = _fg("1", [2, 2, 1], ["1", "2", "1", "2"])
+    ext = {"x_min": -2, "x_max": 2, "y_min": -2, "y_max": 2, "z_min": 0.0, "z_max": 460.0}
+    pos = expand_positions(fg, ext)
+    assert all(p["z"] == pytest.approx(230.0) for p in pos)
+
+
+def test_expand_positions_symmetric_z_center_stays_zero():
+    """2 - symmetric z ([-0.5,0.5], center 0): grid z stays 0 (backward-compatible)."""
+    fg = _fg("1", [2, 2, 1], ["1", "2", "1", "2"])
+    ext = {"x_min": -2, "x_max": 2, "y_min": -2, "y_max": 2, "z_min": -0.5, "z_max": 0.5}
+    pos = expand_positions(fg, ext)
+    assert all(p["z"] == pytest.approx(0.0) for p in pos)
+
+
 # ── 阶段3：compose_lattice_tree（嵌套 fill 递归）───────────
 def _lcell(num, mat, u, fg=None, expr="-1", lat="1", extent=None) -> dict:
     return {"cellNum": num, "material": mat, "fill": "", "fill_grid": fg,
