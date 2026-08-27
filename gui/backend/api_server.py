@@ -2772,10 +2772,20 @@ class MCNPHandler(BaseHTTPRequestHandler):
             # 避免 50 万叶+树节点几十 MB 响应把前端卡死（全堆芯 289×289 场景）。
             # disc 模式（步骤2）：每 pin 1 盘、每 universe 1 几何 —— 实例数已大降
             # （BEAVRS 50 万 → 5.6 万），允许 InstancedMesh 实例化，不再 2 万一刀切裁叶。
+            # subPitch = 全部格阵的最小 pitch（OWEN placePin disc 用 min(subPitch*0.47, ...)
+            # 定 disc 半径）。BEAVRS 根格阵 21.5（组件间距）但组件内 pin 间距 1.26——若前端
+            # 误用根格阵 pitch（21.5）画 disc，半径 ≈5.05cm 远超 1.26cm 格位 → 圆柱互相穿插、
+            # 超出外壳、乱面。必须用最小格距（subPitch=1.26）保证 disc 在格位内不重叠。
+            _subpitch = 1.26
+            for _lt in composed.get("lattices", []) or []:
+                _pit = _lt.get("pitch") or []
+                if len(_pit) >= 2 and _pit[0] > 0 and _pit[1] > 0:
+                    _subpitch = min(_subpitch, _pit[0], _pit[1])
             _fid = {
                 "detail": "disc" if composed.get("detail") == "disc" else "layers",
                 "axial": bool(composed.get("axial")),
                 "estimate": composed.get("count", 0),
+                "subPitch": _subpitch,
             }
             if composed.get("detail") == "disc":
                 # disc 已折叠：只要 ≤ MAX_TOTAL_INSTANCES 就进详细实例化（InstancedMesh 吃 5.6 万）

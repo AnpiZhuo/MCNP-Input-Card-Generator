@@ -100,6 +100,7 @@ interface LatticeData {
   detailViable: boolean;
   outerBound: any;
   disc: boolean;
+  subPitch: number;
 }
 
 /* ── 纯辅助 ── */
@@ -273,6 +274,7 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
       const detailViable = j.detailViable !== false;
       const jf = (j as any).fidelity || {};
       const isDisc = jf.detail === 'disc';
+      const subPitch = (jf.subPitch as number) || primary?.pitch?.[0] || 1.26;
       const auto = isOverview(false, detailViable, n, isDisc);
       // 项3：色块用「实际几何坐标」而非默认几何中心（见 Preview3D 同注释）——详细可折叠时
       // 直接用叶实例绝对坐标（逐位对齐详细模式）；自动总览回落到根格阵完整 positions。
@@ -285,7 +287,7 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
       // 调色板：总览模式用根格阵 positions 的宇宙（leaves 已裁空）；否则用叶宇宙
       const palette = buildUniversePalette((auto ? overviewPositions : leaves).map((p) => p.u));
 
-      dataRef.current = { leaves, overviewPositions, universeStl, cellMaterials, palette, trclDeg, blockSize, count: n, detailViable, outerBound: (j as any).outer_bound || null, disc: isDisc };
+      dataRef.current = { leaves, overviewPositions, universeStl, cellMaterials, palette, trclDeg, blockSize, count: n, detailViable, outerBound: (j as any).outer_bound || null, disc: isDisc, subPitch };
       if (!cancelled) {
         setCount(n);
         setHint(auto ? `格位过多（${n.toLocaleString()}），已自动切换色块总览` : "");
@@ -362,6 +364,7 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
       overviewMode: effOverview,
       blockSize: data.blockSize,
       disc: data.disc,
+      subPitch: data.subPitch,
     });
     scene.add(handle.group);
     handleRef.current = handle;

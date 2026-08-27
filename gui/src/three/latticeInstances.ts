@@ -287,6 +287,9 @@ export interface LatticeInstancesOptions {
   /** true=disc 降级（每 pin 单盘/外壳，不展开内部径向层；OWEN placePin disc）。
      详细模式专用：忽略 universeStl，每个 (u,cellNum) 分组用程序化盘几何实例化。 */
   disc?: boolean;
+  /** 全部格阵的最小 pitch（OWEN subPitch）。disc 半径用 min(blockSize, subPitch)，
+     避免误用根格阵大 pitch 使圆柱远超组件 pin 格位（BEAVRS 根 21.5 vs 组件 1.26）。 */
+  subPitch?: number;
 }
 
 export interface LatticeInstancesHandle {
@@ -305,8 +308,11 @@ function colorToNumber(c: string): number {
 
 /** disc 单盘/外壳几何（OWEN placePin disc）：圆柱，半径 = 格元盒 x/y 的一半×0.47，
  *  高 = blockSize.z。项目 Z-up（数学/物理/MCNP 坐标），圆柱已 rotateX 到 +Z。无 STL 依赖（不炸 FreeCAD），GPU 实例化。 */
-function buildDiscGeometry(block: { x: number; y: number; z: number; hex?: boolean }): THREE.BufferGeometry {
-  const r = Math.max((Math.min(block.x, block.y) / 2) * 0.47, 1e-3);
+function buildDiscGeometry(block: { x: number; y: number; z: number; hex?: boolean }, subPitch?: number): THREE.BufferGeometry {
+  // 半径用 min(格元盒 x/y, subPitch) —— 组件格阵 pin 间距（BEAVRS 1.26）远小于根格阵
+  // pitch(21.5)；若误用根格阵 pitch，圆柱半径 ≈5cm 远超 1.26cm 格位 → 互相穿插/超出外壳/乱面。
+  const eff = Math.min(block.x, block.y, subPitch && subPitch > 0 ? subPitch : block.x);
+  const r = Math.max((eff / 2) * 0.47, 1e-3);
   const h = Math.max(block.z, 1e-3);
   // 项目 3D 用数学/物理坐标系（Z-up，全项目 camera.up=(0,0,1)，MCNP 轴向=Z）。
   // CylinderGeometry 默认沿 Y，rotateX(90°) 使 pin 沿 +Z，否则横躺（Y 向）呈"横向棒子"。
@@ -406,7 +412,7 @@ export function buildLatticeInstances(opts: LatticeInstancesOptions): LatticeIns
       // disc 模式（OWEN placePin disc）：每 universe 用程序化单盘/外壳几何实例化，
       // 不展开内部径向层、不依赖 universeStl（不炸 FreeCAD）。
       const geometry = disc
-        ? buildDiscGeometry(block)
+        ? buildDiscGeometry(block, opts.subPitch)
         : (opts.universeStl?.[g.u]?.[g.cellNum] ?? new THREE.BoxGeometry(1, 1, 1));
       // 元素填充格（水/慢化剂）：STL 包围盒 x/y ≈ 整个格元盒 → 半透明。z 高度全长后，
       // 不透明水盒会遮挡后排阵格（用户看到「有的阵格显示、有的不显示」）。
