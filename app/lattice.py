@@ -1151,13 +1151,49 @@ def detect_fill_cycle(sub_by_u: dict) -> dict:
     return {"cycle": False, "chain": []}
 
 
+def _cell_box_outside_container(bx, by, bz, hx, hy, hz, cb) -> bool:
+    """格元盒 [bx±hx]×[by±hy]×[bz±hz] 是否**完全在**容器 cell 之外。
+
+    方法级判断（依容器 cell 几何，非超壳结果适配）：格元盒最近点到容器几何中心
+    距离 > 容器半径/边界 → 该格元完全在容器 cell 外 → 不产实体（如 BEAVRS 角位
+    u=30 无限水格元盒完全在 cz 187.96 圆柱外）。cyl: 格元盒最近点到 (cx,cy) 距离
+    ≤ r 才可能有堆芯部分；box: 格元盒与容器盒有重叠。cb 为空 → 不裁剪（兼容）。
+    """
+    if not cb:
+        return False
+    if cb.get("shape") == "cylinder":
+        dx = max(0.0, abs(bx - cb.get("cx", 0.0)) - hx)
+        dy = max(0.0, abs(by - cb.get("cy", 0.0)) - hy)
+        if math.hypot(dx, dy) > cb.get("r", 0.0):
+            return True
+        zmin, zmax = cb.get("zmin"), cb.get("zmax")
+        if zmin is not None and bz + hz < zmin:
+            return True
+        if zmax is not None and bz - hz > zmax:
+            return True
+        return False
+    if cb.get("shape") == "box":
+        xr = cb.get("x") or [0, 0]
+        yr = cb.get("y") or [0, 0]
+        zr = cb.get("z")
+        if bx + hx < xr[0] or bx - hx > xr[1]:
+            return True
+        if by + hy < yr[0] or by - hy > yr[1]:
+            return True
+        if zr and (bz + hz < zr[0] or bz - hz > zr[1]):
+            return True
+        return False
+    return False
+
+
 def compose_lattice_tree(outer_fg: "FillGrid | None", sub_by_u: dict,
                          extent: dict | None, trcl,
                          max_depth: int = MAX_LATTICE_DEPTH,
                          max_total: int = MAX_TOTAL_INSTANCES,
                          surf_text: str = "",
                          axial: bool = False,
-                         detail: str = "layers") -> dict:
+                         detail: str = "layers",
+                         container_bound: dict | None = None) -> dict:
     """嵌套 fill 递归：从外层格阵出发构建 NESTED TREE + FLAT leafInstances + 各格阵 positions。
 
     双形态返回：
@@ -1196,6 +1232,7 @@ def compose_lattice_tree(outer_fg: "FillGrid | None", sub_by_u: dict,
         "surf_text": surf_text or "",
         "axial": bool(axial),
         "detail": str(detail or "layers"),
+        "container_bound": container_bound,
         "surfaces": _parse_surface_cards(surf_text or ""),
         "axial_cache": {},
     }
@@ -1264,6 +1301,12 @@ def _expand_lattice(fg, extent, cell_num, ctx, state) -> list:
         abs_x = bx + pos.get("x", 0.0) + pos.get("dx", 0.0)
         abs_y = by + pos.get("y", 0.0) + pos.get("dy", 0.0)
         abs_z = bz + pos.get("z", 0.0) + pos.get("dz", 0.0)
+        # 方法级：格元盒完全在容器 cell 外 → 该格元不属于容器 cell（堆芯），不产实体。
+        # 依据"格元与容器 cell 几何相交"，非超壳结果适配；换任何外壳皆正确。
+        cb = state.get("container_bound")
+        if cb is not None and _cell_box_outside_container(
+                abs_x, abs_y, abs_z, px / 2.0, py / 2.0, pz / 2.0, cb):
+            continue
         idx = pos.get("idx", "")
         path = f"{ctx['path']}.{idx}" if ctx["path"] else str(idx)
         node = _expand_universe(u, (abs_x, abs_y, abs_z), depth, path, state)

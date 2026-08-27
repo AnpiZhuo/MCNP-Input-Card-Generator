@@ -755,17 +755,17 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
     if (!data || !ctrl || !sceneReady) return;
     const effOverview = latticeOverview || data.detailViable === false || (!data.disc && data.count > DETAIL_MAX_INSTANCES);
     // 项：色块总览按外壳裁剪——只显示落在外壳（最外层容器 cell）内的格位，角部超壳剔除。
-    // disc 详细模式同样裁剪：根格阵方形边/角格位（u=30 水/反射、u=708-711 baffle）到原点
-    // 距离 198-243cm 远超圆柱外壳 187.96 → 不裁会露出重叠外壳（实测 48 个 depth=1 超壳叶）。
+    // disc 详细模式**不**按圆心裁：渲染的是后端「universe ∩ 格元盒 ∩ 容器cell」裁剪 STL
+    // （MCNP 窗口裁剪），圆柱外自动无实体。圆角 baffle(圆心 192-198>187.96 但格元盒部分在内)
+    // 显示成格元∩圆柱的弧板，按圆心裁会误删它们。fill 层已按「格元盒与容器相交」正确跳过
+    // 完全在外的格位(32 个 u=30)，剩余部分在内格位交给容器裁剪 STL。
     let positions;
     if (effOverview) {
       positions = data.outerBound
         ? data.overviewPositions.filter((p: any) => inOuter(p, data.outerBound))
         : data.overviewPositions;
     } else {
-      positions = data.disc && data.outerBound
-        ? data.positions.filter((p: any) => inOuter(p, data.outerBound))
-        : data.positions;
+      positions = data.positions;
     }
     const handle = buildLatticeInstances({
       positions,

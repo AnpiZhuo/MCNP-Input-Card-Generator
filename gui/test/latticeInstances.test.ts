@@ -268,9 +268,9 @@ describe("buildLatticeInstances（总览模式）", () => {
   });
 });
 
-/* ── buildLatticeInstances：disc 降级（每 pin 单盘/外壳，步骤2） ── */
+/* ── buildLatticeInstances：disc 降级（渲染后端容器裁剪 STL，MCNP 窗口裁剪） ── */
 
-describe("buildLatticeInstances（disc 降级模式）", () => {
+describe("buildLatticeInstances（disc 降级：容器裁剪 STL）", () => {
   const positions: LatticeInstance[] = [
     { path: "0", u: "5", cellNum: "1", mat: "1", x: 0, y: 0, z: 230, depth: 0 },
     { path: "1", u: "5", cellNum: "1", mat: "1", x: 1, y: 0, z: 230, depth: 0 },
@@ -279,60 +279,39 @@ describe("buildLatticeInstances（disc 降级模式）", () => {
   const palette = { "5": "#ff0000", "6": "#00ff00" };
   const block = { x: 2, y: 2, z: 4, hex: false };
 
-  it("disc=true 用程序化盘几何（CylinderGeometry，非 STL/Box），按 (u,cellNum) 分组", () => {
+  it("disc=true 优先用 universeStl[u][cellNum]（后端容器裁剪 STL），非程序化圆柱", () => {
+    const universeStl = { "5": { "1": boxGeo(2, 2, 4) }, "6": { "2": boxGeo(1, 1, 4) } };
+    const { group } = buildLatticeInstances({
+      positions, universeStl, cellMaterials: {}, palette,
+      overviewMode: false, disc: true, blockSize: block,
+    });
+    const meshes = group.userData.instancedMeshes as THREE.InstancedMesh[];
+    expect(meshes).toHaveLength(2);
+    expect(meshes[0].count).toBe(2);
+    expect(meshes[1].count).toBe(1);
+    // disc 渲染的是提供方 STL（这里 boxGeo），不是程序化 CylinderGeometry
+    expect((meshes[0].geometry as any).type).toBe("BoxGeometry");
+  });
+
+  it("disc 无 STL 时回退占位盒（不炸），仍按 (u,cellNum) 分组实例化", () => {
     const { group } = buildLatticeInstances({
       positions, universeStl: {}, cellMaterials: {}, palette,
       overviewMode: false, disc: true, blockSize: block,
     });
     const meshes = group.userData.instancedMeshes as THREE.InstancedMesh[];
-    expect(meshes).toHaveLength(2);
-    // 5:1 两个实例 + 6:2 一个实例（u=6 mat=0 仍在，但 disc 用 universe 色）
-    expect(meshes[0].count).toBe(2);
-    expect(meshes[1].count).toBe(1);
-    const g0 = meshes[0].geometry;
-    expect((g0 as any).type).toBe("CylinderGeometry");
-    // 项目 Z-up（数学/物理/MCNP 坐标）：CylinderGeometry 默认沿 Y，必须 rotateX(90°)
-    // 到 +Z，否则 pin 横躺（Y 向）呈"横向棒子"。block.h(=4) > 2r 时 bbox z 应 > x/y。
-    (g0 as THREE.BufferGeometry).computeBoundingBox();
-    const sz = (g0 as THREE.BufferGeometry).boundingBox!.getSize(new THREE.Vector3());
-    expect(sz.z).toBeGreaterThan(sz.x);
-    expect(sz.z).toBeGreaterThan(sz.y);
-  });
-
-  it("subPitch 生效：disc 半径 = min(block, subPitch)/2*0.47，不用根格阵大 pitch", () => {
-    // blockSize.x=21.5（根格阵 pitch），subPitch=1.26（组件 pin 间距）
-    // disc 半径应为 1.26/2*0.47≈0.296，而非 21.5/2*0.47≈5.05（后者圆柱远超格位→超壳/乱面）
-    const big = { x: 21.5, y: 21.5, z: 460, hex: false };
-    const { group } = buildLatticeInstances({
-      positions, universeStl: {}, cellMaterials: {}, palette,
-      overviewMode: false, disc: true, blockSize: big, subPitch: 1.26,
-    });
-    const meshes = group.userData.instancedMeshes as THREE.InstancedMesh[];
-    const g0 = meshes[0].geometry as THREE.BufferGeometry;
-    g0.computeBoundingBox();
-    const sz = g0.boundingBox!.getSize(new THREE.Vector3());
-    // disc 半径 = min(21.5,1.26)/2*0.47≈0.296 → bbox x 尺寸 ≈ 0.59 << 21.5
-    expect(sz.x).toBeLessThan(2);
-    expect(sz.x).toBeGreaterThan(0.2);
+    expect(meshes.length).toBeGreaterThan(0);
+    expect(meshes.reduce((a, m) => a + m.count, 0)).toBe(3);
   });
 
   it("disc 色 = getUniverseColor（每 universe 一色）", () => {
+    const universeStl = { "5": { "1": boxGeo(2, 2, 4) }, "6": { "2": boxGeo(1, 1, 4) } };
     const { group } = buildLatticeInstances({
-      positions, universeStl: {}, cellMaterials: {}, palette,
+      positions, universeStl, cellMaterials: {}, palette,
       overviewMode: false, disc: true, blockSize: block,
     });
     const meshes = group.userData.instancedMeshes as THREE.InstancedMesh[];
     const m0 = meshes[0].material as THREE.MeshStandardMaterial;
     expect(m0.color.getHex()).toBe(new THREE.Color("#ff0000").getHex()); // u=5
-  });
-
-  it("不使用 universeStl（无 STL 也能渲染盘）", () => {
-    const { group } = buildLatticeInstances({
-      positions, universeStl: undefined as any, cellMaterials: {}, palette,
-      overviewMode: false, disc: true, blockSize: block,
-    });
-    const meshes = group.userData.instancedMeshes as THREE.InstancedMesh[];
-    expect(meshes.length).toBeGreaterThan(0);
   });
 });
 

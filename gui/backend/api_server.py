@@ -753,6 +753,79 @@ def _lattice_outer_bound(cell_list, outer_u: str, surf_text: str, lattice) -> di
     return None
 
 
+def _lattice_container_expr(cell_list, outer_u) -> str:
+    """找 fill 指向 outer_u 的最外层容器 cell（无 u 无 lat 的空 cell）的 surface_expr。
+
+    容器 cell 几何（如 BEAVRS cell343 `-80 700 -730` = cz 187.96 内 + z∈[0,460]）用于
+    方法级 STL 裁剪：STL = universe ∩ 格元盒 ∩ 容器cell。格元与容器 cell 无交集的格位
+    （角位 u=30 无限水 `-3:3`）∩ 容器 cell → 空，不产生"圆柱外虚假水块"（此前的 bug：
+    把无限 cell 只按格元盒裁剪成有限块，格元盒在圆柱外时该块完全在 cell 343 之外）。
+    """
+    if not outer_u:
+        return ""
+    for c in cell_list or []:
+        if not isinstance(c, dict) or c.get("kind") == "raw":
+            continue
+        cell = c.get("cell") if c.get("kind") == "cell" and isinstance(c.get("cell"), dict) else c
+        if str(cell.get("u", "") or "") != "":
+            continue
+        if cell.get("lat"):
+            continue
+        if str(cell.get("fill", "") or "").strip() != str(outer_u):
+            continue
+        return str(cell.get("surface_expr", "") or "").strip()
+    return ""
+
+
+def _lattice_container_bound(surface_expr: str, surf_text: str, lattice) -> dict | None:
+    """解析最外层容器 cell 的几何边界（供 fill 展开判断格元是否在容器内）。
+
+    方法级：格阵里的每个格元（格位中心 ± 格元盒半径）与容器 cell 几何相交，才属于
+    容器 cell（如 BEAVRS cell343 圆柱内 z∈[0,460]）。格元盒完全在容器 cell 之外的
+    （角位 u=30 无限水）不产实体——这是"查容器 cell 几何"而非"反推超壳结果"，
+    换任何外壳皆正确。
+    返回 {shape:"cylinder", cx,cy,r,zmin,zmax} 或 {shape:"box", x,y,z}；不可解析 → None。
+    """
+    if not surface_expr:
+        return None
+    try:
+        surfaces = lattice._parse_surface_cards(surf_text)
+    except Exception:
+        surfaces = {}
+    px = []
+    py = []
+    pz = []
+    cz_r = None
+    for tok in surface_expr.split():
+        if not lattice._INT_RE.match(tok):
+            continue
+        n = int(tok)
+        kw, params = surfaces.get(abs(n), (None, []))
+        if not params:
+            continue
+        try:
+            v = float(params[0])
+        except (TypeError, ValueError):
+            continue
+        if kw == "CZ" and v > 0:
+            cz_r = v
+        elif kw == "PX":
+            px.append(v)
+        elif kw == "PY":
+            py.append(v)
+        elif kw == "PZ":
+            pz.append(v)
+    if cz_r is not None:
+        zlo = min(pz) if pz else None
+        zhi = max(pz) if pz else None
+        return {"shape": "cylinder", "cx": 0.0, "cy": 0.0, "r": cz_r,
+                "zmin": zlo, "zmax": zhi}
+    if px and py:
+        return {"shape": "box", "x": [min(px), max(px)], "y": [min(py), max(py)],
+                "z": [min(pz), max(pz)] if pz else None}
+    return None
+
+
 def _universe_has_lattice(sub_by_u: dict, u: str) -> bool:
     """universe u 是否含格阵 cell（是 → 嵌套子格阵，不由外层直接产 STL）。"""
     for cell in sub_by_u.get(str(u), []):
@@ -778,12 +851,18 @@ def _stls_base64(cells: dict) -> dict:
 
 
 def _build_one_universe(surf_text, tr_text, cell_list, u, box,
-                        cell_num, pitch, height, lattice) -> dict:
+                        cell_num, pitch, height, lattice,
+                        container_expr: str = "") -> dict:
     """把 universe u 的实体栅元裁剪到格元盒 → FreeCAD STL（{cellNum: base64}）。
 
     格元盒用**一个 RPP 宏体**（`-<num>` 盒内半空间）追加进 universe 栅元
     surface_expr，worker 内做 cell solid ∩ RPP 盒实体 的 solid-solid common
     （闭盒实体 ∩ 圆柱正常；「圆柱 ∩ 平行轴平面」FreeCAD/OCC 恒空，QA 复现）。
+    **方法级裁剪**：再把容器 cell 343 的几何约束（container_expr，如 `-80 700 -730`
+    = cz 187.96 内 + z∈[0,460]）追加 —— STL = universe ∩ 格元盒 ∩ 容器 cell。
+    这样格元与容器 cell 无交集的格位（角位 u=30 无限水 `-3:3`，格元盒在圆柱外）∩
+    容器 cell = 空，不产生"圆柱外虚假水块"。换任何外壳皆正确（查容器 cell 几何，
+    非反推超壳结果）。
     空 STL（0 三角形）显式丢弃不产出——前端对缺失 (u,cellNum) 回退占位盒
     （显式降级，不静默给 84B 空 STL）。按 u/cellNum/pitch/height 指纹缓存。
     """
@@ -815,7 +894,10 @@ def _build_one_universe(surf_text, tr_text, cell_list, u, box,
     for cell in uni_cells:
         m = dict(cell)
         expr = str(cell.get("surface_expr", "") or "").strip()
-        m["surface_expr"] = (expr + " " + suffix).strip()
+        # 格元盒（suffix）+ 容器 cell 343 几何（container_expr）裁剪：
+        # universe ∩ 格元盒 ∩ 容器cell —— 格元完全在容器外的（角位无限水）交集为空不产出。
+        clip = suffix + ((" " + container_expr.strip()) if container_expr.strip() else "")
+        m["surface_expr"] = (expr + " " + clip).strip()
         mod_cells.append(m)
     # 3. 指纹缓存（extra 含 pitch/height 防脏命中）
     fp = _PREVIEW_CACHE_LATTICE.fingerprint(
@@ -2714,6 +2796,13 @@ class MCNPHandler(BaseHTTPRequestHandler):
             else:
                 outer = lattice_infos[0]
             trcl_deg = outer.get("trcl_deg", 0.0)
+            # 方法级容器 cell 几何边界：fill 展开时判断格元盒与容器 cell（BEAVRS 圆柱）
+            # 是否相交。格元盒完全在容器 cell 外的格位（角位 u=30 无限水）不产实体——
+            # 依据"格元与容器 cell 几何关系"，非"超壳结果"，换任何外壳皆正确。
+            container_expr = _lattice_container_expr(
+                cell_list, str(outer.get("u", "") or ""))
+            container_bound = _lattice_container_bound(
+                container_expr, surf_text, lattice)
             # 步骤1+2 LOD 预算（OWEN planRender 移植）：先 layers（每径向层/轴向段各一叶），
             # 若 count 超 DETAIL_MAX_INSTANCES 则切 disc（轴向已有折叠 + 每 pin 单盘）。
             # BEAVRS：layers(count=22.6万) 超限 → disc(count=5.6万) 进 InstancedMesh 实例化。
@@ -2721,13 +2810,15 @@ class MCNPHandler(BaseHTTPRequestHandler):
             composed = lattice.compose_lattice_tree(
                 outer["fill_grid"], sub_by_u, outer["extent"], trcl_deg,
                 lattice.MAX_LATTICE_DEPTH, lattice.MAX_TOTAL_INSTANCES,
-                surf_text, axial=axial, detail="layers")
+                surf_text, axial=axial, detail="layers",
+                container_bound=container_bound)
             if (composed.get("count", 0) > lattice.DETAIL_MAX_INSTANCES
                     and composed.get("status") != "too_many"):
                 composed = lattice.compose_lattice_tree(
                     outer["fill_grid"], sub_by_u, outer["extent"], trcl_deg,
                     lattice.MAX_LATTICE_DEPTH, lattice.MAX_TOTAL_INSTANCES,
-                    surf_text, axial=axial, detail="disc")
+                    surf_text, axial=axial, detail="disc",
+                    container_bound=container_bound)
             # 最外层容器 cell（fill 指向根格阵 universe 的空 cell，如 BEAVRS cell 343）
             # 的几何边界 → 供前端色块总览裁剪超外壳格位（17×17 方形格阵 vs 圆柱壳）。
             composed["outer_bound"] = _lattice_outer_bound(
@@ -2743,7 +2834,13 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 composed["cycle"] = False
                 composed["chain"] = []
 
-            # 4. 每个格阵 → 直接引用叶 universe 的裁剪 STL
+            # 4. 每个格阵 → 直接引用叶 universe 的裁剪 STL。
+            #    容器 cell（fill 指向根格阵 universe 的空 cell，BEAVRS 343）的几何约束
+            #    （`-80 700 -730` = cz 内 + z 界）作为 STL 裁剪的一部分：STL = universe
+            #    ∩ 格元盒 ∩ 容器cell —— 方法级，格元完全在容器外的（角位无限水）交集为空，
+            #    不产生"圆柱外虚假水块"；换任何外壳皆正确。
+            container_expr = _lattice_container_expr(
+                cell_list, str(outer.get("u", "") or ""))
             for entry in composed.get("lattices", []):
                 info = _find_lattice_cell_info_by_num(
                     entry.get("num"), lattice_infos, sub_by_u)
@@ -2763,7 +2860,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
                         height = entry.get("height", 1.0)
                         stls = _build_one_universe(
                             surf_text, tr_text, cell_list, u, box,
-                            entry.get("num"), pitch, height, lattice)
+                            entry.get("num"), pitch, height, lattice,
+                            container_expr)
                         if stls:
                             universes[u] = stls
                 entry["universes"] = universes

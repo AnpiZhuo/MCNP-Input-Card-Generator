@@ -350,13 +350,15 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
       handleRef.current = null;
     }
     const effOverview = isOverview(overviewUser, data.detailViable, data.count, data.disc);
-    // 总览/disc 详细：按外壳裁剪超壳格位（根格阵方形边/角 u=30 水/反射、u=708-711 baffle
-    // 到原点 198-243cm 远超圆柱外壳 187.96，不裁会露出重叠外壳）。
+    // 总览：按外壳裁剪超壳格位（色块圆心点）。disc 详细**不**按圆心裁——渲染的是后端
+    //「universe ∩ 格元盒 ∩ 容器cell」裁剪 STL（MCNP 窗口裁剪），圆柱外自动无实体；
+    // 圆角 baffle(圆心>187.96 但格元部分在内)显示成弧板，按圆心裁会误删。fill 层已按
+    //「格元盒与容器相交」正确跳过完全在外的格位。
     let positions;
     if (effOverview) {
       positions = data.outerBound ? data.overviewPositions.filter((p) => inOuter(p, data.outerBound)) : data.overviewPositions;
     } else {
-      positions = data.disc && data.outerBound ? data.leaves.filter((p) => inOuter(p, data.outerBound)) : data.leaves;
+      positions = data.leaves;
     }
     const handle = buildLatticeInstances({
       positions,

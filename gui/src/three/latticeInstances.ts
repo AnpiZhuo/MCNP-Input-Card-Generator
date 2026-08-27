@@ -409,10 +409,11 @@ export function buildLatticeInstances(opts: LatticeInstancesOptions): LatticeIns
     for (const g of groups) {
       const matStr = opts.cellMaterials?.[g.u]?.[g.cellNum] ?? g.items[0].mat ?? "";
       const isVoid = matStr === "0";
-      // disc 模式（OWEN placePin disc）：每 universe 用程序化单盘/外壳几何实例化，
-      // 不展开内部径向层、不依赖 universeStl（不炸 FreeCAD）。
+      // disc 模式：渲染后端「universe ∩ 格元盒 ∩ 容器cell」裁剪的 STL（MCNP 窗口裁剪），
+      // 不再用程序化圆柱——程序化柱画在格位圆心、忽略容器 cell（圆柱），角 baffle（圆心在
+      // 壳外）会超出/重叠外壳。universeStl 已含容器裁剪，圆柱外自动无实体、换外壳皆正确。
       const geometry = disc
-        ? buildDiscGeometry(block, opts.subPitch)
+        ? (opts.universeStl?.[g.u]?.[g.cellNum] ?? opts.universeStl?.[g.u]?.[Object.keys(opts.universeStl?.[g.u] || {})[0]] ?? new THREE.BoxGeometry(1, 1, 1))
         : (opts.universeStl?.[g.u]?.[g.cellNum] ?? new THREE.BoxGeometry(1, 1, 1));
       // 元素填充格（水/慢化剂）：STL 包围盒 x/y ≈ 整个格元盒 → 半透明。z 高度全长后，
       // 不透明水盒会遮挡后排阵格（用户看到「有的阵格显示、有的不显示」）。
