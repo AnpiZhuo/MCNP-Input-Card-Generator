@@ -243,8 +243,8 @@ describe("buildLatticeInstances（总览模式）", () => {
     expect(group.rotation.z).toBeCloseTo((30 * Math.PI) / 180, 9);
   });
 
-  it("DETAIL_MAX_INSTANCES = 20000（超限自动切总览的阈值常量）", () => {
-    expect(DETAIL_MAX_INSTANCES).toBe(20000);
+  it("DETAIL_MAX_INSTANCES = 1000000（超限自动切总览的阈值常量，与后端一致）", () => {
+    expect(DETAIL_MAX_INSTANCES).toBe(1000000);
   });
 });
 

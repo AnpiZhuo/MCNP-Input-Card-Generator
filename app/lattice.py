@@ -572,8 +572,8 @@ def validate_lattice_surfaces(surface_expr: str, lat: str, surfaces_text: str = 
 # 跨语言 golden（gui/src/utils/__golden__/latticeGolden.json）锁死。
 
 MAX_LATTICE_DEPTH = 8          # 嵌套 fill 递归深度上限（超 → status="depth_limit"）
-MAX_TOTAL_INSTANCES = 500_000  # 叶实例总数上限（超 → status="too_many"）
-DETAIL_MAX_INSTANCES = 20_000  # 详细模式（逐 universe STL）上限，超 → 自动切色块总览
+MAX_TOTAL_INSTANCES = 1_000_000  # 叶实例总数上限（超 → status="too_many"）
+DETAIL_MAX_INSTANCES = 1_000_000  # 详细模式（逐 universe STL）上限，超 → 自动切色块总览
 
 
 def _num(s) -> float:
