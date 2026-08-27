@@ -659,17 +659,19 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
             <option value="power">省电核显</option>
             <option value="default">系统默认</option>
           </select>
-          {/* 自检提示 / 设置结果（内联，非弹窗）：走核显且未选时提示；选后显示成功/失败 */}
-          {(gpuPrefMsg || (gpu && !gpu.discrete && !gpuPrefSel)) && (
-            <span style={{ fontSize: 10, alignSelf: "center", color: gpuPrefMsg ? gpuPrefMsg.color : "#b5881a" }}>
-              {gpuPrefMsg ? gpuPrefMsg.text : "当前 3D 走核显，可选「高性能独显」切换（重启生效）"}
-            </span>
-          )}
           {fc.status === "missing" && <button className="btn btn-ghost btn-xs" onClick={fc.pickPath}>指定 FreeCAD 路径</button>}
           <button className="btn btn-ghost btn-xs" onClick={() => setShowStepDlg(true)}>📥 导入 STEP</button>
           <button className="btn btn-primary btn-xs" onClick={handlePreview3D}>🔍 3D 预览</button>
           <button className="btn btn-ghost btn-xs" onClick={handleExportSTEP}>📐 导出 STEP</button>
         </div>
+        {/* GPU 偏好提示（独占一行，右对齐，位于按钮行下方）：自检 / 设置结果 */}
+        {(gpuPrefMsg || (gpu && !gpu.discrete && !gpuPrefSel)) && (
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
+            <span style={{ fontSize: 10, color: gpuPrefMsg ? gpuPrefMsg.color : "#b5881a" }}>
+              {gpuPrefMsg ? gpuPrefMsg.text : "当前 3D 走核显，可选「高性能独显」切换（重启生效）"}
+            </span>
+          </div>
+        )}
       </div>
       <div className="glass-card">
         <TextModeSection label="栅元列表" active={cellRawMode} onToggle={toggleCellRawMode} onDiscard={discardCellRaw} />
