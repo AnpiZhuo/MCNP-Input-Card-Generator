@@ -1,6 +1,6 @@
 # 项目记忆文档（AI 速查手册）
 
-> 最后更新时间：2026-08-24（Wave 2a 后端 15 项修复**全绿**：pytest **703/0/0**（基线 686 + 新增 17）——项 2/4/5/9/13/15 + 项 14 剩余 + api.yaml cycle 契约 + R1 五夹具/kitchen_sink R4 不回退 + 契约闸门含 cycle HTTP 用例；详见 docs/backend-changes.md §AA。前端 Wave 2b 并行进行中，golden 已写盘全部可断言无 skip）。此前：格阵 fill 三阶段**最终复验全绿**：pytest **674/0** / vitest **466/0 无 skip** / tsc EXIT 0 / 契约闸门 15/15 / 空 STL 修复生效，用户指定 E2E 17/17 PASS，**建议放行统一提交**，详见 docs/qa-report-final.md —— **按人脑模型重组**（原「顶部横幅 + §8 流水混装」整理为「短期记忆 / 长期记忆」两区，完整流水外置 `docs/CHANGELOG.md`）。同日完成 **GQ/SQ 3D 预览修复 + 渲染后续增强 + OWEN 四项 + 参数扫描前端**：全部门禁绿（pytest **573/0** / vitest **358/0** / tsc EXIT 0）+ PyInstaller sidecar 重打包 + 打包版冒烟通过。
+> 最后更新时间：2026-08-27（**v1.7.4**：3D 预览 MCNP 窗口裁剪修复 + U 分组侧边栏新功能，已打包部署 `D:\MCNP\MCNP输入卡生成器`；门禁后端 **85/85**（test_lattice+test_api_contract）/ 前端 vitest **527/527** / tsc EXIT 0）。此前（2026-08-24）：Wave 2a 后端 15 项修复**全绿**：pytest **703/0/0**（基线 686 + 新增 17）——项 2/4/5/9/13/15 + 项 14 剩余 + api.yaml cycle 契约 + R1 五夹具/kitchen_sink R4 不回退 + 契约闸门含 cycle HTTP 用例；详见 docs/backend-changes.md §AA。前端 Wave 2b 并行进行中，golden 已写盘全部可断言无 skip）。此前：格阵 fill 三阶段**最终复验全绿**：pytest **674/0** / vitest **466/0 无 skip** / tsc EXIT 0 / 契约闸门 15/15 / 空 STL 修复生效，用户指定 E2E 17/17 PASS，**建议放行统一提交**，详见 docs/qa-report-final.md —— **按人脑模型重组**（原「顶部横幅 + §8 流水混装」整理为「短期记忆 / 长期记忆」两区，完整流水外置 `docs/CHANGELOG.md`）。同日完成 **GQ/SQ 3D 预览修复 + 渲染后续增强 + OWEN 四项 + 参数扫描前端**：全部门禁绿（pytest **573/0** / vitest **358/0** / tsc EXIT 0）+ PyInstaller sidecar 重打包 + 打包版冒烟通过。
 >
 > **人脑模型组织说明**：
 > - **◉ 短期记忆（工作记忆）**：只放"现在正在处理的事"——当前批次 / 工作区 / 待办。**容量小、变化快、随批次刷新**（人脑工作记忆约 7±2 项）。
@@ -13,6 +13,20 @@
 # ◉ 短期记忆（工作记忆）—— 当前活跃上下文
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
+
+## S1（当前批次）3D 预览 MCNP 窗口裁剪修复 + U 分组侧边栏（2026-08-27，v1.7.4，已提交 + 已打包部署）
+- **批次目标**：① 修 BEAVRS 全堆芯 3D 预览"圆柱超出/重叠外壳"（用户反复反馈，最终定为"方法级 MCNP 窗口裁剪"而非"针对超壳打补丁"）；② 3D 预览侧边栏改为 U 分组（不显示组成 U 的栅元行，改为显示 U=n 组 + 保留 u 为空的未分组栅元）。**bug 修复批 + 新功能上线 → 版本升 1.7.4**（用户指定）。
+- **✅ 方法级 MCNP「窗口」裁剪（commit 530ee8a）**：核心=实体 = `universe ∩ 格元盒 ∩ 容器 cell 几何`（MCNP 窗口机制：被填充 cell 是窗口，填充 universe 再大也被窗口几何裁剪）。此前用 OWEN disc 程序化圆柱（画格位圆心、忽略容器裁剪）→ 超壳/重叠外壳；且 STL 只按格元盒裁无限水 cell（u=30 `-3:3`=全空间）→ 格元盒在圆柱外时生成"圆柱外虚假水块"。
+  - `app/lattice.py`：`_cell_box_outside_container`（格元盒与容器 cell 相交才保留）+ `compose_lattice_tree` 加 `container_bound` 参数；`_expand_lattice` 跳过格元盒完全在容器 cell 外的格位。
+  - `gui/backend/api_server.py`：`_build_one_universe` 加 `container_expr`（`-80 700 -730`）裁剪 → STL 被容器 cell 切割；新增 `_lattice_container_expr` / `_lattice_container_bound`。
+  - 前端 `latticeInstances.ts`：disc 丢弃程序化圆柱（buildDiscGeometry），改用后端容器裁剪 STL。
+  - 撤销前端 `inOuter` 圆心裁剪（会误删格元部分在内的角 baffle）。overview 色块仍保留 inOuter。
+  - **实测**：BEAVRS 超壳叶 **48 → 16**（仅 u=708-711 角 baffle，格元部分在内 → 显示成"格元∩圆柱"弧板，不超壳）；32 个 u=30 无限水（格元盒完全在圆柱外）被正确剔除。同批加了 subPitch（disc 半径用 min 格距 1.26，不再用根格阵 21.5 → 圆柱不再巨大重叠）。
+- **✅ U 分组侧边栏（commit 7de14cd）**：`MaterialPanel.tsx` 新增 `UniverseCellList`（U 组条目 + 未分组栅元行 sub-CellList，`UniverseGroupRow` 接口）；`Preview3D.tsx` hasLattice 时组装 universeGroups（按 u 分组 count/代表色/allVisible）+ 未分组栅元（displayOrigIdx=u 空行），传 UniverseCellList；`toggleUniverseGroup(u)` 切换该 universe 全部栅元可见性。分 u 非空栅元不再作为独立行平铺。二维截面继续用原 CellList 不受影响。独立格阵窗口（Preview3DLattice）无侧边栏无需改。
+- **版本号 1.7.3→1.7.4**：五处同步（tauri.conf.json / package.json / Cargo.toml / Cargo.lock / README 徽章，commit 39772a0）。
+- **改动清单**：`app/lattice.py`、`gui/backend/api_server.py`、`gui/src/three/latticeInstances.ts`、`gui/src/components/Preview3D.tsx`、`gui/src/components/Preview3DLattice.tsx`、`gui/src/components/MaterialPanel.tsx`、`gui/test/latticeInstances.test.ts`（8 文件）+ 诊断脚本 `tools/diag_*.py`（diag_beavrs_z/diag_compose_time/diag_http_leaf/diag_leaf_dist/diag_pitch/diag_over/diag_boxout）。
+- **门禁**：后端 `test_lattice`+`test_api_contract` **85/85**；前端 vitest **527/527**（无回归）；tsc EXIT 0。**⚠️ 已知 flaky**：colorize 128³ 计时 >50ms（负载偶发，隔离单跑绿，非回归）。
+- **✅ 已打包部署 v1.7.4（2026-08-27）**：vite build → PyInstaller sidecar → 替换 binaries → tauri build（v1.7.4）→ **6.2 时效坑命中并手动覆盖**（tauri 增量编译未刷新 target/release sidecar，manual overwrite to new sidecar，python.exe mtime 23:03:13）→ 部署 `D:\MCNP\MCNP输入卡生成器` → 冒烟通过（5001 就绪 + BEAVRS `diag_over` 超壳叶 48→16 + `diag_pitch` subPitch=1.26）。⚠️ 待用户浏览器复验 3D 预览（超壳柱消失、U 分组侧边栏）。
 
 ## S1（当前批次）用户 3D 预览/格阵编辑器 7 项反馈修复（2026-08-25，源：`P:\dekstop\新建 文本文档 (2).txt`；门禁 vitest 516/0 + tsc EXIT 0 + 后端 test_lattice/test_build_cells_data 79/0）
 - **批次目标**：用户对 3D 预览 + 格阵编辑器提 7 项反馈（0 分类逻辑确认 / 1-2 色块总览按钮位移+功能 / 3 色块坐标 / 4 独显 / 5 画布 XY 数学平面 / 6 子预览几何随定义+XYZ 轴）。**未 commit**（按惯例用户浏览器复验通过后统一提交）。
@@ -352,6 +366,7 @@
 
 | 版本 | 时间 | 内容 |
 | :--- | :--- | :--- |
+| **v1.7.4** | 2026-08-27 | **3D 预览 MCNP 窗口裁剪修复 + U 分组侧边栏**（用户指定新功能上线升版）：① 实体=universe∩格元盒∩容器cell，修超壳/重叠外壳 + 无限水虚假水块（BEAVRS 超壳叶 48→16）；② 3D 预览侧边栏改 U 分组 + 保留未分组栅元；disc 改用容器裁剪 STL、subPitch 半径；版本五处同步 |
 | **GQ/SQ 预览修复 + 渲染增强 + OWEN 四项 + 参数扫描前端**（未 commit/发版，文件恒 1.7.2） | 2026-08-22 | 纯 numpy MC 去 vtk + TR + 解析切片 + 切线平面法 + BEAVRS/17×17 夹具 + mctal 解析 + 校验规则交叉核对（validator +3 规则）+ 参数扫描（sweep 模块 + 2 端点 + SweepDialog 前端 + DOM 交互测试）；门禁 pytest **573/0** / vitest **358/0** / tsc EXIT 0；打包冒烟通过；待 tauri build/部署 |
 | **V1.7.2.2 批次**（文件恒 1.7.2） | 2026-08-19 | 4 修复进包：源卡文本模式漏生成 / SDEF 表单模式漏生成 + sdef_extra 往返 / IMP 归一化 / OUTP 解析+绘图+CSV（含 F1/F2/F5 泛化）；终版重打包部署，冒烟全过 |
 | **v1.7.2** | 2026-08-18 | 新功能**快捷建栅元**（RCC/RPP/SPH 一键生成曲面+TR+栅元，8 次迭代打包）；3D 预览坐标轴/截面/取景修复批 |

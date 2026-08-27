@@ -39,6 +39,7 @@ A desktop application for visually creating, editing, and validating **MCNP** in
 | **STEP 导入（GEOUNED）** | 几何标签页导入 `.STEP/.STP`，经 FreeCAD + GEOUNED 自动转换为 MCNP 曲面/栅元 |
 | **工作区保存/恢复 Save/Restore** | 关闭自动保存、手动保存按钮、一键清空；刷新/重开自动恢复全部输入 |
 | **3D 预览 / 截面** | FreeCAD 精确几何渲染，独立窗口可边编辑边看；截面由 STL 直接切出，支持 `#n` 栅元补集 |
+| **格阵 3D 装配** | 嵌套 fill 展开 + InstancedMesh 实例化渲染 BEAVRS 全堆芯（轴向折叠 / disc 降级 / subPitch 尺寸）；按 MCNP「窗口」机制裁剪（实体 = universe ∩ 格元盒 ∩ 容器 cell），不超壳、无虚假外块；3D 预览侧边栏按 U 分组显示（+ 保留未分组栅元） |
 | **条件编译行** | 材料/栅元支持 `#ifdef/#else/#endif`，所有行可拖拽排序 |
 | **材料下拉选择** | 栅元表格与 3D 预览中点击材料号下拉选择，**自动填充材料密度** |
 | **自定义窗口 Custom window** | 无系统边框 + 自绘标题栏（拖拽、最小化/最大化/关闭），类似 VSCode |
