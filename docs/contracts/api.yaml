@@ -1647,6 +1647,39 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
+  /api/set-gpu-preference:
+    post:
+      operationId: setGpuPreference
+      tags: [system]
+      summary: 设置应用 GPU 偏好（高性能独显 / 省电核显 / 系统默认）
+      description: |
+        写入 HKCU\Software\Microsoft\DirectX\UserGpuPreferences\<msedgewebview2.exe 及应用主 exe>
+        = GpuPreference=<2|1|0>;（2=高性能独显，1=省电/核显，0=系统默认），生效需重启应用。
+        入参 data.get("preference") ∈ {high, power, default}，缺省 high。非 Windows 返回 changed=0。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                preference:
+                  type: string
+                  enum: [high, power, default]
+      responses:
+        '200':
+          description: 成功 {status:"ok", preference, targets, changed}
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      preference: { type: string }
+                      targets: { type: array, items: { type: string } }
+                      changed: { type: integer }
+
 components:
   schemas:
     OkEnvelope:

@@ -1224,6 +1224,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             "/api/validate-lattice-surfaces": self._handle_validate_lattice_surfaces,
             "/api/lattice-extent": self._handle_lattice_extent,
             "/api/preview-lattice": self._handle_preview_lattice,
+            "/api/set-gpu-preference": self._handle_set_gpu_preference,
         }
         handler = handlers.get(parsed.path)
         if handler:
@@ -1231,6 +1232,23 @@ class MCNPHandler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
+
+    def _handle_set_gpu_preference(self):
+        """设置应用 GPU 偏好（写 HKCU UserGpuPreferences），需重启生效。
+
+        入参 preference ∈ {high(独显), power(核显), default(系统默认)}。对
+        msedgewebview2.exe + 应用主 exe 写入 GpuPreference=2/1/0;。非 Windows 返回 changed=0。
+        """
+        try:
+            gpu_pref = _import_app("gpu_pref")
+            data = self._read_body() or {}
+            pref = str(data.get("preference") or "high")
+            if pref not in ("high", "power", "default"):
+                pref = "high"
+            res = gpu_pref.apply_gpu_preference(pref)
+            self._ok({"status": "ok", "preference": pref, **res})
+        except Exception as e:
+            self._err(str(e))
 
     # ── 参数扫描（sweep）──
     def _handle_sweep_plan(self):

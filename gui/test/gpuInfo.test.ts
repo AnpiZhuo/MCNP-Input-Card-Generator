@@ -3,7 +3,7 @@
  * detectWebGLGpu 依赖浏览器 WebGL，jsdom 不测（返回 null 即可）。
  */
 import { describe, expect, it } from "vitest";
-import { classifyGpu, gpuStatusText } from "../src/utils/gpuInfo";
+import { classifyGpu, gpuShortText, gpuStatusText } from "../src/utils/gpuInfo";
 
 describe("classifyGpu", () => {
   it("NVIDIA GeForce / RTX → 独显", () => {
@@ -27,6 +27,14 @@ describe("classifyGpu", () => {
   it("空 → null；未命中 → unknown 核显", () => {
     expect(classifyGpu("", "")).toBeNull();
     expect(classifyGpu("Foo", "Bar")).toMatchObject({ vendor: "unknown", discrete: false });
+  });
+});
+
+describe("gpuShortText（用户要求：只要核显/独显）", () => {
+  it("独显 / 核显 / 未知", () => {
+    expect(gpuShortText({ vendor: "nvidia", discrete: true, name: "NVIDIA GeForce RTX 4060" })).toContain("独显");
+    expect(gpuShortText({ vendor: "intel", discrete: false, name: "Intel UHD 770" })).toContain("核显");
+    expect(gpuShortText(null)).toContain("未知");
   });
 });
 

@@ -8,6 +8,8 @@
  *
  * 纯函数可测（classifyGpu），detectWebGLGpu 依赖 DOM/WebGL（浏览器运行）。
  */
+import { apiUrl } from "./api";
+
 export interface GpuInfo {
   /** 厂商：nvidia | amd | intel | apple | unknown */
   vendor: string;
@@ -92,4 +94,39 @@ export function gpuStatusText(info: GpuInfo | null): string {
   if (!info) return "🎮 GPU: 不可用/未知";
   const kind = info.discrete ? "独显" : "核显（集显）";
   return `🎮 GPU: ${info.name || info.vendor} · ${kind}`;
+}
+
+/** 精简显示：用户要求"只要显示核显还是独显"（项4）。 */
+export function gpuShortText(info: GpuInfo | null): string {
+  if (!info) return "🎮 GPU: 未知";
+  return info.discrete ? "🎮 GPU: 独显" : "🎮 GPU: 核显";
+}
+
+export type GpuPreference = "high" | "power" | "default";
+
+export interface GpuSetResult {
+  ok: boolean;
+  targets: string[];
+  changed: number;
+  message?: string;
+}
+
+/** 调后端写 GPU 偏好（写 HKCU UserGpuPreferences，重启生效）。 */
+export async function setGpuPreference(preference: GpuPreference): Promise<GpuSetResult> {
+  try {
+    const r = await fetch(apiUrl("/api/set-gpu-preference"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ preference }),
+    });
+    const j = await r.json();
+    return {
+      ok: j.status !== "error",
+      targets: Array.isArray(j.targets) ? j.targets : [],
+      changed: Number(j.changed) || 0,
+      message: j.message,
+    };
+  } catch (e: any) {
+    return { ok: false, targets: [], changed: 0, message: String(e?.message || "无法连接后端") };
+  }
 }
