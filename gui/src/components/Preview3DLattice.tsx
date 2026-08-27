@@ -350,10 +350,14 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
       handleRef.current = null;
     }
     const effOverview = isOverview(overviewUser, data.detailViable, data.count, data.disc);
-    // 总览：用根格阵 positions（完整），不用截断的 leaves；按外壳裁剪超壳格位
-    const positions = effOverview
-      ? (data.outerBound ? data.overviewPositions.filter((p) => inOuter(p, data.outerBound)) : data.overviewPositions)
-      : data.leaves;
+    // 总览/disc 详细：按外壳裁剪超壳格位（根格阵方形边/角 u=30 水/反射、u=708-711 baffle
+    // 到原点 198-243cm 远超圆柱外壳 187.96，不裁会露出重叠外壳）。
+    let positions;
+    if (effOverview) {
+      positions = data.outerBound ? data.overviewPositions.filter((p) => inOuter(p, data.outerBound)) : data.overviewPositions;
+    } else {
+      positions = data.disc && data.outerBound ? data.leaves.filter((p) => inOuter(p, data.outerBound)) : data.leaves;
+    }
     const handle = buildLatticeInstances({
       positions,
       universeStl: data.universeStl,

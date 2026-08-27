@@ -754,10 +754,19 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
     const ctrl = ctrlRef.current;
     if (!data || !ctrl || !sceneReady) return;
     const effOverview = latticeOverview || data.detailViable === false || (!data.disc && data.count > DETAIL_MAX_INSTANCES);
-    // 项：色块总览按外壳裁剪——只显示落在外壳（最外层容器 cell）内的格位，角部超壳剔除
-    const positions = effOverview
-      ? (data.outerBound ? data.overviewPositions.filter((p: any) => inOuter(p, data.outerBound)) : data.overviewPositions)
-      : data.positions;
+    // 项：色块总览按外壳裁剪——只显示落在外壳（最外层容器 cell）内的格位，角部超壳剔除。
+    // disc 详细模式同样裁剪：根格阵方形边/角格位（u=30 水/反射、u=708-711 baffle）到原点
+    // 距离 198-243cm 远超圆柱外壳 187.96 → 不裁会露出重叠外壳（实测 48 个 depth=1 超壳叶）。
+    let positions;
+    if (effOverview) {
+      positions = data.outerBound
+        ? data.overviewPositions.filter((p: any) => inOuter(p, data.outerBound))
+        : data.overviewPositions;
+    } else {
+      positions = data.disc && data.outerBound
+        ? data.positions.filter((p: any) => inOuter(p, data.outerBound))
+        : data.positions;
+    }
     const handle = buildLatticeInstances({
       positions,
       universeStl: data.universeStl,
