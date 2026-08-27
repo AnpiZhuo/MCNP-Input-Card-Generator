@@ -62,4 +62,13 @@ describe("Preview3D 唯一 3D 预览（格阵装配融进主场景）", () => {
     renderPreview([{ num: "1", mat: "1", surfaces: "-1" }]);
     expect(screen.getByText(/3D 预览/)).toBeTruthy();
   });
+
+  it("hasLattice → 色块总览 toggle 在控制面板（与半透明查看同区）；无 lattice → 不渲染 (项1/项2)", () => {
+    renderPreview([{ num: "40", mat: "0", surfaces: "-1", fill_grid: '{"lat":"1","kind":"lattice","dims":[2,2,1],"range":["0:1","0:1","0:0"],"cells":[{"u":"1"},{"u":"1"},{"u":"1"},{"u":"1"}],"raw":""}' }]);
+    expect(screen.getByText("色块总览")).toBeTruthy();
+    expect(screen.getByText("半透明查看")).toBeTruthy();
+    cleanup();
+    renderPreview([{ num: "41", mat: "1", surfaces: "-1" }]);
+    expect(screen.queryByText("色块总览")).toBeNull();
+  });
 });

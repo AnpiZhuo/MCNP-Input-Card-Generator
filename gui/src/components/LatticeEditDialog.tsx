@@ -152,6 +152,34 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
 
   const effectiveDims = dims;
 
+  /* ── 项6：子预览几何随定义变化（不再固定 pitch=1）。
+   * rect 用宏体长 L/宽 W/高 H；六棱柱 mode B 用由 RHP 外接半径推导的格距 hexPitch + 高，
+   * mode A 用 apothem(=|M-V|)*2 作格距 + |T-V| 作高。手动/未生成宏体时回落 pitch=1。 ── */
+  const previewGeom = useMemo(() => {
+    if (lat === "2") {
+      let pitch: number;
+      let height: number;
+      if (rhpMode === "A") {
+        const apothem = Math.hypot(genHexA.mx - genHexA.vx, genHexA.my - genHexA.vy, genHexA.mz - genHexA.vz);
+        pitch = 2 * apothem;
+        height = Math.hypot(genHexA.tx - genHexA.vx, genHexA.ty - genHexA.vy, genHexA.tz - genHexA.vz);
+      } else {
+        pitch = hexPitch;
+        height = genHexB.H;
+      }
+      return { pitch: Number.isFinite(pitch) && pitch > 0 ? pitch : 1, pitchY: undefined, height: Number.isFinite(height) && height > 0 ? height : 1 };
+    }
+    const L = autoMode ? genRect.L : 0;
+    const W = autoMode ? genRect.W : 0;
+    const H = autoMode ? genRect.H : 0;
+    return {
+      pitch: L > 0 ? L : 1,
+      pitchY: W > 0 ? W : 1,
+      height: H > 0 ? H : 1,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lat, autoMode, rhpMode, hexPitch, genRect, genHexB, genHexA]);
+
   const currentRange = useMemo(
     () => [
       rangeFromDirCounts(xDir.neg, xDir.pos),
@@ -542,7 +570,7 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
               `当前涂色笔：U=${selectedU}`),
           ),
           React.createElement("div", { style: { flex: 1, minWidth: 240, height: 380 } },
-            React.createElement(LatticePreview3D, { lat, dims: effectiveDims, cells, palette, pitch: 1, height: Math.max(0.5, effectiveDims[2] || 1) }),
+            React.createElement(LatticePreview3D, { lat, dims: effectiveDims, cells, palette, pitch: previewGeom.pitch, pitchY: previewGeom.pitchY, height: previewGeom.height }),
           ),
         ),
       /* 步骤3：保存摘要（体积告警 + 判环已在保存时） */

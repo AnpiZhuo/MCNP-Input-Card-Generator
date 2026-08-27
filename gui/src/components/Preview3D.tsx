@@ -708,12 +708,16 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         const leaves = r.leafInstances || [];
         const n = r.count ?? leaves.length;
         const detailViable = r.detailViable !== false;
-        // 色块总览用根格阵 positions（完整）；总览模式调色板取自根格阵宇宙
-        const overviewPositions = (primary?.positions ?? []).map((x: any) => ({
-          path: String(x.idx), u: x.u, cellNum: "", mat: "",
-          x: x.x + (x.dx ?? 0), y: x.y + (x.dy ?? 0), z: x.z + (x.dz ?? 0), depth: 1,
-        }));
         const autoOverview = detailViable === false || n > DETAIL_MAX_INSTANCES;
+        // 项3：色块用「实际几何坐标」而非默认几何中心——
+        // 详细可折叠（detailViable 且未超限）时直接用叶实例绝对坐标（与详细模式逐位对齐），
+        // 自动总览（超大规模/嵌套 BEAVRS）回落到根格阵完整 positions（根 grid 中心，代表装配格位）。
+        const overviewPositions = (!autoOverview && leaves.length > 0)
+          ? leaves.map((x: any) => ({ path: x.path, u: x.u, cellNum: "", mat: "", x: x.x, y: x.y, z: x.z, depth: x.depth }))
+          : (primary?.positions ?? []).map((x: any) => ({
+              path: String(x.idx), u: x.u, cellNum: "", mat: "",
+              x: x.x + (x.dx ?? 0), y: x.y + (x.dy ?? 0), z: x.z + (x.dz ?? 0), depth: 1,
+            }));
         const palette = buildUniversePalette((autoOverview ? overviewPositions : leaves).map((x: any) => x.u));
         latticeDataRef.current = { positions: leaves, overviewPositions, universeStl, cellMaterials, palette, trclDeg: primary?.trclRotationDeg ?? 0, blockSize, count: n, detailViable };
         if (!cancelled) { setLatticeDataVersion(v => v + 1); setLatticeLoading(false); }
@@ -1010,17 +1014,6 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         React.createElement("span", {
           style: { fontSize: 11, color: "var(--text-tertiary)" },
         }, "🖱 拖拽旋转 · 滚轮缩放 · 右键平移"),
-        hasLattice && React.createElement("label", {
-          style: { display: "flex", gap: 6, alignItems: "center", fontSize: 11, color: "rgba(241,241,249,0.75)", cursor: "pointer" },
-        },
-          React.createElement("input", {
-            type: "checkbox",
-            checked: latticeOverview,
-            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setLatticeOverview(e.target.checked),
-            style: { accentColor: "#ff4d6d" },
-          }),
-          "色块总览",
-        ),
         React.createElement("button", {
           className: "btn btn-ghost btn-xs",
           onClick: onClose,
@@ -1127,6 +1120,29 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
           },
             React.createElement("span", null, "半透明查看"),
             React.createElement("span", { style: { fontSize: 10, color: "var(--text-tertiary)" } }, "默认不透明渲染（性能最佳）；开启可看穿外壳"),
+          ),
+        ),
+        /* 色块总览开关（项1/2）：位于「半透明查看」下方；切换详细几何 ↔ 色块总览 */
+        hasLattice && React.createElement("div", {
+          style: {
+            padding: "8px 14px", borderBottom: "1px solid var(--border-glass)",
+            display: "flex", alignItems: "center", gap: 8,
+          } as React.CSSProperties,
+        },
+          React.createElement("input", {
+            type: "checkbox",
+            id: "lattice-overview-toggle",
+            checked: latticeOverview,
+            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setLatticeOverview(e.target.checked),
+            style: { accentColor: "var(--accent)" } as React.CSSProperties,
+          }),
+          React.createElement("label", {
+            htmlFor: "lattice-overview-toggle",
+            style: { fontSize: 11, color: "var(--text-secondary)", cursor: "pointer", display: "flex", flexDirection: "column", gap: 2 } as React.CSSProperties,
+          },
+            React.createElement("span", null, "色块总览"),
+            React.createElement("span", { style: { fontSize: 10, color: "var(--text-tertiary)" } },
+              latticeOverview ? "按宇宙色块显示装配格位（省性能）" : "显示真实几何（性能优先）"),
           ),
         ),
         /* 截面控制 */

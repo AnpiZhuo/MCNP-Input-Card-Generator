@@ -22,6 +22,7 @@ import { useSectionTextMode } from "../utils/useSectionTextMode";
 import { textToSection } from "../utils/sectionConvert";
 import { appendCardText, applyQuickAddChoice, generatedCellToRow, quickAddCheckFailedMessage, type QuickAddChoice, type QuickCellResult } from "../utils/quickCell";
 import { applyBatchEditToRows, pruneSelectedNums, selectedCellsFromNums, toggleCellNum, type BatchCellEditValues } from "../utils/batchCellEdit";
+import { detectWebGLGpu, classifyGpu, gpuStatusText, type GpuInfo } from "../utils/gpuInfo";
 
 /** 下拉右缘防溢出：x 超过视口右缘时 clamp 到 viewportWidth - dropdownWidth - 20。
  *  对齐现行为（现 220 = 200 宽 + 20 边距）。viewportWidth 为 0/负数时 Math.min 自然兜底（返回 min(x, 负数)）。 */
@@ -53,6 +54,12 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const [batchOpen, setBatchOpen] = useState(false);
   const [surfText, setSurfText] = useState("");
   const [trText, setTrText] = useState("");
+  // 项4 辅助：读取当前 WebGL 实际使用的 GPU（主界面与 3D 预览同进程，可反映 3D 用卡）
+  const [gpu, setGpu] = useState<GpuInfo | null>(null);
+  useEffect(() => {
+    const d = detectWebGLGpu();
+    if (d) setGpu(classifyGpu(d.vendor, d.renderer));
+  }, []);
   const [show3D, setShow3D] = useState(false);
   const [showStepDlg, setShowStepDlg] = useState(false);
   const [quickCellOpen, setQuickCellOpen] = useState(false);
@@ -616,8 +623,16 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
           </div>
         </div>
         {/* 3D 预览 & STEP 操作按钮 */}
-        <div style={{display:"flex", gap:8, justifyContent:"flex-end", marginTop:8}}>
+        <div style={{display:"flex", gap:8, justifyContent:"flex-end", marginTop:8, alignItems:"center"}}>
           <span style={{fontSize:11, color:fc.status === "ok" ? "#2e7d32" : "#c62828", alignSelf:"center"}}>{fc.status === "checking" ? "检测中..." : fc.status === "ok" ? "✅ FreeCAD 已安装" : "⚠ 需要 FreeCAD"}</span>
+          {gpu && (
+            <span
+              title={gpu.discrete ? "当前 3D 预览走独立显卡" : "当前 3D 预览走核显；如需独显请运行 tools\\set-discrete-gpu.bat"}
+              style={{ fontSize: 11, alignSelf: "center", color: gpu.discrete ? "#2e7d32" : "#b5881a", cursor: "default" }}
+            >
+              {gpuStatusText(gpu)}
+            </span>
+          )}
           {fc.status === "missing" && <button className="btn btn-ghost btn-xs" onClick={fc.pickPath}>指定 FreeCAD 路径</button>}
           <button className="btn btn-ghost btn-xs" onClick={() => setShowStepDlg(true)}>📥 导入 STEP</button>
           <button className="btn btn-primary btn-xs" onClick={handlePreview3D}>🔍 3D 预览</button>

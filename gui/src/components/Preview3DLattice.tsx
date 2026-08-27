@@ -254,11 +254,14 @@ export default function Preview3DLattice({ cells, surfaces, trCards, onClose }: 
       const blockSize = blockSizeFrom(primary, latCell.lat || "");
       const detailViable = j.detailViable !== false;
       const auto = isOverview(false, detailViable, n);
-      // 色块总览用根格阵 positions（完整）；叶子超上限时后端已裁空
-      const overviewPositions = (primary?.positions ?? []).map((p) => ({
-        path: String(p.idx), u: p.u, cellNum: "", mat: "",
-        x: p.x + (p.dx ?? 0), y: p.y + (p.dy ?? 0), z: p.z + (p.dz ?? 0), depth: 1,
-      }));
+      // 项3：色块用「实际几何坐标」而非默认几何中心（见 Preview3D 同注释）——详细可折叠时
+      // 直接用叶实例绝对坐标（逐位对齐详细模式）；自动总览回落到根格阵完整 positions。
+      const overviewPositions = (!auto && leaves.length > 0)
+        ? leaves.map((p) => ({ ...p, cellNum: "", mat: "" }))
+        : (primary?.positions ?? []).map((p) => ({
+            path: String(p.idx), u: p.u, cellNum: "", mat: "",
+            x: p.x + (p.dx ?? 0), y: p.y + (p.dy ?? 0), z: p.z + (p.dz ?? 0), depth: 1,
+          }));
       // 调色板：总览模式用根格阵 positions 的宇宙（leaves 已裁空）；否则用叶宇宙
       const palette = buildUniversePalette((auto ? overviewPositions : leaves).map((p) => p.u));
 

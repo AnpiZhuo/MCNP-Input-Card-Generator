@@ -52,27 +52,33 @@ export default function LatticeCanvas({ lat, dims, cells, palette, selectedU, on
     <div key={k} className="lattice-layer">
       {layers > 1 && <div className="lattice-layer-label">层 {k}</div>}
       <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 26px)`, gap: 2 }}>
-        {cells.slice(k * layerSize, (k + 1) * layerSize).map((c, li) => {
-          const idx = k * layerSize + li;
-          const i = li % cols;
-          const j = Math.floor(li / cols);
-          return (
-            <button
-              key={idx}
-              type="button"
-              data-testid={`lcell-${idx}`}
-              aria-label={`格位 ${idx} U=${c.u}`}
-              title={`(${i},${j},${k}) U=${c.u}`}
-              onClick={() => handleClick(idx)}
-              disabled={disabled}
-              style={{
-                width: 26, height: 26, border: "1px solid rgba(255,255,255,0.16)", borderRadius: 3,
-                background: cellBg(c.u), color: "var(--text-secondary)", fontSize: 9,
-                cursor: disabled ? "default" : "pointer", padding: 0, lineHeight: 1,
-              }}
-            >{cellLabel(c.u)}</button>
-          );
-        })}
+        {/* 项5：XY 按数学平面（X 右 / Y 上）——行 j 从下往上排（首 DOM 行 = 最大 j 行） */}
+        {Array.from({ length: rows }).map((_, jr) =>
+          Array.from({ length: cols }).map((_, ic) => {
+            const j = rows - 1 - jr;
+            const i = ic;
+            const li = j * cols + i;
+            const idx = k * layerSize + li;
+            const c = cells[idx];
+            if (!c) return null;
+            return (
+              <button
+                key={idx}
+                type="button"
+                data-testid={`lcell-${idx}`}
+                aria-label={`格位 ${idx} U=${c.u}`}
+                title={`(${i},${j},${k}) U=${c.u}`}
+                onClick={() => handleClick(idx)}
+                disabled={disabled}
+                style={{
+                  width: 26, height: 26, border: "1px solid rgba(255,255,255,0.16)", borderRadius: 3,
+                  background: cellBg(c.u), color: "var(--text-secondary)", fontSize: 9,
+                  cursor: disabled ? "default" : "pointer", padding: 0, lineHeight: 1,
+                }}
+              >{cellLabel(c.u)}</button>
+            );
+          }),
+        )}
       </div>
     </div>
   );
@@ -107,7 +113,7 @@ export default function LatticeCanvas({ lat, dims, cells, palette, selectedU, on
                 style={{
                   position: "absolute",
                   left: h.x - minX,
-                  top: h.y - minY,
+                  top: maxY - h.y, // 项5：Y 向上（数学平面）；Y 越大越靠上
                   width: cellW,
                   height: cellH,
                   clipPath: HEX_CLIP,

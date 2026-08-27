@@ -14,7 +14,19 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
-## S1（当前批次）格阵 fill 15 项用户实测反馈修复（2026-08-24，PM 全新接手；三阶段已提交 commit 2e38934）
+## S1（当前批次）用户 3D 预览/格阵编辑器 7 项反馈修复（2026-08-25，源：`P:\dekstop\新建 文本文档 (2).txt`；门禁 vitest 516/0 + tsc EXIT 0 + 后端 test_lattice/test_build_cells_data 79/0）
+- **批次目标**：用户对 3D 预览 + 格阵编辑器提 7 项反馈（0 分类逻辑确认 / 1-2 色块总览按钮位移+功能 / 3 色块坐标 / 4 独显 / 5 画布 XY 数学平面 / 6 子预览几何随定义+XYZ 轴）。**未 commit**（按惯例用户浏览器复验通过后统一提交）。
+- **✅ 项0 分类逻辑确认（后端已符合）**：`app/lattice.py` `_expand_universe` 已按用户四点模型——① U 空/0 的栅元直接显示（实体叶 material≠0 / 纯 void 叶）；② 用 fill（含 fill="0"）的 U=0/空=装配容器不产 STL；③ 无 fill 的 U≠0=可复用 universe 装配组件（每 universe 一份 STL 复用）；④ 用 fill 的 U≠0=位置函数可嵌套递归（sub_by_u fill 图 DFS）。后端点 preview-lattice compose_lattice_tree 已有嵌套。**无代码改动**（仅确认 + 门禁验 79/0）。
+- **✅ 项1/项2 色块总览**：`Preview3D.tsx` 标题栏的「色块总览」checkbox 移到右侧控制面板**「半透明查看」下方**（`lattice-overview-toggle`），仅 hasLattice 显示；文案随开关切换「按宇宙色块显示装配格位 / 显示真实几何」。原切换机制（latticeOverview → 重建 effect）保留且功能完好。
+- **✅ 项3 色块坐标**：`Preview3D.tsx` + `Preview3DLattice.tsx` 的 overviewPositions 从「根格阵 positions（默认几何中心）」改为**详细可折叠时直接用叶实例绝对坐标**（与详细模式逐位对齐），自动总览（超限/嵌套 BEAVRS）才回落根格阵完整 positions。
+- **✅ 项4 独显**：确认全部 5 处 WebGL 渲染器（Preview3D initScene / useThreeCanvas / QuickCellDialog / PtracRenderer / VolumeRenderer）均已 `powerPreference: "high-performance"`。**强制指定物理独显无法从 WebGL/WebView2 JS 侧实现**（渲染跑在共享的 `msedgewebview2.exe` 而非应用主 exe，Windows 按进程分配 GPU）。
+  - **✅ 落地工具**：新增 `tools/set-discrete-gpu.ps1` + `tools/set-discrete-gpu.bat`（双击即用，UTF-8 BOM）；原理=把 WebView2 `msedgewebview2.exe` 与应用主 exe 写入 `HKCU\Software\Microsoft\DirectX\UserGpuPreferences\<exe>` = `GpuPreference=2;`（per-user 无需管理员）。本机实测写入→读回 `GpuPreference=2;` 成功（已验证后还原）。脚本自动识别应用 exe（排除 python/msedgewebview/unins 等）+ 搜索共享/固定版本 WebView2；NVIDIA 检测到则提示可在 NVIDIA 控制面板程序设置里再给 `msedgewebview2.exe` 强制选「高性能 NVIDIA 处理器」（驱动层更彻底）。参数：`-AppExeOnly`（只设应用 exe，避免影响其它 WebView2 程序）/ `-AppExe "..."` / `-PrinterOnly`（预览不写）。**注意**：Evergreen 共享 WebView2 设高性能会影响所有 WebView2 程序；改后需重启应用/电脑生效。**前提**：真正渲染仍由 WebView2 决定，注册表/驱动对 WebView2 无 100% 保证（微软 #5072 同结论），最彻底仍需 NVIDIA 控制面板程序级设置。
+  - **✅ GPU 信息读出（几何标签页，FreeCAD 状态旁）**：新增 `gui/src/utils/gpuInfo.ts`（深模块：`detectWebGLGpu` 读 `WEBGL_debug_renderer_info`→UNMASKED_*, `classifyGpu` 判 nvidia/amd/intel/apple+核显/独显, `gpuStatusText` 文案）+ `gui/test/gpuInfo.test.ts`(5)。`GeometryTab.tsx` 顶部 useEffect 检测一次，在「曲面卡 & TR 变换」卡片底部操作行 **FreeCAD 状态旁** 显示 🎮 GPU: 名称·独显/核显（核显黄 + tooltip 提示跑 set-discrete-gpu.bat）。主界面与 3D 预览共享 WebView2 进程，可反映 3D 用卡。门禁 vitest 66 文件/522 全过 + tsc 0 + vite build 0。
+- **✅ 项5 画布 XY 数学平面**：`LatticeCanvas.tsx` 矩形 CSS grid 改**行 j 从下往上排**（首 DOM 行=最大 j 行），六棱柱 hex 改 `top: maxY - h.y`（Y 越大越靠上）→ X 右 / Y 上（数学平面），原来 Y 是屏幕向下。
+- **✅ 项6 子预览几何随定义 + XYZ 轴**：`LatticePreview3D.tsx` 增 `buildAxes()`（AXIS_CONFIG：X 红/Y 绿/Z 蓝，数学/物理三维表达系，含正端字母 sprite）+ `pitchY` 参数；`LatticeEditDialog.tsx` 新增 `previewGeom` useMemo（rect 用宏体 L/W/H；hex mode B 用 hexPitch+genHexB.H、mode A 用 apothem×2+ |T−V|），由 `pitch:1` 固定改为真实几何尺寸，图形随定义变化。
+- **改动清单**：`gui/src/components/Preview3D.tsx`、`Preview3DLattice.tsx`、`LatticeCanvas.tsx`、`LatticePreview3D.tsx`、`LatticeEditDialog.tsx`（全部前端，无后端新端点）。**门禁：vitest 516/0（65 文件全过，preview3dLatticeRouting/latticeEditDialog 等沿用 mock 无回退）+ tsc EXIT 0 + 后端 test_lattice/test_build_cells_data 79/0**。⚠️ 待用户浏览器复验（前端需重建 dev bundle；项4 独显为 OS 级设置仅提示）。
+
+## S1（上一批次）格阵 fill 15 项用户实测反馈修复（2026-08-24，PM 全新接手；三阶段已提交 commit 2e38934）
 - **批次目标**：用户浏览器实测格阵 fill 三阶段后提 15 项反馈（A 栅格编辑器 1-7 / B U 分组 8-11 / C 数据校验 12-13 / D 3D 预览 14-15）。修复后**用户在浏览器复验**（后端 5001、前端 1420 已运行），通过后**统一提交**（新 commit，不混入 2e38934）。
 - **用户核心原则（不可违背）**：① MCNP 能输入多少参数，编辑器就该提供多少参数输入；② 格阵 cell 几何统一用宏体定义（LAT=1→RPP/BOX，LAT=2→RHP/HEX）。
 - **⚠️ 3D 预览 STL 生成 cell 分类规则（用户已确认，2026-08-24，项 14/15 权威依据）**：① 被 fill 的 cell（fill 非空 **或** fill_grid 非空，含 fill="0"）=装配容器，自身不产 STL（无论有无 u、material 是否 0）；② 递归装配 universe 直到叶级实体 cell（material≠0 且无 fill）才产 STL；③ 普通实体 cell（material≠0 无 fill 无 u）→直接产 STL；④ 纯 void（material=0 无 fill 无 u）→参与 STL（项 14 删 void 约束唯一适用范围）；⑤ graveyard（imp=0）→不渲染；⑥ universe U 几何=所有 u=U 的 cell 的 STL 集合。**关键缺口：build_cells_data 当前只 skip fill_grid 非空格阵 cell，没 skip `fill=U` 单值 cell——删 void 后这类 cell 变实体块（"大紫方块"根因），必须补 skip 任何带 fill 的 cell。**
