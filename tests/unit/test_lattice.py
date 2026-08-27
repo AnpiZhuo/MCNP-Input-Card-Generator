@@ -618,8 +618,8 @@ def test_compose_lattice_tree_too_many():
 
 def test_compose_lattice_tree_limits_constants():
     assert MAX_LATTICE_DEPTH == 8
-    assert MAX_TOTAL_INSTANCES == 1000000
-    assert DETAIL_MAX_INSTANCES == 1000000
+    assert MAX_TOTAL_INSTANCES == 2000000
+    assert DETAIL_MAX_INSTANCES == 2000000
 
 
 # ── 阶段3：跨语言 golden（positions / nested，前端 latticeGolden.json）──
