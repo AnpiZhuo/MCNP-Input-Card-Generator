@@ -292,7 +292,7 @@ export interface LatticeInstancesHandle {
 }
 
 /** 详细模式实例数上限：超出自动切总览（BEAVRS 全堆芯 ~30-60 万叶） */
-export const DETAIL_MAX_INSTANCES = 2000000;
+export const DETAIL_MAX_INSTANCES = 1000000000;
 
 function colorToNumber(c: string): number {
   if (!c || c === "transparent") return 0x888888;
