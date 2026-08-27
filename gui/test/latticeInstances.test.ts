@@ -299,6 +299,23 @@ describe("buildLatticeInstances（disc 降级模式）", () => {
     expect(sz.z).toBeGreaterThan(sz.y);
   });
 
+  it("subPitch 生效：disc 半径 = min(block, subPitch)/2*0.47，不用根格阵大 pitch", () => {
+    // blockSize.x=21.5（根格阵 pitch），subPitch=1.26（组件 pin 间距）
+    // disc 半径应为 1.26/2*0.47≈0.296，而非 21.5/2*0.47≈5.05（后者圆柱远超格位→超壳/乱面）
+    const big = { x: 21.5, y: 21.5, z: 460, hex: false };
+    const { group } = buildLatticeInstances({
+      positions, universeStl: {}, cellMaterials: {}, palette,
+      overviewMode: false, disc: true, blockSize: big, subPitch: 1.26,
+    });
+    const meshes = group.userData.instancedMeshes as THREE.InstancedMesh[];
+    const g0 = meshes[0].geometry as THREE.BufferGeometry;
+    g0.computeBoundingBox();
+    const sz = g0.boundingBox!.getSize(new THREE.Vector3());
+    // disc 半径 = min(21.5,1.26)/2*0.47≈0.296 → bbox x 尺寸 ≈ 0.59 << 21.5
+    expect(sz.x).toBeLessThan(2);
+    expect(sz.x).toBeGreaterThan(0.2);
+  });
+
   it("disc 色 = getUniverseColor（每 universe 一色）", () => {
     const { group } = buildLatticeInstances({
       positions, universeStl: {}, cellMaterials: {}, palette,
