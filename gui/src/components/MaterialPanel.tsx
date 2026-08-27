@@ -93,3 +93,56 @@ export function CellList({ rows, onToggle, onMaterialClick }: {
     </div>
   );
 }
+
+/** 3D 预览格阵侧边栏：U 组条目（每个 u 非空一条）+ 未分组（u 为空）栅元行。
+ *  「组成 U 的栅元」不作为独立行平铺，改由 U 组呈现；U 为空的栅元照常列出。 */
+export interface UniverseGroupRow {
+  u: number;
+  count: number;
+  color: string;      // 该组代表色（组内首个非 void 栅元材料色，void 则灰）
+  visible?: boolean;  // 组内是否 all-visible（无 locked 概念，组可整体切换）
+}
+
+export function UniverseCellList({ groups, ungrouped, onToggleGroup, onToggle, onMaterialClick }: {
+  groups: UniverseGroupRow[];
+  ungrouped: MaterialCellRow[];
+  onToggleGroup?: (u: number) => void;
+  onToggle?: (i: number) => void;
+  onMaterialClick?: (i: number, e: React.MouseEvent) => void;
+}) {
+  const groupStyle: React.CSSProperties = {
+    display: "flex", alignItems: "center", gap: 6, padding: "6px 14px",
+    cursor: onToggleGroup ? "pointer" : "default",
+    borderBottom: "1px solid rgba(255,255,255,0.06)",
+    background: "rgba(76,159,232,0.06)",
+  };
+  return (
+    <div style={{ flex: 1, overflow: "auto" }}>
+      <div style={{ padding: "6px 14px", fontSize: 10, color: "var(--text-tertiary)", fontWeight: 600 }}>
+        U 组（{groups.length}）
+      </div>
+      {groups.map((g) => (
+        <div
+          key={`u-${g.u}`}
+          style={groupStyle}
+          onClick={onToggleGroup ? () => onToggleGroup(g.u) : undefined}
+          title="点击切换该 universe 全部栅元可见性"
+        >
+          <input
+            type="checkbox" checked={g.visible !== false} readOnly
+            style={{ pointerEvents: "none", flexShrink: 0 }}
+          />
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: g.color, flexShrink: 0, border: "1px solid rgba(255,255,255,0.2)" }} />
+          <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-primary)", flexShrink: 0 }}>{`U=${g.u}`}</span>
+          <span style={{ fontSize: 10, color: "var(--text-secondary)", flexShrink: 0 }}>{`· ${g.count} 栅元`}</span>
+        </div>
+      ))}
+      {ungrouped.length > 0 && (
+        <div style={{ padding: "6px 14px", fontSize: 10, color: "var(--text-tertiary)", fontWeight: 600, borderTop: "1px solid rgba(255,255,255,0.04)" }}>
+          未分组栅元（{ungrouped.length}）
+        </div>
+      )}
+      <CellList rows={ungrouped} onToggle={onToggle} onMaterialClick={onMaterialClick} />
+    </div>
+  );
+}

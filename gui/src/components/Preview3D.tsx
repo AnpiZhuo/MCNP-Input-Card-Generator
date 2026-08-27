@@ -66,7 +66,7 @@ interface Preview3DProps {
 
 /* ---- 色板（10 色，按材料号取模） ---- */
 import { getMatColor as getColor } from "../utils/materialColors";
-import { MaterialLegend, CellList } from "./MaterialPanel";
+import { MaterialLegend, CellList, UniverseCellList } from "./MaterialPanel";
 import { useDeck } from "../utils/DeckContext";
 import { openCrossSection } from "../utils/windows";
 import { apiUrl } from "../utils/api";
@@ -1020,6 +1020,30 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   // 格阵装配适配：右侧栅元列表过滤 universe 栅元（u 非空，经 fill 装配显示）；
   // displayOrigIdx = 过滤后列表每行对应的 cellViews 原始索引
   const displayOrigIdx = cellViews.map((_cv, i) => i).filter((i) => !(rawCells[i]?.u));
+  // 格阵侧边栏：U 组（u 非空，每个 U 一条）+ 未分组栅元（u 为空照常列出）。
+  // 「组成 U 的栅元」不作为独立行平铺，改由 U 组呈现；U 为空的栅元保留。
+  const uniGroupsMap = new Map<number, { count: number; color: string; idxs: number[] }>();
+  for (let _i = 0; _i < cellViews.length; _i++) {
+    const uS = (rawCells[_i]?.u || "").trim();
+    const u = uS ? Number(uS) : NaN;
+    if (Number.isFinite(u)) {
+      const g = uniGroupsMap.get(u) || { count: 0, color: "var(--text-tertiary)", idxs: [] };
+      g.count++; g.idxs.push(_i);
+      if (cellViews[_i]?.mat !== "0") g.color = cellViews[_i].color;
+      uniGroupsMap.set(u, g);
+    }
+  }
+  const universeGroups = Array.from(uniGroupsMap.entries())
+    .map(([u, g]) => ({ u, count: g.count, color: g.color,
+                        visible: g.idxs.every((ix) => cellViews[ix].visible) }))
+    .sort((a, b) => a.u - b.u);
+  const toggleUniverseGroup = useCallback((u: number) => {
+    const g = uniGroupsMap.get(u); if (!g) return;
+    const target = !g.idxs.every((ix) => cellViews[ix]?.visible);
+    setCellViews((prev) => prev.map((c, ix) =>
+      (g.idxs.includes(ix) && c.mat !== "0") ? { ...c, visible: target } : c));
+    g.idxs.forEach((ix) => { if (cellViews[ix]?.mat !== "0") ctrlRef.current?.setVisible(ix, target); });
+  }, [cellViews]);
 
   // 材料图例（去重）
   const legendEntries: { mat: string; color: string }[] = [];
@@ -1235,13 +1259,19 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         hasLattice && React.createElement("div", {
           style: { fontSize: 10, color: "var(--text-tertiary)", padding: "2px 14px" } as React.CSSProperties,
         }, "格阵已装配：universe 栅元经 fill 显示，不单独列出"),
-        React.createElement(CellList, {
-          rows: hasLattice
-            ? displayOrigIdx.map((i) => ({ num: cellViews[i].num, mat: cellViews[i].mat, comment: cellViews[i].comment, visible: cellViews[i].visible, locked: cellViews[i].mat === "0" }))
-            : cellViews.map(cv => ({ num: cv.num, mat: cv.mat, comment: cv.comment, visible: cv.visible, locked: cv.mat === "0" })),
-          onToggle: (rowIndex: number) => toggleCell(hasLattice ? displayOrigIdx[rowIndex] : rowIndex),
-          onMaterialClick: (rowIndex: number, e: React.MouseEvent) => { setMatPicker({ i: hasLattice ? displayOrigIdx[rowIndex] : rowIndex, x: e.clientX, y: e.clientY }); },
-        }),
+        hasLattice
+          ? React.createElement(UniverseCellList, {
+              groups: universeGroups,
+              ungrouped: displayOrigIdx.map((i) => ({ num: cellViews[i].num, mat: cellViews[i].mat, comment: cellViews[i].comment, visible: cellViews[i].visible, locked: cellViews[i].mat === "0" })),
+              onToggleGroup: toggleUniverseGroup,
+              onToggle: (rowIndex: number) => toggleCell(displayOrigIdx[rowIndex]),
+              onMaterialClick: (rowIndex: number, e: React.MouseEvent) => { setMatPicker({ i: displayOrigIdx[rowIndex], x: e.clientX, y: e.clientY }); },
+            })
+          : React.createElement(CellList, {
+              rows: cellViews.map(cv => ({ num: cv.num, mat: cv.mat, comment: cv.comment, visible: cv.visible, locked: cv.mat === "0" })),
+              onToggle: (rowIndex: number) => toggleCell(rowIndex),
+              onMaterialClick: (rowIndex: number, e: React.MouseEvent) => { setMatPicker({ i: rowIndex, x: e.clientX, y: e.clientY }); },
+            }),
         /* 重合检测面板（点击对 → 两栅元红色高亮） */
         React.createElement("div", {
           style: {
