@@ -6,8 +6,8 @@
     "distDir": "../dist"
   },
   "package": {
-    "productName": "MCNP \u8f93\u5165\u5361\u751f\u6210\u5668",
-    "version": "1.7.3"
+    "productName": "MCNP 输入卡生成器",
+    "version": "1.7.4"
   },
   "tauri": {
     "allowlist": {
@@ -35,7 +35,9 @@
     "bundle": {
       "active": false,
       "targets": "all",
-      "externalBin": ["python"],
+      "externalBin": [
+        "python"
+      ],
       "identifier": "com.mcnp.generator",
       "icon": [
         "icons/32x32.png",
@@ -49,7 +51,7 @@
     },
     "windows": [
       {
-        "title": "MCNP \u8f93\u5165\u5361\u751f\u6210\u5668",
+        "title": "MCNP 输入卡生成器",
         "width": 1200,
         "height": 800,
         "minWidth": 900,
