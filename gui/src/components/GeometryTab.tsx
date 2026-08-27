@@ -57,18 +57,23 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   // 项4 辅助：读取当前 WebGL 实际使用的 GPU（主界面与 3D 预览同进程，可反映 3D 用卡）
   const [gpu, setGpu] = useState<GpuInfo | null>(null);
   const [gpuPrefBusy, setGpuPrefBusy] = useState(false);
+  const [gpuPrefSel, setGpuPrefSel] = useState("");
+  const [gpuPrefMsg, setGpuPrefMsg] = useState<{ color: string; text: string } | null>(null);
   useEffect(() => {
     const d = detectWebGLGpu();
     if (d) setGpu(classifyGpu(d.vendor, d.renderer));
   }, []);
 
+  // 选 GPU 偏好 → 调后端写注册表；结果用内联提示条（不用 window.alert，避免 WebView2 弹窗不可靠）
   const applyGpuPref = (pref: GpuPreference) => {
-    setGpuPrefBusy(true);
     const label = pref === "high" ? "高性能独显" : pref === "power" ? "省电核显" : "系统默认";
+    setGpuPrefSel(pref);
+    setGpuPrefBusy(true);
+    setGpuPrefMsg(null);
     setGpuPreference(pref).then((r) => {
       setGpuPrefBusy(false);
-      if (r.ok) alert(`已设置 GPU 偏好为「${label}」，重启应用后生效（3D 用卡在启动时读取）`);
-      else alert((r.message || "设置失败") + "（仅 Windows 下生效）");
+      if (r.ok) setGpuPrefMsg({ color: "#2e7d32", text: `已设为「${label}」，重启应用后生效（3D 用卡在启动时读取）` });
+      else setGpuPrefMsg({ color: "#c62828", text: `设置失败：${r.message || "未知"}（仅 Windows 下生效）` });
     });
   };
   const [show3D, setShow3D] = useState(false);
@@ -643,7 +648,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
             {gpuShortText(gpu)}
           </span>
           <select
-            value=""
+            value={gpuPrefSel}
             disabled={gpuPrefBusy}
             onChange={(e) => { const v = e.target.value as GpuPreference; if (v) applyGpuPref(v); }}
             style={{ fontSize: 11, alignSelf: "center", background: "var(--bg-input)", border: "1px solid var(--border-glass)", color: "var(--text-primary)", borderRadius: 4, padding: "1px 4px" }}
@@ -654,6 +659,12 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
             <option value="power">省电核显</option>
             <option value="default">系统默认</option>
           </select>
+          {/* 自检提示 / 设置结果（内联，非弹窗）：走核显且未选时提示；选后显示成功/失败 */}
+          {(gpuPrefMsg || (gpu && !gpu.discrete && !gpuPrefSel)) && (
+            <span style={{ fontSize: 10, alignSelf: "center", color: gpuPrefMsg ? gpuPrefMsg.color : "#b5881a" }}>
+              {gpuPrefMsg ? gpuPrefMsg.text : "当前 3D 走核显，可选「高性能独显」切换（重启生效）"}
+            </span>
+          )}
           {fc.status === "missing" && <button className="btn btn-ghost btn-xs" onClick={fc.pickPath}>指定 FreeCAD 路径</button>}
           <button className="btn btn-ghost btn-xs" onClick={() => setShowStepDlg(true)}>📥 导入 STEP</button>
           <button className="btn btn-primary btn-xs" onClick={handlePreview3D}>🔍 3D 预览</button>
