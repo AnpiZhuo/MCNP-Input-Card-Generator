@@ -929,17 +929,20 @@ def _lattice_pitch(extent: dict | None, lat: str):
     return px, py, pz
 
 
-def _cell_pz_bounds(surface_expr: str, surfaces_text: str = "") -> tuple:
+def _cell_pz_bounds(surface_expr: str, surfaces_text: str = "", surfaces=None) -> tuple:
     """扫描栅元曲面表达式中的 PZ 约束 → (z_lower, z_upper)；无 PZ 返回 (None, None)。
 
     -surf(PZ z0) → z < z0（上界）；+surf(PZ z0) → z > z0（下界）。
+    surfaces 预解析曲面卡（dict）可传入避免重复 parse（性能：单卡多次扫描时
+    不必每次全量 _parse_surface_cards 整段曲面卡文本）。
     """
     if not surface_expr or not str(surface_expr).strip():
         return None, None
     expr = str(surface_expr).strip()
     if any(ch in expr for ch in "#:()"):
         return None, None
-    surfaces = _parse_surface_cards(surfaces_text)
+    if surfaces is None:
+        surfaces = _parse_surface_cards(surfaces_text)
     lo, hi = None, None
     for tok in expr.split():
         if not _INT_RE.match(tok):
@@ -956,6 +959,40 @@ def _cell_pz_bounds(surface_expr: str, surfaces_text: str = "") -> tuple:
         else:      # z < z0 → 上界
             hi = z0 if hi is None else min(hi, z0)
     return lo, hi
+
+
+def _build_axial_segments(u, cells, surf_text, surfaces=None):
+    """识别 universe u 的轴向 stack：单-fill 子 universe + PZ 界定的 z 段列表。
+
+    轴向 stack（如 BEAVRS 燃料柱 u=116/124/131/…：25 个 cell 各 fill 一个
+    径向 pin universe，每 cell 由一对 PZ 平面界定，z 从 0 到 460 分 25 段）。
+    每段 = {zmin, zmax, fill_u, cellNum}。非单-fill cell（径向层/格阵 cell）跳过；
+    段数 < 2 → 返回 None（普通径向 pin universe 不是轴向 stack）。
+    OWEN mcnp.ts buildAxialStack 移植（MIT, BelvoirDynamics 2026）。
+    """
+    segs = []
+    for cell in cells or []:
+        fg = cell.get("fill_grid")
+        if fg is not None and fg.kind == "lattice":
+            continue  # 格阵 cell 不是轴向段
+        if fg is not None and fg.kind == "translated":
+            fill_u = fg.cells[0].u if fg.cells else ""
+        else:
+            fill_u = str(cell.get("fill") or "").strip()
+        if not fill_u or fill_u == "0":
+            continue
+        mat_s = str(cell.get("material") or "").strip()
+        # 轴向段 cell：material=0（装配容器）+ 单-fill。material≠0 的径向层不是轴向段
+        if mat_s not in ("0", ""):
+            continue
+        lo, hi = _cell_pz_bounds(cell.get("surface_expr", ""), surf_text, surfaces)
+        if lo is None or hi is None or not (hi > lo):
+            continue
+        segs.append({"zmin": lo, "zmax": hi, "fill_u": fill_u, "cellNum": cell.get("cellNum")})
+    if len(segs) < 2:
+        return None
+    segs.sort(key=lambda s: s["zmin"])
+    return segs
 
 
 def _extent_center(extent: dict | None) -> list:
@@ -1115,7 +1152,10 @@ def detect_fill_cycle(sub_by_u: dict) -> dict:
 def compose_lattice_tree(outer_fg: "FillGrid | None", sub_by_u: dict,
                          extent: dict | None, trcl,
                          max_depth: int = MAX_LATTICE_DEPTH,
-                         max_total: int = MAX_TOTAL_INSTANCES) -> dict:
+                         max_total: int = MAX_TOTAL_INSTANCES,
+                         surf_text: str = "",
+                         axial: bool = False,
+                         detail: str = "layers") -> dict:
     """嵌套 fill 递归：从外层格阵出发构建 NESTED TREE + FLAT leafInstances + 各格阵 positions。
 
     双形态返回：
@@ -1151,8 +1191,18 @@ def compose_lattice_tree(outer_fg: "FillGrid | None", sub_by_u: dict,
         "leaves": [],
         "lattices": [],
         "count": 0,
+        "surf_text": surf_text or "",
+        "axial": bool(axial),
+        "detail": str(detail or "layers"),
+        "surfaces": _parse_surface_cards(surf_text or ""),
+        "axial_cache": {},
     }
     outer_num = _find_lattice_cell_num(outer_fg, sub_by_u)
+    # 预计算全部 universe 的轴向 stack（一次性），供 _expand_universe 的 axial_cache 命中
+    _parse_surface_cards  # noqa: 保持符号可见（未使用）
+    for _u, _cells in (sub_by_u or {}).items():
+        state["axial_cache"].setdefault(
+            str(_u), _build_axial_segments(str(_u), _cells, state["surf_text"], state["surfaces"]))
     root_ctx = {"base": (0.0, 0.0, 0.0), "depth": 1, "path": "",
                 "trcl": float(trcl or 0)}
     tree = _expand_lattice(outer_fg, extent, outer_num, root_ctx, state)
@@ -1163,6 +1213,8 @@ def compose_lattice_tree(outer_fg: "FillGrid | None", sub_by_u: dict,
         "count": state["count"],
         "lattices": state["lattices"],
         "detailViable": state["count"] <= DETAIL_MAX_INSTANCES,
+        "detail": str(detail or "layers"),
+        "axial": bool(axial),
     }
 
 
@@ -1217,13 +1269,65 @@ def _expand_lattice(fg, extent, cell_num, ctx, state) -> list:
 
 
 def _expand_universe(u, base_xyz, depth, path, state) -> dict | None:
-    """展开 universe u 的栅元 → 该格位的 NESTED 节点（无可渲染子节点 → None）。"""
+    """展开 universe u 的栅元 → 该格位的 NESTED 节点（无可渲染子节点 → None）。
+
+    轴向折叠（state["axial"] is False，默认）：若 universe u 是轴向 stack
+    （单-fill + PZ 界定，≥2 段），只展开跨度最大的"代表段"（OWEN placeEntry
+    折叠逻辑：active fuel 段作整柱代表），逐段展开则由 axial=True 放开。
+    非 stack 的径向 pin universe（material cell、无 PZ）不受影响。
+    """
     cells = state["sub_by_u"].get(str(u))
     if not cells:
         return None
     bx, by, bz = base_xyz
     node = {"u": str(u), "x": bx, "y": by, "z": bz,
             "depth": depth, "path": path, "children": []}
+    # 轴向折叠：默认只展开"代表段"。axial_cache 在 compose 入口预计算，避免每格位重解析。
+    if not state.get("axial"):
+        _cache = state.setdefault("axial_cache", {})
+        segs = _cache.get(str(u))
+        if segs is None:
+            segs = _build_axial_segments(u, cells, state.get("surf_text", ""), state.get("surfaces"))
+            _cache[str(u)] = segs
+        if segs is not None:
+            rep = segs[0]
+            for sgm in segs:
+                if (sgm["zmax"] - sgm["zmin"]) > (rep["zmax"] - rep["zmin"]):
+                    rep = sgm
+            sub_node = _expand_universe(rep["fill_u"], base_xyz, depth + 1, path, state)
+            if sub_node is not None:
+                node["children"].append(sub_node)
+            return node if node["children"] else None
+    # disc 降级（步骤2）：detail=="disc" 且该 universe 是"纯径向 pin"（全部 material
+    # cell、无格阵/无单-fill）→ 只产 1 个代表叶（OWEN disc：主材料层单盘），而不是
+    # 每径向层一个叶。用户"把每个 U 打包成只有外壳的 STL"的叶数层面实现。
+    # 轴向 stack / 格阵 universe 不在此处理（由轴向折叠 + 各自递归负责）。
+    if state.get("detail") == "disc":
+        material_layers = [
+            cell for cell in cells
+            if str(cell.get("material") or "").strip() not in ("0", "")
+            and cell.get("fill_grid") is None
+            and str(cell.get("fill") or "").strip() == ""
+        ]
+        has_lattice_or_fill = any(
+            cell.get("fill_grid") is not None or str(cell.get("fill") or "").strip() not in ("", "0")
+            for cell in cells)
+        if material_layers and not has_lattice_or_fill:
+            # OWEN placePin disc：取"主导实心层"（第一个 material cell；disc 单盘）
+            rep = material_layers[0]
+            leaf = {
+                "path": path,
+                "u": str(u),
+                "cellNum": rep.get("cellNum"),
+                "mat": str(rep.get("material") or "").strip(),
+                "x": bx, "y": by, "z": bz,
+                "depth": depth,
+                "disc": True,
+            }
+            state["leaves"].append(leaf)
+            state["count"] += 1
+            node["children"].append({"leaf": True, **leaf})
+            return node if node["children"] else None
     for cell in cells:
         fg = cell.get("fill_grid")
         if fg is not None and fg.kind == "lattice":

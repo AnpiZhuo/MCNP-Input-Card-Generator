@@ -2714,9 +2714,20 @@ class MCNPHandler(BaseHTTPRequestHandler):
             else:
                 outer = lattice_infos[0]
             trcl_deg = outer.get("trcl_deg", 0.0)
+            # 步骤1+2 LOD 预算（OWEN planRender 移植）：先 layers（每径向层/轴向段各一叶），
+            # 若 count 超 DETAIL_MAX_INSTANCES 则切 disc（轴向已有折叠 + 每 pin 单盘）。
+            # BEAVRS：layers(count=22.6万) 超限 → disc(count=5.6万) 进 InstancedMesh 实例化。
+            axial = False
             composed = lattice.compose_lattice_tree(
                 outer["fill_grid"], sub_by_u, outer["extent"], trcl_deg,
-                lattice.MAX_LATTICE_DEPTH, lattice.MAX_TOTAL_INSTANCES)
+                lattice.MAX_LATTICE_DEPTH, lattice.MAX_TOTAL_INSTANCES,
+                surf_text, axial=axial, detail="layers")
+            if (composed.get("count", 0) > lattice.DETAIL_MAX_INSTANCES
+                    and composed.get("status") != "too_many"):
+                composed = lattice.compose_lattice_tree(
+                    outer["fill_grid"], sub_by_u, outer["extent"], trcl_deg,
+                    lattice.MAX_LATTICE_DEPTH, lattice.MAX_TOTAL_INSTANCES,
+                    surf_text, axial=axial, detail="disc")
             # 最外层容器 cell（fill 指向根格阵 universe 的空 cell，如 BEAVRS cell 343）
             # 的几何边界 → 供前端色块总览裁剪超外壳格位（17×17 方形格阵 vs 圆柱壳）。
             composed["outer_bound"] = _lattice_outer_bound(
@@ -2759,10 +2770,26 @@ class MCNPHandler(BaseHTTPRequestHandler):
 
             # 超详细上限（将自动切色块总览）→ 裁掉叶/树，只留 lattices[].positions 供总览，
             # 避免 50 万叶+树节点几十 MB 响应把前端卡死（全堆芯 289×289 场景）。
-            if composed.get("count", 0) > lattice.DETAIL_MAX_INSTANCES:
+            # disc 模式（步骤2）：每 pin 1 盘、每 universe 1 几何 —— 实例数已大降
+            # （BEAVRS 50 万 → 5.6 万），允许 InstancedMesh 实例化，不再 2 万一刀切裁叶。
+            _fid = {
+                "detail": "disc" if composed.get("detail") == "disc" else "layers",
+                "axial": bool(composed.get("axial")),
+                "estimate": composed.get("count", 0),
+            }
+            if composed.get("detail") == "disc":
+                # disc 已折叠：只要 ≤ MAX_TOTAL_INSTANCES 就进详细实例化（InstancedMesh 吃 5.6 万）
+                if composed.get("count", 0) > lattice.MAX_TOTAL_INSTANCES:
+                    composed["leafInstances"] = []
+                    composed["tree"] = []
+                    composed["detailViable"] = False
+                else:
+                    composed["detailViable"] = True
+            elif composed.get("count", 0) > lattice.DETAIL_MAX_INSTANCES:
                 composed["leafInstances"] = []
                 composed["tree"] = []
                 composed["detailViable"] = False
+            composed["fidelity"] = _fid
 
             self._ok({**composed, "limit": limit})
         except Exception as e:
