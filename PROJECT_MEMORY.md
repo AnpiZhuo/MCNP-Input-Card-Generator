@@ -34,6 +34,7 @@
 - **改动清单**：`gui/src/utils/lattice.ts`（`universeColorByRank` + `buildUniversePalette` 改用哈希；`UNIVERSE_PALETTE_12` 保留导出兼容）、`gui/test/lattice.test.ts`（调色板测试改 golden-angle 断言 + 新增"多 U 不撞色"用例 + import `universeColorByRank`）。生产消费点（LatticeEditDialog/Preview3D/Preview3DLattice/LatticeCanvas/LatticePreview3D）全部经 `buildUniversePalette` 自动受益，无需改。
 - **门禁**：前端 vitest **528/528**（新增 1）；tsc EXIT 0；后端 pytest **81/0**（无回归，纯前端改动）。golden 无颜色断言未动。
 - **⚠️ 说明**：golang golden 无颜色段，跨语言不受影响；材料色模式（getMatColor/materialMode）未动。
+- **✅ 打包部署 v1.7.4（2026-08-28，含 lat=2 hex STL 空修复 + subPitch + hex 居中 + FILL 配色，仅这两批 bug 修复 + 配色，未升版恒 1.7.4）**：完整链路 vite build（8.3s）→ PyInstaller sidecar（python.exe 25,289,687B）→ 复制 binaries → **tauri build（34.5s，main exe 6,578,176B @ 7:44）** → **6.2 时效坑命中**（target/release python.exe 仍是旧 25,287,226B，手动覆盖为新 25,289,687B + _internal 2223 文件）→ 部署 `D:\MCNP\MCNP输入卡生成器`（main 6,578,176 + python 25,289,687 + _internal 2223）→ 冒烟通过：`python.exe` 直跑后端 5001 就绪 + `preview-lattice` U233 **universes STL keys=['1','2','3']**（非空）/ **subPitch=1.45034** / **x -45.69..45.69、y -26.38..26.38**（hex 居中，关于原点对称）。冒烟后已杀手动起的 sidecar（5001 释放）。⚠️ 部署版 GUI 未启动（侧边冒烟用 sidecar 直跑）；用户打开 GUI 时应用会自行拉起 sidecar。
 
 （下一段 S1 记录 disc STL 键错配 + z 居中，见下方 `## S1（当前批次）disc 模式 STL 键错配 + z 居中`。）
 
