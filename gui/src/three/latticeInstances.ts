@@ -14,8 +14,8 @@
  * 位置约定（与阶段2画布/子预览锁定一致）：
  *   - rect(lat=1)：格位中心 = origin + (i·px, j·py, k·pz)，默认 origin 使格阵居中
  *     （cell(0,0,0) 中心 = (-(nx-1)/2·px, -(ny-1)/2·py, -(nz-1)/2·pz)）。
- *   - hex(lat=2)：格位中心 = origin + hexCenter(i,j,pitch)，默认 origin=[0,0,0]
- *     （hexCenter 为画布与阶段3共用权威公式，golden 锁死）。
+ *   - hex(lat=2)：格位中心 = origin + hexCenter(i-(nx-1)/2, j-(ny-1)/2, pitch)，默认 origin=[0,0,0]
+ *     （居中偏移使格阵几何中心落在原点，与后端 expand_positions 逐位一致；hexCenter 权威公式 golden 锁死）。
  *   - 格元盒（裁剪 bound）= {x: cellSize.x, y: (rect=cellSize.y / hex=cellSize.x), z: cellSize.z}。
  */
 import * as THREE from "three";
@@ -106,7 +106,7 @@ function defaultOrigin(node: LatticeComposeNode, dims: [number, number, number])
   ];
 }
 
-/** 格位中心（绝对坐标；rect 居中 / hex 原始蜂窝公式，与阶段2锁定一致） */
+/** 格位中心（绝对坐标；rect 居中 / hex 居中，与后端 expand_positions 逐位一致） */
 function gridCenter(
   node: LatticeComposeNode,
   idx: number,
@@ -118,7 +118,8 @@ function gridCenter(
   const j = Math.floor(idx / nx) % ny;
   const k = Math.floor(idx / (nx * ny));
   if (node.lat === "2") {
-    const h = hexCenter(i, j, node.cellSize.x);
+    // 居中偏移：MCNP LAT=2 对称索引以格阵中心格为原点（与 Python expand_positions hex 分支一致）
+    const h = hexCenter(i - (nx - 1) / 2, j - (ny - 1) / 2, node.cellSize.x);
     return [origin[0] + h.x, origin[1] + h.y, origin[2] + k * node.cellSize.z];
   }
   return [

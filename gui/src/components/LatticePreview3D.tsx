@@ -128,7 +128,8 @@ export default function LatticePreview3D({ lat, dims, cells, palette, pitch = 1,
         const i = idx % cols;
         const j = Math.floor(idx / cols) % rows;
         const k = Math.floor(idx / (cols * rows));
-        const center = hexCenter(i, j, pitch);
+        // 居中：与后端 expand_positions hex 分支一致，格阵几何中心落在原点
+        const center = hexCenter(i - (cols - 1) / 2, j - (rows - 1) / 2, pitch);
         const wire = buildHexPrism(R, height, colorOf(c.u, palette));
         wire.group.position.set(center.x, center.y, (k - (layers - 1) / 2) * height);
         group.add(wire.group);

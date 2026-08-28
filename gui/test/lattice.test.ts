@@ -155,14 +155,15 @@ describe("hexGrid（矩形交错蜂窝，项5 新公式）", () => {
   it("2×2 阵列（fixtures/hex_lattice.inp dims=[2,2,1]）位置对齐", () => {
     const cells = hexGrid([2, 2, 1], 2);
     expect(cells).toHaveLength(4);
-    expect(cells[0]).toMatchObject({ idx: 0, col: 0, row: 0, x: 0, y: 0 });
+    // 居中偏移 (i-(nx-1)/2, j-(ny-1)/2)：nx=2 → co=0.5, ro=0.5
+    expect(cells[0]).toMatchObject({ idx: 0, col: 0, row: 0, x: -1.5, y: -0.8660254037844386 });
     expect(cells[1]).toMatchObject({ idx: 1, col: 1, row: 0 });
-    expect(cells[1].x).toBeCloseTo(2, 9); // (1+0)·2
-    expect(cells[1].y).toBeCloseTo(0, 9);
+    expect(cells[1].x).toBeCloseTo(0.5, 9); // (0.5+(-0.5)·0.5)·2
+    expect(cells[1].y).toBeCloseTo(-0.8660254037844386, 9);
     expect(cells[2].idx).toBe(2);
-    expect(cells[2].x).toBeCloseTo(1, 9); // (0+0.5)·2
-    expect(cells[2].y).toBeCloseTo(Math.sqrt(3), 9); // 1·2·√3/2
-    expect(cells[3]).toMatchObject({ idx: 3, col: 1, row: 1 });
+    expect(cells[2].x).toBeCloseTo(-0.5, 9); // ((-0.5)+0.5·0.5)·2
+    expect(cells[2].y).toBeCloseTo(0.8660254037844386, 9); // 0.5·2·√3/2
+    expect(cells[3]).toMatchObject({ idx: 3, col: 1, row: 1, x: 1.5, y: 0.8660254037844386 });
   });
   it("行主序 i 最快：idx 与 (col,row,layer) 一致", () => {
     const cells = hexGrid([3, 2, 2], 1);

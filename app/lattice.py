@@ -1051,7 +1051,10 @@ def expand_positions(fg: "FillGrid | None", extent: dict | None,
                 idx = i + nx * (j + ny * k)  # 行主序 i 最快（rectGrid idxOf 一致）
                 entry = cells[idx] if idx < len(cells) else FillEntry()
                 if lat == "2":
-                    hx, hy = hex_center(i, j, px)
+                    # 居中：MCNP LAT=2 的 FILL 卡（如 -21:21）以格阵中心格 (col=0,row=0)
+                    # 为几何中心。用 (i-(nx-1)/2, j-(ny-1)/2) 偏移把格阵几何中心平移到原点，
+                    # 与 rect 分支的 (i-(nx-1)/2)*px 一致（此前 i/j 从 0 起 → 格位全在正象限）。
+                    hx, hy = hex_center(i - (nx - 1) / 2.0, j - (ny - 1) / 2.0, px)
                     cz = z_origin + (k - (nz - 1) / 2.0) * pz
                 else:
                     hx = (i - (nx - 1) / 2.0) * px

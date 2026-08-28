@@ -145,7 +145,9 @@ export interface HexCell {
   y: number;
 }
 
-/** 六棱柱格位（矩形交错蜂窝，MCNP hex fill 为 (i,j,k) 矩形盒；环形蜂窝由 void 角位构成） */
+/** 六棱柱格位（矩形交错蜂窝，MCNP hex fill 为 (i,j,k) 矩形盒；环形蜂窝由 void 角位构成）。
+ *  居中：与后端 expand_positions 的 hex 分支一致，用 (i-(cols-1)/2, j-(rows-1)/2) 偏移
+ *  使格阵几何中心落在原点（MCNP LAT=2 的 -N:N 对称索引以此中心为原点）。 */
 export function hexGrid(dims: number[], pitch: number): HexCell[] {
   const cols = Math.max(1, dims[0] ?? 1);
   const rows = Math.max(1, dims[1] ?? 1);
@@ -155,7 +157,7 @@ export function hexGrid(dims: number[], pitch: number): HexCell[] {
     for (let j = 0; j < rows; j++) {
       for (let i = 0; i < cols; i++) {
         const idx = i + cols * (j + rows * k);
-        const c = hexCenter(i, j, pitch);
+        const c = hexCenter(i - (cols - 1) / 2, j - (rows - 1) / 2, pitch);
         out.push({ idx, col: i, row: j, layer: k, x: c.x, y: c.y });
       }
     }
@@ -434,16 +436,18 @@ export function estimateLatticeExtent(fg: FillGridJson | null): LatticeExtent {
   if (fg.lat === "2") {
     const pitch = 1;
     const cells = hexGrid(dims, pitch);
-    let maxX = 0;
-    let maxY = 0;
+    // 外沿取跨度（max-min），不依赖格阵绝对位置（居中/未居中 span 相同）
+    let minX = 0, maxX = 0, minY = 0, maxY = 0;
     for (const c of cells) {
-      maxX = Math.max(maxX, c.x);
-      maxY = Math.max(maxY, c.y);
+      if (c.x < minX) minX = c.x;
+      if (c.x > maxX) maxX = c.x;
+      if (c.y < minY) minY = c.y;
+      if (c.y > maxY) maxY = c.y;
     }
     // 顶点+X 蜂窝：格元半宽 = pitch/√3（顶点-顶点宽 2pitch/√3），半高 = pitch/2（flat-flat 高 pitch）
     return {
-      x: maxX + pitch / Math.sqrt(3),
-      y: maxY + pitch / 2,
+      x: (maxX - minX) + pitch / Math.sqrt(3),
+      y: (maxY - minY) + pitch / 2,
       z: Math.max(1, dims[2] ?? 1),
     };
   }

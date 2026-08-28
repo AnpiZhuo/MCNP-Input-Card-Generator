@@ -398,7 +398,7 @@ function expandPositionsRef(s: any): { idx: number; x: number; y: number; z: num
         let hx: number;
         let hy: number;
         if (s.lat === "2") {
-          const h = hexCenter(i, j, px); // 复用画布/阶段3共用权威蜂窝公式（golden 锁死）
+          const h = hexCenter(i - (nx - 1) / 2, j - (ny - 1) / 2, px); // 居中偏移（与后端 expand_positions hex 分支一致）
           hx = h.x;
           hy = h.y;
         } else {

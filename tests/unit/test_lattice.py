@@ -514,7 +514,9 @@ def test_expand_positions_rect_3d():
 
 
 def test_expand_positions_hex_ring_order():
-    """hex 用矩形盒模型（hexGrid 交错），角位 void 由 u="0" 承载（不排除）。"""
+    """hex 用矩形盒模型（hexGrid 交错），角位 void 由 u="0" 承载（不排除）。
+    居中（2026-08-28）：hex 分支用 hex_center(i-(nx-1)/2, j-(ny-1)/2) 使格阵几何中心
+    落原点（与 rect 一致），不再全在正象限。"""
     fg = _fg("2", [2, 2, 1], ["1", "2", "1", "2"])
     # 面法向 0°/60°/120°：flat-to-flat=x（格距），pointy-to-pointy=y
     ext = {"x_min": -0.8660254037844386, "x_max": 0.8660254037844386,
@@ -522,12 +524,13 @@ def test_expand_positions_hex_ring_order():
     pos = expand_positions(fg, ext)
     assert len(pos) == 4
     assert [p["u"] for p in pos] == ["1", "2", "1", "2"]
-    # MCNP LAT=2 蜂窝（pitch=√3，x=(col+row/2)·√3, y=row·√3·√3/2=row·1.5）：
-    #   idx0 (0,0)  idx1 (1.732, 0)  idx2 (0.866, 1.5)  idx3 (2.598, 1.5)
-    assert pos[0]["x"] == pytest.approx(0.0) and pos[0]["y"] == pytest.approx(0.0)
-    assert pos[1]["x"] == pytest.approx(1.7320508075688772) and pos[1]["y"] == pytest.approx(0.0)
-    assert pos[2]["x"] == pytest.approx(0.8660254037844386) and pos[2]["y"] == pytest.approx(1.5)
-    assert pos[3]["x"] == pytest.approx(2.598076211353316) and pos[3]["y"] == pytest.approx(1.5)
+    # MCNP LAT=2 蜂窝（pitch=√3，x=(col+row/2)·√3, y=row·√3·√3/2=row·1.5），居中偏移
+    # (i-0.5, j-0.5)：idx0 (-1.299, -0.75)  idx1 (0.433, -0.75)  idx2 (-0.433, 0.75)
+    #   idx3 (1.299, 0.75)
+    assert pos[0]["x"] == pytest.approx(-1.299038105676658) and pos[0]["y"] == pytest.approx(-0.7499999999999999)
+    assert pos[1]["x"] == pytest.approx(0.4330127018922193) and pos[1]["y"] == pytest.approx(-0.7499999999999999)
+    assert pos[2]["x"] == pytest.approx(-0.4330127018922193) and pos[2]["y"] == pytest.approx(0.7499999999999999)
+    assert pos[3]["x"] == pytest.approx(1.299038105676658) and pos[3]["y"] == pytest.approx(0.7499999999999999)
 
 
 def test_expand_positions_trcl_90():
@@ -646,17 +649,19 @@ def test_compose_lattice_tree_limits_constants():
 
 # ── 阶段3：跨语言 golden（positions / nested，前端 latticeGolden.json）──
 def _golden_positions_hex_fresh(s: dict) -> bool:
-    """golden positions 段 hex 条目是否已由前端重算为项5 新公式值。
+    """golden positions 段 hex 条目是否已重算为居中公式值。
 
-    前端 Wave 2b 并行写盘（hexCenter/positions.hex 全量重算）；未重算时 golden 仍为
-    旧公式值 → 本条目 skip（沿用「未产出 skip」模式）。rect 段不受项5 影响恒 fresh。
+    hex 居中（2026-08-28）：expand_positions/hexGrid/gridCenter 的 hex 分支改
+    hex_center(i-(nx-1)/2, j-(ny-1)/2) 使格阵几何中心落原点（与 rect 一致）。前端
+    Wave 写盘后 golden hex_2x2 期望值为居中值（idx1=(0.433,-0.75)）。未重算时仍为旧
+    正象限值 → 本条目 skip（沿用「未产出 skip」模式）。rect 段不受影响恒 fresh。
     """
     if s.get("lat") != "2":
         return True
     for exp in s.get("expected", []):
         if exp.get("idx") == 1:
-            return (exp["x"] == pytest.approx(1.5, abs=1e-9)
-                    and exp["y"] == pytest.approx(0.8660254037844386, abs=1e-9))
+            return (exp["x"] == pytest.approx(0.4330127018922193, abs=1e-9)
+                    and exp["y"] == pytest.approx(-0.7499999999999999, abs=1e-9))
     return False
 
 
