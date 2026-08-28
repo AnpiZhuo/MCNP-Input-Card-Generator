@@ -409,14 +409,16 @@
 
 ### 打包链路（每次发布走此流程，详见 `docs/手动打包方法.md`）
 
+> **⭐ 首选 `scripts\release.ps1`（一键，2026-08-28 新增）**：PowerShell 一键脚本自动完成「环境检查 → 版本号(可选提升五处) → 门禁(pytest+vitest) → vite → PyInstaller → 复制 binaries → tauri build → **6.2 自动覆盖 sidecar 进 target\release** → 部署 → 冒烟(5001 探活)」。**自动处理两个每次必踩的坑**：① npm/npx 被 ExecutionPolicy 禁（改用 node 直调 vite/tauri/vitest CLI）；② **6.2 sidecar 时效坑**（tauri 增量编译不刷新 target\release 的 sidecar，脚本**无条件覆盖**，不再人工核对 mtime）。用法：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1 [-NewVer x.y.z | -SkipGate | -SkipDeploy]`。已实测完整链路发版成功（1.7.4）。下面分步仅备查/手动干预用。
+
 ```
-1. vite build                       （前端产物，~3-4s）
+1. vite build                       （前端产物，~3-4s；node .\node_modules\vite\bin\vite.js build）
 2. PyInstaller sidecar              （在 gui\ 下跑 gui/mcnp_sidecar.spec，产物名 "python"；
                                     核对 _keep_py / _keep_dirs 清单，如 outp_parser.py/meshtal/ 等新增模块）
 3. 替换 binaries                    （把新 sidecar 的 python.exe + _internal 换进 target\release\）
-4. tauri build                      （需 RUSTUP_HOME/CARGO_HOME=D:\rust）
+4. tauri build                      （需 RUSTUP_HOME/CARGO_HOME=D:\rust；node .\node_modules\@tauri-apps\cli\tauri.js build）
 5. ⚠️ 6.2 时效校验（必做）           （tauri 增量编译不刷新 target\release 的 sidecar！
-                                    手动核对 python.exe mtime/体积，覆盖为新 sidecar）
+                                    手动核对 python.exe mtime/体积，覆盖为新 sidecar；一键脚本已自动处理）
 6. 部署 D:\MCNP\MCNP输入卡生成器     （⚠️ 先杀运行中的旧主程序+sidecar，否则文件锁目录致 _internal 残缺）
 7. 冒烟                             （用 sidecar python.exe 直跑不弹 GUI：xsdir-check / generate 定向卡 / preview-3d 出 STL）
 ```
