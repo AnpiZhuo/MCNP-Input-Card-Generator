@@ -14,6 +14,21 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
+## S1（当前批次）lat=2 六棱柱 3D 预览 bug 修复（2026-08-28，源 `P:\dekstop\u233-comp-therm-001-case-6.i`，核心已修复，未提交）
+- **批次目标**：修 U233-COMP-THERM-001 case 6 的 lat=2 六棱柱格阵（43×43 hex）3D 预览 bug —— handoff 第2项。**三个已知问题：① hex pin universe STL 空→前端回退 BoxGeometry 方块；② subPitch 误用硬编码 1.26；③ hex 格位全在正象限未居中。**
+- **✅ 根因1（核心，已修复）**：`_build_one_universe(u=1/2/3)` 返回空。根因=容器 cell20 `surface_expr="10 -16 18 -23 -36 -37 38 39 #15 #16 #17 #18"` 含 **MCNP cell 补集运算符 `#n`**（挖控制叶片）。`_lattice_container_expr` 原样返回该表达式 → `_build_one_universe` 把它当作布尔裁剪表达式追加进 universe pin cell（`expr + 格元盒后缀 + 容器cell`），**FreeCAD 解析不了指向未定义 cell 的 `#` → 整次 build 失败 → 所有 universe STL 变空**。BEAVRS 容器 cell343 `-80 700 -730` 无 `#` 所以没踩此坑。
+  - **修复**：`_lattice_container_expr` 返回前剥离 `#` 补集 token（`expr.split()` 过滤 `tok.startswith("#")`），容器裁剪只保留外边界曲面（`10 -16 18 -23 -36 -37 38 39`）。
+  - **A/B 证实**：含容器裁剪 u=1/2/3 全空；去掉容器或剥离 `#` 后全部正常。**最小触发条件** = 补集引用**未定义** cell（`#99`）→ 构建失败；引用已定义 cell（`#9`）不触发（FreeCAD 能解析 `#9`）。
+  - **验证**：`diag_hex.py` 源码/修复后端 → `universes STL keys=['1','2','3']`；STL 包围盒 z∈[-19.05,19.05]（z 居中，关于 origin 对称）；u=1 cell1 半径 ~0.267cm 圆柱 / u=2 cell8 ~0.621 圆柱 / u=3 cell14 填格元盒。
+- **✅ 根因2（已修复）**：subPitch=`min(所有格阵pitch)`，但 `_subpitch` 硬编码初值 1.26（BEAVRS pin 间距）→ 单格阵（U233 只有 1 个 lat=2）时 `min(1.26,1.45034)=1.26` 错误。**修复**：`_subpitch=None` 初值，仅对实际格阵取 min pitch（单格阵=1.45034）；无格阵兜底 1.26。验证 fidelity.subPitch=1.45034。
+- **⚠️ 根因3 hex 居中（未并做，转独立改进项）**：`expand_positions` 的 hex 分支 `hex_center(i,j,px)`（i/j 从 0..nx-1）未做 rect 那样的 `(i-(nx-1)/2)` 居中 → 格位全在正象限（x∈0..91.37、y∈0..52.75）。**未修原因**：① 跨语言 golden `hex_2x2_pitch_sqrt3` 期望值 + 前端 `lattice.ts hexCenter/hexGrid` + `latticeInstances.ts defaultOrigin(hex=[0,0,0])` 全部锁定"不居中"行为，改动需同步后端/前端/golden/测试（波及 binary TS 文件）；② 视觉上 Preview3DLattice 取景按 leafInstances 包围盒自动框住，不产生可见 bug。**建议作为独立一致性改进单独排期**（需先确认 MCNP LAT=2 的 -N:N 对称索引是否应居中原点）。
+- **回归测试（TDD 已验证红绿）**：`tests/integration/test_api_contract.py::test_http_preview_lattice_universe_stl_nonempty_container_hash`（LATTICE_CONTAINER_HASH_DECK，容器边界含 `#99` 补集，断言 universe STL 非空）。**红**：stash 修复后 `assert {}`（universes 空）；**绿**：修复版 18 passed。依赖 FreeCAD（skip if 无）。
+- **门禁**：后端 pytest **99/0**（test_lattice 81 + test_build_cells_data + test_api_contract 18）；前端 vitest **527/527**；tsc EXIT 0。**⚠️ 5001 坑复现**：跑 test_api_contract 前须清 5001——本轮发现 5001 被**打包部署版 sidecar**（`D:\MCNP\MCNP输入卡生成器\python.exe -u backend/mcnp_bridge.py`，旧代码）占用，导致 pytest HTTP 连到旧后端、universes 空、subPitch=1.26（假象）。已终止该进程释放端口。
+- **改动清单**：`gui/backend/api_server.py`（`_lattice_container_expr` 剥离 `#` + `_subpitch` None-init）、`tests/integration/test_api_contract.py`（新增 LATTICE_CONTAINER_HASH_DECK + STL 非空回归）、未提交的 `tools/diag_hex.py`。
+- **⚠️ 用户注意事项**：本轮为释放 5001 端口已终止打包部署版后端（`...python.exe -u backend/mcnp_bridge.py`）。若用户在用打包版 GUI，需重启 `MCNP输入卡生成器.exe` 恢复后端。
+
+（下一段 S1 记录 disc STL 键错配 + z 居中，见下方 `## S1（当前批次）disc 模式 STL 键错配 + z 居中`。）
+
 ## S1（当前批次）3D 预览 MCNP 窗口裁剪修复 + U 分组侧边栏（2026-08-27，v1.7.4，已提交 + 已打包部署）
 - **批次目标**：① 修 BEAVRS 全堆芯 3D 预览"圆柱超出/重叠外壳"（用户反复反馈，最终定为"方法级 MCNP 窗口裁剪"而非"针对超壳打补丁"）；② 3D 预览侧边栏改为 U 分组（不显示组成 U 的栅元行，改为显示 U=n 组 + 保留 u 为空的未分组栅元）。**bug 修复批 + 新功能上线 → 版本升 1.7.4**（用户指定）。
 - **✅ 方法级 MCNP「窗口」裁剪（commit 530ee8a）**：核心=实体 = `universe ∩ 格元盒 ∩ 容器 cell 几何`（MCNP 窗口机制：被填充 cell 是窗口，填充 universe 再大也被窗口几何裁剪）。此前用 OWEN disc 程序化圆柱（画格位圆心、忽略容器裁剪）→ 超壳/重叠外壳；且 STL 只按格元盒裁无限水 cell（u=30 `-3:3`=全空间）→ 格元盒在圆柱外时生成"圆柱外虚假水块"。

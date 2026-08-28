@@ -512,3 +512,61 @@ def test_http_preview_lattice_universe_stl_nonempty(backend_base_url):
             assert tri > 0, (
                 f"universe u{u} cell {cell_num} STL 空（{len(raw)}B/0 三角形）——"
                 "格元盒裁剪仍产出空几何")
+
+
+# 容器 cell 带 MCNP cell 补集 `#n`（如核心挖控制叶片 `#15 #16 #17 #18`）时，
+# _build_one_universe 把 container_expr 当作布尔裁剪表达式追加进 universe pin cell，
+# FreeCAD 解析不了 `#` → 整次 build 失败、所有 universe STL 变空（前端回退方块占位）。
+# 回归：_lattice_container_expr 必须剥离 `#` 补集 token，容器只保留曲面边界。
+# `#99` 引用未定义 cell = 最简触发：补集 cell 不在 universe 构建集合时构建失败。
+LATTICE_CONTAINER_HASH_DECK = {
+    "surfaces": "1 px -1\n2 px 1\n3 py -1\n4 py 1\n5 pz -1\n6 pz 1\n7 cz 0.3\n9 px 0",
+    "tr_cards": "",
+    "cells": [
+        {"kind": "cell", "cell": {"number": 20, "material": "0", "density": "",
+                                  "surface_expr": "1 -2 3 -4 5 -6 #99", "u": "",
+                                  "fill": "4", "lat": "", "trcl": "", "render": True,
+                                  "fill_grid": ""}},
+        {"kind": "cell", "cell": {"number": 19, "material": "0", "density": "",
+                                  "surface_expr": "1 -2 3 -4 5 -6", "u": "4",
+                                  "fill": "0:1 0:1 0:0", "lat": "1", "trcl": "", "render": True,
+                                  "fill_grid": json.dumps(LATTICE_FILL_GRID)}},
+        {"kind": "cell", "cell": {"number": 1, "material": "1", "density": "-1.0",
+                                  "surface_expr": "-7", "u": "1", "render": True,
+                                  "fill_grid": ""}},
+    ],
+}
+
+
+def test_http_preview_lattice_universe_stl_nonempty_container_hash(backend_base_url):
+    """回归：容器 cell 含 `#` 补集（如核心挖叶片）时 universe STL 仍非空。
+
+    致命缺陷根因：_lattice_container_expr 返回的容器 cell surface_expr 若含 MCNP cell
+    补集运算符 `#n`（如 `... #15 #16 #17 #18`），_build_one_universe 把它拼进 pin cell
+    表达式做布尔裁剪，FreeCAD 解析不了指向未定义 cell 的 `#` → 整次 build 失败 → 所有
+    universe STL 变空（前端回退 BoxGeometry 方块）。修复=_lattice_container_expr 剥离
+    `#` 补集 token。本用例构造容器边界含 `#99`（补集引用未定义 cell）直验 universe STL 非空。
+    FreeCAD 不可用时 skip。
+    """
+    try:
+        from app.freecad_locator import bin_dir
+    except ImportError:
+        bin_dir = None
+    if not bin_dir:
+        pytest.skip("FreeCAD 不可用，跳过 universe STL 非空直验")
+    import base64
+    resp = _post(backend_base_url, "/api/preview-lattice", LATTICE_CONTAINER_HASH_DECK)
+    assert resp.get("status") == "ok", resp
+    lattices = resp.get("lattices", [])
+    assert len(lattices) == 1, resp
+    universes = lattices[0].get("universes", {})
+    assert universes, f"universes 为空（#补集容器导致 STL 全空）: {resp}"
+    for u in sorted(universes):
+        cells = universes[u]
+        assert cells, f"universe u{u} 无 STL"
+        for cell_num in sorted(cells):
+            raw = base64.b64decode(cells[cell_num])
+            tri = _stl_triangle_count(raw)
+            assert tri > 0, (
+                f"universe u{u} cell {cell_num} STL 空（{len(raw)}B/0 三角形）——"
+                "容器 # 补集仍被塞进裁剪表达式")

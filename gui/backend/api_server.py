@@ -812,7 +812,14 @@ def _lattice_container_expr(cell_list, outer_u) -> str:
             continue
         if str(cell.get("fill", "") or "").strip() != str(outer_u):
             continue
-        return str(cell.get("surface_expr", "") or "").strip()
+        expr = str(cell.get("surface_expr", "") or "").strip()
+        # MCNP cell 补集运算符 `#n`（如 cell20 `10 -16 18 -23 -36 -37 38 39 #15 #16 #17 #18`
+        # 挖控制叶片）不是曲面号。`_build_one_universe` 把 container_expr 当作布尔裁剪表达式
+        # 追加进 universe pin cell（格元盒后缀 + 容器 cell），FreeCAD 解析不了 `#` → 整次
+        # build 失败、所有 universe STL 变空（前端回退方块占位）。容器裁剪只关心容器 cell 的
+        # 外边界曲面（`10 -16 18 -23 -36 -37 38 39`），`#` 补集应剥离。
+        expr = " ".join(tok for tok in expr.split() if not tok.startswith("#"))
+        return expr
     return ""
 
 
@@ -2949,11 +2956,16 @@ class MCNPHandler(BaseHTTPRequestHandler):
             # 定 disc 半径）。BEAVRS 根格阵 21.5（组件间距）但组件内 pin 间距 1.26——若前端
             # 误用根格阵 pitch（21.5）画 disc，半径 ≈5.05cm 远超 1.26cm 格位 → 圆柱互相穿插、
             # 超出外壳、乱面。必须用最小格距（subPitch=1.26）保证 disc 在格位内不重叠。
-            _subpitch = 1.26
+            # 但单格阵（如 U233 hex 卡只有 1 个 lat=2 格阵）时没有"更小的子格阵"，subPitch
+            # 应取该格阵自己的 pitch（1.45034），而不是硬编码 BEAVRS 专属的 1.26。
+            _subpitch = None
             for _lt in composed.get("lattices", []) or []:
                 _pit = _lt.get("pitch") or []
                 if len(_pit) >= 2 and _pit[0] > 0 and _pit[1] > 0:
-                    _subpitch = min(_subpitch, _pit[0], _pit[1])
+                    _subpitch = min(_pit[0], _pit[1]) if _subpitch is None \
+                        else min(_subpitch, _pit[0], _pit[1])
+            if _subpitch is None:
+                _subpitch = 1.26  # 无格阵兜底（防御）
             _fid = {
                 "detail": "disc" if composed.get("detail") == "disc" else "layers",
                 "axial": bool(composed.get("axial")),
