@@ -40,6 +40,7 @@ import {
   rhpModeAError,
   serializeFillGrid,
   UNIVERSE_GRAY,
+  universeColorByRank,
   UNIVERSE_PALETTE_12,
 } from "../src/utils/lattice";
 import golden from "../src/utils/__golden__/latticeGolden.json";
@@ -198,12 +199,23 @@ describe("inHexRing（项5 蜂窝环内判定，替代旧 i<rowLens[j] 横向行
 });
 
 describe("宇宙调色板", () => {
-  it("u 数值升序取 12 色板；排除 void(0)/空", () => {
+  it("u 数值升序按 golden-angle 色相散列；排除 void(0)/空；同 U 恒同色", () => {
     const p = buildUniversePalette(["10", "0", "", "2", "10", "1"]);
     expect(Object.keys(p)).toEqual(["1", "2", "10"]);
-    expect(p["1"]).toBe(UNIVERSE_PALETTE_12[0]);
-    expect(p["2"]).toBe(UNIVERSE_PALETTE_12[1]);
-    expect(p["10"]).toBe(UNIVERSE_PALETTE_12[2]);
+    // golden-angle：rank 0/1/2 对应 u=1/2/10，确定性 hex
+    expect(p["1"]).toBe(universeColorByRank(0));
+    expect(p["2"]).toBe(universeColorByRank(1));
+    expect(p["10"]).toBe(universeColorByRank(2));
+    // 同 U 恒同色：重复输入不改变色
+    const p2 = buildUniversePalette(["1", "1", "2"]);
+    expect(p2["1"]).toBe(p["1"]);
+    expect(p2["2"]).toBe(p["2"]);
+  });
+  it("多 U 分散不撞色：rank 连续区间色相间隔 ≥ 若干度（黄金角保证）", () => {
+    const us = Array.from({ length: 40 }, (_, i) => String(i + 1));
+    const p = buildUniversePalette(us);
+    const cols = us.map((u) => p[u]);
+    expect(new Set(cols).size).toBe(cols.length); // 40 个 U 全不撞色
   });
   it("getUniverseColor 未命中回退灰", () => {
     const p = { "1": "#123456" };

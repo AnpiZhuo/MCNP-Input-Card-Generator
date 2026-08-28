@@ -186,9 +186,25 @@ export const UNIVERSE_PALETTE_12: string[] = [
 /** 未命中回退灰（u 不在色板） */
 export const UNIVERSE_GRAY = "#9a9a9a";
 
+/** 确定性 universe 色：golden-angle 色相散列（同 U 恒同色、任意多 U 分散不轻易撞色）。
+ *  hue = (rank * 137.508) % 360（黄金角步进，前 N 个 U 色相最大程度分隔），
+ *  HSL 饱和/亮度取适中值转 hex。rank 由调用方按 universe 号升序提供。 */
+export function universeColorByRank(rank: number): string {
+  const hue = (rank * 137.508) % 360;
+  const sat = 0.62;
+  const lig = 0.5;
+  const a = sat * Math.min(lig, 1 - lig);
+  const f = (n: number): number => {
+    const k = (n + hue / 30) % 12;
+    return lig - a * Math.max(-1, Math.min(k - 3, Math.min(9 - k, 1)));
+  };
+  const hex = (x: number): string => Math.round(x * 255).toString(16).padStart(2, "0");
+  return `#${hex(f(0))}${hex(f(8))}${hex(f(4))}`;
+}
+
 /**
- * 构建宇宙→颜色映射：u 数值升序，从 12 色板依序取色。
- * 空串 / "0"（void）不占色板（void 由画布特判渲染为透明）。
+ * 构建宇宙→颜色映射：u 数值升序，按 golden-angle 色相散列生成确定性 hex。
+ * 空串 / "0"（void）不占调色板（void 由画布特判渲染为透明）。
  */
 export function buildUniversePalette(us: (string | number)[]): Record<string, string> {
   const uniq = Array.from(new Set(us.map((u) => String(u))));
@@ -197,7 +213,7 @@ export function buildUniversePalette(us: (string | number)[]): Record<string, st
   let rank = 0;
   for (const u of uniq) {
     if (!u || u === "0") continue;
-    palette[u] = UNIVERSE_PALETTE_12[rank % UNIVERSE_PALETTE_12.length];
+    palette[u] = universeColorByRank(rank);
     rank++;
   }
   return palette;

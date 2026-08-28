@@ -27,6 +27,14 @@
 - **改动清单**：`gui/backend/api_server.py`（`_lattice_container_expr` 剥离 `#` + `_subpitch` None-init）、`tests/integration/test_api_contract.py`（新增 LATTICE_CONTAINER_HASH_DECK + STL 非空回归）、未提交的 `tools/diag_hex.py`。
 - **⚠️ 用户注意事项**：本轮为释放 5001 端口已终止打包部署版后端（`...python.exe -u backend/mcnp_bridge.py`）。若用户在用打包版 GUI，需重启 `MCNP输入卡生成器.exe` 恢复后端。
 
+## S1（当前批次）FILL 涂色编辑 U 分布颜色太少（2026-08-28，handoff 第3项，已修复已提交）
+- **用户反馈**：涂色编辑 FILL 按 U 分组/分布只排 **12 种颜色**，太多 U 同色。希望改为函数随机生成（按 universe 稳定 hash 成色）。
+- **方案**：`buildUniversePalette` 从固定 `UNIVERSE_PALETTE_12`（12 色轮换）改为 **golden-angle 色相散列**——按 universe 号数值升序去重排序，第 rank 个 U 色相 = `(rank*137.508)%360`，HSL(0.62/0.5) 转 hex。新增 `universeColorByRank(rank)` 纯函数（同 U 恒同色、前 N 个 U 色相最大程度分隔、任意多 U 不撞色）。`getUniverseColor` 签名不变（palette 缺失回退灰）。
+- **验证**：500 个 U 全唯一色（0 撞色）；前 12 U 色相邻间隔 ≥20.1°（黄金角特性）；同 U 重复输入恒同色。
+- **改动清单**：`gui/src/utils/lattice.ts`（`universeColorByRank` + `buildUniversePalette` 改用哈希；`UNIVERSE_PALETTE_12` 保留导出兼容）、`gui/test/lattice.test.ts`（调色板测试改 golden-angle 断言 + 新增"多 U 不撞色"用例 + import `universeColorByRank`）。生产消费点（LatticeEditDialog/Preview3D/Preview3DLattice/LatticeCanvas/LatticePreview3D）全部经 `buildUniversePalette` 自动受益，无需改。
+- **门禁**：前端 vitest **528/528**（新增 1）；tsc EXIT 0；后端 pytest **81/0**（无回归，纯前端改动）。golden 无颜色断言未动。
+- **⚠️ 说明**：golang golden 无颜色段，跨语言不受影响；材料色模式（getMatColor/materialMode）未动。
+
 （下一段 S1 记录 disc STL 键错配 + z 居中，见下方 `## S1（当前批次）disc 模式 STL 键错配 + z 居中`。）
 
 ## S1（当前批次）3D 预览 MCNP 窗口裁剪修复 + U 分组侧边栏（2026-08-27，v1.7.4，已提交 + 已打包部署）
