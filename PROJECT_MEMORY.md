@@ -217,7 +217,7 @@
   - 核心引擎：pymcnp（BSD-3-Clause）+ 自研 generator/parsers
   - CSG 几何：FreeCAD（LGPL）；STEP→MCNP：GEOUNED（EUPL-1.2，随程序 vendor 打包）
 - **核心业务**：用可视化表单 GUI 替代手工编辑 MCNP `.INP` 输入文件；覆盖生成/导入/校验/3D 预览/截面/材料库/源/计数/输出分析全流程
-- **许可**：All Rights Reserved（自有代码禁止盈利/未经许可发布）；开源组件各按自身许可
+- **许可**：本项目自有代码 MIT License（2026-08-28 由自定义限制许可改为 MIT，放弃商用/再分发限制）；开源组件各按自身许可
 
 ## §2 当前状态快照（语义记忆）
 

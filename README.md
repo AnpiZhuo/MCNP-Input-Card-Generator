@@ -21,7 +21,7 @@ A desktop application for visually creating, editing, and validating **MCNP** in
 ![Version](https://img.shields.io/badge/Version-1.7.4-blue)
 ![Frontend](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-teal)
 ![Shell](https://img.shields.io/badge/Shell-Tauri-green)
-![License](https://img.shields.io/badge/License-All%20Rights%20Reserved-red)
+![License](https://img.shields.io/badge/License-MIT-brightgreen)
 ![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-lightgrey)
 ![MCNP](https://img.shields.io/badge/MCNP-6.x%20Compatible-orange)
 
@@ -192,16 +192,13 @@ python api_server.py
 
 ## 许可协议 License
 
-**All Rights Reserved.** 版权所有 © 2026 魏祎卓
+本项目自有代码以 [**MIT License**](LICENSE) 发布。版权所有 © 2026 魏祎卓 (Wei Yizhuo)。
 
-> **本许可仅适用于本项目自有代码。** 所捆绑/调用的开源组件保留其各自许可证：GEOUNED（EUPL-1.2）、OpenCascade（LGPL v2.1）、FreeCAD（LGPL v2+）、pymcnp（BSD-3-Clause）、React（MIT）、Vite（MIT）、Tauri（MIT/Apache-2.0）、Three.js（MIT）、NumPy（BSD）等，详见上方"引用与致谢"。
+> **MIT 许可仅适用于本项目自有代码。** 任何人可自由使用、复制、修改、合并、发布、分发、再许可、销售本软件，但必须在所有副本中保留此版权声明与许可声明（详见 `LICENSE` 文件）。
+>
+> 项目所捆绑/调用的开源组件保留其各自许可证：GEOUNED（EUPL-1.2）、OpenCascade（LGPL v2.1）、FreeCAD（LGPL v2+）、pymcnp（BSD-3-Clause）、React（MIT）、Vite（MIT）、Tauri（MIT/Apache-2.0）、Three.js（MIT）、NumPy（BSD）等，详见上方"引用与致谢"。"引用与致谢"列出的第三方许可是各组件自身的许可，与本项目代码的 MIT 许可不同，使用时请分别遵守。
 
-- ✅ 允许个人及机构内部**免费使用**
-- ✅ 允许为自用或内部使用**修改代码**
-- ❌ **严禁任何形式的盈利活动**（销售、付费服务、商业嵌入等）
-- ❌ 修改后公开发布须**经作者书面许可**
-
-如需授权请联系：1378963177@qq.com
+如有问题或合作，可联系：1378963177@qq.com
 
 ---
 
