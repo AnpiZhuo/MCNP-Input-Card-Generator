@@ -535,6 +535,45 @@ def _stl_triangle_count(raw: bytes) -> int:
     return 0
 
 
+def _stl_recenter_z(raw: bytes) -> bytes:
+    """把二进制 STL 整体沿 z 平移，使包围盒 z 中心 = 0（与 compose「叶位置 = 格阵中心」约定一致）。
+
+    _build_one_universe 的格元盒/容器裁剪产生 z∈[zmin,zmax] 的**底锚** STL（如 BEAVRS 全堆芯
+    高度 460 → z∈[0,460]，中心在 230）。但前端把几何原点放在叶位置 z（=格阵中心，如 230）→
+    底锚 STL 放上去整体上移 height/2（"位置不对/燃料棒与板子浮空"根因）。这里在 STL 层把 z
+    居中（每顶点 z -= bbox_z_center），使几何关于 universe 原点对称，与 buildDiscGeometry
+    程序化柱（居中）及色块总览（居中 box）的约定一致。
+    仅平移 z，不动 x/y（围板等格位几何本就在格元盒内按设计偏移，不能居中）。
+    返回新字节；非二进制/解析失败 → 原样返回（安全降级，不加重问题）。
+    """
+    if not raw or b"facet" in raw:  # 空或 ASCII STL：跳过（ASCII 由跨语言消费少，不影响本项目）
+        return raw
+    try:
+        tris = _import_app("stl_cross_section").parse_binary_stl(raw)
+    except Exception:
+        return raw
+    if tris.size == 0:
+        return raw
+    zs = tris[..., 2]
+    zc = float((float(zs.min()) + float(zs.max())) / 2.0)
+    if abs(zc) < 1e-9:
+        return raw
+    import struct
+    n = struct.unpack("<I", raw[80:84])[0]
+    out = bytearray(raw[:84])  # 头部 + 三角形数原样
+    off = 84
+    for i in range(n):
+        if off + 50 > len(raw):
+            break
+        out += raw[off:off + 12]       # 法向原样保留
+        tri = tris[i]
+        for v in tri:
+            out += struct.pack("<fff", float(v[0]), float(v[1]), float(v[2]) - zc)
+        out += raw[off + 48:off + 50]  # 属性字节
+        off += 50
+    return bytes(out)
+
+
 def _cell_trcl_deg(trcl_field, tr_cards) -> float:
     """trcl 字段（"1"/"TR1"/"*TR1"/""）→ 绕 Z 旋转角（度）。
 
@@ -939,6 +978,7 @@ def _build_one_universe(surf_text, tr_text, cell_list, u, box,
                     raw = f.read()
                 if _stl_triangle_count(raw) == 0:
                     continue  # 空 STL 显式降级：不产出（前端回退占位盒）
+                raw = _stl_recenter_z(raw)  # z 居中：前端叶位置=格阵中心约定（修"位置不对/浮空"）
                 dst = os.path.join(session_dir, f"cell_{num}.stl")
                 with open(dst, "wb") as f:
                     f.write(raw)  # 直接落盘已读字节，避免二次读
