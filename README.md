@@ -1,8 +1,12 @@
 # MCNP 输入卡生成器 — MCNP Input Card Generator
 
+> **商标声明 / Trademark Notice**：MCNP®（Monte Carlo N-Particle）是 Triad National Security, LLC（运营 Los Alamos National Laboratory 的机构）的注册商标。本项目是一个**独立的第三方工具**，用于生成 MCNP 输入文件，**与 Triad National Security, LLC / Los Alamos National Laboratory 无任何关联、无背书、非其官方产品**。项目名称中的 "MCNP" 仅用于描述本工具的用途（生成 MCNP 输入文件），不表示与 MCNP 官方存在隶属或代理关系。
+
 一款用于可视化创建、编辑、校验 **MCNP**（Monte Carlo N-Particle）输入文件（`.INP`）的桌面应用。用结构化、表单化的 GUI 替代手工文本编辑，内置 3D 几何预览、平面截面、材料库、能量/时间网格等工具。
 
 A desktop application for visually creating, editing, and validating **MCNP** input files (`.INP`). Replaces manual text editing with a structured, form-based GUI, with built-in 3D preview, cross-section view, material library, and energy/time grids.
+
+> English: MCNP® is a registered trademark of Triad National Security, LLC (operator of Los Alamos National Laboratory). This project is an **independent third-party tool** for MCNP input file creation and is **not affiliated with, endorsed by, or an official product of** Triad National Security, LLC / Los Alamos National Laboratory. "MCNP" is used herein solely to describe the tool's purpose.
 
 <div align="center">
   <img src="images/overview.png" alt="应用界面概览" width="820"/>
