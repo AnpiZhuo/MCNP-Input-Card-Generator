@@ -1400,3 +1400,16 @@ python -m pytest tests/unit/test_lattice.py -q            # 66 passed
 
 **验证**：u233 官方样例整文件 `parse→gen→parse→gen` **字节全等**（R1）；lat=2 cell 19 仍
 1849 格完整。全量 pytest **707/0**（新增 `test_parse_ifdef_block_within_material_splits_macro_and_nuclides`）。
+
+---
+
+## §AC 材料库深化（2026-08-30）
+
+> 完整流水见 `docs/CHANGELOG.md`（材料库深化 批次）+ 门禁 pytest **737/0** 全绿。本段仅后端新增/改动。
+
+- `app/material_library.py`（新）：库路径回落（`MCNP_MATERIAL_DIR` > `D:\MCNP\material` > `%APPDATA%\MCNP\material` > temp）、`_read_library`/`_write_library`（原子写防半写、损坏备份重置）、`normalize_entry`、CRUD（save/list/get/delete）、`validate_entry`（组成自洽）、`check_zaids_xsdir`（缺库/后缀不匹配）、`parse_import`（JSON/CSV）、`export_json`/`export_csv`、`apply_import`（冲突三选 + `existing_entries` 内容一致自动跳过 `identical`）。
+- `gui/backend/api_server.py`：5 个 handler `_handle_material_library(_save/_delete/_import/_export)` 注册进 handlers dict；`_handle_material_library_import` 接收 `existing_entries` 并传给 `apply_import`。
+- `gui/mcnp_sidecar.spec`：`_keep_py` 加 `material_library.py`（`_import_app` 动态导入防漏打）。
+- `app/generator/inp_generator.py`：`generate_inp_from_deck` 拆 `basic_tail`（MODE/NPS 卡）移数据卡段最末尾，`basic_head`（CTME/ACT/PRINT/NONU）留开头。
+- `docs/contracts/api.yaml`：5 新端点（materialLibrary/save/delete/import/export）+ `MaterialLibraryEntry` schema。
+- `tests/unit/test_material_library.py`（新，23 用例）：路径回落/CRUD 往返/JSON CSV 导入导出/冲突三选 + identical/validate_entry/check_zaids_xsdir 等。

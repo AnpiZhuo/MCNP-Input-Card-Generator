@@ -15,6 +15,10 @@ export interface PresetItem {
   density?: string;
   /** 同位素级 ZAID+份额（负号=质量份额）。有则选预设直接填「手动 ZAID」模式 */
   rows?: [string, string][];
+  /** 额外 MCNP 选项（nlib=.66c 等）。可随预设保存/导入导出 */
+  options?: string;
+  /** 热中子 MT 卡（lwtr.10t）。可随预设保存/导入导出 */
+  mtCard?: string;
 }
 
 export const PRESET_CATEGORIES: [string, PresetItem[]][] = [

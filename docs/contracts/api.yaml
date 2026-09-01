@@ -1680,6 +1680,201 @@ paths:
                       targets: { type: array, items: { type: string } }
                       changed: { type: integer }
 
+  /api/material-library:
+    get:
+      operationId: materialLibrary
+      tags: [source]
+      summary: 获取用户材料库（文件侧 custom + override）
+      description: |
+        返回文件侧（D:\\MCNP\\material\\material_library.json，D 盘不可写回落
+        %APPDATA%\\MCNP\\material\\）的 custom + override 材料条目，不含内置 55+48
+        （内置在前端代码）。前端负责"内置 ⊕ 文件"合并：同名 key 用 override 覆盖内置。
+        无需 body（do_GET 与 do_POST 同路由）。
+      responses:
+        '200':
+          description: 材料库全量
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      materials:
+                        type: object
+                        description: key → entry
+                        additionalProperties: { $ref: '#/components/schemas/MaterialLibraryEntry' }
+                      path: { type: string }
+        '500':
+          description: 读取异常
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/material-library/save:
+    post:
+      operationId: materialLibrarySave
+      tags: [source]
+      summary: upsert 一条材料库条目（新建 custom / 编辑内置另存 override）
+      description: |
+        body 传 entry（MaterialLibraryEntry）。save 后返回 saving 条目 + 组成自洽警告。
+        前端可在保存前先自行 validate；保存动作本身接受条目（容忍警告），
+        由前端决定是否阻断。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                entry: { $ref: '#/components/schemas/MaterialLibraryEntry' }
+      responses:
+        '200':
+          description: 保存结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      entry: { $ref: '#/components/schemas/MaterialLibraryEntry' }
+                      warnings: { type: array, items: { type: string } }
+        '500':
+          description: 保存异常
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/material-library/delete:
+    post:
+      operationId: materialLibraryDelete
+      tags: [source]
+      summary: 按 key 删除一条材料库条目（custom 或 override）
+      description: |
+        删除 override 等价于"恢复原始"（内置不受影响）；删除 custom 即移除用户新建材料。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                key: { type: string }
+      responses:
+        '200':
+          description: 删除结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      deleted: { type: boolean }
+                      key: { type: string }
+        '500':
+          description: 删除异常
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/material-library/import:
+    post:
+      operationId: materialLibraryImport
+      tags: [source]
+      summary: 导入 JSON/CSV 材料库（dry_run 预览，确认后落库）
+      description: |
+        body: {format, content, conflict, existing_keys, dry_run}。
+        conflict ∈ skip|overwrite|rename（三选一，前端预览弹窗让用户选）。
+        existing_keys 为当前库全量 key（含内置，由前端传入），用于冲突判定。
+        dry_run=True 只返回预览（不写库）；False 按 conflict 合并写库。
+          preview[]: 每条 {key,name,errors(组成自洽),xsdir(反向索引)}。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                format: { type: string, enum: [json, csv] }
+                content: { type: string }
+                conflict: { type: string, enum: [skip, overwrite, rename] }
+                existing_keys: { type: array, items: { type: string } }
+                dry_run: { type: boolean }
+      responses:
+        '200':
+          description: 导入结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      result:
+                        type: object
+                        properties:
+                          imported: { type: array, items: { type: string } }
+                          skipped: { type: array, items: { type: string } }
+                          overwritten: { type: array, items: { type: string } }
+                          renamed: { type: array, items: { type: string } }
+                          dry_run: { type: boolean }
+                      preview:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            key: { type: string }
+                            name: { type: string }
+                            errors: { type: array, items: { type: string } }
+                            xsdir: { type: array, items: { type: object } }
+                      dry_run: { type: boolean }
+                      format: { type: string }
+        '500':
+          description: 导入异常
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/material-library/export:
+    post:
+      operationId: materialLibraryExport
+      tags: [source]
+      summary: 导出 JSON/CSV 材料库（整库或指定条目）
+      description: |
+        body: {format, entries?}。entries 未传则导出文件侧全部材料；前端可传
+        已合并（内置⊕文件）的 entries 以导出含内置整库。JSON 无损（含 raw 行），
+        CSV 便捷（每核素一行、含 options/mtCard、raw 行跳过）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                format: { type: string, enum: [json, csv] }
+                entries:
+                  type: array
+                  items: { $ref: '#/components/schemas/MaterialLibraryEntry' }
+      responses:
+        '200':
+          description: 导出内容
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      format: { type: string }
+                      content: { type: string }
+        '500':
+          description: 导出异常
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
 components:
   schemas:
     OkEnvelope:
@@ -1777,6 +1972,25 @@ components:
         options: { type: string, description: 额外 MCNP 选项（nlib=.66c 等） }
         mt_card: { type: string, description: 热中子 MT 卡（lwtr.10t） }
         formula: { type: string, description: 化学式原文（公式输入模式回填用） }
+    MaterialLibraryEntry:
+      type: object
+      description: |
+        用户材料库条目（app/material_library.py normalize_entry）。与 MaterialData 不同，
+        带稳定 key/category/desc/density/origin；rows 复用 MaterialRow 判别联合。
+        origin=custom（用户新建）| override（编辑内置的本地覆盖）。
+      properties:
+        key: { type: string, description: 稳定身份（内置 key 或生成的 slug/hash） }
+        name: { type: string }
+        category: { type: string }
+        formula: { type: string, description: 化学式原文（公式输入模式回填用） }
+        desc: { type: string }
+        density: { type: string, description: MCNP 质量密度（负值） }
+        options: { type: string, description: 额外 MCNP 选项（nlib=.66c 等） }
+        mtCard: { type: string, description: 热中子 MT 卡（lwtr.10t） }
+        origin: { type: string, enum: [custom, override] }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/MaterialRow' }
     SourceItem:
       type: object
       description: |

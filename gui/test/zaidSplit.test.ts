@@ -25,9 +25,9 @@ describe("splitZaid（ZAID → {el, mass}）", () => {
     expect(splitZaid("92235.80c")).toEqual({ el: "U", mass: "235" });
   });
 
-  it("自然元素（质量位 AAA=000）→ 质量数为空串", () => {
-    expect(splitZaid("6000")).toEqual({ el: "C", mass: "" });
-    expect(splitZaid("26000")).toEqual({ el: "Fe", mass: "" });
+  it("自然元素（质量位 AAA=000）→ 质量数 000（不退回 placeholder）", () => {
+    expect(splitZaid("6000")).toEqual({ el: "C", mass: "000" });
+    expect(splitZaid("26000")).toEqual({ el: "Fe", mass: "000" });
   });
 
   it("手写 '元素-质量数' 形态：Fe-57 → Fe/57", () => {

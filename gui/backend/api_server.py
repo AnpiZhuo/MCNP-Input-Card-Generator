@@ -1416,6 +1416,11 @@ class MCNPHandler(BaseHTTPRequestHandler):
             "/api/lattice-extent": self._handle_lattice_extent,
             "/api/preview-lattice": self._handle_preview_lattice,
             "/api/set-gpu-preference": self._handle_set_gpu_preference,
+            "/api/material-library": self._handle_material_library,
+            "/api/material-library/save": self._handle_material_library_save,
+            "/api/material-library/delete": self._handle_material_library_delete,
+            "/api/material-library/import": self._handle_material_library_import,
+            "/api/material-library/export": self._handle_material_library_export,
         }
         handler = handlers.get(parsed.path)
         if handler:
@@ -1438,6 +1443,105 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 pref = "high"
             res = gpu_pref.apply_gpu_preference(pref)
             self._ok({"status": "ok", "preference": pref, **res})
+        except Exception as e:
+            self._err(str(e))
+
+    # ── 材料库（深化，2026-08）──
+    def _handle_material_library(self):
+        """返回用户材料库（文件侧 custom + override，不含内置 55+48）。"""
+        try:
+            ml = _import_app("material_library")
+            self._ok({
+                "materials": ml.list_materials(),
+                "path": ml.library_path(),
+            })
+        except Exception as e:
+            self._err(str(e))
+
+    def _handle_material_library_save(self):
+        """upsert 一条材料库条目。返回保存条目 + 组成自洽警告。"""
+        try:
+            ml = _import_app("material_library")
+            data = self._read_body() or {}
+            entry = data.get("entry")
+            if not entry:
+                raise ValueError("缺少 entry")
+            saved = ml.save_material(entry)
+            self._ok({"entry": saved, "warnings": ml.validate_entry(saved)})
+        except Exception as e:
+            self._err(str(e))
+
+    def _handle_material_library_delete(self):
+        """按 key 删除一条（custom 或 override）。"""
+        try:
+            ml = _import_app("material_library")
+            data = self._read_body() or {}
+            key = str(data.get("key") or "")
+            if not key:
+                raise ValueError("缺少 key")
+            deleted = ml.delete_material(key)
+            self._ok({"deleted": deleted, "key": key})
+        except Exception as e:
+            self._err(str(e))
+
+    def _handle_material_library_import(self):
+        """导入 JSON/CSV。dry_run=True 只返回预览（不写库）。
+
+        body: {format, content, conflict, existing_keys, dry_run}
+        conflict ∈ skip|overwrite|rename；existing_keys 为当前库全量 key（含内置），
+        由前端传入；per-entry 校验（validate_entry + check_zaids_xsdir）随预览返回。
+        """
+        try:
+            ml = _import_app("material_library")
+            data = self._read_body() or {}
+            fmt = str(data.get("format") or "json")
+            content = data.get("content") or ""
+            conflict = str(data.get("conflict") or "skip")
+            existing_keys = data.get("existing_keys") or []
+            existing_entries = data.get("existing_entries")
+            dry_run = bool(data.get("dry_run"))
+            if not content.strip():
+                raise ValueError("导入内容为空")
+            entries = ml.parse_import(content, fmt)
+            preview = []
+            for e in entries:
+                preview.append({
+                    "key": e.get("key"),
+                    "name": e.get("name"),
+                    "errors": ml.validate_entry(e),
+                    "xsdir": ml.check_zaids_xsdir(e),
+                })
+            result = ml.apply_import(entries, conflict=conflict,
+                                     existing_keys=existing_keys,
+                                     existing_entries=existing_entries,
+                                     dry_run=dry_run)
+            self._ok({"result": result, "preview": preview,
+                      "dry_run": dry_run, "format": fmt})
+        except Exception as e:
+            self._err(str(e))
+
+    def _handle_material_library_export(self):
+        """导出 JSON/CSV。body: {format, entries?}。未传 entries 用文件内全部材料。
+
+        前端可传已合并（内置 ⊕ 文件）的 entries 以导出含内置的整库；
+        不传则导出文件侧（custom+override）。
+        """
+        try:
+            ml = _import_app("material_library")
+            data = self._read_body() or {}
+            fmt = str(data.get("format") or "json")
+            entries = data.get("entries")
+            if not entries:
+                entries = list(ml.list_materials().values())
+            if not entries:
+                raise ValueError("没有可导出的材料")
+            if fmt == "json":
+                content = ml.export_json(entries)
+            elif fmt == "csv":
+                content = ml.export_csv(entries)
+            else:
+                raise ValueError("不支持的导出格式: " + str(fmt))
+            self._ok({"format": fmt, "content": content})
         except Exception as e:
             self._err(str(e))
 

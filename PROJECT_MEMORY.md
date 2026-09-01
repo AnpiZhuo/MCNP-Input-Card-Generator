@@ -14,7 +14,17 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
-## S1（当前批次）lat=2 六棱柱 3D 预览 bug 修复（2026-08-28，源 `P:\dekstop\u233-comp-therm-001-case-6.i`，核心已修复，未提交）
+## S1（当前批次）材料库深化（2026-08-30，已实现 + 已打包部署 v1.7.4）
+- **批次目标**：把材料库从 97 种静态预设升级为用户可编辑、可迁移、可自检的材料资产。
+- **后端**：`app/material_library.py` + `/api/material-library`(GET/save/delete/import/export)；持久化 `D:\MCNP\material\material_library.json`（D 盘不可写回落 `%APPDATA%\MCNP\material\`，原子写/防半写/损坏备份）；**custom + override** 模型；导入 JSON（无损）+ CSV（长格式带全 options/mtCard，按 key 分组/行交错正确/标量取首个非空），`dry_run` 预览 + 冲突三选（跳过/覆盖/改名）+ **内容完全一致自动跳过**（`apply_import` + `existing_entries` 比对）；xsdir 反向索引（缺库/后缀不匹配）+ 组成自洽校验（份额归一/正负号一致/密度/S(α,β)需含氢）。
+- **前端**：`data/materialLibrary.ts`（LibraryEntry builtin/custom/override + `mergeLibrary` 保序合并 + API 封装 + 旧 localStorage 一次性迁移）+ `useMaterialLibrary` hook + MaterialEditDialog 贯通（handlePreset 查合并库 / 选中自动带出 MT卡与其他 / 修"用户预设选中无反应"bug / 「保存至材料库」/ `hidePreset`）+ MaterialLibraryPanel 管理面板（内置/我的材料/已修改三区、搜索/编辑/删除/恢复原始/导入导出/ZAID 明细标 ✓/✗）+ MaterialTab「📚 材料库」入口。
+- **✅ 修复（复验反馈）**：① 编辑弹窗被父浮窗 `backdrop-filter` 裁剪 → `MaterialEditDialog` 用 `createPortal` 到 `document.body`；② 编辑保存后列表不刷新（`useMaterialLibrary` 用 `useMemo` 缓存模块级 `_cache`）→ 去 `useMemo` 每次读最新 `_cache`；③ 材料库内编辑隐藏预设区（`hidePreset` + `initialFormulaText`），footer「保存」直接写库；④ 生成 INP 时 **MODE（粒子类型）+ NPS（数量）卡移到数据卡段最末尾**（`inp_generator` 拆 `basic_tail`），其余 CTME/ACT/PRINT/NONU 留开头；⑤ 导入"内容一致 → 默认跳过"。
+- **打包**：README 与 exe 同级放入（`release.ps1` 部署步骤加复制 + 自检）＋ `mcnp_sidecar.spec` `_keep_py` 加 `material_library.py`；**⚠️ 踩坑**：edit 改写 `release.ps1` 丢 UTF-8 BOM → Windows PowerShell 5.1 中文乱码解析崩溃，补 BOM 修复。
+- **门禁**：后端 pytest **737/0**（含材料库 23 单测 先红后绿）+ 契约闸门含 5 新端点；前端 vitest 534/535（唯一失败 colorize 128³<50ms 已知 flaky，隔离单跑 18/18 绿）+ tsc EXIT 0 + vite build 成功；打包版 sidecar 材料库端点冒烟（list/save/export）过。
+- **版本**：沿用 **1.7.4**（材料库为新功能，按 §5 应升版待上级指定；已按用户确认沿用）。
+- **⚠️ 待用户复验**：编辑弹窗完整不被裁剪、保存后即时刷新、材料库内编辑无预设区、生成 INP 的 MODE/NPS 在末尾、导入相同自动跳过。
+
+## S1（上一批次）lat=2 六棱柱 3D 预览 bug 修复（2026-08-28，源 `P:\dekstop\u233-comp-therm-001-case-6.i`，核心已修复，未提交）
 - **批次目标**：修 U233-COMP-THERM-001 case 6 的 lat=2 六棱柱格阵（43×43 hex）3D 预览 bug —— handoff 第2项。**三个已知问题：① hex pin universe STL 空→前端回退 BoxGeometry 方块；② subPitch 误用硬编码 1.26；③ hex 格位全在正象限未居中。**
 - **✅ 根因1（核心，已修复）**：`_build_one_universe(u=1/2/3)` 返回空。根因=容器 cell20 `surface_expr="10 -16 18 -23 -36 -37 38 39 #15 #16 #17 #18"` 含 **MCNP cell 补集运算符 `#n`**（挖控制叶片）。`_lattice_container_expr` 原样返回该表达式 → `_build_one_universe` 把它当作布尔裁剪表达式追加进 universe pin cell（`expr + 格元盒后缀 + 容器cell`），**FreeCAD 解析不了指向未定义 cell 的 `#` → 整次 build 失败 → 所有 universe STL 变空**。BEAVRS 容器 cell343 `-80 700 -730` 无 `#` 所以没踩此坑。
   - **修复**：`_lattice_container_expr` 返回前剥离 `#` 补集 token（`expr.split()` 过滤 `tok.startswith("#")`），容器裁剪只保留外边界曲面（`10 -16 18 -23 -36 -37 38 39`）。
@@ -225,7 +235,7 @@
 - **已完成功能**：
   - 8 标签页表单编辑（基本/材料/几何/源/计数/高级/输出）
   - INP 生成/导入（含拖拽）、工作区自动保存/恢复、4 套主题
-  - 材料库（**97 种预设**：49 内置 + 48 PNNL-15870 精选同位素级；xsdir 校验 + 下拉自动填充密度）
+  - 材料库（**97 种预设**：49 内置 + 48 PNNL-15870 精选同位素级；xsdir 校验 + 下拉自动填充密度）+ **用户可编辑持久材料库**（材料库深化，2026-08-30：custom/override、导入导出 JSON·CSV、xsdir 反向索引 + 组成自洽校验、「📚材料库」管理面板、MT卡/其他随预设贯通，存 `D:\MCNP\material\material_library.json`）
   - 3D 预览（FreeCAD CSG，`#n` 栅元补集支持）+ 平面截面（STL numpy 切）+ STEP/GEOUNED 导入
   - **GQ/SQ 曲面 3D 预览**（2026-08-22）：含任意 GQ/SQ 的栅元走纯 numpy 体素 CSG（`app/mc.py`/`voxel_csg.py`/`quadric.py`），TR 变换正确、水密、无 vtk 依赖、打包可用
   - **GQ/SQ 精确截面（2D 解析切片）**（2026-08-22）：`app/analytic_slice.py` 在切割平面上解析求值 + marching squares 提取轮廓；**切线平面法快路径**（椭球/圆柱平滑水密网格，~600 三角形）
@@ -263,7 +273,7 @@
 | `app/stl_cross_section.py` / `_freecad_cross_section_worker.py` | 截面（numpy 切 STL，不依赖 FreeCAD） | 后端 |
 | `app/step_importer_geouned.py` / `geouned_worker.py` | GEOUNED STEP→MCNP 转换封装 | 后端 |
 | `app/step_importer.py` / `freecad_locator.py` | STEP 导入 / FreeCAD 定位唯一入口 | 后端 |
-| `app/xsdir_db.py` / `material_presets.py` | xsdir 截面数据库 / 预设材料库 | 后端 |
+| `app/xsdir_db.py` / `material_presets.py` / `material_library.py` | xsdir 截面数据库 / 预设材料库 / **用户材料库持久化（深化，custom/override、导入导出、xsdir 反向索引、组成自洽）** | 后端 |
 | `app/outp_parser.py` | **OUTP 输出解析（纯 stdlib 容错，V1.7.2.2 新增）** | 后端 |
 | `app/mctal_parser.py` / `app/sweep.py` | **mctal 输出解析（k-eff/收敛/tally）** / **参数扫描纯函数（对齐 OWEN sweepCore）** | 后端 |
 | `app/meshtal/` | 网格计数解析/体积构建/配色/cache/deck_match/worker（8 模块） | 后端 |
@@ -364,6 +374,7 @@
 - **大网格零通量背景涂蓝（2026-08-15 用户实测）**：色阶下限=0 时精确 0 值也被涂蓝遮模型。已修：色阶下限**自适应** = `minPositive×0.5`（曾用 sqrt 规则切太狠致"只显示一个面"，已按用户反馈改）；注意纹理是线性归一化 u8，微小值会被量化成 0（minPositive 从 u8 字节重建，勿用原始文件最小值）。
 - **GQ/SQ 3D 预览 3 连坑（2026-08-22 实测，静态审查发现不了）**：① `app/mc.py` 邻接索引 `t_ids`/`slots` 的 repeat/tile 与「先全部 (0,1)、再 (1,2)、再 (2,0) 的块状边数组」错位 → 朝向传播全乱（signed volume≈0、假碎片/假冲突）；必须 `t_ids=tile`、`slots=repeat`。② BFS 波前同波重复三角形未去重 → 指数膨胀到 4 千万+（内存炸）；用一次性 bool 数组去重。③ 带 TR 小栅元在大 bound（B=500）下：TR 曲面 AABB 必须经 8 角点变换（`p_global=o+p_local@R`）求全局紧盒，保守全盒会让 32³ 粗扫漏检 → 空网格降级包围盒；margin 必须按**实际扫描盒**间距 `(scan_hi−scan_lo).max()/(coarse−1)×1.1`，用全局 `2B/(coarse-1)` 在 B=500 时达 35cm 把细化盒撑爆。水密断言必须用「每条无向边恰被 2 个三角形使用」的边计数法（**vtkFeatureEdges 对 marching cubes 网格误报边界边**）；`*TRn` 求值前必须 `p_local = rotate⁻¹·(p_global − o)`。
 - **GQ/SQ 后续增强 3 连坑（2026-08-22 实测）**：① **凸裁剪盖面**：顶点恰落在裁剪面上（dist≈0）时跨边条件会漏掉该交点 → 盖面缺顶点被丢弃 → 三角形破洞（228 条开放边）；`cut()` 端点贴面返回 `keep()`、盖面收集贴面顶点本身。OWEN 的边链盖面法在细密切线平面下会退化丢面（162 面球只出 35 面），改用 Sutherland–Hodgman + 盖面绕质心极角排序。② **金螺旋方向分布不均**：外接多面体顶点半径到 1.08r+、体积误差 8%+，改二十面体细分（162/642 方向）；162 方向外接误差仍 ~2.1% → 无封口时绕中心体积校正 λ=(V_true/V_mesh)^(1/3)（体积精确）、有封口时用 642 方向（区域体积无法解析）。③ **解析切片 marching squares 16 格表 case 12（{2,3} 上边在内）应为 (1,3) 而非 (0,1)**；`_plane_halfspace` 的 pos/neg sgn 与 surface_fn 正侧约定相反（pos 侧要取 −法向）。
+- **材料库深化 3 坑（2026-08-30 实测）**：① **嵌套浮窗被 `backdrop-filter` 裁剪**——`FloatingDialog` 用 `backdrop-filter: blur(16px)` 会创建 containing block，使嵌套其中 `position:fixed` 的子弹窗相对父定位、被父 `overflow:hidden` 裁剪。修法=子弹窗用 `createPortal` 渲染到 `document.body`（ExamplesDialog/GeometryTab 同法）。② **模块级缓存被 `useMemo` 冻结不刷新**——`useMaterialLibrary` 用 `useMemo(()=>entries,_cache…,[loaded])`，但 `entries` 依赖模块级 `_cache`（不在 deps），save/remove 后 `_cache` 更新 + notify 触发重渲染，`useMemo` 仍返回旧缓存 → 面板不刷新。修法=去掉 `useMemo` 每次读最新 `_cache`。③ **edit 改写 `.ps1` 丢 UTF-8 BOM**——Windows PowerShell 5.1 按 GBK 读无 BOM 的 UTF-8 中文就乱码解析崩溃；修法=用 `[System.Text.UTF8Encoding]::new($true)` 重存为带 BOM。
 
 - **OUTP 解析误用 pymcnp 构造函数（2026-08-19 实测）**：`pymcnp.Outp(text)` 是构造函数非解析入口，恒报 TypeError；正确入口 `Outp.from_mcnp(text).to_dataframe()`。且内置 pymcnp 0.9.1 Tally_4 只认 MCNP6.2 布局，MCNP6.1 紧凑两列解析为空 → 需 `app/outp_parser.py` 兜底。
 - **测试笔误陷阱（fixtures 实测）**：① valid_39.meshtal 的 tally number 是 **4 不是 1**（须取自 parse 响应 `tallies[].number`）；② preview-3d 单栅元 material="0" 是 void → `include_void=False` 跳过 → 空 stl_files（冒烟 deck 须用非 0 material）。
@@ -393,6 +404,7 @@
 | 版本 | 时间 | 内容 |
 | :--- | :--- | :--- |
 | **v1.7.4** | 2026-08-27 | **3D 预览 MCNP 窗口裁剪修复 + U 分组侧边栏**（用户指定新功能上线升版）：① 实体=universe∩格元盒∩容器cell，修超壳/重叠外壳 + 无限水虚假水块（BEAVRS 超壳叶 48→16）；② 3D 预览侧边栏改 U 分组 + 保留未分组栅元；disc 改用容器裁剪 STL、subPitch 半径；版本五处同步 |
+| **v1.7.4（材料库深化，沿用版本待上级指定）** | 2026-08-30 | **材料库深化**（新功能）：用户可编辑持久材料库（custom/override、`D:\MCNP\material\material_library.json`、D盘回落 `%APPDATA%`）、导入导出 JSON·CSV（冲突三选 + 内容一致自动跳过）、xsdir 反向索引 + 组成自洽校验、📚 材料库管理面板、MT卡/其他随预设贯通；修复：编辑弹窗 `backdrop-filter` 裁剪（`createPortal`）、编辑保存后列表不刷新（去 useMemo）、材料库内编辑隐藏预设区、生成 INP 的 MODE+NPS 卡移数据卡段末尾；README 与 exe 同级放入；spec `_keep_py` 加 `material_library.py`。门禁 pytest **737/0** + vitest 534/535（flaky 隔离绿）+ tsc/build 过 |
 | **GQ/SQ 预览修复 + 渲染增强 + OWEN 四项 + 参数扫描前端**（未 commit/发版，文件恒 1.7.2） | 2026-08-22 | 纯 numpy MC 去 vtk + TR + 解析切片 + 切线平面法 + BEAVRS/17×17 夹具 + mctal 解析 + 校验规则交叉核对（validator +3 规则）+ 参数扫描（sweep 模块 + 2 端点 + SweepDialog 前端 + DOM 交互测试）；门禁 pytest **573/0** / vitest **358/0** / tsc EXIT 0；打包冒烟通过；待 tauri build/部署 |
 | **V1.7.2.2 批次**（文件恒 1.7.2） | 2026-08-19 | 4 修复进包：源卡文本模式漏生成 / SDEF 表单模式漏生成 + sdef_extra 往返 / IMP 归一化 / OUTP 解析+绘图+CSV（含 F1/F2/F5 泛化）；终版重打包部署，冒烟全过 |
 | **v1.7.2** | 2026-08-18 | 新功能**快捷建栅元**（RCC/RPP/SPH 一键生成曲面+TR+栅元，8 次迭代打包）；3D 预览坐标轴/截面/取景修复批 |

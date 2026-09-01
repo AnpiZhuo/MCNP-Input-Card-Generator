@@ -1370,7 +1370,11 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
     lines.append(DATA_CARDS_BANNER)
 
     basic_lines = _generate_basic(basic)
-    if basic_lines: lines.extend(basic_lines)
+    # 用户要求：MODE（粒子类型）+ NPS（数量）卡放到数据卡段最末尾，
+    # 其余基本卡（CTME/ACT/PRINT/NONU）留在数据卡开头。
+    basic_tail = [l for l in basic_lines if l.startswith("MODE") or l.startswith("NPS")]
+    basic_head = [l for l in basic_lines if not (l.startswith("MODE") or l.startswith("NPS"))]
+    if basic_head: lines.extend(basic_head)
 
     # TRn 变换卡（来自右侧 TR 文本框，放入数据卡段）
     tr_text = deck.tr_cards.strip()
@@ -1431,6 +1435,9 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
     # 其他卡片排在数据卡段最末尾（来自高级选项卡的手动输入）
     other_lines = _generate_other_cards(adv)
     if other_lines: lines.extend(other_lines)
+
+    # MODE + NPS 卡放在数据卡段的最末尾（用户指定布局）
+    if basic_tail: lines.extend(basic_tail)
 
     lines.append("")
     raw = "\n".join(lines)

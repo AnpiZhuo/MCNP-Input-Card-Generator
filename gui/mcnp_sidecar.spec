@@ -25,6 +25,7 @@ _keep_py = [
     "_cross_section_helper.py",
     "_freecad_cross_section_worker.py",
     "stl_cross_section.py", "gpu_pref.py",
+    "material_library.py",
 ]
 _keep_dirs = ["generator", "docs", "meshtal", "ptrac"]  # generator（含 parsers）+ 参考文档 + meshtal 网格计数 + ptrac 粒子径迹模块
 

@@ -1271,3 +1271,16 @@ ormalizeImportedMaterials（核素行 zaid 剥后缀，raw 行原样，rows/nucl
 - **localStorage 键名**：`mcnp_groupbyu_v1`（初始 true；只读 useState + useEffect 写回；不跨标签页同步）。
 - **未分组组设计**：哨兵 `UNGROUPED_U=-1` 数值升序排最前；组头文案「未分组 · N 栅元」+ 提示「拖拽栅元到此行清空 U」；未分组组内 cell 可正常拖出（cellHandlers 复用原行拖动）。
 - **门禁**：vitest **476/0 无 skip**（基线 466 + 新增 10：universeGroups +6 / geometryGroupDrag +4）+ tsc EXIT 0 + vite build EXIT 0。已知 flaky 不变：colorize 128³ 计时用例隔离单跑即绿。
+
+---
+
+## 材料库深化（2026-08-30）
+
+> 完整流水见 `docs/CHANGELOG.md`（材料库深化 批次）+ 门禁 vitest 534/535（flaky 隔离绿）+ tsc EXIT 0 + build 过。本段仅前端改动。
+
+- `gui/src/data/materialLibrary.ts`（新）：`LibraryEntry`（origin=builtin/custom/override）+ `builtinToEntries` + `normalizeEntry` + `genKey` + `mergeLibrary`（保序，同 key override 覆盖）+ `materialToEntry` + 后端 API 封装（list/save/delete/import/export）+ `migrateLegacyUserPresets`（旧 localStorage 一次性迁移）。`PresetItem` 加 `options`/`mtCard` 字段（`MaterialPresets.tsx`）。
+- `gui/src/hooks/useMaterialLibrary.ts`（新）：模块级 `_cache` + 订阅者 notify 共享缓存；`load`/`reload`/`save`/`remove`；**不用 `useMemo`**（防模块级 `_cache` 被冻结致保存后列表不刷新）。
+- `MaterialEditDialog.tsx`：`handlePreset` 改查合并库 `entryByKey`（修"用户预设选中无反应"bug）+ 选中 `setOptions`/`setMtCard` + 记录 `sourceKey`；`handleSaveToLibrary`（区分 override/custom + 成功后 `onClose`）；下拉改用 `presetGroups`（内置/我的材料/已修改分组）；新增 `hidePreset`/`initialSourceKey`/`initialFormulaText` props；**`createPortal` 到 `document.body`**（防被父 `backdrop-filter` 浮窗裁剪）。
+- `MaterialLibraryPanel.tsx`（新）：「📚材料库」管理面板——内置/我的材料/已修改三区、搜索、编辑（`MaterialEditDialog` 传 `hidePreset` + footer「保存」直接写库）、删除/「恢复原始」、ZAID 明细逐条标 ✓/✗（`validate-zaid`）、导入（dry_run 预览 + 冲突三选）/导出（JSON/CSV）。
+- `MaterialTab.tsx`：加「📚 材料库」按钮 + 渲染 `MaterialLibraryPanel`。
+- 测试：`gui/test/materialLibrary.test.ts`（新，7 用例：normalize/merge/builtinToEntries/materialToEntry）。

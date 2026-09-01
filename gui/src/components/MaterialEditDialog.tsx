@@ -1,14 +1,16 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
+import { createPortal } from "react-dom";
 import FloatingDialog from "./FloatingDialog";
 
 interface Nuclide { zaid: string; fraction: string }
 interface MaterialFormData { matNum: string; name: string; nuclides: MaterialRow[]; options: string; mtCard: string; density: string }
-interface Props { matNum: string; name: string; nuclides: MaterialRow[]; density?: string; options?: string; mtCard?: string; onSave: (d: MaterialFormData) => void; onClose: () => void }
+interface Props { matNum: string; name: string; nuclides: MaterialRow[]; density?: string; options?: string; mtCard?: string; initialSourceKey?: string; hidePreset?: boolean; initialFormulaText?: string; onSave: (d: MaterialFormData) => void; onClose: () => void }
 
-import { PRESET_CATEGORIES, filterPresets, type PresetItem } from "./MaterialPresets";
 import type { MaterialRow } from "../utils/DeckContext";
 import { useRowDrag } from "../utils/useRowDrag";
 import { apiUrl } from "../utils/api";
+import { useMaterialLibrary } from "../hooks/useMaterialLibrary";
+import type { LibraryEntry } from "../data/materialLibrary";
 
 // 元素→质子数映射
 const Z_EL: Record<string, string> = {};
@@ -47,7 +49,8 @@ export function splitZaid(zaid: string): { el: string; mass: string } {
   var znum = num.slice(0, -3) || "";
   var mass = num.slice(-3) || "";
   var parsed = parseInt(mass, 10);
-  return { el: Z_EL[znum] || "", mass: parsed ? String(parsed) : "" };
+  // 质量位 AAA=000（自然元素，parsed=0）也要显示 "000"，而非退回 placeholder（用户反馈）
+  return { el: Z_EL[znum] || "", mass: parsed ? String(parsed) : (mass ? "000" : "") };
 }
 
 /**
@@ -117,10 +120,6 @@ export function shareModeLabel(mode: ShareMode): string {
   return mode === "weight" ? "质量份额" : "原子份额";
 }
 
-const UP_KEY = "mcnp_user_presets";
-function loadUP(): PresetItem[] { try { return JSON.parse(localStorage.getItem(UP_KEY) || "[]"); } catch { return []; } }
-function saveUP(ps: PresetItem[]) { localStorage.setItem(UP_KEY, JSON.stringify(ps)); }
-
 const s: Record<string, React.CSSProperties> = {
   lbl: { fontSize: 10, fontWeight: 500, color: "var(--text-tertiary)", display: "block", marginBottom: 4 },
   inp: { height: 32, padding: "0 10px", borderRadius: 6, border: "1px solid var(--border-glass)", background: "var(--bg-input)", color: "var(--text-primary)", fontSize: 12, outline: "none", width: "100%" },
@@ -136,8 +135,10 @@ async function expandFormula(formula: string, isWeight: boolean = true): Promise
   return j.nuclides;
 }
 
-export default function MaterialEditDialog({ matNum, name, nuclides: initial, density: initDensity, options: initOptions, mtCard: initMtCard, onSave, onClose }: Props) {
-  const [userPresets, setUserPresets] = useState<PresetItem[]>(() => loadUP());
+export default function MaterialEditDialog({ matNum, name, nuclides: initial, density: initDensity, options: initOptions, mtCard: initMtCard, initialSourceKey, hidePreset, initialFormulaText, onSave, onClose }: Props) {
+  const { entries: libraryEntries, save: saveToLibrary } = useMaterialLibrary();
+  // 记住当前填充来源（handlePreset 命中预设/库条目时记录其 key），供「保存至材料库」判定 origin
+  const [sourceKey, setSourceKey] = useState(initialSourceKey || "");
   const [presetSearch, setPresetSearch] = useState("");
   const [mode, setMode] = useState<"manual" | "formula">(initial.length > 0 ? "manual" : "formula");
   const [nucs, setNucs] = useState<MaterialRow[]>(initial.length > 0 ? initial : [{ kind: "nuclide", zaid: "", fraction: "" }]);
@@ -145,7 +146,7 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
   const [options, setOptions] = useState(initOptions || "");
   const [mtCard, setMtCard] = useState(initMtCard || "");
   const [density, setDensity] = useState(initDensity || "");
-  const [formulaText, setFormulaText] = useState("");
+  const [formulaText, setFormulaText] = useState(initialFormulaText || "");
   const [parsing, setParsing] = useState(false);
   const [parsed, setParsed] = useState<Nuclide[] | null>(null);
   const [zaidValid, setZaidValid] = useState<Record<number, boolean|null>>({});
@@ -158,31 +159,75 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
     return m;
   });
 
-  // 用拍平映射快速查找
-  const presetFiltered: [string, PresetItem[]][] = filterPresets(PRESET_CATEGORIES, presetSearch);
-
-  const flatPresets: Record<string, PresetItem> = {};
-  for (const [, items] of PRESET_CATEGORIES) for (const item of items) flatPresets[item.key] = item;
-  const handlePreset = (key: string) => {
-    const p = flatPresets[key]; if (!p) return;
-    setComment(p.name);
-    if (p.density) setDensity(p.density);  // 预设密度自动填入密度栏
-    if (p.rows && p.rows.length > 0) {
-      // PNNL 精选：同位素级 ZAID 行直接填「手动 ZAID」模式（不走化学式展开）
-      setMode("manual");
-      setFormulaText("");
-      setParsed(null);
-      const rows: MaterialRow[] = p.rows.map(([zaid, fraction]) => ({
-        kind: "nuclide" as const, zaid, fraction,
-      }));
-      setNucs(rows);
-      setRowEdits({});
-      p.rows.forEach(([zaid], i) => { if (zaid) validateZaid(i, zaid); });
-    } else {
-      // 化学式预设：展开后填「手动 ZAID」模式；formulaText 保留供切回化学式查看
-      setFormulaText(p.formula); setMode("manual");
-      setParsed(null); parseFormula(p.formula);
+  // 下拉数据源：合并库（内置 ⊕ 文件）按 origin 分组，支持名称/化学式/描述过滤
+  const presetGroups = useMemo(() => {
+    const q = presetSearch.trim().toLowerCase();
+    const match = (e: LibraryEntry) => !q || (e.name + " " + e.formula + " " + e.desc).toLowerCase().includes(q);
+    const builtinGroups: [string, LibraryEntry[]][] = [];
+    const custom: LibraryEntry[] = [];
+    const override: LibraryEntry[] = [];
+    for (const e of libraryEntries) {
+      if (!match(e)) continue;
+      if (e.origin === "custom") custom.push(e);
+      else if (e.origin === "override") override.push(e);
+      else {
+        let g = builtinGroups.find((x) => x[0] === e.category);
+        if (!g) { g = [e.category, []]; builtinGroups.push(g); }
+        g[1].push(e);
+      }
     }
+    return { builtinGroups, custom, override };
+  }, [libraryEntries, presetSearch]);
+
+  // 合并库（内置 ⊕ 文件）：handlePreset 从这查，覆盖内置与用户库条目（含 custom/override）
+  const entryByKey: Record<string, LibraryEntry> = useMemo(() => {
+    const m: Record<string, LibraryEntry> = {};
+    for (const it of libraryEntries) m[it.key] = it;
+    return m;
+  }, [libraryEntries]);
+  const handlePreset = (key: string) => {
+    const e = entryByKey[key]; if (!e) return;
+    setSourceKey(key);
+    setComment(e.name);
+    setDensity(e.density || "");
+    setOptions(e.options || "");         // 贯通：选中自动带出「其他」
+    setMtCard(e.mtCard || "");           // 贯通：选中自动带出 MT 卡
+    const rows = (e.rows || []).map((r) => r.kind === "raw"
+      ? { kind: "raw" as const, text: r.text }
+      : { kind: "nuclide" as const, zaid: r.zaid, fraction: r.fraction });
+    if (rows.length > 0) {
+      // 有解析行：直接填「手动 ZAID」模式
+      setMode("manual"); setFormulaText(""); setParsed(null);
+      setNucs(rows); setRowEdits({});
+      rows.forEach((r, i) => { if (r.kind === "nuclide" && r.zaid) validateZaid(i, r.zaid); });
+    } else if (e.formula) {
+      // 无行但有化学式：展开填充
+      setFormulaText(e.formula); setMode("manual");
+      setParsed(null); parseFormula(e.formula);
+    } else {
+      setMode("manual");
+      setNucs(rows.length ? rows : [{ kind: "nuclide", zaid: "", fraction: "" }]);
+      setRowEdits({});
+    }
+  };
+
+  // 「保存至材料库」：把当前编辑内容存为库条目。key 是否内置决定 origin。
+  const handleSaveToLibrary = async () => {
+    const nm = window.prompt("材料库名称:", comment || "自定义材料");
+    if (!nm) return;
+    const curRows = mode === "formula" && parsed
+      ? parsed.map((n) => ({ kind: "nuclide" as const, zaid: n.zaid, fraction: n.fraction }))
+      : mergePendingEdits();
+    // 源 key 若命中库条目（内置/已修改的 override）→ 存为 override；新建/自定义 → custom
+    const src = entryByKey[sourceKey];
+    const origin = src && src.origin !== "custom" ? "override" : "custom";
+    const key = src ? sourceKey : (nm.replace(/[^0-9A-Za-z]+/g, "_") || "m_none");
+    await saveToLibrary({
+      key, name: nm, category: "我的材料", formula: formulaText, desc: "",
+      density, options, mtCard, origin, rows: curRows,
+    });
+    window.alert("已保存到材料库：" + nm);
+    onClose();
   };
 
   // 对第 i 行核素调 /api/validate-zaid 并回写 zaidValid（载入/公式/手动失焦提交共用）
@@ -291,7 +336,7 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
   };
   const drag = useRowDrag(moveRow);
 
-  return React.createElement(FloatingDialog, {
+  return createPortal(React.createElement(FloatingDialog, {
     title: `材料 M${matNum}`,
     onClose,
     width: 600,
@@ -301,8 +346,9 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
     ),
   },
     React.createElement("div", { style: { padding: 0 } },
-        // 预设 + 用户预设管理
-        React.createElement("div", { style: { marginBottom: 12 } },
+        // 预设 + 材料库选择（内置 ⊕ 用户库 custom/override）—— hidePreset 时整个隐藏
+        // （从「材料库」面板编辑库条目时不需要再次选择预设/保存至库）
+        !hidePreset && React.createElement("div", { style: { marginBottom: 12 } },
           React.createElement("label", { style: s.lbl }, "预设材料"),
           React.createElement("input", {
             style: { ...s.inp, marginBottom: 6, height: 28 },
@@ -312,12 +358,14 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
           }),
           React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
             React.createElement("select", { className: "form-select", style: { height: 34, flex: 1 }, onChange: (e: React.ChangeEvent<HTMLSelectElement>) => e.target.value && handlePreset(e.target.value), value: "" },
-              React.createElement("option", { value: "" }, "-- " + (presetFiltered.flatMap(([, items]) => items).length + userPresets.length) + " 种预设材料 --"),
-              userPresets.length > 0 ? React.createElement(React.Fragment, null,
-                React.createElement("optgroup", { key: "_user", label: "用户预设" }),
-                userPresets.map((p, ui) => React.createElement("option", { key: p.key, value: p.key }, p.name)),
+              React.createElement("option", { value: "" }, "-- " + libraryEntries.length + " 种材料 --"),
+              presetGroups.custom.length > 0 ? React.createElement("optgroup", { key: "_custom", label: "我的材料" },
+                presetGroups.custom.map((p) => React.createElement("option", { key: p.key, value: p.key }, p.name)),
               ) : null,
-              ...presetFiltered.flatMap(([cat, items]) => [
+              presetGroups.override.length > 0 ? React.createElement("optgroup", { key: "_override", label: "已修改" },
+                presetGroups.override.map((p) => React.createElement("option", { key: p.key, value: p.key }, p.name)),
+              ) : null,
+              ...presetGroups.builtinGroups.flatMap(([cat, items]) => [
                 React.createElement("optgroup", { key: cat, label: cat }),
                 ...items.map(item => React.createElement("option", { key: item.key, value: item.key }, item.name)),
               ]),
@@ -325,30 +373,10 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
             React.createElement("button", {
               className: "btn btn-success btn-xs",
               style: { whiteSpace: "nowrap" },
-              onClick: () => {
-                var nm = prompt("预设名称:", comment || "自定义材料");
-                if (!nm) return;
-                var key = "user_" + Date.now();
-                var newPs = [...userPresets, { key: key, name: nm, formula: formulaText, desc: "", density: density || "" }];
-                setUserPresets(newPs); saveUP(newPs);
-              },
-            }, "+ 保存"),
+              title: "把当前编辑内容存入材料库（编辑内置会存为覆盖）",
+              onClick: () => { handleSaveToLibrary(); },
+            }, "保存至材料库"),
           ),
-          // 用户预设删除
-          userPresets.length > 0 ? React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 } },
-            userPresets.map((p, ui) =>
-              React.createElement("span", { key: p.key, style: { display: "flex", alignItems: "center", gap: 2, fontSize: 10, background: "rgba(255,255,255,0.05)", borderRadius: 4, padding: "1px 6px" } as React.CSSProperties },
-                React.createElement("span", { style: { color: "var(--text-secondary)" } }, p.name),
-                React.createElement("button", {
-                  style: { background: "none", border: "none", color: "#e53935", cursor: "pointer", fontSize: 12, padding: "0 2px" },
-                  onClick: () => {
-                    var newPs = userPresets.filter(function(_, j) { return j !== ui; });
-                    setUserPresets(newPs); saveUP(newPs);
-                  },
-                }, "×"),
-              )
-            ),
-          ) : null,
         ),
         React.createElement("label", { style: s.lbl }, "材料名称/注释"),
         React.createElement("input", { style: { ...s.inp, marginBottom: 10 }, value: comment, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setComment(e.target.value), placeholder: "如 水、不锈钢" }),
@@ -481,5 +509,5 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
           ),
         ),
       ),
-  );
+  ), document.body);
 }

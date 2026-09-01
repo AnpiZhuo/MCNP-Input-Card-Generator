@@ -172,11 +172,15 @@ New-Item -ItemType Directory -Path $deploy | Out-Null
 Copy-Item (Join-Path $rel "MCNP 输入卡生成器.exe") (Join-Path $deploy "MCNP 输入卡生成器.exe") -Force
 Copy-Item (Join-Path $rel "python.exe") (Join-Path $deploy "python.exe") -Force
 Copy-Item $relInt (Join-Path $deploy "_internal") -Recurse -Force
+# README 与主 exe 同级放入（用户指定，2026-08-30）
+$readme = Join-Path $repo "README.md"
+if (Test-Path $readme) { Copy-Item $readme (Join-Path $deploy "README.md") -Force }
 foreach ($chk in @(
     (Join-Path $deploy "MCNP 输入卡生成器.exe"),
     (Join-Path $deploy "python.exe"),
     (Join-Path $deploy "_internal\app\preview_cache.py"),
-    (Join-Path $deploy "_internal\vendor\geouned")
+    (Join-Path $deploy "_internal\vendor\geouned"),
+    (Join-Path $deploy "README.md")
 )) {
     if (-not (Test-Path $chk)) { Fail "部署后自检失败: $chk 缺失" }
 }

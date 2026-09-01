@@ -13,6 +13,16 @@
 ## 一、批次详情档案（原 PROJECT_MEMORY.md 顶部修复横幅，含独有验收细节）
 
 
+### ✅ 材料库深化（2026-08-30，已打包部署 v1.7.4，版本沿用待上级指定）
+
+把材料库从 97 种静态预设升级为用户可编辑、可迁移、可自检的材料资产。
+
+- **后端**：`app/material_library.py` + `/api/material-library`(GET/save/delete/import/export)；持久化 `D:\MCNP\material\material_library.json`（D 盘不可写回落 `%APPDATA%`，原子写/防半写/损坏备份）；**custom + override** 模型；导入 JSON（无损）+ CSV（长格式带全 options/mtCard，按 key 分组/行交错正确，`dry_run` 预览 + 冲突三选跳/覆/改 + **内容一致自动跳过**）；xsdir 反向索引 + 组成自洽校验（份额归一/正负号/密度/S(α,β)需含氢）。
+- **前端**：`data/materialLibrary.ts`（LibraryEntry + mergeLibrary 保序合并 + API 封装 + 旧 localStorage 迁移）+ `useMaterialLibrary` hook + MaterialEditDialog 贯通（handlePreset 查合并库 / 选中带出 MT卡与其他 / 修"用户预设选中无反应"bug / 「保存至材料库」/ `hidePreset`）+ MaterialLibraryPanel 管理面板（内置/我的材料/已修改三区、搜索/编辑/删除/恢复原始/导入导出/ZAID 明细标 ✓/✗）+ MaterialTab「📚材料库」入口。
+- **✅ 修复**：编辑弹窗被父浮窗 `backdrop-filter` 裁剪 → `MaterialEditDialog` 用 `createPortal` 到 `document.body`；编辑保存后列表不刷新（模块级 `_cache` 被 `useMemo` 冻结）→ 去 useMemo；材料库内编辑隐藏预设区（`hidePreset`）；生成 INP 时 **MODE+NPS 卡移数据卡段最末尾**（`inp_generator` 拆 `basic_tail`）；导入"内容一致 → 默认跳过"。
+- **打包**：README 与 exe 同级放入（`release.ps1` 部署步骤）；`mcnp_sidecar.spec` `_keep_py` 加 `material_library.py`；踩坑 edit 改写 `.ps1` 丢 UTF-8 BOM 致 PS5.1 中文乱码解析崩溃（补 BOM 修复）。
+- **门禁**：pytest **737/0**（含材料库 23 单测 先红后绿）+ 契约闸门含 5 新端点；前端 vitest 534/535（唯一失败 colorize 128³<50ms 已知 flaky，隔离 18/18 绿）+ tsc EXIT 0 + vite build 成功；部署版 sidecar 材料库端点冒烟（list/save/export）过。
+
 ### ✅ v1.7.3 新功能批次：GQ/SQ 3D 预览 + 渲染增强 + OWEN 五项 + 3D 重合检测（2026-08-22，用户指定版本 1.7.3）
 
 - **GQ/SQ 3D 预览修复**：纯 numpy marching cubes（`app/mc.py`，去 vtk）+ 体素 CSG（`app/voxel_csg.py`，TR 变换/AABB 紧盒/margin 按扫描盒）+ 3 个动态 bug 修复（邻接索引、BFS 波前膨胀、TR 大 bound 漏检）；普通 GQ/SQ 栅元水密可渲染。

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import MaterialEditDialog from "./MaterialEditDialog";
+import MaterialLibraryPanel from "./MaterialLibraryPanel";
 import { useDeck, MaterialData } from "../utils/DeckContext";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
 
@@ -10,6 +11,7 @@ interface MatTabProps {
 export default function MaterialTab({ onMaterialAdded }: MatTabProps) {
   const [mats, setMats] = useState<MaterialData[]>([]);
   const [editIdx, setEditIdx] = useState<number | null>(null);
+  const [showLibrary, setShowLibrary] = useState(false);
   const { deck, patch } = useDeck();
 
   // 文本↔表单互转（深模块：逻辑在 useSectionTextMode 一处，这里只传回填回调）
@@ -48,6 +50,7 @@ export default function MaterialTab({ onMaterialAdded }: MatTabProps) {
 
   return (
     <>
+      {showLibrary && <MaterialLibraryPanel onClose={() => setShowLibrary(false)} />}
       {editIdx !== null && (
         <MaterialEditDialog
           matNum={String(mats[editIdx].number)}
@@ -80,6 +83,7 @@ export default function MaterialTab({ onMaterialAdded }: MatTabProps) {
               {busy ? "转换中..." : (rawMode ? "← 回到表单" : "✎ 文本模式")}
             </button>
             <button className="btn btn-success btn-sm" onClick={addMat}>+ 添加</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setShowLibrary(true)}>📚 材料库</button>
           </div>
 
         {rawMode ? <textarea className="form-input" value={rawText} onChange={e => {setRawText(e.target.value);patch({rawOverrides:{...deck.rawOverrides,materials:e.target.value}});}} style={{width:"100%",minHeight:200,fontFamily:"Consolas,monospace",fontSize:12}} placeholder="材料卡原始文本..." /> : <div className="table-wrap">
