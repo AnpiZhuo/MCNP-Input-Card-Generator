@@ -63,56 +63,28 @@ MCP 的机制就是让 AI **自动枚举工具**（`tools/list`）。用户只�
 
 ## 启动
 
-inputcard-mcp 作为程序能力随程序分发，有两种运行方式：
+inputcard-mcp 作为程序能力随程序分发，**通过 MCP over HTTP（本机环回 8100）**供外部 agent 连接，不再用 stdio。
 
-**① 打包版（随程序 sidecar，推荐）**
+**运行**：主程序启动时会自动拉起 `--mcp-http`；也可手动
 ```bash
-# 已有部署目录里的 sidecar；AI 客户端把它当作 stdio MCP server 拉起
-<部署目录>\python.exe --mcp-server
+<部署目录>\python.exe --mcp-http          # 打包版（自动探测 8100）
+python -m inputcard_mcp                     # 源码开发版（默认 8100，可用 --port=<n>）
 ```
 
-**② 源码开发**
-```bash
-pip install -r inputcard_mcp/requirements.txt
-python -m inputcard_mcp
-```
-
-> 打包版无需另外装依赖（`inputcard_mcp` + `mcp` 已随 sidecar 打进 `_internal`）。用户通常在 AI 客户端配置里**一次性注册**下面任一服务，之后无需手动启动。
-
-> **⚠️ 客户端/测试注意事项（stderr）**：MCP 传输靠 stdout 走协议，**stderr 是独立通道**。服务端默认已把日志降到 WARNING（不刷屏），所以即使客户端不读 stderr 也不会卡。但作为防御，建议客户端/测试用 `stdio_client(server, errlog=<会被持续消费的流>)` 或**同时 drain stdout+stderr 的双通道 reader**——尤其当你把 `INPUTCARD_MCP_LOG=DEBUG` 放开排查时，stderr 会变多，不消费就有缓冲满风险（Windows 下曾实测卡死，根因 `diagnostics: stderr-hang`）。
-
-**打包版配置**
+**连接（agent 的 MCP 配置）**：
 ```json
-{
-  "mcpServers": {
-    "inputcard-mcp": {
-      "command": "<部署目录>\\python.exe",
-      "args": ["--mcp-server"]
-    }
-  }
-}
+{ "mcpServers": { "inputcard-mcp": { "type": "http", "url": "http://127.0.0.1:8100/mcp" } } }
 ```
 
-**源码开发版配置**
-```json
-{
-  "mcpServers": {
-    "inputcard-mcp": {
-      "command": "python",
-      "args": ["-m", "inputcard_mcp"],
-      "env": { "PYTHONPATH": "<本项目根目录>" }
-    }
-  }
-}
-```
+> ⚠️ 客户端/测试注意事项（stderr）：服务端默认把日志降到 WARNING（不刷 stderr），不易触发管道缓冲；但 MCP 传输靠 stdout 走协议，stderr 是独立通道，仍建议客户端/测试同时消费 stdout+stderr，尤其用 `INPUTCARD_MCP_LOG=DEBUG` 排查时。
 
 ---
 
-## 工具集（已实现，共 6 个）
+## 工具集（已实现，共 6 个，默认操作「程序当前工作区」）
 
-无状态：每个修改型工具都「收当前 `INP` 文本 → 返回新 `INP`」。
+外部 agent 连接后自动发现工具。`read_document` / `list_section` / `patch_section` **不传 `inp` 即读/改「程序当前工作区」**（所有标签页，程序界面随之变化）；传 `inp` 则按该文档无状态处理。
 
-> **设计原则（深模块）**：接口刻意保持**小而深**——不做"每类设置一个浅工具"，而是用 `list_section` / `patch_section` 让 AI 针**语义段**读写，覆盖全部 INP 数据段。后端生成器已支持全部段，因此**一个** `patch_section` 就能整体改写任意一段。
+> **设计原则（深模块）**：接口刻意保持**小而深**——用 `list_section` / `patch_section` 让 AI 针**语义段**读写，覆盖全部 INP 段；后端生成器已支持全部段，因此**一个** `patch_section` 就能整体改写任意一段，并同步写回程序工作区。
 
 ### 文档级
 | 工具 | 作用 | 输入 | 返回 |

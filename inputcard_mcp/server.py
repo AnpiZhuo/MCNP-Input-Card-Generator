@@ -483,14 +483,12 @@ def _mcp_http_main(host="127.0.0.1", port=8100):
 
 
 def main():
-    if "--mcp-http" in sys.argv:
-        port = 8100
-        for a in sys.argv:
-            if a.startswith("--port="):
-                port = int(a.split("=", 1)[1])
-        _mcp_http_main(port=port)
-    else:
-        mcp.run()
+    """inputcard-mcp 唯一入口：MCP over HTTP（默认本机环回 8100）。stdio 已移除。"""
+    port = 8100
+    for a in sys.argv:
+        if a.startswith("--port="):
+            port = int(a.split("=", 1)[1])
+    _mcp_http_main(port=port)
 
 
 if __name__ == "__main__":
