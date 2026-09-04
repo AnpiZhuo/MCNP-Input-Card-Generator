@@ -10,13 +10,15 @@
 
 在支持 MCP 的 AI 客户端（Claude Desktop / Claude Code / 其他 agent）里添加以下服务：
 
+> **`<安装目录>` 占位符**：MCP 的 `command` 必须是**绝对路径**，但没人知道你把程序解压到哪——所以把 `<安装目录>` 替换成**你实际安装/解压到的地方**。最省事的就是用**本文件所在目录**（`python.exe` 就在本文件旁边）：在资源管理器地址栏复制该目录路径，或右键 `python.exe` → 属性 → 复制位置。
+
 **Claude Desktop（`claude_desktop_config.json`）**
 
 ```json
 {
   "mcpServers": {
     "inputcard-mcp": {
-      "command": "D:\\MCNP\\MCNP输入卡生成器\\python.exe",
+      "command": "<安装目录>\\python.exe",
       "args": ["--mcp-server"]
     }
   }
@@ -30,7 +32,7 @@
   "mcpServers": {
     "inputcard-mcp": {
       "type": "stdio",
-      "command": "D:\\MCNP\\MCNP输入卡生成器\\python.exe",
+      "command": "<安装目录>\\python.exe",
       "args": ["--mcp-server"]
     }
   }
