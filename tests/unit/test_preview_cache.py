@@ -147,3 +147,51 @@ def test_hit_skips_builder(tmp_path):
     miss = cache.get_or_build("fp2", {"surfaces": "px 1"})
     assert len(calls) == 1, "未命中应恰好调用 builder 一次"
     assert miss["dir"] == os.path.join(cache._base_dir, "fp2")
+
+
+# ── 跨进程磁盘恢复（用户约定：可复用内容存持久目录，重启后命中）──
+def test_cross_process_disk_recovery(tmp_path):
+    """模拟进程重启：全新实例（内存 _index 为空、相同 base_dir）仍能从磁盘恢复命中。
+
+    preview_cache 把 cells/freecad 写到 meta.json；新实例 get 内存 miss 时读盘恢复，
+    同一 deck 无需再调 FreeCAD/builder ——「只算一次、往后复用」。
+    """
+    base = tmp_path / "mem_cache"
+    src = _src_dir(tmp_path, cells=2)
+    cells = {
+        1: {"material": "1", "path": str(src / "cell_1.stl")},
+        2: {"material": "0", "path": str(src / "cell_2.stl")},
+    }
+    cache_a = PreviewCache(base_dir=str(base))
+    cache_a.put("fp", {"dir": str(src), "cells": cells, "freecad": "/opt/freecad"})
+    # 源会话目录被清（clear-stl）不影响缓存拷贝
+    shutil.rmtree(src)
+    assert cache_a.get("fp") is not None
+    assert (Path(base) / "fp" / "meta.json").is_file()
+
+    # 模拟进程重启：全新实例、空 _index、相同 base_dir → 应从磁盘恢复命中
+    cache_b = PreviewCache(base_dir=str(base))
+    hit = cache_b.get("fp")
+    assert hit is not None, "跨进程后应从磁盘 meta.json 恢复命中"
+    assert hit["dir"] == str(base / "fp")
+    assert hit["cells"][1]["material"] == "1"
+    assert hit["cells"][1]["path"].endswith("cell_1.stl")
+    assert hit["freecad"] == "/opt/freecad"
+    assert (Path(hit["dir"]) / "cell_1.stl").is_file()
+    assert (Path(hit["dir"]) / "cell_2.stl").is_file()
+
+
+def test_cross_process_get_missing_fp_returns_none(tmp_path):
+    """跨进程 & 磁盘没有该指纹 → 返回 None（不误命中）。"""
+    cache = PreviewCache(base_dir=str(tmp_path / "mem_cache"))
+    assert cache.get("missing") is None
+
+
+def test_cross_process_corrupt_meta_returns_none(tmp_path):
+    """meta.json 损坏/无内容 → 视为 miss，不返回脏数据。"""
+    base = tmp_path / "mem_cache"
+    cache = PreviewCache(base_dir=str(base))
+    fp_dir = base / "fp"
+    fp_dir.mkdir(parents=True)
+    (fp_dir / "meta.json").write_text("{not json", encoding="utf-8")
+    assert cache.get("fp") is None

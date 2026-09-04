@@ -11,6 +11,7 @@ import math
 import os
 import re
 import sys
+import threading
 from http.server import ThreadingHTTPServer as HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
@@ -39,7 +40,10 @@ from models import (
     BasicSettings, CellData, CellRow, FmeshDefinition, MaterialData, MaterialRow,
     PTRACSettings, SourceData, TallySettings, TallyDefinition, AdvancedSettings, DeckData
 )
-from generator.inp_generator import generate_inp_from_deck
+# 注意：inp_generator 在模块顶层 import pymcnp（fail-fast 约定，见 tests/test_tech_debt.py F#7），
+# 而 pymcnp/__init__ 会连同 matplotlib/pandas/pyvista 等重依赖一起导入（实测 ~2.4s 拖慢后端拉起）。
+# 因此 generate_inp_from_deck 改为在 handler 内按需导入（与下方 _generate_materials 等一致），
+# 保持「模块级只 import 核心引擎、重量依赖延迟到 handler」的本文件既有约定。
 from generator.parsers import parse_inp_text
 from xsdir_db import DB as xsdir_db
 
@@ -80,12 +84,25 @@ def _ptrac_worker_cmd() -> list:
 # ── preview-3d deck 指纹缓存（P0a：同 deck 二次打开免 FreeCAD 子进程）──
 # 深模块见 app/preview_cache.py：put 把会话 STL 拷进缓存自有目录，clear-stl 删除
 # 的是会话目录，缓存拷贝存活 → 关预览窗口后重开同一 deck 仍命中（≤1s）。
+#
+# 跨启动复用：缓存目录固定存到 D:\MCNP\memory（用户约定，不存在则创建）而非
+# tempfile.mkdtemp 临时目录；配合 preview_cache 写盘的 meta.json，进程重启后
+# get 仍能从磁盘恢复 → 同一 deck 只算一次（首次 FreeCAD、之后直接命中）。
 from preview_cache import PreviewCache
-_PREVIEW_CACHE = PreviewCache()
+
+# 用户约定的可复用内容持久目录：D:\MCNP\memory（不存在则创建）。
+MEMORY_DIR = r"D:\MCNP\memory"
+
+def _cache_base(sub: str) -> str:
+    d = os.path.join(MEMORY_DIR, sub)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+_PREVIEW_CACHE = PreviewCache(base_dir=_cache_base("preview_cache"))
 
 # 格阵 universe 裁剪 STL 独立缓存（LRU 2）：键含 u/cellNum/pitch/height（extra 并入指纹），
 # 防不同裁剪参数脏命中。与 _PREVIEW_CACHE 分离，不互相驱逐。
-_PREVIEW_CACHE_LATTICE = PreviewCache(max_entries=2)
+_PREVIEW_CACHE_LATTICE = PreviewCache(max_entries=2, base_dir=_cache_base("preview_cache_lattice"))
 
 # ── 3D 预览 STL 会话 ──
 # 3D 预览生成的 STL 保留在此（不随请求清理），供截面复用（numpy 切平面）。
@@ -111,14 +128,33 @@ def _clear_stl_session() -> None:
 
 
 # ===== 共享曲面解析（preview-3d / export-step / cross-section 共用） =====
-import pymcnp.inp as _pi
+# 惰性加载 pymcnp.inp：模块级 `import pymcnp.inp` 会连同 pymcnp/__init__ 的
+# Plot/Visualize/outp 等重型子模块（matplotlib/pandas/pyvista）一起被导入，
+# 实测把后端「拉起」拖慢约 2.2s。改为首次解析 MCNP 曲面文本时才真正 import，
+# 启动立刻可用，成本只挪到第一次曲面请求（后台线程预热兜底）。
+_SURF_CLASSES = None
+_SURF_CLASSES_LOCK = threading.Lock()
 
-_SURF_CLASSES = {}
-for _name in dir(_pi):
-    _obj = getattr(_pi, _name)
-    if hasattr(_obj, '_KEYWORD') and hasattr(_obj, 'from_mcnp') and isinstance(_obj, type):
-        _kw = (_obj._KEYWORD or '').upper()
-        if _kw: _SURF_CLASSES[_kw] = _obj
+
+def _surf_classes() -> dict:
+    """惰性构建 {MCNP 曲面关键字: pymcnp 曲面类}。
+
+    仅在解析 MCNP 曲面文本（preview-3d / export-step / cross-section /
+    栅元覆盖检测）时首次调用；之后复用缓存。线程安全：多请求并发首拉时只构建一次。
+    """
+    global _SURF_CLASSES
+    if _SURF_CLASSES is None:
+        with _SURF_CLASSES_LOCK:
+            if _SURF_CLASSES is None:
+                import pymcnp.inp as _pi
+                _d = {}
+                for _name in dir(_pi):
+                    _obj = getattr(_pi, _name)
+                    if hasattr(_obj, '_KEYWORD') and hasattr(_obj, 'from_mcnp') and isinstance(_obj, type):
+                        _kw = (_obj._KEYWORD or '').upper()
+                        if _kw: _d[_kw] = _obj
+                _SURF_CLASSES = _d
+    return _SURF_CLASSES
 
 def _plane_coeff_to_points(A: float, B: float, C: float, D: float) -> list:
     """平面 Ax+By+Cz=D → 3 个非共线点（pymcnp 的 P 类只支持三点定义）。
@@ -144,6 +180,7 @@ def parse_surfaces(text: str) -> list:
     """将 MCNP 曲面文本解析为 pymcnp 表面对象列表（支持 TR 引用号）"""
     import re
     surfs = []
+    _cls_map = _surf_classes()  # 惰性构建 pymcnp 曲面类表（拖慢启动的重型 import 只在此触发一次）
     for _line in text.strip().splitlines():
         _l = _line.strip()
         if not _l or _l.startswith("C") or _l.startswith("c"): continue
@@ -163,8 +200,8 @@ def parse_surfaces(text: str) -> list:
         _p = _l.split()
         if len(_p) < 2: continue
         _kw_idx = 1
-        if len(_p) > 2 and _SURF_CLASSES.get(_p[2].upper()): _kw_idx = 2
-        _cls = _SURF_CLASSES.get(_p[_kw_idx].upper())
+        if len(_p) > 2 and _cls_map.get(_p[2].upper()): _kw_idx = 2
+        _cls = _cls_map.get(_p[_kw_idx].upper())
         if _cls is None: continue
         try:
             _s = _cls.from_mcnp(_l)
@@ -1838,7 +1875,9 @@ class MCNPHandler(BaseHTTPRequestHandler):
         try:
             data = self._read_body()
             deck = deck_from_json(data)
-            # raw_overrides 是独立参数（DeckData 无此字段），必须单独传给生成器
+            # raw_overrides 是独立参数（DeckData 无此字段），必须单独传给生成器。
+            # 按需导入 inp_generator（其模块顶层会 import pymcnp，见上方注释）。
+            from generator.inp_generator import generate_inp_from_deck
             inp_text = generate_inp_from_deck(deck, data.get("raw_overrides") or {})
             self._ok({"inp": inp_text})
         except Exception as e:
@@ -3372,6 +3411,17 @@ def main():
     server = HTTPServer(("0.0.0.0", PORT), MCNPHandler)
     print(f"[API] MCNP API 服务启动 → http://localhost:{PORT}/api/generate")
     print(f"   Python 后端路径: {APP_DIR}")
+    # 后台预热 pymcnp 曲面解析：启动即返回、不阻塞服务，
+    # 让第一个曲面请求（preview-3d/export-step/cross-section）不再吃一次 2s 的冷水 import。
+    try:
+        def _warm():
+            try:
+                _surf_classes()
+            except Exception:
+                pass  # 预热失败不影响功能，首次请求时仍会按需 import
+        threading.Thread(target=_warm, daemon=True, name="pymcnp-prewarm").start()
+    except Exception:
+        pass
     try:
         server.serve_forever()
     except KeyboardInterrupt:

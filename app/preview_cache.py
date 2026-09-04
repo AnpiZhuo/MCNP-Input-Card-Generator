@@ -34,6 +34,7 @@ class PreviewCache:
                 产出会话 dict 并 put。命中不调用（测试注入计数函数断言 0 次）。
         """
         self._base_dir = base_dir or tempfile.mkdtemp(prefix="mcnp_preview_cache_")
+        os.makedirs(self._base_dir, exist_ok=True)
         self._max_entries = max_entries
         self._builder = builder
         self._index = {}   # fp -> {"dir", "cells", "freecad"}
@@ -63,10 +64,22 @@ class PreviewCache:
         """命中且目录仍存在 → {"dir", "cells", "freecad"}；否则 None。
 
         目录已删（悬挂）→ 清理索引并返回 None（isdir 兜底 miss）。
+        内存 miss 时尝试从磁盘恢复（meta.json）——跨进程重启后仍能命中，
+        同一 deck 无需重新调 FreeCAD（「只算一次、往后复用」）。
         """
         entry = self._index.get(fp)
         if entry is None:
-            return None
+            cache_dir = os.path.join(self._base_dir, fp)
+            if os.path.isdir(cache_dir):
+                recovered = self._load_meta(cache_dir)
+                if recovered is not None:
+                    entry = recovered
+                    self._index[fp] = entry
+                    self._touch(fp)
+                else:
+                    return None
+            else:
+                return None
         if not os.path.isdir(entry.get("dir", "")):
             self._drop(fp)
             return None
@@ -110,6 +123,9 @@ class PreviewCache:
         }
         self._touch(fp)
         self.evict_lru(self._max_entries)
+        # 把 cells/freecad 元数据持久化到磁盘（meta.json）：进程重启后 get 内存 miss 时
+        # 能从磁盘恢复，真正实现「同一 deck 只算一次、跨启动复用」（无需重新调 FreeCAD）。
+        self._persist_meta(cache_dir, cached_cells, session.get("freecad"))
 
     def put_overlaps(self, fp: str, report: dict) -> None:
         """把重合检测报告写入缓存目录（同指纹，随目录驱逐自动清理）。"""
@@ -172,6 +188,49 @@ class PreviewCache:
             self._drop(self._order[0])
 
     # ── 内部 ───────────────────────────────────────────────
+    _META_NAME = "meta.json"
+
+    def _persist_meta(self, cache_dir: str, cached_cells: dict, freecad) -> None:
+        """把 cells/freecad 元数据写进缓存目录 meta.json，供跨进程 get 磁盘恢复。
+
+        存相对文件名（而非绝对路径），恢复时拼 cache_dir，避免临时/移动目录失效。
+        """
+        meta = {"freecad": freecad, "cells": {}}
+        for num, info in cached_cells.items():
+            meta["cells"][str(num)] = {
+                "material": info.get("material", "0"),
+                "file": os.path.basename(info.get("path", "") or ""),
+            }
+        try:
+            with open(os.path.join(cache_dir, self._META_NAME),
+                      "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False)
+        except OSError:
+            pass
+
+    def _load_meta(self, cache_dir: str) -> dict | None:
+        """从 meta.json 恢复 {"dir", "cells", "freecad"}；无/损坏 → None。"""
+        meta_path = os.path.join(cache_dir, self._META_NAME)
+        if not os.path.isfile(meta_path):
+            return None
+        try:
+            with open(meta_path, encoding="utf-8") as f:
+                m = json.load(f)
+        except Exception:
+            return None
+        cells = {}
+        for num, info in (m.get("cells") or {}).items():
+            try:
+                n = int(num)
+            except (TypeError, ValueError):
+                continue
+            rel = info.get("file", "") or ""
+            cells[n] = {
+                "material": info.get("material", "0"),
+                "path": os.path.join(cache_dir, rel),
+            }
+        return {"dir": cache_dir, "cells": cells, "freecad": m.get("freecad")}
+
     def _touch(self, fp: str) -> None:
         """把 fp 标记为最近使用（排到 LRU 序末尾）。"""
         if fp in self._order:
