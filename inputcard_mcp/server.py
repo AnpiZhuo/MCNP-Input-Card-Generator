@@ -77,16 +77,27 @@ def _deck_to_sections(deck) -> dict:
     import dataclasses
     d = dataclasses.asdict(deck)
     sec = {k: d.get(k) for k in ("basic", "surfaces", "tr_cards", "cells", "materials", "sources", "tally")}
+    if sec.get("tally") is None:
+        sec["tally"] = {}
     sec["advanced"] = d.get("adv")
     sec["universe_comments"] = d.get("universe_comments", {})
     return sec
 
 
 def _sections_to_deck(sections: dict):
-    """8 段语义结构 → DeckData（复用 deck_from_json；advanced 键转回 adv）。"""
+    """8 段语义结构 → DeckData（复用 deck_from_json；advanced 键转回 adv）。
+
+    None 段归一化为空默认（deck_from_json 期望 dict/list/str；_tally_from_dict 不能收 None）。
+    """
     d = dict(sections or {})
     if "advanced" in d:
         d["adv"] = d.pop("advanced")
+    for k, dv in (("basic", {}), ("surfaces", ""), ("tr_cards", ""), ("tally", {}), ("adv", {})):
+        if d.get(k) is None:
+            d[k] = dv
+    for k in ("cells", "materials", "sources"):
+        if d.get(k) is None:
+            d[k] = []
     return deck_from_json(d)
 
 

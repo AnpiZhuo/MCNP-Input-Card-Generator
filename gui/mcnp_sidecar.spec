@@ -83,11 +83,10 @@ _ptrac_mods = [
 ]
 _hidden += _ptrac_mods
 
-# inputcard-mcp（AI 接入，本地 stdio MCP server）：仅 mcnp_bridge --mcp-server 分派时
-# import inputcard_mcp.server（其顶层 import mcp.server.fastmcp）。主程序 api_server 路径
-# 不触碰 mcp，故打包时 mcp 打进 PYZ 但不影响 5001 后端启动。FastMCP 依赖
-# （pydantic/starlette/httpx/uvicorn 等）由 PyInstaller 从 mcp.server.fastmcp 自动收集。
-_hidden += ["inputcard_mcp", "inputcard_mcp.server"]
+# inputcard-mcp（AI 接入）：mcnp_bridge --mcp-server / --mcp-http 分派时 import inputcard_mcp.server
+# （顶层 import mcp.server.fastmcp）。其 __mcp_http_main 还需 uvicorn/starlette（FastMCP stdio 路径
+# 不 import 它们，故须显式打进 PYZ；主程序 api_server 路径不触碰，不影响 5001 后端启动）。
+_hidden += ["inputcard_mcp", "inputcard_mcp.server", "uvicorn", "starlette"]
 
 a = Analysis(
     [os.path.join(GUI_BACKEND, "mcnp_bridge.py")],
