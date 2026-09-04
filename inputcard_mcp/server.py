@@ -29,8 +29,15 @@ from mcp.server.fastmcp import FastMCP
 # 轻量依赖：解析器只做 INP → DeckData；不触发 pymcnp/FreeCAD
 from generator.parsers import parse_inp_text
 
-# 复用 api_server 的 deck ⇄ JSON（与 GUI 同一实现；其模块级只 import 核心引擎，xsdir 惰性）
-from api_server import deck_from_json, deck_to_frontend_dict
+# 复用 api_server 的 deck ⇄ JSON 与各段映射（与 GUI 同一实现；其模块级只 import 核心引擎，xsdir 惰性）
+from api_server import (
+    deck_from_json, deck_to_frontend_dict,
+    _basic_from_dict, _cells_from_list, _materials_from_list,
+    _sources_from_list, _tally_from_dict, _adv_from_dict,
+)
+
+# 后端语义段（= deck_from_json 的 8 类读取入口；AI 可写单位）
+_SECTIONS = ("basic", "surfaces", "tr_cards", "cells", "materials", "sources", "tally", "advanced")
 
 mcp = FastMCP("inputcard-mcp")
 
@@ -66,6 +73,48 @@ def validate_document(inp: str) -> dict:
     errors = validate_inp_text(inp) or []
     _, warnings = parse_inp_text(inp)
     return {"ok": not errors, "errors": errors, "warnings": warnings}
+
+
+@mcp.tool()
+def list_section(inp: str, section: str) -> dict:
+    """读取输入卡中**某一个语义段**的结构化值（snake_case，可直接在 list_section 读回、改、再回传 patch_section）。
+    section ∈ basic / surfaces / tr_cards / cells / materials / sources / tally / advanced。
+    这是按段查看现状的统一入口（替代 list_cells / list_materials 等）。"""
+    if section not in _SECTIONS:
+        raise ValueError(f"未知 section: {section}（可选 {', '.join(_SECTIONS)}）")
+    import dataclasses
+    deck, _ = parse_inp_text(inp)
+    d = dataclasses.asdict(deck)
+    return d.get("adv" if section == "advanced" else section)
+
+
+@mcp.tool()
+def patch_section(inp: str, section: str, data: dict) -> str:
+    """整体替换输入卡中的**某一个语义段**并返回新 INP 文本（全量覆盖一段）。
+    section ∈ basic / surfaces / tr_cards / cells / materials / sources / tally / advanced；
+    data 为该段结构化值（用 list_section 读回再改，或按该段字段构造）。
+    内部：读入当前 deck → 用对应 _xxx_from_dict 替换该段 → 重新生成 INP。"""
+    if section not in _SECTIONS:
+        raise ValueError(f"未知 section: {section}（可选 {', '.join(_SECTIONS)}）")
+    data = data or {}
+    deck, _ = parse_inp_text(inp)
+    if section == "basic":
+        deck.basic = _basic_from_dict(data)
+    elif section == "surfaces":
+        deck.surfaces = data if isinstance(data, str) else str(data)
+    elif section == "tr_cards":
+        deck.tr_cards = data if isinstance(data, str) else str(data)
+    elif section == "cells":
+        deck.cells = _cells_from_list(data if isinstance(data, list) else [])
+    elif section == "materials":
+        deck.materials = _materials_from_list(data if isinstance(data, list) else [])
+    elif section == "sources":
+        deck.sources = _sources_from_list(data if isinstance(data, list) else [])
+    elif section == "tally":
+        deck.tally = _tally_from_dict(data)
+    elif section == "advanced":
+        deck.adv = _adv_from_dict(data)
+    return _generate(deck)
 
 
 # ─────────────────────────────── 栅元 ───────────────────────────────

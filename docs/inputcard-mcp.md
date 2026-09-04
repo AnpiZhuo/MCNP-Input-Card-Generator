@@ -110,12 +110,20 @@ python -m inputcard_mcp
 
 无状态：每个修改型工具都「收当前 `INP` 文本 → 返回新 `INP`」。
 
+> `list_section` / `patch_section` 提供**按语义段的全量覆盖**：后端生成器已支持全部 INP 数据段，
+> 因此用**一个** `patch_section` 就能整体改写任意一段（basic/surfaces/tr_cards/cells/materials/sources/tally/advanced），
+> 而不必为每类设置各写一个工具。可写 = 这些后端语义段；纯前端 UI 中间态（textMode/sourceTemplate/grids/rawOverrides）**不可写**。
+
 ### 文档级
 | 工具 | 作用 | 输入 | 返回 |
 |------|------|------|------|
 | `read_document` | INP → 结构化 deck JSON（完整） | `inp` | `{ deck, warnings }` |
 | `generate_document` | deck JSON → INP 文本 | `deck` | `str` |
 | `validate_document` | 语法 + 解析警告校验 | `inp` | `{ ok, errors, warnings }` |
+| `list_section` | 读取**一个语义段**的结构化值（snake_case，可改后回传 patch_section） | `inp, section` | `dict`（该段） |
+| `patch_section` | **整体替换一个语义段**并返回新 INP（全量覆盖） | `inp, section, data` | `str`（新 INP） |
+
+`section` ∈ `basic / surfaces / tr_cards / cells / materials / sources / tally / advanced`（`advanced` 对应后端 `adv`，含源模式 SDEF/KCODE/SSW/SSR、phys、other_cards）。详析见 [`docs/inputcard-mcp-全量覆盖.md`](inputcard-mcp-全量覆盖.md)。
 
 ### 栅元
 | 工具 | 作用 | 关键输入 | 返回 |
