@@ -83,7 +83,25 @@ function AppInner() {
   const { deck, patch, loadDeck } = useDeck();
   // AI 接入：当前工作区同步到 /workspace + 轮询回显 + 状态（MCP over HTTP）
   const [aiOpen, setAiOpen] = useState(false);
-  const ai = useAiWorkspace(deck, (aiDeck: any) => loadDeck({ ...deck, ...aiDeck }));
+  // 把后端 adv（源/高级）语义投影回前端中间态，让「源项」等页签随 AI 修改更新
+  const aiProject = (aiDeck: any) => {
+    const adv = aiDeck.adv || {};
+    const sm = adv.source_mode;
+    const srcMode = sm === "kcode" ? "kcode" : sm === "surface" ? "surface" : "sdef";
+    const sf: any = {};
+    ["sdef_par","sdef_erg","sdef_pos_x","sdef_pos_y","sdef_pos_z","sdef_wgt","sdef_dir","sdef_vec",
+     "sdef_axs","sdef_rad","sdef_ext","sdef_cel","sdef_sur","sdef_nrm","sdef_tr","sdef_ccc","sdef_ara","sdef_rate"]
+      .forEach(k => { if (adv[k] !== undefined && adv[k] !== "") sf[k] = adv[k]; });
+    return {
+      sourceMode: srcMode,
+      sdefFields: sf,
+      sdefRawText: adv.sdef_raw_text || "",
+      distributions: (adv.sdef_distributions ? (() => { try { return JSON.parse(adv.sdef_distributions); } catch { return []; } })() : []),
+      sswFields: (adv.ssw_surf || adv.ssw_sym || adv.ssw_pty || adv.ssw_cel) ? { surf: adv.ssw_surf||"", sym: adv.ssw_sym||"", pty: adv.ssw_pty||"", cel: adv.ssw_cel||"" } : {},
+      ssrFields: (adv.ssr_surf || adv.ssr_mode || adv.ssr_cel || adv.ssr_pty || adv.ssr_col || adv.ssr_wgt || adv.ssr_tr || adv.ssr_psc) ? { surf: adv.ssr_surf||"", mode: adv.ssr_mode||"", cel: adv.ssr_cel||"", pty: adv.ssr_pty||"", col: adv.ssr_col||"", wgt: adv.ssr_wgt||"", tr: adv.ssr_tr||"", psc: adv.ssr_psc||"" } : {},
+    };
+  };
+  const ai = useAiWorkspace(deck, (aiDeck: any) => loadDeck({ ...deck, ...aiDeck, ...aiProject(aiDeck) }));
 
   useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, [theme]);
   // 主题一变就持久化到独立键（清空工作区不影响主题）
