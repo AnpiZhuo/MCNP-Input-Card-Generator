@@ -5,7 +5,7 @@ import SswSsrForm from "./SswSsrForm";
 import DocViewer from "./DocViewer";
 import { useDeck } from "../utils/DeckContext";
 import type { DistEntry, SourceItem } from "../utils/DeckContext";
-import { SOURCE_TEMPLATES, fieldsForTemplate, SDEF_FIELD_META, TEMPLATE_DEFAULTS } from "../utils/sourceTemplates";
+import { SOURCE_TEMPLATES, fieldsForTemplate, SDEF_FIELD_META } from "../utils/sourceTemplates";
 import TextModeSection from "./TextModeSection";
 
 interface KsrcPoint { x: string; y: string; z: string }
@@ -142,29 +142,9 @@ export default function SourceTab() {
     }
   }, [ksrcPoints]);
 
-  // 模板切换默认值（对照说明书：体积源各轴独立分布、能谱源用内置函数）
+  // 模板切换：仅切换模板 id（保留已有字段值；分布/字段过滤交给 fieldsForTemplate）
   const applyTemplate = (id: string) => {
     setTemplate(id);
-    const def = TEMPLATE_DEFAULTS[id];
-    if (def?.sdefVals) { patch({ sdefFields: { ...sdefFields, ...def.sdefVals } }); }
-    if (def?.dists?.length) {
-      let maxId = distributions.reduce((m, d) => Math.max(m, d.id), 0) || 0;
-      const newDists = [...distributions];
-      const fieldPatch: Record<string, string> = {};
-      for (const td of def.dists) {
-        maxId++;
-        const nd: DistEntry = {
-          id: maxId, paramRef: SDEF_FIELD_META.find(f => f.key === td.paramKey)?.keyword || td.paramKey, auto: false,
-          si: { type: td.siType, values: [...td.siValues] },
-          sp: { type: td.spType, values: [...(td.spValues || [])], fnCode: td.fnCode || "", fnParams: [...(td.fnParams || [])] },
-          sb: null, ds: null,
-        };
-        newDists.push(nd);
-        fieldPatch[td.paramKey] = "D" + maxId;
-      }
-      setDistributions(newDists);
-      patch({ sdefFields: { ...sdefFields, ...fieldPatch } });
-    }
   };
 
   const tplFields = fieldsForTemplate(template);

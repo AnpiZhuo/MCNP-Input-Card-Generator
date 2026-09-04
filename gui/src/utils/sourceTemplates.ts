@@ -47,19 +47,11 @@ export interface SourceTemplate {
   desc: string;        // 说明（给新手看）
   doc: string;         // 对照的说明书小节
   fields: string[];    // SDEF_FIELD_META 的 key（"sdef_*"）；"table" 表示多点源表格
-  sdefVals?: Record<string, string>; // 选中模板时建议的 SDEF 字段默认值
 }
 
 export const SOURCE_TEMPLATES: SourceTemplate[] = [
-  { id: "point", name: "点源", icon: "◎", desc: "单点发射，最常用：固定位置+能量", doc: "点源", fields: ["sdef_par", "sdef_erg", "sdef_pos_x", "sdef_pos_y", "sdef_pos_z", "sdef_wgt", "sdef_dir", "sdef_tme"] },
+  { id: "point", name: "单点源", icon: "◎", desc: "单点发射，最常用：固定位置+能量", doc: "点源", fields: ["sdef_par", "sdef_erg", "sdef_pos_x", "sdef_pos_y", "sdef_pos_z", "sdef_wgt", "sdef_dir", "sdef_tme"] },
   { id: "multi_point", name: "多点源", icon: "◉", desc: "多个位置点，各自概率（自动生成 SI/SP）", doc: "多个点源", fields: ["table"] },
-  { id: "sphere", name: "球体源", icon: "●", desc: "球内体积均匀：位置+半径", doc: "球体源", fields: ["sdef_par", "sdef_erg", "sdef_pos_x", "sdef_pos_y", "sdef_pos_z", "sdef_rad", "sdef_wgt"] },
-  { id: "cylinder", name: "柱体源", icon: "▮", desc: "圆柱体积均匀：位置+轴向+内外径+高度", doc: "柱体源", fields: ["sdef_par", "sdef_erg", "sdef_pos_x", "sdef_pos_y", "sdef_pos_z", "sdef_axs", "sdef_rad", "sdef_ext", "sdef_wgt"] },
-  { id: "volume_xyz", name: "体积源", icon: "▣", desc: "长方体体积均匀：X/Y/Z 各自区间（用分布）", doc: "笛卡尔体积源", fields: ["sdef_par", "sdef_erg", "sdef_pos_x", "sdef_pos_y", "sdef_pos_z", "sdef_wgt"] },
-  { id: "volume_cel", name: "栅元源", icon: "⬒", desc: "指定栅元内体积均匀", doc: "栅元体积均匀源", fields: ["sdef_par", "sdef_erg", "sdef_cel", "sdef_wgt"] },
-  { id: "surface", name: "曲面源", icon: "▤", desc: "在指定曲面上发射（POS 必须在面上）", doc: "曲面源", fields: ["sdef_par", "sdef_erg", "sdef_sur", "sdef_nrm", "sdef_pos_x", "sdef_pos_y", "sdef_pos_z", "sdef_wgt"] },
-  { id: "energy", name: "能谱源", icon: "≋", desc: "能量分布（Watt/Maxwell 等内置谱）", doc: "指定能谱", fields: ["sdef_par", "sdef_erg", "sdef_pos_x", "sdef_pos_y", "sdef_pos_z", "sdef_wgt"] },
-  { id: "directional", name: "方向源", icon: "→", desc: "指定方向发射（DIR+VEC）", doc: "指定方向", fields: ["sdef_par", "sdef_erg", "sdef_dir", "sdef_vec", "sdef_pos_x", "sdef_pos_y", "sdef_pos_z", "sdef_wgt"] },
   { id: "free", name: "高级自由", icon: "⚙", desc: "显示全部变量，专家模式", doc: "SDEF 全部", fields: SDEF_FIELD_META.map(f => f.key) },
 ];
 
@@ -103,27 +95,3 @@ export const SP_TYPES = [
   { v: "C", n: "累积概率", d: "SP C c1 c2 ..." },
   { v: "V", n: "按体积加权", d: "SP V v1 v2 ...（仅 CEL 体积源）" },
 ];
-
-/** 模板自动创建的分布（对照说明书二：各轴独立分布 / 能谱用内置函数） */
-export interface TemplateDist {
-  paramKey: string;            // 绑定的 sdef 字段（设为 D{id}）
-  siType: "L" | "H" | "A" | "S";
-  siValues: string[];
-  spType: "D" | "C" | "V";
-  spValues: string[];
-  fnCode?: string;             // 内置函数（能谱源默认 Watt -3）
-  fnParams?: string[];
-}
-export const TEMPLATE_DEFAULTS: Record<string, { sdefVals?: Record<string, string>; dists?: TemplateDist[] }> = {
-  // 笛卡尔体积源：X=D1 Y=D2 Z=D3 各轴独立分布（说明书示例）
-  // H=直方图类型 → 区间内均匀取样；值留空，用户自己填上下限
-  volume_xyz: { dists: [
-    { paramKey: "sdef_pos_x", siType: "H", siValues: ["", ""], spType: "D", spValues: [] },
-    { paramKey: "sdef_pos_y", siType: "H", siValues: ["", ""], spType: "D", spValues: [] },
-    { paramKey: "sdef_pos_z", siType: "H", siValues: ["", ""], spType: "D", spValues: [] },
-  ]},
-  // 能谱源：ERG=D1 + SP1 内置函数（默认 Watt -3，参数留空用户填；说明书：SDEF ERG=D1 SP1 -3）
-  energy: { dists: [
-    { paramKey: "sdef_erg", siType: "L", siValues: [], spType: "D", spValues: [], fnCode: "-3", fnParams: ["", ""] },
-  ]},
-};

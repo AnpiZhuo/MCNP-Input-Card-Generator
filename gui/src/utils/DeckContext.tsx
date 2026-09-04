@@ -40,8 +40,7 @@ export interface DistEntry {
   auto: boolean;
 }
 export type SourceTemplateType =
-  | "point" | "multi_point" | "sphere" | "cylinder" | "volume_xyz"
-  | "volume_cel" | "surface" | "energy" | "directional" | "free";
+  | "point" | "multi_point" | "free";
 export interface SswFields { surf: string; sym: string; pty: string; cel: string }
 export interface SsrFields { surf: string; mode: string; cel: string; pty: string; col: string; wgt: string; tr: string; psc: string }
 
