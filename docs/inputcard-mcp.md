@@ -106,40 +106,22 @@ python -m inputcard_mcp
 
 ---
 
-## 工具集（已实现）
+## 工具集（已实现，共 6 个）
 
 无状态：每个修改型工具都「收当前 `INP` 文本 → 返回新 `INP`」。
 
-> `list_section` / `patch_section` 提供**按语义段的全量覆盖**：后端生成器已支持全部 INP 数据段，
-> 因此用**一个** `patch_section` 就能整体改写任意一段（basic/surfaces/tr_cards/cells/materials/sources/tally/advanced），
-> 而不必为每类设置各写一个工具。可写 = 这些后端语义段；纯前端 UI 中间态（textMode/sourceTemplate/grids/rawOverrides）**不可写**。
+> **设计原则（深模块）**：接口刻意保持**小而深**——不做"每类设置一个浅工具"，而是用 `list_section` / `patch_section` 让 AI 针**语义段**读写，覆盖全部 INP 数据段。后端生成器已支持全部段，因此**一个** `patch_section` 就能整体改写任意一段。
 
 ### 文档级
 | 工具 | 作用 | 输入 | 返回 |
 |------|------|------|------|
-| `read_document` | INP → 结构化 deck JSON（完整） | `inp` | `{ deck, warnings }` |
-| `generate_document` | deck JSON → INP 文本 | `deck` | `str` |
+| `read_document` | INP → **按语义段的**结构（`{ sections, warnings }`） | `inp` | `{ sections, warnings }` |
+| `generate_document` | 从 `sections` 生成 INP 文本（与 read_document 输出同构） | `sections` | `str` |
 | `validate_document` | 语法 + 解析警告校验 | `inp` | `{ ok, errors, warnings }` |
-| `list_section` | 读取**一个语义段**的结构化值（snake_case，可改后回传 patch_section） | `inp, section` | `dict`（该段） |
+| `list_section` | 读取**一个语义段**（与 read_document 的 `sections[section]` 同构） | `inp, section` | `dict`（该段） |
 | `patch_section` | **整体替换一个语义段**并返回新 INP（全量覆盖） | `inp, section, data` | `str`（新 INP） |
 
-`section` ∈ `basic / surfaces / tr_cards / cells / materials / sources / tally / advanced`（`advanced` 对应后端 `adv`，含源模式 SDEF/KCODE/SSW/SSR、phys、other_cards）。详析见 [`docs/inputcard-mcp-全量覆盖.md`](inputcard-mcp-全量覆盖.md)。
-
-### 栅元
-| 工具 | 作用 | 关键输入 | 返回 |
-|------|------|---------|------|
-| `list_cells` | 列出栅元摘要 | `inp` | `[{num,mat,density,surface_expr,imp,…}]` |
-| `get_cell` | 取单栅元 | `inp, num` | `cell` |
-| `update_cell` | 改栅元（材料/密度/表达式/imp/注释…） | `inp, num, patch` | `str`（新 INP） |
-| `set_mode` | 设粒子模式 N/P/E | `inp, mode_n/p/e` | `str`（新 INP） |
-
-### 材料
-| 工具 | 作用 | 关键输入 | 返回 |
-|------|------|---------|------|
-| `list_materials` | 列出材料卡 | `inp` | `[{number,comment,rows,…}]` |
-| `set_material` | 改材料（注释/化学式/选项/MT 卡） | `inp, number, patch` | `str`（新 INP） |
-
-### 几何（快捷建栅元）
+### 几何（便捷）
 | 工具 | 作用 | 关键输入 | 返回 |
 |------|------|---------|------|
 | `add_shape` | 追加规则几何体（rcc/rpp/sph/hex/tet） | `inp, shape, params` | `{ inp, surface_added, cells_added, cell_numbers }` |
@@ -150,6 +132,17 @@ python -m inputcard_mcp
 - `hex`：`{cx,cy,cz,hx,hy,hz,radius,rings,segments}`（RHP 六棱柱）
 - `rpp`：`{cx,cy,cz,L,W,H,nx,ny,nz}`（轴对齐六面体）
 - `tet`：`{p1,p2,p3,p4}`（4 顶点，程序算 4 面）
+
+### 覆盖范围
+- **可写（8 个语义段）**：`basic / surfaces / tr_cards / cells / materials / sources / tally / advanced`（`advanced` 对应后端 `adv`，含源模式 SDEF/KCODE/SSW/SSR、phys、other_cards）。栅元/材料等所有细粒度修改都通过 `read_section`→改→`patch_section` 完成，无需单独的 list_cells/update_cell/set_material 等工具。
+- **不可写（纯前端 UI 中间态）**：`textMode` / `sourceTemplate` 编号 / `grids` / `rawOverrides`——不属 INP 内容，`patch_section` 会拒绝。
+
+### ⚠️ 边界：text mode / raw override（不建模，会结构化重写）
+`rawOverrides` 是 GUI 把某段切到**文本模式**时手打的原始卡文本，它是 `generate_inp_from_deck(deck, raw_overrides)` 的**第二个参数**（非 deck 字段，`models.DeckData` 无此字段）。
+- `read_document`/`list_section`/`patch_section`/`generate_document` 这条 MCP 管线走**结构化路径**，**不接触 raw overrides**：`read_document` 的 `sections` 不含它，改写后生成也用结构化重新生成该段。
+- 因此**文本模式段在 MCP 里会被结构化重写**（解析成结构化字段→可改→再生成），**不会保留你手写的 raw 原文/格式**。若某段必须保持 raw 文本原样，请改其它段时不触碰它（MCP 会整体用结构化重生成）。
+
+详析见 [`docs/inputcard-mcp-全量覆盖.md`](inputcard-mcp-全量覆盖.md)。
 
 ---
 

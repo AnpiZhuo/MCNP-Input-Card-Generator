@@ -31,7 +31,7 @@ from generator.parsers import parse_inp_text
 
 # 复用 api_server 的 deck ⇄ JSON 与各段映射（与 GUI 同一实现；其模块级只 import 核心引擎，xsdir 惰性）
 from api_server import (
-    deck_from_json, deck_to_frontend_dict,
+    deck_from_json,
     _basic_from_dict, _cells_from_list, _materials_from_list,
     _sources_from_list, _tally_from_dict, _adv_from_dict,
 )
@@ -48,21 +48,44 @@ def _generate(deck, raw_overrides=None):
     return generate_inp_from_deck(deck, raw_overrides or {})
 
 
+def _deck_to_sections(deck) -> dict:
+    """DeckData → 8 段语义结构（snake_case，advanced 对应后端 adv）。
+
+    与 list_section / patch_section / generate_document **同一结构**（asdict 口径）。
+    另保留 universe_comments（U 分组注释），generate 时不会被丢。
+    """
+    import dataclasses
+    d = dataclasses.asdict(deck)
+    sec = {k: d.get(k) for k in ("basic", "surfaces", "tr_cards", "cells", "materials", "sources", "tally")}
+    sec["advanced"] = d.get("adv")
+    sec["universe_comments"] = d.get("universe_comments", {})
+    return sec
+
+
+def _sections_to_deck(sections: dict):
+    """8 段语义结构 → DeckData（复用 deck_from_json；advanced 键转回 adv）。"""
+    d = dict(sections or {})
+    if "advanced" in d:
+        d["adv"] = d.pop("advanced")
+    return deck_from_json(d)
+
+
 # ─────────────────────────────── 文档级读写 ───────────────────────────────
 
 @mcp.tool()
 def read_document(inp: str) -> dict:
-    """解析 MCNP 输入卡文本，返回结构化 deck JSON（栅元/材料/曲面/TR/基础设置/计数）。
-    这是"读"入口：AI 第一步先调用它了解文档现状。"""
+    """解析 MCNP 输入卡文本，返回**按语义段的**结构（sections：basic/surfaces/tr_cards/cells/materials/sources/tally/advanced + universe_comments）。
+    这是"读"入口，与 list_section/patch_section/generate_document **同一结构**：改 sections 某段后直接回传 generate_document 或 patch_section。
+    ⚠️ 本管线走结构化路径，**不建模 text mode / raw override**；文本模式段会被结构化为 deck 后可改，但生成时不保留该段的 raw 原文覆盖。"""
     deck, warnings = parse_inp_text(inp)
-    return {"deck": deck_to_frontend_dict(deck), "warnings": warnings}
+    return {"sections": _deck_to_sections(deck), "warnings": warnings}
 
 
 @mcp.tool()
-def generate_document(deck: dict) -> str:
-    """从结构化 deck JSON 生成 MCNP 输入卡文本（INP）。这是"写"入口。"""
-    d = deck_from_json(deck)
-    return _generate(d, deck.get("rawOverrides") or deck.get("raw_overrides"))
+def generate_document(sections: dict) -> str:
+    """从**按语义段的**结构生成 MCNP 输入卡文本（INP）。这是"写"入口；sections 与 read_document 的输出同构。"""
+    deck = _sections_to_deck(sections)
+    return _generate(deck, sections.get("rawOverrides") or sections.get("raw_overrides"))
 
 
 @mcp.tool()
@@ -117,115 +140,7 @@ def patch_section(inp: str, section: str, data: dict) -> str:
     return _generate(deck)
 
 
-# ─────────────────────────────── 栅元 ───────────────────────────────
-
-def _cells_view(deck):
-    out = []
-    for r in deck.cells:
-        if r.kind == "raw":
-            out.append({"kind": "raw", "text": r.text})
-        else:
-            c = r.cell
-            out.append({
-                "num": str(c.number), "mat": c.material, "density": c.density,
-                "surface_expr": c.surface_expr,
-                "imp_n": c.imp_n, "imp_p": c.imp_p, "imp_e": c.imp_e,
-                "universe": c.u or "", "fill": c.fill or "",
-                "comment": c.comment,
-            })
-    return out
-
-
-@mcp.tool()
-def list_cells(inp: str) -> list:
-    """列出输入卡中所有栅元（编号/材料/密度/曲面表达式/imp/注释），供 AI 查看现状。"""
-    deck, _ = parse_inp_text(inp)
-    return _cells_view(deck)
-
-
-@mcp.tool()
-def get_cell(inp: str, num: int) -> dict:
-    """取单个栅元（编号 num）的完整信息。"""
-    deck, _ = parse_inp_text(inp)
-    for r in deck.cells:
-        if r.kind == "cell" and r.cell.number == num:
-            c = r.cell
-            return {
-                "num": str(c.number), "mat": c.material, "density": c.density,
-                "surface_expr": c.surface_expr,
-                "imp_n": c.imp_n, "imp_p": c.imp_p, "imp_e": c.imp_e,
-                "vol": c.vol, "universe": c.u or "", "fill": c.fill or "",
-                "lat": c.lat or "", "trcl": c.trcl or "", "comment": c.comment,
-            }
-    return {"error": f"未找到栅元 {num}"}
-
-
-def _patch_cell(deck, num, patch):
-    """就地修改 num 栅元的字段；返回是否命中。patch 用后端字段名。"""
-    for r in deck.cells:
-        if r.kind == "cell" and r.cell.number == num:
-            c = r.cell
-            for k, v in patch.items():
-                if hasattr(c, k):
-                    setattr(c, k, str(v))
-            return True
-    return False
-
-
-@mcp.tool()
-def update_cell(inp: str, num: int, patch: dict) -> str:
-    """修改栅元（编号 num）并返回更新后的 INP 文本。
-    patch 可用字段：material/material、density、surface_expr、imp_n/imp_p/imp_e、comment、
-    u、fill、lat、trcl（对应后端字段名）。未列字段不修改。"""
-    deck, _ = parse_inp_text(inp)
-    if not _patch_cell(deck, num, patch):
-        raise ValueError(f"未找到栅元 {num}")
-    return _generate(deck)
-
-
-@mcp.tool()
-def set_mode(inp: str, mode_n: bool = None, mode_p: bool = None, mode_e: bool = None) -> str:
-    """设置粒子模式（N/P/E 启停，None=不改）并返回更新后的 INP 文本。"""
-    deck, _ = parse_inp_text(inp)
-    if mode_n is not None:
-        deck.basic.mode_n = bool(mode_n)
-    if mode_p is not None:
-        deck.basic.mode_p = bool(mode_p)
-    if mode_e is not None:
-        deck.basic.mode_e = bool(mode_e)
-    return _generate(deck)
-
-
-# ─────────────────────────────── 材料 ───────────────────────────────
-
-@mcp.tool()
-def list_materials(inp: str) -> list:
-    """列出输入卡中所有材料卡（编号/注释/核素成分）。"""
-    deck, _ = parse_inp_text(inp)
-    out = []
-    for m in deck.materials:
-        rows = [{"kind": r.kind, "zaid": r.zaid, "fraction": r.fraction, "text": r.text}
-                for r in m.rows]
-        out.append({"number": m.number, "comment": m.comment, "rows": rows,
-                    "formula": m.formula, "options": m.options, "mt_card": m.mt_card})
-    return out
-
-
-@mcp.tool()
-def set_material(inp: str, number: int, patch: dict) -> str:
-    """修改材料卡（编号 number）并返回更新后的 INP 文本。
-    patch 可用字段：comment、formula、options、mt_card。"""
-    deck, _ = parse_inp_text(inp)
-    for m in deck.materials:
-        if m.number == number:
-            for k, v in patch.items():
-                if hasattr(m, k):
-                    setattr(m, k, v)
-            return _generate(deck)
-    raise ValueError(f"未找到材料 {number}")
-
-
-# ─────────────────────────────── 快捷建栅元（add_shape） ───────────────────────────────
+# ── 快捷建栅元（add_shape）───────────────────────────────
 
 def _next_surface_num(deck, base=101):
     """已有曲面卡的最大编号 + 1；无可解析则 base。"""
