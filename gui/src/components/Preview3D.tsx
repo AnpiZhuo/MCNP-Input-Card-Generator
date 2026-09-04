@@ -79,7 +79,8 @@ import { createTickGrid } from "../three/TickGrid";
 import { AXIS_CONFIG } from "../three/axisConfig";
 import { offsetPlaneForStl } from "../three/planeOffset";
 import { buildQuickCellPreview, wireColorForMaterial } from "../three/quickCellPreview";
-import { appendCardText, applyQuickAddChoice, type QuickAddChoice, type QuickCellResult, type QuickShape } from "../utils/quickCell";
+import { type QuickCellResult, type QuickShape } from "../utils/quickCell";
+import { useQuickAddOverlap } from "../utils/useQuickAddOverlap";
 import FloatingDialog from "./FloatingDialog";
 
 /* ---- plane eq formatting/parsing ---- */
@@ -569,10 +570,6 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   } | null>(null);
   const [overlapBusy, setOverlapBusy] = useState(false);
   const [highlightNums, setHighlightNums] = useState<string[]>([]);
-  const [quickCheck, setQuickCheck] = useState<{
-    overlaps: any[]; existingNums: number[]; zeroVolume: number[]; result: QuickCellResult;
-  } | null>(null);
-  const [quickCheckBusy, setQuickCheckBusy] = useState(false);
 
   const runOverlapCheck = useCallback(async () => {
     setOverlapBusy(true);
@@ -877,6 +874,28 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
     setWireSpec(valid ? { shape, config, material } : null);
   };
 
+  // 快捷建栅元重合检测 + 补集决策（共享 hook；3D 页内弹决策，写回交给宿主 onQuickCellGenerate）
+  const { quickCheck, runCheck, applyChoice: applyQuickCheck } = useQuickAddOverlap({
+    getExistingCells: () => (propsRef.current.cells as any[]).map(c => ({
+      num: parseInt(c.num, 10),
+      mat: String(c.mat),
+      density: (c as any).density || "",
+      surfaces: (c as any).surfaces || (c as any).surface_expr || "",
+      u: (c as any).u || "",
+      fill: (c as any).fill || "",
+      lat: (c as any).lat || "",
+      trcl: (c as any).trcl || "",
+      render: (c as any).render !== false,
+      fill_grid: (c as any).fill_grid || "",
+      impN: (c as any).impN || (c as any).imp_n || "",
+      impP: (c as any).impP || (c as any).imp_p || "",
+      impE: (c as any).impE || (c as any).imp_e || "",
+    })),
+    getSurfaces: () => propsRef.current.surfaces || "",
+    getTrCards: () => propsRef.current.trCards || "",
+    onApplyResult: (r) => { onQuickCellGenerate?.(r); setGenTick(t => t + 1); },
+  });
+
   const handleQuickCellGenerate = (result: QuickCellResult) => {
     // 移除本次线框（新栅元由重拉 STL 渲染）
     const ctrl = ctrlRef.current;
@@ -891,77 +910,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       return;
     }
     // 在 3D 预览页内做重合检测并弹决策（不把提示发回主页面）
-    const newCellsPayload = result.cells.map(c => ({
-      number: parseInt(c.num, 10) || 0,
-      material: c.mat,
-      density: c.density,
-      surface_expr: c.surfaces,
-    }));
-    const p = propsRef.current;
-    const existingCells = p.cells.map((c: any) => ({
-      kind: "cell",
-      cell: {
-        number: parseInt(c.num) || 0,
-        material: c.mat,
-        density: (c as any).density || "",
-        surface_expr: (c as any).surfaces || (c as any).surface_expr || "",
-        u: (c as any).u || "",
-        fill: (c as any).fill || "",
-        lat: (c as any).lat || "",
-        trcl: (c as any).trcl || "",
-        render: (c as any).render !== false,
-        fill_grid: (c as any).fill_grid || "",
-        imp_n: (c as any).impN || (c as any).imp_n || "",
-        imp_p: (c as any).impP || (c as any).imp_p || "",
-        imp_e: (c as any).impE || (c as any).imp_e || "",
-      },
-    }));
-    (async () => {
-      setQuickCheckBusy(true);
-      try {
-        const r = await fetch(apiUrl("/api/quick-add-check"), {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            surfaces: appendCardText(p.surfaces || "", result.surfacesText),
-            cells: existingCells,
-            tr_cards: appendCardText(p.trCards || "", result.trCardsText),
-            new_cells: newCellsPayload,
-          }),
-          signal: AbortSignal.timeout(60000),
-        });
-        const j = await r.json();
-        if (j.status !== "error" && j.overlaps && j.overlaps.length > 0) {
-          const newNums = new Set(newCellsPayload.map(c => c.number));
-          const existingNums = Array.from(new Set<number>(
-            j.overlaps
-              .filter((o: any) => newNums.has(o.a) !== newNums.has(o.b))
-              .map((o: any) => Number(newNums.has(o.a) ? o.b : o.a)),
-          ));
-          setQuickCheck({ overlaps: j.overlaps, existingNums, zeroVolume: j.zero_volume || [], result });
-          setQuickCheckBusy(false);
-          return;
-        }
-      } catch (e) { /* 检测失败 → 直接加入 */ }
-      setQuickCheckBusy(false);
-      onQuickCellGenerate?.(result);
-      setGenTick(t => t + 1);
-    })();
-  };
-
-  // 3D 预览内补集决策（纯函数，支持多栅元）：A=新避开已有 / B=已有让位 / D=只占真空 / C=保持原样
-  const applyQuickCheck = (choice: QuickAddChoice) => {
-    const qc = quickCheck;
-    if (!qc) return;
-    const existing = (propsRef.current.cells as any[]).map(c => ({
-      num: parseInt(c.num, 10),
-      mat: String(c.mat),
-      surfaces: (c as any).surfaces || (c as any).surface_expr || "",
-    }));
-    const result = applyQuickAddChoice(qc.result, qc.overlaps, existing, choice);
-    result.overlapHandled = true;
-    setQuickCheck(null);
-    onQuickCellGenerate?.(result);
-    setGenTick(t => t + 1);
+    runCheck(result);
   };
 
   const restoreQuickCellPanel = () => {

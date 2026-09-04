@@ -20,7 +20,8 @@ import { openPreview3D, onMaterialChange, onQuickCellGenerate } from "../utils/w
 import { apiUrl } from "../utils/api";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
 import { textToSection } from "../utils/sectionConvert";
-import { appendCardText, applyQuickAddChoice, generatedCellToRow, quickAddCheckFailedMessage, type QuickAddChoice, type QuickCellResult } from "../utils/quickCell";
+import { appendCardText, generatedCellToRow, quickAddCheckFailedMessage, type QuickCellResult } from "../utils/quickCell";
+import { useQuickAddOverlap } from "../utils/useQuickAddOverlap";
 import { applyBatchEditToRows, pruneSelectedNums, selectedCellsFromNums, toggleCellNum, type BatchCellEditValues } from "../utils/batchCellEdit";
 import { detectWebGLGpu, classifyGpu, gpuShortText, gpuStatusText, setGpuPreference, type GpuInfo, type GpuPreference } from "../utils/gpuInfo";
 
@@ -79,13 +80,6 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const [show3D, setShow3D] = useState(false);
   const [showStepDlg, setShowStepDlg] = useState(false);
   const [quickCellOpen, setQuickCellOpen] = useState(false);
-  const [quickCheck, setQuickCheck] = useState<{
-    result: QuickCellResult;
-    overlaps: any[];
-    recommended: "new_hole" | "existing_hole" | "none";
-    existingNums: number[];
-    zeroVolume: number[];
-  } | null>(null);
   // 格阵 fill 阶段2：栅格编辑器 + 按 U 分组显示
   const [latticeOpen, setLatticeOpen] = useState(false);
   const [latticeEditIdx, setLatticeEditIdx] = useState<number | null>(null);
@@ -255,94 +249,39 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     }
     setQuickCellOpen(true);
   };
-  const handleQuickCellGenerate = (result: QuickCellResult) => {
-    const nextSurf = appendCardText(surfTextRef.current, result.surfacesText);
-    const nextTr = appendCardText(trTextRef.current, result.trCardsText);
-    setSurfText(nextSurf);
-    setTrText(nextTr);
-  const newRows = result.cells.map(generatedCellToRow);
-  // 生成入口（3D 预览）已处理重合决策：应用补丁后直接加入，不再重复弹窗
-  if (result.existingExprPatch && result.existingExprPatch.length) {
-    const patchMap = new Map(result.existingExprPatch.map(p => [p.num, p.surfaces]));
-    setCells(prev => prev.map(c => c.kind === "cell" && patchMap.has(c.cell.num)
-      ? { ...c, cell: { ...c.cell, surfaces: patchMap.get(c.cell.num)! } }
-      : c));
-  }
-  if (result.overlapHandled || result.checkOverlap === false) {
-    setCells(prev => [...prev, ...newRows]);
-    return;
-  }
-    // 快捷添加重合检查：新栅元 vs 已有 → 弹出 A/B/C 补集决策
-    const cellRows = newRows.filter(r => r.kind === "cell");
-    if (!cellRows.length) { setCells(prev => [...prev, ...newRows]); return; }
-    const newCellsPayload = cellRows.map(r => ({
-      number: parseInt(r.cell.num, 10) || 0,
-      material: r.cell.mat,
-      density: r.cell.density,
-      surface_expr: r.cell.surfaces,
-    }));
-    const existingCells = cellsRef.current.filter(c => c.kind === "cell").map(c => ({
-      kind: "cell",
-      cell: {
-        number: parseInt(c.cell.num, 10) || 0,
-        material: c.cell.mat,
-        density: c.cell.density,
-        surface_expr: c.cell.surfaces,
-      },
-    }));
-    (async () => {
-      try {
-        const r = await fetch(apiUrl("/api/quick-add-check"), {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            surfaces: nextSurf,
-            cells: existingCells,
-            tr_cards: nextTr,
-            new_cells: newCellsPayload,
-          }),
-          signal: AbortSignal.timeout(60000),
-        });
-        const j = await r.json();
-        if (j.status !== "error" && j.overlaps && j.overlaps.length > 0) {
-          const newNums = new Set(newCellsPayload.map(c => c.number));
-          const existingNums = Array.from(new Set<number>(
-            j.overlaps
-              .filter((o: any) => newNums.has(o.a) !== newNums.has(o.b))
-              .map((o: any) => Number(newNums.has(o.a) ? o.b : o.a)),
-          ));
-          setQuickCheck({
-            result, overlaps: j.overlaps, recommended: j.recommended,
-            existingNums, zeroVolume: j.zero_volume || [],
-          });
-          return;
-        }
-      } catch (e) {
-        // T2：检测失败 → 仍追加栅元，但非阻塞警告用户未校验重合（不再静默跳过）
-        console.warn("[quick-add-check] 重合检测失败，未校验与已有栅元重叠:", e);
-        setQuickCheckWarn(quickAddCheckFailedMessage(e));
-      }
-      setCells(prev => [...prev, ...newRows]);
-    })();
-  };
-
-  // 快捷添加补集决策（纯函数，支持多栅元）：A=新避开已有 / B=已有让位 / D=只占真空 / C=不处理
-  const applyQuickCheck = (choice: QuickAddChoice) => {
-    if (!quickCheck) return;
-    const qc = quickCheck;
-    const existing = cells.filter(c => c.kind === "cell").map(c => ({
-      num: parseInt(c.cell.num, 10),
-      mat: c.cell.mat,
-      surfaces: c.cell.surfaces,
-    }));
-    const patched = applyQuickAddChoice(qc.result, qc.overlaps, existing, choice);
-    if (patched.existingExprPatch && patched.existingExprPatch.length) {
-      const patchMap = new Map(patched.existingExprPatch.map(p => [p.num, p.surfaces]));
+  // 统一写回：曲面/TR 文本 + 补集补丁 + 新栅元（直接/决策后/已处理均走这里）
+  const writeBack = (r: QuickCellResult) => {
+    setSurfText(appendCardText(surfTextRef.current, r.surfacesText));
+    setTrText(appendCardText(trTextRef.current, r.trCardsText));
+    if (r.existingExprPatch && r.existingExprPatch.length) {
+      const patchMap = new Map(r.existingExprPatch.map(p => [p.num, p.surfaces]));
       setCells(prev => prev.map(c => c.kind === "cell" && patchMap.has(c.cell.num)
         ? { ...c, cell: { ...c.cell, surfaces: patchMap.get(c.cell.num)! } }
         : c));
     }
-    setCells(prev => [...prev, ...patched.cells.map(generatedCellToRow)]);
-    setQuickCheck(null);
+    setCells(prev => [...prev, ...r.cells.map(generatedCellToRow)]);
+  };
+  const { quickCheck, runCheck: runQuickCheck, applyChoice: applyQuickCheck } = useQuickAddOverlap({
+    getExistingCells: () => cellsRef.current.filter(c => c.kind === "cell").map(c => ({
+      num: parseInt(c.cell.num, 10),
+      mat: c.cell.mat,
+      density: c.cell.density,
+      surfaces: c.cell.surfaces,
+    })),
+    getSurfaces: () => surfTextRef.current,
+    getTrCards: () => trTextRef.current,
+    onApplyResult: writeBack,
+    onCheckFail: (e) => setQuickCheckWarn(quickAddCheckFailedMessage(e)),
+  });
+
+  const handleQuickCellGenerate = (result: QuickCellResult) => {
+    // 生成入口（3D 预览）已处理重合决策：应用补丁后直接加入，不再重复弹窗
+    if (result.overlapHandled || result.checkOverlap === false) {
+      writeBack(result);
+      return;
+    }
+    // 快捷添加重合检查：新栅元 vs 已有 → 有重叠由 hook 弹 A/B/C 补集决策，否则直接写回
+    runQuickCheck(result);
   };
 
   // 3D 预览里点击材料号改材料 → 更新本地 cells，local→deck 同步自动 patch

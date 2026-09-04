@@ -22,6 +22,7 @@ _keep_py = [
     "freecad_locator.py", "step_importer_geouned.py", "geouned_worker.py",
     "xsdir_db.py", "step_importer.py",
     "outp_parser.py",
+    "coverage_check.py",
     "_cross_section_helper.py",
     "_freecad_cross_section_worker.py",
     "stl_cross_section.py", "gpu_pref.py",
@@ -81,6 +82,12 @@ _ptrac_mods = [
     "ptrac", "ptrac.ptrac_parser", "ptrac._ptrac_worker",
 ]
 _hidden += _ptrac_mods
+
+# inputcard-mcp（AI 接入，本地 stdio MCP server）：仅 mcnp_bridge --mcp-server 分派时
+# import inputcard_mcp.server（其顶层 import mcp.server.fastmcp）。主程序 api_server 路径
+# 不触碰 mcp，故打包时 mcp 打进 PYZ 但不影响 5001 后端启动。FastMCP 依赖
+# （pydantic/starlette/httpx/uvicorn 等）由 PyInstaller 从 mcp.server.fastmcp 自动收集。
+_hidden += ["inputcard_mcp", "inputcard_mcp.server"]
 
 a = Analysis(
     [os.path.join(GUI_BACKEND, "mcnp_bridge.py")],

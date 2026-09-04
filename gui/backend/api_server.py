@@ -1383,6 +1383,10 @@ def _deck_to_frontend_dict(deck: DeckData) -> dict:
     return deck_dict
 
 
+# 公开别名：DeckData → 前端 deck JSON（inputcard-mcp 等外部接入复用）
+deck_to_frontend_dict = _deck_to_frontend_dict
+
+
 def _fmt_num(v) -> str:
     """pandas 数值 → 显示字符串（None/NaN → 空串）。"""
     if v is None:

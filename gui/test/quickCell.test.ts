@@ -15,6 +15,8 @@ import {
   type RccConfig,
   type RppConfig,
   type SphConfig,
+  type HexConfig,
+  type TetConfig,
 } from "../src/utils/quickCell";
 
 const emptyCtx = { surfacesText: "", trCardsText: "", cellNumbers: [] };
@@ -120,6 +122,69 @@ describe("SPH 生成", () => {
   });
 });
 
+describe("HEX 六棱柱生成（RHP 宏体）", () => {
+  const cfg: HexConfig = { center: [0, 0, 0], axis: [0, 0, 10], radius: 2, rings: 2, segments: 3 };
+
+  it("RHP 宏体（V H R1，轴 +Z → R1 沿 +X=apothem）+ 轴向 P 平面", () => {
+    const r = generateQuickCell("hex", cfg, emptyCtx);
+    // apothem = radius·√3/2 ≈ 1.732051；环1 apothem/rings、环2 apothem（同心递增，同 RCC 环）
+    expect(r.surfacesText).toContain("101 rhp 0 0 0  0 0 10  0.866025 0 0");
+    expect(r.surfacesText).toContain("102 rhp 0 0 0  0 0 10  1.732051 0 0");
+    expect(r.surfacesText).toContain("103 p 0 0 1 3.333333");
+    expect(r.surfacesText).toContain("104 p 0 0 1 6.666667");
+    expect(r.trCardsText).toBe("");
+    expect(r.surfaceCount).toBe(4);
+    expect(r.cellCount).toBe(6);
+  });
+
+  it("栅元表达式与 RCC 同构（核心环 -RHP，外环 +内 -外；段首 -P、末 +P、中 +P -P）", () => {
+    const r = generateQuickCell("hex", cfg, emptyCtx);
+    expect(r.cells.map((c) => c.surfaces)).toEqual([
+      "-101 -103",
+      "-101 +103 -104",
+      "-101 +104",
+      "+101 -102 -103",
+      "+101 -102 +103 -104",
+      "+101 -102 +104",
+    ]);
+    expect(r.cells[5].comment).toBe("RHP 环2/2 段3/3");
+  });
+
+  it("校验：radius/轴向/环/段", () => {
+    expect(validateQuickCell("hex", { center: [0, 0, 0], axis: [0, 0, 1], radius: -1, rings: 2, segments: 2 })).toMatch(/半径/);
+    expect(validateQuickCell("hex", { center: [0, 0, 0], axis: [0, 0, 0], radius: 1, rings: 2, segments: 2 })).toMatch(/轴向向量/);
+    expect(validateQuickCell("hex", { center: [0, 0, 0], axis: [0, 0, 1], radius: 1, rings: 0, segments: 2 })).toMatch(/环数/);
+    expect(validateQuickCell("hex", { center: [0, 0, 0], axis: [0, 0, 1], radius: 1, rings: 2, segments: 1.5 })).toMatch(/段数/);
+  });
+});
+
+describe("TET 四面体生成（4 顶点）", () => {
+  // 单位四面体：A(0,0,0) B(1,0,0) C(0,1,0) D(0,0,1)
+  const cfg: TetConfig = {
+    p1: [0, 0, 0], p2: [1, 0, 0], p3: [0, 1, 0], p4: [0, 0, 1],
+  };
+
+  it("4 个 P 平面，法向朝向体内；栅元 = +p1 +p2 +p3 +p4", () => {
+    const r = generateQuickCell("tet", cfg, emptyCtx);
+    expect(r.surfaceCount).toBe(4);
+    expect(r.cellCount).toBe(1);
+    // 面 ABC(法向 z 朝上 +)，ABD(法向 +Y)，ACD(法向 +X)，BCD(法向 −(1,1,1))
+    expect(r.surfacesText).toContain("101 p 0 0 1 0");
+    expect(r.surfacesText).toContain("102 p 0 1 0 0");
+    expect(r.surfacesText).toContain("103 p 1 0 0 0");
+    expect(r.surfacesText).toContain("104 p -0.57735 -0.57735 -0.57735 -0.57735"); // 法向归一化 (−1,−1,−1)/√3
+    expect(r.cells[0].surfaces).toBe("+101 +102 +103 +104");
+    expect(r.cells[0].comment).toBe("TET 四面体");
+  });
+
+  it("校验：非有限坐标 / 四点共面（退化）", () => {
+    expect(validateQuickCell("tet", { p1: [0, 0, 0], p2: [1, 0, 0], p3: [0, 1, 0], p4: [NaN, 0, 0] })).toMatch(/有效数字/);
+    // 四点共面（z 全 0 → 体积 0）
+    expect(validateQuickCell("tet", { p1: [0, 0, 0], p2: [1, 0, 0], p3: [0, 1, 0], p4: [1, 1, 0] })).toMatch(/共面\/退化/);
+    expect(validateQuickCell("tet", cfg)).toBeNull();
+  });
+});
+
 describe("RPP 生成", () => {
   it("轴对齐：RPP + 内部 PX/PY/PZ，无 TR", () => {
     const r = generateQuickCell("rpp", { size: [2, 2, 2], center: [0, 0, 0], angles: [0, 0, 0], nx: 2, ny: 2, nz: 1 }, emptyCtx);
@@ -204,21 +269,21 @@ describe("材料/密度/imp", () => {
     expect(densityForMaterial("2", ctx.materials)).toBe("");
   });
 
-  it("imp 勾选写 0（杀粒子），不勾选按基础页模式填 1", () => {
+  it("imp 填数值写 IMP:N=值（含 0），留空按基础页模式填 1", () => {
     const r = generateQuickCell("sph", { center: [0, 0, 0], radius: 1, shells: 1 }, {
-      ...emptyCtx, material: "0", impN: true, impP: false, impE: true,
+      ...emptyCtx, material: "0", impN: "0", impP: "", impE: "0",
       modeN: false, modeP: true, modeE: true,
     });
-    // 勾选 → 0
+    // 填了 0 → 写 0
     expect(r.cells[0].impN).toBe("0");
     expect(r.cells[0].impE).toBe("0");
-    // 不勾选 + 基础页启用该粒子 → 1
+    // 留空 + 基础页启用该粒子 → 1
     expect(r.cells[0].impP).toBe("1");
   });
 
-  it("imp 不勾选且基础页未启用该粒子 → 留空", () => {
+  it("imp 留空且基础页未启用该粒子 → 留空", () => {
     const r = generateQuickCell("sph", { center: [0, 0, 0], radius: 1, shells: 1 }, {
-      ...emptyCtx, material: "0", impN: false, impP: false, impE: false,
+      ...emptyCtx, material: "0", impN: "", impP: "", impE: "",
       modeN: true, modeP: false, modeE: false,
     });
     expect(r.cells[0].impN).toBe("1");
@@ -237,6 +302,10 @@ describe("数量预览", () => {
       .toEqual({ surfaceCount: 1 + 1 + 2 + 3, cellCount: 24 });
     expect(quickCellCounts("rpp", { size: [2, 2, 2], center: [0, 0, 0], angles: [0, 0, 1], nx: 2, ny: 3, nz: 4 }))
       .toEqual({ surfaceCount: 6 + 1 + 2 + 3, cellCount: 24 });
+    expect(quickCellCounts("hex", { center: [0, 0, 0], axis: [0, 0, 1], radius: 1, rings: 4, segments: 3 }))
+      .toEqual({ surfaceCount: 6, cellCount: 12 });
+    expect(quickCellCounts("tet", { p1: [0, 0, 0], p2: [1, 0, 0], p3: [0, 1, 0], p4: [0, 0, 1] }))
+      .toEqual({ surfaceCount: 4, cellCount: 1 });
   });
 });
 

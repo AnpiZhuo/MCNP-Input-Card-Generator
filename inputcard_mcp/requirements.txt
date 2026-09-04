@@ -1,0 +1,2 @@
+# inputcard-mcp 依赖（本地 stdio MCP 服务器；作为程序能力随程序提供）
+mcp>=1,<2

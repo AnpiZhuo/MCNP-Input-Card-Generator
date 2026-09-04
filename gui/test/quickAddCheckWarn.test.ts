@@ -7,10 +7,11 @@ import { quickAddCheckFailedMessage } from "../src/utils/quickCell";
 /**
  * T2 回归：快捷建栅元的重合检测 catch 曾静默跳过（`catch (e) { /* 检测失败 → 直接追加 *​/ }`）。
  * 修法：失败时仍追加栅元，但弹出非阻塞警告（"重合检测失败，未校验与已有栅元重叠"）
- * + console.warn 记录原因。
+ * + console.warn 记录原因。逻辑现抽到 useQuickAddOverlap hook（GeometryTab 通过 onCheckFail 弹警告）。
  */
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GEO_TSX = readFileSync(join(HERE, "../src/components/GeometryTab.tsx"), "utf-8");
+const HOOK_TS = readFileSync(join(HERE, "../src/utils/useQuickAddOverlap.ts"), "utf-8");
 
 describe("T2：快捷建栅元重合检测失败不再静默（非阻塞警告）", () => {
   it("quickAddCheckFailedMessage 生成含原因的中文警告", () => {
@@ -22,10 +23,13 @@ describe("T2：快捷建栅元重合检测失败不再静默（非阻塞警告�
   });
 
   it("GeometryTab 快捷添加 catch 不再静默：console.warn 记录 + 弹非阻塞警告", () => {
+    // hook：失败必 console.warn 记录原因
+    expect(HOOK_TS).toContain("console.warn(\"[quick-add-check]");
+    // GeometryTab：通过 onCheckFail 把失败转成非阻塞警告（含 quickAddCheckFailedMessage）
     expect(GEO_TSX).toContain("quickAddCheckFailedMessage");
     expect(GEO_TSX).toContain("setQuickCheckWarn");
-    expect(GEO_TSX).toContain("console.warn(\"[quick-add-check]");
     // 旧静默注释（检测失败 → 直接追加）已移除
+    expect(HOOK_TS).not.toContain("检测失败 → 直接追加");
     expect(GEO_TSX).not.toContain("检测失败 → 直接追加");
   });
 });

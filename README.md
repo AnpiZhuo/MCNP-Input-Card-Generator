@@ -31,6 +31,13 @@ A desktop application for visually creating, editing, and validating **MCNP** in
 
 ---
 
+## AI 接入（inputcard-mcp）
+
+支持 MCP 的 AI 助手可通过 **`inputcard-mcp`** 直接读取、修改、生成 MCNP 输入卡（`.INP`）。无需复制粘贴文件内容——注册一次 MCP 服务，AI 会自动发现这些工具。
+
+- 详细说明（接入配置、工具清单、给 AI 的入口提示）：**[docs/inputcard-mcp.md](docs/inputcard-mcp.md)**
+- 服务命名刻意避开 "MCNP" 子串，以免与 MCNP® 及本工具内已有 `mcnp_*` 文件混淆。
+
 ## 技术栈 Tech Stack
 
 | 层 | 技术 |
@@ -87,15 +94,7 @@ python api_server.py
 
 ### 打包为 EXE Build Standalone EXE
 
-> **推荐一键出包**（v1.7.4 起）：`scripts\release.ps1` 自动完成「环境检查 → 版本号 → 门禁 → vite → PyInstaller sidecar → 替换 binaries → Tauri 构建 → **6.2 自动覆盖 sidecar** → 部署 → 冒烟」，显著规避 npm/npx 被 ExecutionPolicy 禁与 Tauri 增量编译不刷新 sidecar 这两个坑。
->
-> ```bat
-> powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1            :: 沿用当前版本号（bug 修复批）
-> powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1 -NewVer 1.7.5   :: 提升版本（仅新功能）
-> powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1 -SkipDeploy     :: 只构建不部署
-> ```
->
-> 或按 **`docs/手动打包方法.md`** 分步操作（自 v1.6.4 起已停用 build.bat / release.bat 旧自动化脚本）。
+> 打包为 EXE 请按 **`docs/手动打包方法.md`** 分步操作（`release.bat` / `scripts\release.ps1` 一键脚本已废弃删除）。
 > 流程：vite 构建 → PyInstaller 打包后端 sidecar → 替换 `src-tauri/binaries/` → Tauri 构建 → 复制产物到交付目录 → 冒烟验证。
 
 打包产物在 `gui/src-tauri/target/release/`（`bundle.active=false`，`bundle/` 目录为空属正常）。运行 exe 时前端自动拉起后端、关闭时一起退出。
@@ -119,8 +118,6 @@ python api_server.py
 ## 项目结构 Project Structure
 
 ```
-├── scripts/
-│   └── release.ps1                  # 一键打包部署脚本（vite→PyInstaller→Tauri→6.2 覆盖→部署→冒烟）
 ├── app/                            # Python 核心（生成/解析/校验引擎）
 │   ├── generator/                  # inp_generator、parsers、validator
 │   ├── models.py                   # 数据模型 (DeckData, CellData, ...)

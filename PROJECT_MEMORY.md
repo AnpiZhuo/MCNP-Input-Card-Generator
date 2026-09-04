@@ -14,6 +14,19 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
+## S1（当前批次）AI 接入 inputcard-mcp + 快捷建栅元六棱柱/四面体 + 深模块化（本会话，已实现，本次提交）
+- **批次目标**：① 让支持 MCP 的 AI 助手能在本地读写/生成 MCNP 输入卡；② 快捷建栅元扩到六棱柱(RHP)/四面体；③ IMP 改数值输入默认 0；④ 把 GeometryTab/Preview3D 重复的重合检测编排抽成深模块；⑤ 废弃一键打包、提示词做成页面。
+- **✅ inputcard-mcp（AI 接入，本地 stdio）**：新增 `inputcard_mcp/` 包（`server.py`/`__main__.py`/`__init__.py`/`requirements.txt`，`mcp>=1,<2`），FastMCP v1 @tool。**无状态**：每次工具调用 AI 携带完整文本文档，修改型工具「收当前 INP → 返回新 INP」。10 工具：`read_document/generate_document/validate_document/list_cells/get_cell/update_cell/set_mode/list_materials/set_material/add_shape`（add_shape 支持 rcc/rpp/sph/hex/tet）。复用后端 `parse_inp_text`/`generate_inp_from_deck`/`deck_from_json`/`deck_to_frontend_dict`；`add_shape` 的栅元/曲面生成在本服务内（公式等价前端快捷建栅元）。**命名刻意避开 "MCNP" 子串**（商标 + 区分 `mcnp_bridge`/`mcnp_sidecar`/`MCNP输入卡生成器`）。
+- **✅ 打包（随 sidecar）**：`gui/backend/mcnp_bridge.py` 加 `--mcp-server` 分派（仅此分支 import mcp/FastMCP，主 api_server 5001 路径不触碰 mcp）；`gui/mcnp_sidecar.spec` `_hidden` 加 `inputcard_mcp`/`inputcard_mcp.server`；打包版 `<部署>\python.exe --mcp-server` 可作 stdio MCP server（已用 MCP 客户端端到端验证自动发现全部 10 工具）。`gui/backend/api_server.py` 加公开别名 `deck_to_frontend_dict` 供复用。
+- **✅ 快捷建栅元新增**：`gui/src/utils/quickCell.ts` 加 `HexConfig`/`TetConfig`/`hexRadialBasis`（RHP R1 轴向）、`generateHex`（RHP 宏体，结构同 RCC）、`generateTet`（4 顶点→4 平面，法向朝体内）；`quickCellPreview.ts` 加 `buildHex`/`buildTet`；`QuickCellForm.tsx` 加 hex/tet 形状按钮与表单（hex 同圆柱参数 / tet 输入 4 顶点）。
+- **✅ IMP 数值化**：`QuickCellForm` N/P/E 由复选框改数值输入（默认 "0"，留空按基础页模式填 1）；`QuickCellContext.impN/impP/impE` 由 boolean→string；`cellBase` 相应改。
+- **✅ 深模块 useQuickAddOverlap**：新增 `gui/src/utils/useQuickAddOverlap.ts`（3 getter + 统一写回 + 可选 onCheckFail，把后端请求体/appendCardText/applyQuickAddChoice 藏进实现）；`GeometryTab.tsx`/`Preview3D.tsx` 改用，删各自重复 fetch+决策逻辑。
+- **✅ 一键打包废弃**：删除 `release.bat`/`README-release.md`/`scripts\release.ps1`；`README.md`/手动打包方法/PROJECT_MEMORY 改"仅手动打包，一键已废弃"。
+- **✅ 提示词页面**：新增项目根 `AI接入提示词.md`（与 README 同级，简单版 + System Prompt 版，修正两处不一致：无 get_surfaces／validate_document 不含几何重合）；`docs/inputcard-mcp.md` 方式二指向该页。
+- **✅ 门禁**：前端 vitest **554/0**（69 文件）；tsc EXIT 0；`gui/dist/python/python.exe --mcp-server` 端到端 list_tools 10 工具全通。后端零核心改动（api_server 仅加别名）。
+- **改动清单**：`inputcard_mcp/`(新)、`gui/src/utils/quickCell.ts`、`gui/src/three/quickCellPreview.ts`、`gui/src/components/QuickCellForm.tsx`、`gui/src/components/GeometryTab.tsx`、`gui/src/components/Preview3D.tsx`、`gui/src/utils/useQuickAddOverlap.ts`(新)、`gui/backend/api_server.py`、`gui/backend/mcnp_bridge.py`、`gui/mcnp_sidecar.spec`、`docs/inputcard-mcp.md`(新)、`AI接入提示词.md`(新)、`README.md`、`docs/手动打包方法.md`、`requirements.txt`、删除 `release.bat`/`README-release.md`/`scripts/release.ps1`、`gui/test/quickCell.test.ts`/`quickCellPreview.test.ts`/`quickAddCheckWarn.test.ts`/`useQuickAddOverlap.test.tsx`(新)。
+- **⚠️ 注意**：`inputcard_mcp/server.py` 顶层 import `mcp.server.fastmcp`、`generator.parsers`、`api_server`；源码 dev 用 `python -m inputcard_mcp`（需 PYTHONPATH 含项目根/app/gui-backend，server 已自加路径）。
+
 ## S1（当前批次）后端拉起提速 + preview_cache 跨进程持久化（2026-09-04，已提交 commit 0a266cd；此前未提交 3D 功能已一并提交 f7fc2ed）
 - **批次目标**：修"后端拉起等待时间过长"。根因=`gui/backend/api_server.py` 模块级 `import pymcnp.inp`（及 `inp_generator` 模块顶层 `from pymcnp import inp`）触发 `pymcnp/__init__` 急切导入 `Plot`/`Visualize`/`outp`，连带 `matplotlib`+`pandas`+`pyvista` → 后端启动 ~2.5s。
 - **✅ 启动提速（commit 0a266cd，仅 `gui/backend/api_server.py`）**：① `_SURF_CLASSES` 改**线程安全惰性** `_surf_classes()`（首次 `parse_surfaces` 才 import pymcnp.inp）；② `generate_inp_from_deck` 从模块顶层改为 `_handle_generate` 内**按需导入**（符合本文件"重量依赖延迟到 handler"既有约定）；③ `main()` 加**后台预热线程**——启动即返回不阻塞，后台把 pymcnp 拉起来。效果：`import api_server` **2546ms→299ms**，真实拉起（端口就绪）~0.5s；`pymcnp` 不再随导入进入 `sys.modules`；预热后首个 `generate_inp_from_deck` **0.002s**。
@@ -313,6 +326,7 @@
 | `app/mctal_parser.py` / `app/sweep.py` | **mctal 输出解析（k-eff/收敛/tally）** / **参数扫描纯函数（对齐 OWEN sweepCore）** | 后端 |
 | `app/meshtal/` | 网格计数解析/体积构建/配色/cache/deck_match/worker（8 模块） | 后端 |
 | `app/ptrac/` | PTRAC 粒子径迹解析 + worker | 后端 |
+| `inputcard_mcp/` | **AI 接入 MCP server（本地 stdio，10 工具；无状态，复用 parse/generate；打包用 `mcnp_bridge --mcp-server` 分派）** | 后端 |
 | | | |
 | **前端（gui/src/）** | | |
 | `gui/src/App.tsx` | 主界面（顶栏/导入/生成/保存恢复/主题） | 前端 |
@@ -322,7 +336,8 @@
 | `gui/src/three/` | 3D 深模块：cameraParams/renderGate/cellMaterial/TickGrid/axisConfig（轴单一事实来源）/planeOffset（截面平面坐标换算）/quickCellPreview（快捷建栅元线框） | 前端 |
 | `gui/src/volume/` | 体积可视化 11 模块（volumeShader/VolumeRenderer/colorize/alignWorld/downsampleRequest/fmeshState/ColorLegend/FMeshForm/VolumeControlPanel/ResultWindow/surfacesAABB） | 前端 |
 | `gui/src/ptrac/` | PTRAC 径迹 3D 窗口模块（trackColors/PtracRenderer/PtracWindow 等） | 前端 |
-| `gui/src/utils/quickCell.ts` / `gui/src/components/QuickCellDialog.tsx` | 快捷建栅元：纯函数生成（编号/校验/RCC/RPP/SPH）+ 弹窗 | 前端 |
+| `gui/src/utils/quickCell.ts` / `gui/src/components/QuickCellDialog.tsx` | 快捷建栅元：纯函数生成（编号/校验/RCC/RPP/SPH/**HEX/TET**）+ 弹窗 | 前端 |
+| `gui/src/utils/useQuickAddOverlap.ts` | **快捷建栅元重合检测+补集决策深模块（GeometryTab/Preview3D 共用）** | 前端 |
 | `gui/src/utils/batchCellEdit.ts` / `gui/src/components/BatchCellEditDialog.tsx` | 栅元列表批量编辑：纯函数应用（空字段=不改、曲面只追加）+ 弹窗 | 前端 |
 | `gui/src/utils/rawOverrides.ts` | **raw_overrides 纯函数构造（V1.7.2.2 新增，含 sdef）** | 前端 |
 | `gui/src/utils/tallyChart.ts` | **OUTP 结果 SVG 折线图纯函数（V1.7.2.2 新增）** | 前端 |
@@ -456,7 +471,7 @@
 
 ### 打包链路（每次发布走此流程，详见 `docs/手动打包方法.md`）
 
-> **⭐ 首选 `scripts\release.ps1`（一键，2026-08-28 新增）**：PowerShell 一键脚本自动完成「环境检查 → 版本号(可选提升五处) → 门禁(pytest+vitest) → vite → PyInstaller → 复制 binaries → tauri build → **6.2 自动覆盖 sidecar 进 target\release** → 部署 → 冒烟(5001 探活)」。**自动处理两个每次必踩的坑**：① npm/npx 被 ExecutionPolicy 禁（改用 node 直调 vite/tauri/vitest CLI）；② **6.2 sidecar 时效坑**（tauri 增量编译不刷新 target\release 的 sidecar，脚本**无条件覆盖**，不再人工核对 mtime）。用法：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1 [-NewVer x.y.z | -SkipGate | -SkipDeploy]`。已实测完整链路发版成功（1.7.4）。下面分步仅备查/手动干预用。
+> **打包唯一流程为手动**（`docs/手动打包方法.md`）。曾有一键脚本 `release.bat` / `scripts\release.ps1` 均已**废弃删除**（一键脚本曾解决第 ② 项 npm/npx 被 ExecutionPolicy 禁与 6.2 sidecar 时效坑，但整套一键能力已弃用）。当前**每次发布**按下面分步手动执行，**尤其 6.2 时效校验不可跳过**。
 
 ```
 1. vite build                       （前端产物，~3-4s；node .\node_modules\vite\bin\vite.js build）
@@ -465,7 +480,7 @@
 3. 替换 binaries                    （把新 sidecar 的 python.exe + _internal 换进 target\release\）
 4. tauri build                      （需 RUSTUP_HOME/CARGO_HOME=D:\rust；node .\node_modules\@tauri-apps\cli\tauri.js build）
 5. ⚠️ 6.2 时效校验（必做）           （tauri 增量编译不刷新 target\release 的 sidecar！
-                                    手动核对 python.exe mtime/体积，覆盖为新 sidecar；一键脚本已自动处理）
+                                    手动核对 python.exe mtime/体积，覆盖为新 sidecar）
 6. 部署 D:\MCNP\MCNP输入卡生成器     （⚠️ 先杀运行中的旧主程序+sidecar，否则文件锁目录致 _internal 残缺）
 7. 冒烟                             （用 sidecar python.exe 直跑不弹 GUI：xsdir-check / generate 定向卡 / preview-3d 出 STL）
 ```

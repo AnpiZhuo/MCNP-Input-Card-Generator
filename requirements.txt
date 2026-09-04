@@ -2,4 +2,6 @@ pymcnp>=0.9.0
 pyinstaller>=5.0
 matplotlib
 numpy
+# AI 接入（inputcard-mcp：本地 stdio MCP 服务器，复用本程序解析/生成能力）
+mcp>=1,<2
 # geouned — STEP→MCNP 转换引擎（自动装到 FreeCAD 的 Python 中）

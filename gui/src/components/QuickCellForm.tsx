@@ -73,6 +73,11 @@ export default function QuickCellForm({
   const [shape, setShape] = useState<QuickShape>("rcc");
   // 所有数值输入默认空：空按 0（分块按 1）处理
   const [rcc, setRcc] = useState({ cx: "", cy: "", cz: "", hx: "", hy: "", hz: "", r: "", rings: "", segments: "" });
+  const [hex, setHex] = useState({ cx: "", cy: "", cz: "", hx: "", hy: "", hz: "", r: "", rings: "", segments: "" });
+  const [tet, setTet] = useState({
+    p1x: "", p1y: "", p1z: "", p2x: "", p2y: "", p2z: "",
+    p3x: "", p3y: "", p3z: "", p4x: "", p4y: "", p4z: "",
+  });
   const [sph, setSph] = useState({ x: "", y: "", z: "", r: "", shells: "" });
   const [rpp, setRpp] = useState({
     L: "", W: "", H: "", cx: "", cy: "", cz: "",
@@ -81,9 +86,9 @@ export default function QuickCellForm({
   const [unit, setUnit] = useState<"deg" | "rad">("deg");
   const angleFocusRef = useRef<"roll" | "pitch" | "yaw">("roll");
   const [material, setMaterial] = useState("0");
-  const [impN, setImpN] = useState(false);
-  const [impP, setImpP] = useState(false);
-  const [impE, setImpE] = useState(false);
+  const [impN, setImpN] = useState("0");
+  const [impP, setImpP] = useState("0");
+  const [impE, setImpE] = useState("0");
   const [checkOverlap, setCheckOverlap] = useState(true);
   const [confirmVoid, setConfirmVoid] = useState(false);
 
@@ -97,6 +102,29 @@ export default function QuickCellForm({
           radius: num(rcc.r),
           rings: intPos(rcc.rings),
           segments: intPos(rcc.segments),
+        },
+      };
+    }
+    if (shape === "hex") {
+      return {
+        shape,
+        config: {
+          center: [num(hex.cx), num(hex.cy), num(hex.cz)],
+          axis: [num(hex.hx), num(hex.hy), num(hex.hz)],
+          radius: num(hex.r),
+          rings: intPos(hex.rings),
+          segments: intPos(hex.segments),
+        },
+      };
+    }
+    if (shape === "tet") {
+      return {
+        shape,
+        config: {
+          p1: [num(tet.p1x), num(tet.p1y), num(tet.p1z)],
+          p2: [num(tet.p2x), num(tet.p2y), num(tet.p2z)],
+          p3: [num(tet.p3x), num(tet.p3y), num(tet.p3z)],
+          p4: [num(tet.p4x), num(tet.p4y), num(tet.p4z)],
         },
       };
     }
@@ -174,12 +202,40 @@ export default function QuickCellForm({
       onClick: () => setShape(s),
     }, label);
 
+  const impInput = (label: string, value: string, set: (v: string) => void) =>
+    React.createElement(React.Fragment, null,
+      React.createElement("label", { style: { fontSize: 11, color: "var(--text-secondary)", flexShrink: 0 } }, label),
+      React.createElement("input", {
+        style: { ...style.inp, width: 42, height: 26, textAlign: "center", flexShrink: 0 },
+        value, placeholder: "0",
+        onChange: (e: React.ChangeEvent<HTMLInputElement>) => set(e.target.value),
+      }),
+    );
+
   const inputGroup = () => {
-    if (shape === "rcc") {
+    if (shape === "rcc" || shape === "hex") {
+      const vals = shape === "rcc" ? rcc : hex;
+      const set = shape === "rcc"
+        ? (k: string, v: string) => setRcc((p) => ({ ...p, [k]: v }))
+        : (k: string, v: string) => setHex((p) => ({ ...p, [k]: v }));
       return React.createElement(React.Fragment, null,
-        numRow("底面中心", [{ key: "cx", ph: "X" }, { key: "cy", ph: "Y" }, { key: "cz", ph: "Z" }], rcc, (k, v) => setRcc((p) => ({ ...p, [k]: v }))),
-        numRow("轴向量", [{ key: "hx", ph: "HX" }, { key: "hy", ph: "HY" }, { key: "hz", ph: "HZ" }], rcc, (k, v) => setRcc((p) => ({ ...p, [k]: v }))),
-        numRow("半径 / 切分", [{ key: "r", ph: "半径" }, { key: "rings", ph: "环数 N" }, { key: "segments", ph: "段数 M" }], rcc, (k, v) => setRcc((p) => ({ ...p, [k]: v }))),
+        numRow("底面中心", [{ key: "cx", ph: "X" }, { key: "cy", ph: "Y" }, { key: "cz", ph: "Z" }], vals, set),
+        numRow("轴向量", [{ key: "hx", ph: "HX" }, { key: "hy", ph: "HY" }, { key: "hz", ph: "HZ" }], vals, set),
+        numRow("半径 / 切分", [{ key: "r", ph: "半径" }, { key: "rings", ph: "环数 N" }, { key: "segments", ph: "段数 M" }], vals, set),
+      );
+    }
+    if (shape === "tet") {
+      const vertex = (label: string, kx: string, ky: string, kz: string) => numRow(
+        label,
+        [{ key: kx, ph: "X" }, { key: ky, ph: "Y" }, { key: kz, ph: "Z" }],
+        tet,
+        (k, v) => setTet((p) => ({ ...p, [k]: v })),
+      );
+      return React.createElement(React.Fragment, null,
+        vertex("顶点 1", "p1x", "p1y", "p1z"),
+        vertex("顶点 2", "p2x", "p2y", "p2z"),
+        vertex("顶点 3", "p3x", "p3y", "p3z"),
+        vertex("顶点 4", "p4x", "p4y", "p4z"),
       );
     }
     if (shape === "sph") {
@@ -234,6 +290,8 @@ export default function QuickCellForm({
       segBtn("rcc", "圆柱 RCC"),
       segBtn("rpp", "六面体 RPP"),
       segBtn("sph", "球 SPH"),
+      segBtn("hex", "六棱柱 RHP"),
+      segBtn("tet", "四面体 TET"),
     ),
     inputGroup(),
     React.createElement("div", { style: { ...style.row, marginTop: 8 } },
@@ -249,15 +307,12 @@ export default function QuickCellForm({
           materials.map((m) => React.createElement("option", { key: m.number, value: String(m.number) }, `M${m.number}${m.comment ? " — " + m.comment : ""}`)),
         ),
       ),
-      React.createElement("div", { style: { ...style.grp, maxWidth: 130 } },
-        React.createElement("label", { style: style.lbl }, "IMP（勾选=0，不勾选按基础页填1）"),
-        React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", height: 28 } },
-          React.createElement("label", { style: { fontSize: 11, color: "var(--text-secondary)", display: "flex", gap: 3, alignItems: "center" } },
-            React.createElement("input", { type: "checkbox", checked: impN, onChange: (e) => setImpN(e.target.checked) }), "N"),
-          React.createElement("label", { style: { fontSize: 11, color: "var(--text-secondary)", display: "flex", gap: 3, alignItems: "center" } },
-            React.createElement("input", { type: "checkbox", checked: impP, onChange: (e) => setImpP(e.target.checked) }), "P"),
-          React.createElement("label", { style: { fontSize: 11, color: "var(--text-secondary)", display: "flex", gap: 3, alignItems: "center" } },
-            React.createElement("input", { type: "checkbox", checked: impE, onChange: (e) => setImpE(e.target.checked) }), "E"),
+      React.createElement("div", { style: { ...style.grp, maxWidth: 200 } },
+        React.createElement("label", { style: style.lbl }, "IMP（默认 0；留空按基础页填1）"),
+        React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", height: 28 } },
+          impInput("N", impN, setImpN),
+          impInput("P", impP, setImpP),
+          impInput("E", impE, setImpE),
         ),
       ),
       React.createElement("div", { style: { ...style.grp, maxWidth: 170 } },

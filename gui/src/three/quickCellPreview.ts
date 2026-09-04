@@ -5,7 +5,7 @@
  * 不请求后端、不加载 STL；配合弹窗的按需渲染，实时跟手不卡。
  */
 import * as THREE from "three";
-import { eulerRotation, type RccConfig, type RppConfig, type SphConfig, type QuickShape } from "../utils/quickCell";
+import { eulerRotation, hexRadialBasis, type RccConfig, type RppConfig, type SphConfig, type HexConfig, type TetConfig, type QuickShape } from "../utils/quickCell";
 import { getMatColor } from "../utils/materialColors";
 
 const AXIS_X = new THREE.Vector3(1, 0, 0);
@@ -193,10 +193,68 @@ function buildRpp(group: THREE.Group, c: RppConfig, color: number): void {
   addAxes(group, ORIGIN, AXIS_X.clone().multiplyScalar(alen), AXIS_Y.clone().multiplyScalar(alen), AXIS_Z.clone().multiplyScalar(alen));
 }
 
-export function buildQuickCellPreview(shape: QuickShape, config: RccConfig | RppConfig | SphConfig, color = 0x66ccff): QuickCellPreview {
+function buildHex(group: THREE.Group, c: HexConfig, color: number): void {
+  const base = new THREE.Vector3(...c.center);
+  const ax = new THREE.Vector3(...c.axis);
+  const top = base.clone().add(ax);
+  const n = ax.clone().normalize();
+  const R = c.radius;
+  const [e1a, e2a] = hexRadialBasis(c.axis);
+  const e1 = new THREE.Vector3(...e1a);
+  const e2 = new THREE.Vector3(...e2a);
+
+  // 顶点在 30°+k·60°（e1 为 0° 基线），外接半径 R；与生成的 RHP（R1=apothem 沿 e1）一致
+  const hexPts = (center: THREE.Vector3, radius: number): THREE.Vector3[] => {
+    const pts: THREE.Vector3[] = [];
+    for (let k = 0; k < 6; k++) {
+      const ang = Math.PI / 6 + (k / 6) * Math.PI * 2;
+      pts.push(
+        center.clone()
+          .addScaledVector(e1, Math.cos(ang) * radius)
+          .addScaledVector(e2, Math.sin(ang) * radius),
+      );
+    }
+    return pts;
+  };
+
+  // 外形：底面/顶面六边形 + 6 竖棱
+  const bp = hexPts(base, R);
+  const tp = hexPts(top, R);
+  addLoop(group, bp, color, 0.9);
+  addLoop(group, tp, color, 0.9);
+  for (let k = 0; k < 6; k++) addLine(group, [bp[k], tp[k]], color, 0.7);
+
+  // 同心环：底面位置画各层六边形（半径 R·k/rings）
+  for (let k = 1; k <= c.rings; k++) {
+    addLoop(group, hexPts(base, (R * k) / c.rings), color, 0.55);
+  }
+  // 轴向段切分：每段边界画最大外形六边形
+  for (let k = 1; k < c.segments; k++) {
+    const pos = base.clone().addScaledVector(n, (len(c.axis) * k) / c.segments);
+    addLoop(group, hexPts(pos, R), color, 0.55);
+  }
+
+  const alen = axisLenFor(base, Math.max(R * 2, len(c.axis)));
+  addAxes(group, ORIGIN, AXIS_X.clone().multiplyScalar(alen), AXIS_Y.clone().multiplyScalar(alen), AXIS_Z.clone().multiplyScalar(alen));
+}
+
+function buildTet(group: THREE.Group, c: TetConfig, color: number): void {
+  const P = [c.p1, c.p2, c.p3, c.p4].map((p) => new THREE.Vector3(...p));
+  const edges: [number, number][] = [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]];
+  edges.forEach(([a, b]) => addLine(group, [P[a], P[b]], color, 0.9));
+  const box = new THREE.Box3().setFromPoints(P);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const alen = axisLenFor(center, Math.max(size.x, size.y, size.z));
+  addAxes(group, ORIGIN, AXIS_X.clone().multiplyScalar(alen), AXIS_Y.clone().multiplyScalar(alen), AXIS_Z.clone().multiplyScalar(alen));
+}
+
+export function buildQuickCellPreview(shape: QuickShape, config: RccConfig | RppConfig | SphConfig | HexConfig | TetConfig, color = 0x66ccff): QuickCellPreview {
   const group = new THREE.Group();
   if (shape === "rcc") buildRcc(group, config as RccConfig, color);
   else if (shape === "sph") buildSph(group, config as SphConfig, color);
+  else if (shape === "hex") buildHex(group, config as HexConfig, color);
+  else if (shape === "tet") buildTet(group, config as TetConfig, color);
   else buildRpp(group, config as RppConfig, color);
   return {
     group,

@@ -11,6 +11,10 @@ argv 分派：
                      路径再启第二个 5001（端口冲突挂起）。
   --ptrac-worker    以 ptrac 子进程 worker 模式运行（stdin JSON → stdout JSON，
                      照 --meshtal-worker，契约 ptrac-visualization.md v2 §3）。
+  --mcp-server      以 inputcard-mcp 的 MCP server 模式运行（本地 stdio，供支持
+                     MCP 的 AI 客户端按需拉起；不启动 5001）。仅在传此参数时才
+                     import mcp 依赖（inputcard_mcp.server 顶层 import FastMCP），
+                     主程序 api_server 路径不触碰 mcp，避免其缺失连带崩后端。
 """
 import sys, os
 
@@ -44,6 +48,12 @@ if __name__ == "__main__":
         # ptrac 子进程 worker：stdin JSON → stdout JSON，完成后退出，不启 HTTP
         from ptrac._ptrac_worker import main as _ptrac_worker_main
         _ptrac_worker_main()
+        sys.exit(0)
+
+    if "--mcp-server" in sys.argv:
+        # inputcard-mcp 本地 stdio MCP server（仅此时才 import mcp/FastMCP）
+        from inputcard_mcp.server import main as _mcp_main
+        _mcp_main()
         sys.exit(0)
 
     import api_server  # noqa: E402

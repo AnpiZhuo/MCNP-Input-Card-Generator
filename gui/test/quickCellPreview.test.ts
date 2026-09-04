@@ -40,6 +40,10 @@ describe("快捷建栅元线框预览（RPP）", () => {
     frame("rpp", { size: [2, 2, 2], center: [0, 0, 0], angles: [0, 0, 0], nx: 2, ny: 2, nz: 2 });
     frame("rpp", { size: [2, 2, 2], center: [10, 0, 0], angles: [0, 0, Math.PI / 2], nx: 2, ny: 1, nz: 1 });
     frame("rpp", { size: [2, 4, 6], center: [0, 0, 5], angles: [0, Math.PI / 6, Math.PI / 4], nx: 2, ny: 3, nz: 4 });
+    frame("hex", { center: [0, 0, 0], axis: [0, 0, 10], radius: 2, rings: 2, segments: 3 });
+    frame("hex", { center: [5, 0, 0], axis: [0, 1, 1], radius: 1.5, rings: 1, segments: 2 });
+    frame("tet", { p1: [0, 0, 0], p2: [1, 0, 0], p3: [0, 1, 0], p4: [0, 0, 1] });
+    frame("tet", { p1: [0, 0, 0], p2: [4, 0, 0], p3: [2, 3, 0], p4: [2, 1, 5] });
   });
 
   it("2×2×2 切分矩形跨满截面（回归：曾只画中心象限，看不出 8 个立方体）", () => {

@@ -17,11 +17,11 @@
  * - TR：与 cell 同理（无则 1 起；有则取最大 TR 编号 + 1）
  *
  * 生成的 cell 卡：材料号（默认 0 真空）、密度（材料卡有则自动带出）、
- * imp:n/p/e（勾选写 0=杀粒子；不勾选按基础页粒子模式填 1，未启用模式留空）、
+ * imp:n/p/e（数值直接写 IMP:N=值；留空按基础页粒子模式填 1，未启用模式留空）、
  * 注释；其余高级参数留空。
  */
 
-export type QuickShape = "rcc" | "rpp" | "sph";
+export type QuickShape = "rcc" | "rpp" | "sph" | "hex" | "tet";
 
 export interface RccConfig {
   center: [number, number, number];
@@ -49,6 +49,28 @@ export interface SphConfig {
   shells: number;     // 从内向外等距球壳数 K（第 1 层为实心球）
 }
 
+/** 六棱柱（RHP 宏体）：设置与 RCC 圆柱一致（底面中心 + 轴向向量 + 外接半径），程序自行算面 */
+export interface HexConfig {
+  /** 底面中心（RHP V） */
+  center: [number, number, number];
+  /** 轴向向量，底面→顶面（RHP H）；|axis| = 高度 */
+  axis: [number, number, number];
+  /** 外接半径（圆心到顶点）；apothem = radius·√3/2 */
+  radius: number;
+  /** 同心六棱柱层数 N（apothem 等分） */
+  rings: number;
+  /** 轴向段数 M */
+  segments: number;
+}
+
+/** 四面体：用户输入 4 个顶点坐标，程序自行算 4 个面 */
+export interface TetConfig {
+  p1: [number, number, number];
+  p2: [number, number, number];
+  p3: [number, number, number];
+  p4: [number, number, number];
+}
+
 export interface QuickCellContext {
   surfacesText: string;
   trCardsText: string;
@@ -58,9 +80,10 @@ export interface QuickCellContext {
   materials?: { number: number; density?: string }[];
   /** 生成的栅元材料号（默认 "0" 真空） */
   material?: string;
-  impN?: boolean;
-  impP?: boolean;
-  impE?: boolean;
+  /** 各粒子的重要性数值（如 "0"、"1"）：非空写在栅元卡（IMP:N=值）；留空则按模式填 1 */
+  impN?: string;
+  impP?: string;
+  impE?: string;
   /** 基础页启用的粒子模式（N/P/E）——不勾选 imp 时按此填 1 */
   modeN?: boolean;
   modeP?: boolean;
@@ -315,16 +338,57 @@ function unit(a: number[]): number[] {
   return l > 1e-12 ? scale(a, 1 / l) : [0, 0, 0];
 }
 
+function cross(a: number[], b: number[]): number[] {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+
+/** 四面体体积（|det|/6）；四点共面/退化 ≈ 0 */
+function tetVolume(p1: number[], p2: number[], p3: number[], p4: number[]): number {
+  const ab = sub(p2, p1);
+  const ac = sub(p3, p1);
+  const ad = sub(p4, p1);
+  return Math.abs(dot(ac, cross(ab, ad))) / 6;
+}
+
+/**
+ * 六棱柱横截面基：返回两个正交单位向量 [e1, e2] 均 ⊥ 轴向。
+ * e1 = RHP R1 方向（第一侧面法向，apothem 沿 e1）；顶点位于 30°+k·60°（e1 为 0° 基线），
+ * 与 hexPrism / RHP 卡约定一致。轴向退化（近似平行某基轴）时退避到另一基轴。
+ */
+export function hexRadialBasis(axis: number[]): [number[], number[]] {
+  const u = unit(axis);
+  let e1 = sub([1, 0, 0], scale(u, dot([1, 0, 0], u)));
+  if (len(e1) < 1e-9) e1 = sub([0, 1, 0], scale(u, dot([0, 1, 0], u)));
+  e1 = unit(e1);
+  const e2 = unit(cross(u, e1));
+  return [e1, e2];
+}
+
 /* ── 校验 ──────────────────────────────────────────────── */
 
 /** 返回错误信息（合法返回 null） */
-export function validateQuickCell(shape: QuickShape, config: RccConfig | RppConfig | SphConfig): string | null {
+export function validateQuickCell(shape: QuickShape, config: RccConfig | RppConfig | SphConfig | HexConfig | TetConfig): string | null {
   if (shape === "rcc") {
     const c = config as RccConfig;
     if (!(c.radius > 0)) return "半径必须 > 0";
     if (len(c.axis) < 1e-9) return "轴向向量不能为零向量";
     if (!Number.isInteger(c.rings) || c.rings < 1) return "环数必须是 ≥1 的整数";
     if (!Number.isInteger(c.segments) || c.segments < 1) return "段数必须是 ≥1 的整数";
+    return null;
+  }
+  if (shape === "hex") {
+    const c = config as HexConfig;
+    if (!(c.radius > 0)) return "半径必须 > 0";
+    if (len(c.axis) < 1e-9) return "轴向向量不能为零向量";
+    if (!Number.isInteger(c.rings) || c.rings < 1) return "环数必须是 ≥1 的整数";
+    if (!Number.isInteger(c.segments) || c.segments < 1) return "段数必须是 ≥1 的整数";
+    return null;
+  }
+  if (shape === "tet") {
+    const c = config as TetConfig;
+    const pts = [c.p1, c.p2, c.p3, c.p4];
+    if (!pts.every((p) => p.every((v) => Number.isFinite(v)))) return "四点坐标必须是有效数字";
+    if (tetVolume(c.p1, c.p2, c.p3, c.p4) < 1e-9) return "四点不能共面/退化（体积为 0）";
     return null;
   }
   if (shape === "sph") {
@@ -345,10 +409,17 @@ export function validateQuickCell(shape: QuickShape, config: RccConfig | RppConf
 }
 
 /** 生成的曲面/栅元数量（弹窗实时显示用） */
-export function quickCellCounts(shape: QuickShape, config: RccConfig | RppConfig | SphConfig): QuickCellCounts {
+export function quickCellCounts(shape: QuickShape, config: RccConfig | RppConfig | SphConfig | HexConfig | TetConfig): QuickCellCounts {
   if (shape === "rcc") {
     const c = config as RccConfig;
     return { surfaceCount: c.rings + Math.max(0, c.segments - 1), cellCount: c.rings * c.segments };
+  }
+  if (shape === "hex") {
+    const c = config as HexConfig;
+    return { surfaceCount: c.rings + Math.max(0, c.segments - 1), cellCount: c.rings * c.segments };
+  }
+  if (shape === "tet") {
+    return { surfaceCount: 4, cellCount: 1 };
   }
   if (shape === "sph") {
     const c = config as SphConfig;
@@ -375,14 +446,19 @@ export function densityForMaterial(mat: string, materials?: { number: number; de
 
 function cellBase(ctx: QuickCellContext, num: number, surfaces: string, comment: string): GeneratedCell {
   const mat = (ctx.material ?? "0").trim();
+  const imp = (v: string | undefined, mode?: boolean): string => {
+    // 显式输入数值（含 0）→ 写 IMP:N=值；留空/未提供 → 按基础页模式填 1，未启用留空
+    if (v !== undefined && v.trim() !== "") return v.trim();
+    return mode ? "1" : "";
+  };
   return {
     num: String(num),
     mat,
     density: mat === "0" ? "" : densityForMaterial(mat, ctx.materials),
     surfaces,
-    impN: ctx.impN ? "0" : (ctx.modeN ? "1" : ""),
-    impP: ctx.impP ? "0" : (ctx.modeP ? "1" : ""),
-    impE: ctx.impE ? "0" : (ctx.modeE ? "1" : ""),
+    impN: imp(ctx.impN, ctx.modeN),
+    impP: imp(ctx.impP, ctx.modeP),
+    impE: imp(ctx.impE, ctx.modeE),
     comment,
   };
 }
@@ -610,9 +686,82 @@ function generateRpp(c: RppConfig, ctx: QuickCellContext): QuickCellResult {
   };
 }
 
+/** 六棱柱（RHP 宏体）：与 RCC 同心环 + 轴向段一致，仅用 RHP 宏体代替圆柱 */
+function generateHex(c: HexConfig, ctx: QuickCellContext): QuickCellResult {
+  let surf = nextSurfaceNumber(ctx.surfacesText);
+  let cell = nextCellNumber(ctx.cellNumbers);
+  const [e1] = hexRadialBasis(c.axis);
+  const u = unit(c.axis);
+  const axisLen = len(c.axis);
+  const baseD = dot(u, c.center);
+  const apothemBase = (c.radius * Math.sqrt(3)) / 2; // apothem = 外接半径·√3/2
+  const lines: string[] = [`c ---- 快捷建栅元：RHP 六棱柱（环${c.rings} × 段${c.segments}） ----`];
+  const rhpNums: number[] = [];
+  for (let k = 1; k <= c.rings; k++) {
+    const num = surf++;
+    rhpNums.push(num);
+    const apo = (apothemBase * k) / c.rings;
+    lines.push(
+      `${num} rhp ${fmtNum(c.center[0])} ${fmtNum(c.center[1])} ${fmtNum(c.center[2])}  ` +
+      `${fmtNum(c.axis[0])} ${fmtNum(c.axis[1])} ${fmtNum(c.axis[2])}  ` +
+      `${fmtNum(e1[0] * apo)} ${fmtNum(e1[1] * apo)} ${fmtNum(e1[2] * apo)}`,
+    );
+  }
+  const pNums: number[] = [];
+  if (c.segments > 1) {
+    for (let k = 1; k < c.segments; k++) {
+      const num = surf++;
+      pNums.push(num);
+      const d = baseD + (axisLen * k) / c.segments;
+      lines.push(`${num} p ${fmtNum(u[0])} ${fmtNum(u[1])} ${fmtNum(u[2])} ${fmtNum(d)}`);
+    }
+  }
+  const cells: GeneratedCell[] = [];
+  for (let i = 1; i <= c.rings; i++) {
+    const ringExpr = i === 1 ? `-${rhpNums[0]}` : `+${rhpNums[i - 2]} -${rhpNums[i - 1]}`;
+    for (let k = 1; k <= c.segments; k++) {
+      let segExpr = "";
+      if (c.segments > 1) {
+        if (k === 1) segExpr = `-${pNums[0]}`;
+        else if (k === c.segments) segExpr = `+${pNums[k - 2]}`;
+        else segExpr = `+${pNums[k - 2]} -${pNums[k - 1]}`;
+      }
+      cells.push(cellBase(ctx, cell++, joinExpr([ringExpr, segExpr]), `RHP 环${i}/${c.rings} 段${k}/${c.segments}`));
+    }
+  }
+  return { surfacesText: lines.join("\n") + "\n", trCardsText: "", cells, surfaceCount: lines.length - 1, cellCount: cells.length };
+}
+
+/** 四面体：4 点输入，程序算 4 个三角面（法向朝向体内），单个栅元 */
+function generateTet(c: TetConfig, ctx: QuickCellContext): QuickCellResult {
+  const pts = [c.p1, c.p2, c.p3, c.p4];
+  let surf = nextSurfaceNumber(ctx.surfacesText);
+  let cell = nextCellNumber(ctx.cellNumbers);
+  const lines: string[] = [`c ---- 快捷建栅元：TET 四面体（4 顶点） ----`];
+  // 每面由 3 个顶点定义，第 4 顶点为体内参考点（凸四面体恒在面内侧）
+  const faces: [number, number, number, number][] = [
+    [0, 1, 2, 3], [0, 1, 3, 2], [0, 2, 3, 1], [1, 2, 3, 0],
+  ];
+  const halfspace: string[] = [];
+  for (const [a, b, cc, d] of faces) {
+    const A = pts[a], B = pts[b], C = pts[cc], D = pts[d];
+    let n = cross(sub(B, A), sub(C, A));
+    if (dot(n, sub(D, A)) < 0) n = scale(n, -1); // 定向朝体内
+    n = unit(n);
+    const dn = dot(n, A);
+    const num = surf++;
+    lines.push(`${num} p ${fmtNum(n[0])} ${fmtNum(n[1])} ${fmtNum(n[2])} ${fmtNum(dn)}`);
+    halfspace.push(`+${num}`);
+  }
+  const cells: GeneratedCell[] = [cellBase(ctx, cell, halfspace.join(" "), "TET 四面体")];
+  return { surfacesText: lines.join("\n") + "\n", trCardsText: "", cells, surfaceCount: lines.length - 1, cellCount: cells.length };
+}
+
 /** 生成快捷栅元（假定已通过 validateQuickCell；非法配置直接抛错） */
-export function generateQuickCell(shape: QuickShape, config: RccConfig | RppConfig | SphConfig, ctx: QuickCellContext): QuickCellResult {
+export function generateQuickCell(shape: QuickShape, config: RccConfig | RppConfig | SphConfig | HexConfig | TetConfig, ctx: QuickCellContext): QuickCellResult {
   if (shape === "rcc") return generateRcc(config as RccConfig, ctx);
   if (shape === "sph") return generateSph(config as SphConfig, ctx);
+  if (shape === "hex") return generateHex(config as HexConfig, ctx);
+  if (shape === "tet") return generateTet(config as TetConfig, ctx);
   return generateRpp(config as RppConfig, ctx);
 }
