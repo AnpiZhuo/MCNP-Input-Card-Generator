@@ -7,7 +7,7 @@
   },
   "package": {
     "productName": "MCNP 输入卡生成器",
-    "version": "1.7.4"
+    "version": "1.7.5"
   },
   "tauri": {
     "allowlist": {
