@@ -14,6 +14,23 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
+## S1（当前批次）3D 预览重合检测 fill 修复（2026-09-04，已实现，未提交/未打包）
+- **批次目标**：修 3D 预览重合检测在含 fill 卡、尤其 fill 套 fill（BEAVRS 全堆芯）时"几乎失效/乱报错"。根因=`Preview3D.runOverlapCheck` 请求只传 number/material/density/surface_expr，丢掉 `u/fill/lat/fill_grid/trcl/render/imp`，使后端三道防线全失效：①`_cell_u_of` universe 排除失效（pin 在本地原点互相比较→跨 universe 假重叠）；②`build_cells_data` 的 fill/graveyard 排除失效（格阵 cell/fill 容器/graveyard/无界 void 被当实体→无界 void 铺满 bound 盒全重叠）；③`_lattice_pin_fit_overlaps` 找不到 fill_grid→装配检测恒 0。
+- **✅ 修复**：前端 `runOverlapCheck`+快捷建 `existingCells` 补传全部语义字段（Preview3D.tsx props 加 impN/impP/impE；GeometryTab.tsx 两处调用点转发 impN/impP/impE）；后端 `_handle_quick_add_check` 与 check-overlap 同口径用 `_cell_u_of` 过滤 universe 栅元。
+- **✅ 验证**：17×17 卡 修复前 57 条假重叠→修复后 0 重叠/0 unresolved（universe/fill/graveyard 全排除）；BEAVRS 全堆芯 331 栅元→仅 10 个真实结构栅元（barrel/水/RPV）参与布尔，0 重叠。门禁：overlap 单测 15 / lattice+parser 92 / 集成 roundtrip+api_contract 42 / vitest **546/0** / tsc EXIT 0 / vite build EXIT 0。诊断脚本 `tools/diag_overlap_17x17.py`（可切 17×17/BEAVRS）。
+- **改动清单**：`gui/src/components/Preview3D.tsx`、`gui/src/components/GeometryTab.tsx`、`gui/backend/api_server.py`（仅 `_handle_quick_add_check` 一处 hunk）、`tools/diag_overlap_17x17.py`(新)。
+- **⚠️ 待复验**：17×17 / BEAVRS 全堆芯在 3D 预览重合面板应为 0 重叠；非格阵 deck（graveyard imp=0）重合检测不再被 graveyard 全盒假重叠污染。
+
+## S1（当前批次）*fmesh 能量沉积 + 3D 可视化（2026-09-04，已实现，未提交/未打包）
+- **批次目标**：在现有 meshtal 体积可视化链路上支持 `*fmesh`（MCNP 能量沉积网格，结果 **MeV/g**）的解析与 3D 可视化，并落地待办 P1#5 里的「切面 + 导出（PNG/SVG + CSV）」。用户拍板：① 能量沉积开关放 **FMeshForm「类型」下拉**；②「有更好的就用更好的依赖」——本次判断复用现有链路+浏览器原生能力可达标，**未引入新依赖**。
+- **✅ `*fmesh` 卡体（前端+后端）**：`app/models.py` `FmeshDefinition` 加 `fn_prefix: str`（""=通量 / "*"=能量沉积，照 `TallyDefinition.fn_prefix` 先例）；`app/meshtal/fmesh_parser.py` `_FAMILY_RE` 加 `^(\*?)` 前缀组（parse 设 fn_prefix / `_card_lines` 回放 `*FMESH14:N` / `_has_structured` 加 fn_prefix / CMESH 降级清 fn_prefix）；`gui/backend/api_server.py` `_fmesh_from_list` 传 fn_prefix；前端 `gui/src/volume/fmeshState.ts` `FmeshRow.fn_prefix` + `cardTextToFmesh`（前缀解析）/`cardLines`（发射）/`buildFmeshPayload`/`fmeshDefsToRows`；`FMeshForm.tsx` 类型下拉改「FMESH（通量）/ *FMESH（能量沉积 MeV/g）」→ 写 fn_prefix。
+- **✅ 单位标签（MeV/g）**：`gui/src/volume/openVolume3DWindow.ts` 新增纯函数 `isDepositionTally(fmesh, tallyNumber)`（卡号匹配 + fn_prefix="*"）判定能量沉积 → 开窗桥带 `unit`（"MeV/g（能量沉积）" / "归一化计数"）；`ResultWindow.tsx` 读 unit 传 `VolumeControlPanel` → `ColorLegend` 单位标签（图例原有 unit prop）。检测**靠前端卡体匹配**（用户自建 `*fmesh` 卡主场景）；外部无卡体的 meshtal 默认「归一化计数」（不做 meshtal 头识别——MCNP 是否印标志未确认，避免依赖不确定格式）。
+- **✅ 切面 + 导出（PNG/SVG + CSV）**：新增 `gui/src/volume/sliceExport.ts` 纯函数（`sliceFrame` 单轴切面 2D 热图 / `frameToCsv` 整帧体素 / `sliceToSvg` 矢量 SVG）+ `gui/src/volume/SliceExportPanel.tsx`（轴+切片滑块+canvas 预览+导出按钮）；`ResultWindow.tsx` 跟踪当前帧 `currentFrame` 供切面。全部浏览器原生（canvas.toDataURL/Blob），零新依赖。
+- **门禁全绿**：后端 pytest **741/0/0**（基线 737 + 新增；`test_fmesh_parser` +2 个 `*fmesh` 用例 22 过；无回退）；前端 vitest **546/0**（69 文件全过，新增 fmeshState +2 / sliceExport +6 / openVolume3DWindow +3 = 11；**⚠️ 已知 flaky**：colorize 128³<50ms 偶发负载失败，隔离单跑绿，非回归）；tsc EXIT 0；vite build EXIT 0（产物 `dist/` 生成，此前 exit 1 是 PowerShell 把 chunk 大小警告当 stderr 假象）。
+- **⚠️ 5001 端口**：pytest 前 terminate 打包部署版 sidecar（`D:\MCNP\MCNP输入卡生成器\python.exe -u backend/mcnp_bridge.py`，PID 10700 占 5001）释放端口。**若用户在跑打包版 GUI，需重启 `MCNP输入卡生成器.exe` 恢复后端**。
+- **改动清单**（源码）：`app/models.py`、`app/meshtal/fmesh_parser.py`、`gui/backend/api_server.py`、`gui/src/volume/fmeshState.ts`、`gui/src/volume/FMeshForm.tsx`、`gui/src/volume/openVolume3DWindow.ts`、`gui/src/volume/ResultWindow.tsx`、`gui/src/volume/sliceExport.ts`(新)、`gui/src/volume/SliceExportPanel.tsx`(新)、`gui/src/components/OutputTab.tsx`、`tests/parser/test_fmesh_parser.py`、`gui/test/volume/fmeshState.test.ts`、`gui/test/volume/sliceExport.test.ts`(新)、`gui/test/volume/openVolume3DWindow.test.ts`(新)。
+- **⚠️ 待用户复验**：类型下拉选「*FMESH（能量沉积）」→ 生成卡为 `*FMESH14:N`？导入 `*fmesh` INP → 类型下拉显示「*FMESH（能量沉积）」？开 3D 结果窗口图例显示「MeV/g（能量沉积）」？切面/导出 PNG/SVG/CSV 可用？F6/F7（cell 能量沉积）未做（非网格、本批范围外）。
+
 ## S1（当前批次）材料库深化（2026-08-30，已实现 + 已打包部署 v1.7.4）
 - **批次目标**：把材料库从 97 种静态预设升级为用户可编辑、可迁移、可自检的材料资产。
 - **后端**：`app/material_library.py` + `/api/material-library`(GET/save/delete/import/export)；持久化 `D:\MCNP\material\material_library.json`（D 盘不可写回落 `%APPDATA%\MCNP\material\`，原子写/防半写/损坏备份）；**custom + override** 模型；导入 JSON（无损）+ CSV（长格式带全 options/mtCard，按 key 分组/行交错正确/标量取首个非空），`dry_run` 预览 + 冲突三选（跳过/覆盖/改名）+ **内容完全一致自动跳过**（`apply_import` + `existing_entries` 比对）；xsdir 反向索引（缺库/后缀不匹配）+ 组成自洽校验（份额归一/正负号一致/密度/S(α,β)需含氢）。

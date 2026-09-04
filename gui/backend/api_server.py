@@ -1778,7 +1778,10 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 return
             surfs = parse_surfaces(surf_text)
             tr_cards = parse_tr_cards(tr_text)
-            all_cells = list(cell_list) + [
+            # 与 check-overlap 同口径：排除 universe 栅元（本地坐标会误报假重叠），
+            # 真实装配位置检查属格阵级（lattice-fit）。否则快捷建栅元在含 fill 卡
+            # 的 deck（尤甚 fill套fill）上会对本地原点 universe 误报重叠。
+            all_cells = list(c for c in cell_list if not _cell_u_of(c)) + [
                 {"kind": "cell", "cell": c} for c in new_cells]
             cells_data = build_cells_data(all_cells, include_void=True)
             engine = FreeCADEngine(freecad_bin)

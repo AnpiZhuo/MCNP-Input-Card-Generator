@@ -209,6 +209,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
         comment: (c as any).cell.comment, render: (c as any).cell.render,
         u: (c as any).cell.u, fill: (c as any).cell.fill, lat: (c as any).cell.lat,
         trcl: (c as any).cell.trcl, fill_grid: (c as any).cell.fill_grid,
+        impN: (c as any).cell.impN, impP: (c as any).cell.impP, impE: (c as any).cell.impE,
       })),
       surfaces: surfText,
       trCards: trText,
@@ -779,7 +780,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
         </>)}
       </div>
       {doc && <DocViewer path={doc.path} title={doc.title} onClose={() => setDoc(null)} />}
-      {show3D && <Preview3D cells={cells.filter(c => c.kind === "cell").map(c => ({ num: c.cell.num, mat: c.cell.mat, density: c.cell.density, surfaces: c.cell.surfaces, comment: c.cell.comment, render: c.cell.render, u: c.cell.u, fill: c.cell.fill, lat: c.cell.lat, trcl: c.cell.trcl, fill_grid: c.cell.fill_grid }))} surfaces={surfText} trCards={trText} onClose={() => setShow3D(false)} onMaterialChange={handleCellMaterialChange} onQuickCellGenerate={handleQuickCellGenerate} />}
+      {show3D && <Preview3D cells={cells.filter(c => c.kind === "cell").map(c => ({ num: c.cell.num, mat: c.cell.mat, density: c.cell.density, surfaces: c.cell.surfaces, comment: c.cell.comment, render: c.cell.render, u: c.cell.u, fill: c.cell.fill, lat: c.cell.lat, trcl: c.cell.trcl, fill_grid: c.cell.fill_grid, impN: c.cell.impN, impP: c.cell.impP, impE: c.cell.impE }))} surfaces={surfText} trCards={trText} onClose={() => setShow3D(false)} onMaterialChange={handleCellMaterialChange} onQuickCellGenerate={handleQuickCellGenerate} />}
       {showStepDlg && <StepImportDialog onImport={handleStepImport} onClose={() => setShowStepDlg(false)} />}
       {fc.showDialog && <FloatingDialog title="⚠ 需要 FreeCAD" onClose={fc.closeDialog} width={460}
         footer={React.createElement("button", { className: "btn btn-primary btn-sm", onClick: fc.closeDialog }, "知道了")}>

@@ -52,7 +52,7 @@ interface CellView {
 }
 
 interface Preview3DProps {
-  cells: { num: string; mat: string; density?: string; surfaces?: string; comment?: string; render?: boolean; u?: string; fill?: string; lat?: string; trcl?: string; fill_grid?: string }[];
+  cells: { num: string; mat: string; density?: string; surfaces?: string; comment?: string; render?: boolean; u?: string; fill?: string; lat?: string; trcl?: string; fill_grid?: string; impN?: string; impP?: string; impE?: string }[];
   surfaces?: string;
   trCards?: string;
   onClose: () => void;
@@ -587,6 +587,18 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
             material: c.mat,
             density: (c as any).density || "",
             surface_expr: (c as any).surface_expr || (c as any).surfaces || "",
+            // 格阵/fill/重要性语义字段必须随请求传给后端，否则 universe 栅元
+            // 在本地原点被当绝对坐标比较 → 跨 universe 假重叠（fill套fill 尤甚），
+            // 且 fill/graveyard/lattice-fit 检测全部失效。
+            u: (c as any).u || "",
+            fill: (c as any).fill || "",
+            lat: (c as any).lat || "",
+            trcl: (c as any).trcl || "",
+            render: (c as any).render !== false,
+            fill_grid: (c as any).fill_grid || "",
+            imp_n: (c as any).impN || (c as any).imp_n || "",
+            imp_p: (c as any).impP || (c as any).imp_p || "",
+            imp_e: (c as any).impE || (c as any).imp_e || "",
           },
         })),
         tr_cards: p.trCards || "",
@@ -893,6 +905,15 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         material: c.mat,
         density: (c as any).density || "",
         surface_expr: (c as any).surfaces || (c as any).surface_expr || "",
+        u: (c as any).u || "",
+        fill: (c as any).fill || "",
+        lat: (c as any).lat || "",
+        trcl: (c as any).trcl || "",
+        render: (c as any).render !== false,
+        fill_grid: (c as any).fill_grid || "",
+        imp_n: (c as any).impN || (c as any).imp_n || "",
+        imp_p: (c as any).impP || (c as any).imp_p || "",
+        imp_e: (c as any).impE || (c as any).imp_e || "",
       },
     }));
     (async () => {
