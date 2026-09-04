@@ -56,5 +56,11 @@ if __name__ == "__main__":
         _mcp_main()
         sys.exit(0)
 
+    if "--mcp-http" in sys.argv:
+        # inputcard-mcp over HTTP：uvicorn /mcp + /workspace；AI 用 http://127.0.0.1:8100/mcp 连接
+        from inputcard_mcp.server import _mcp_http_main
+        _mcp_http_main()
+        sys.exit(0)
+
     import api_server  # noqa: E402
     api_server.main()

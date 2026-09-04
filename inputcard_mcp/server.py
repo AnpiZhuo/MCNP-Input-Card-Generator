@@ -89,15 +89,71 @@ def _sections_to_deck(sections: dict):
     return deck_from_json(d)
 
 
+# ── 把"该段整体替换"抽成单一实现（深模块，供 patch_section 与 workspace 共用）──
+def _apply_section_patch(deck, section, data):
+    if section == "basic":
+        deck.basic = _basic_from_dict(data or {})
+    elif section == "surfaces":
+        deck.surfaces = data if isinstance(data, str) else str(data)
+    elif section == "tr_cards":
+        deck.tr_cards = data if isinstance(data, str) else str(data)
+    elif section == "cells":
+        deck.cells = _cells_from_list(data if isinstance(data, list) else [])
+    elif section == "materials":
+        deck.materials = _materials_from_list(data if isinstance(data, list) else [])
+    elif section == "sources":
+        deck.sources = _sources_from_list(data if isinstance(data, list) else [])
+    elif section == "tally":
+        deck.tally = _tally_from_dict(data or {})
+    elif section == "advanced":
+        deck.adv = _adv_from_dict(data or {})
+    return deck
+
+
+# ── 当前工作区（有状态会话）──────────────
+# 程序前端把所有标签页合成的当前 deck 推到这里；MCP 工具在「不传 inp」时读写它。
+_WORKSPACE = {"revision": 0, "sections": None, "deck_text": ""}
+
+
+def _default_sections():
+    from models import DeckData
+    return _deck_to_sections(DeckData())
+
+
+def _ws_sections() -> dict:
+    if not isinstance(_WORKSPACE["sections"], dict):
+        _WORKSPACE["sections"] = _default_sections()
+    return _WORKSPACE["sections"]
+
+
+def _ws_deck():
+    return _sections_to_deck(_ws_sections())
+
+
+def _set_ws_sections(sections):
+    _WORKSPACE["sections"] = dict(sections or {})
+    _WORKSPACE["revision"] += 1
+    return _WORKSPACE["revision"]
+
+
+def _ws_state():
+    """给前端/AI 的当前工作区快照：sections + revision + 生成的 INP 文本。"""
+    sec = _ws_sections()
+    return {"revision": _WORKSPACE["revision"], "sections": sec}
+
+
 # ─────────────────────────────── 文档级读写 ───────────────────────────────
 
 @mcp.tool()
-def read_document(inp: str) -> dict:
-    """解析 MCNP 输入卡文本，返回**按语义段的**结构（sections：basic/surfaces/tr_cards/cells/materials/sources/tally/advanced + universe_comments）。
-    这是"读"入口，与 list_section/patch_section/generate_document **同一结构**：改 sections 某段后直接回传 generate_document 或 patch_section。
-    ⚠️ 本管线走结构化路径，**不建模 text mode / raw override**；文本模式段会被结构化为 deck 后可改，但生成时不保留该段的 raw 原文覆盖。"""
-    deck, warnings = parse_inp_text(inp)
-    return {"sections": _deck_to_sections(deck), "warnings": warnings}
+def read_document(inp: str | None = None) -> dict:
+    """读取输入卡的**按语义段**结构（sections）。两种用法：
+    - 传 inp（INP 文本）→ 解析并用该文档；
+    - **不传 inp → 读「程序当前工作区」**（前端所有标签页推上来的当前 deck，即你正在编辑的程序内容）。
+    返回 { sections, warnings }；sections 与 list_section/patch_section 同构。"""
+    if inp:
+        deck, warnings = parse_inp_text(inp)
+        return {"sections": _deck_to_sections(deck), "warnings": warnings}
+    return {"sections": _ws_sections(), "warnings": []}
 
 
 @mcp.tool()
@@ -118,44 +174,37 @@ def validate_document(inp: str) -> dict:
 
 
 @mcp.tool()
-def list_section(inp: str, section: str) -> dict:
-    """读取输入卡中**某一个语义段**的结构化值（snake_case，可直接在 list_section 读回、改、再回传 patch_section）。
-    section ∈ basic / surfaces / tr_cards / cells / materials / sources / tally / advanced。
-    这是按段查看现状的统一入口（替代 list_cells / list_materials 等）。"""
+def list_section(inp: str | None = None, section: str | None = None) -> dict:
+    """读取**某一个语义段**的结构化值。两种用法：
+    - 传 inp（INP 文本）→ 解析并用该文档；
+    - **不传 inp → 读「程序当前工作区」**的该段。
+    section ∈ basic / surfaces / tr_cards / cells / materials / sources / tally / advanced。"""
     if section not in _SECTIONS:
         raise ValueError(f"未知 section: {section}（可选 {', '.join(_SECTIONS)}）")
-    import dataclasses
-    deck, _ = parse_inp_text(inp)
-    d = dataclasses.asdict(deck)
-    return d.get("adv" if section == "advanced" else section)
+    if inp:
+        deck, _ = parse_inp_text(inp)
+        d = _deck_to_sections(deck)
+    else:
+        d = _ws_sections()
+    return d.get(section)
 
 
 @mcp.tool()
-def patch_section(inp: str, section: str, data: dict) -> str:
-    """整体替换输入卡中的**某一个语义段**并返回新 INP 文本（全量覆盖一段）。
-    section ∈ basic / surfaces / tr_cards / cells / materials / sources / tally / advanced；
-    data 为该段结构化值（用 list_section 读回再改，或按该段字段构造）。
-    内部：读入当前 deck → 用对应 _xxx_from_dict 替换该段 → 重新生成 INP。"""
+def patch_section(inp: str | None = None, section: str | None = None, data: dict | None = None) -> str:
+    """整体替换**某一个语义段**并返回新 INP 文本（全量覆盖一段）。两种用法：
+    - 传 inp（INP 文本）→ 改该文档并生成；
+    - **不传 inp → 改「程序当前工作区」**的该段，并更新工作区（前端界面随之变化）。
+    section ∈ basic / surfaces / tr_cards / cells / materials / sources / tally / advanced。"""
     if section not in _SECTIONS:
         raise ValueError(f"未知 section: {section}（可选 {', '.join(_SECTIONS)}）")
     data = data or {}
-    deck, _ = parse_inp_text(inp)
-    if section == "basic":
-        deck.basic = _basic_from_dict(data)
-    elif section == "surfaces":
-        deck.surfaces = data if isinstance(data, str) else str(data)
-    elif section == "tr_cards":
-        deck.tr_cards = data if isinstance(data, str) else str(data)
-    elif section == "cells":
-        deck.cells = _cells_from_list(data if isinstance(data, list) else [])
-    elif section == "materials":
-        deck.materials = _materials_from_list(data if isinstance(data, list) else [])
-    elif section == "sources":
-        deck.sources = _sources_from_list(data if isinstance(data, list) else [])
-    elif section == "tally":
-        deck.tally = _tally_from_dict(data)
-    elif section == "advanced":
-        deck.adv = _adv_from_dict(data)
+    if inp:
+        deck, _ = parse_inp_text(inp)
+        deck = _apply_section_patch(deck, section, data)
+        return _generate(deck)
+    deck = _ws_deck()
+    deck = _apply_section_patch(deck, section, data)
+    _set_ws_sections(_deck_to_sections(deck))
     return _generate(deck)
 
 
@@ -376,8 +425,47 @@ def add_shape(inp: str, shape: str, params: dict) -> dict:
             "cell_numbers": [n for n, _ in cell_exprs], "shape": shape}
 
 
+def _mcp_http_main(host="127.0.0.1", port=8100):
+    """MCP over HTTP：uvicorn 跑 FastMCP 于 /mcp，外加 /workspace 供前端同步「当前工作区」。
+
+    - /mcp（GET/POST，MCP 协议）：AI 客户端用 http://127.0.0.1:<port>/mcp 连接。
+    - /workspace（GET/PUT，纯 JSON）：前端把当前全部标签页 deck 推上来(PUT)，读当前工作区(GET，供回显)。
+    均共享同一进程的 _WORKSPACE → AI 经 /mcp 读写的就是前端推上来的「当前工作区」。
+    """
+    import uvicorn
+    from starlette.applications import Starlette
+    from starlette.routing import Route, Mount
+    from starlette.responses import JSONResponse
+    from starlette.middleware import Middleware
+    from starlette.middleware.cors import CORSMiddleware
+
+    async def get_ws(_request):
+        return JSONResponse(_ws_state())
+
+    async def put_ws(request):
+        body = await request.json()
+        sec = body.get("sections") if isinstance(body, dict) and "sections" in body else body
+        _set_ws_sections(sec)
+        return JSONResponse({"ok": True, "revision": _WORKSPACE["revision"]})
+
+    app = Starlette(routes=[
+        Route("/workspace", get_ws, methods=["GET"]),
+        Route("/workspace", put_ws, methods=["PUT"]),
+        Mount("/mcp", app=mcp.streamable_http_app()),
+    ], middleware=[Middleware(CORSMiddleware, allow_origins=["*"],
+                              allow_methods=["*"], allow_headers=["*"])])
+    uvicorn.run(app, host=host, port=port, log_level="warning")
+
+
 def main():
-    mcp.run()
+    if "--mcp-http" in sys.argv:
+        port = 8100
+        for a in sys.argv:
+            if a.startswith("--port="):
+                port = int(a.split("=", 1)[1])
+        _mcp_http_main(port=port)
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":
