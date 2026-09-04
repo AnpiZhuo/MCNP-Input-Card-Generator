@@ -33,6 +33,7 @@ from generator.parsers import parse_inp_text
 # 复用 api_server 的 deck ⇄ JSON 与各段映射（与 GUI 同一实现；其模块级只 import 核心引擎，xsdir 惰性）
 from api_server import (
     deck_from_json,
+    deck_to_frontend_dict,
     _basic_from_dict, _cells_from_list, _materials_from_list,
     _sources_from_list, _tally_from_dict, _adv_from_dict,
 )
@@ -440,12 +441,25 @@ def _mcp_http_main(host="127.0.0.1", port=8100):
     from starlette.middleware.cors import CORSMiddleware
 
     async def get_ws(_request):
-        return JSONResponse(_ws_state())
+        # 回显给前端：revision（用于判断 AI 是否改动）+ sections + 前端形态 deck（loadDeck 用）
+        return JSONResponse({
+            "revision": _WORKSPACE["revision"],
+            "sections": _ws_sections(),
+            "deck": deck_to_frontend_dict(_ws_deck()),
+        })
 
     async def put_ws(request):
+        # 前端把当前全部标签页 deck 推上来（前端 JSON 形态），后端转成 sessions 作权威
         body = await request.json()
-        sec = body.get("sections") if isinstance(body, dict) and "sections" in body else body
-        _set_ws_sections(sec)
+        if isinstance(body, dict):
+            if body.get("deck"):
+                _set_ws_sections(_deck_to_sections(deck_from_json(body["deck"])))
+            elif "sections" in body:
+                _set_ws_sections(body["sections"])
+            else:
+                _set_ws_sections(body)
+        else:
+            _set_ws_sections(body)
         return JSONResponse({"ok": True, "revision": _WORKSPACE["revision"]})
 
     app = Starlette(routes=[

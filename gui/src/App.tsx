@@ -10,6 +10,8 @@ import { generateInp } from "./utils/dataCollector";
 import { currentWindowLabel, clearStlSession } from "./utils/windows";
 
 import { DeckProvider, useDeck } from "./utils/DeckContext";
+import { useAiWorkspace } from "./hooks/useAiWorkspace";
+import AiAccessPanel from "./components/AiAccessPanel";
 import { normalizeImportedMaterials } from "./components/MaterialEditDialog";
 import { buildGridsFromTally, buildTallyFromGrids } from "./utils/gridState";
 import { buildFmeshPayload, fmeshDefsToRows } from "./volume/fmeshState";
@@ -79,6 +81,9 @@ function AppInner() {
     return () => { stopped = true; };
   }, []);
   const { deck, patch, loadDeck } = useDeck();
+  // AI 接入：当前工作区同步到 /workspace + 轮询回显 + 状态（MCP over HTTP）
+  const [aiOpen, setAiOpen] = useState(false);
+  const ai = useAiWorkspace(deck, (aiDeck: any) => loadDeck({ ...deck, ...aiDeck }));
 
   useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, [theme]);
   // 主题一变就持久化到独立键（清空工作区不影响主题）
@@ -408,6 +413,11 @@ function AppInner() {
             </span>
           </div>
           <div className="topbar-right">
+            <button className="btn btn-ghost btn-sm" onClick={() => setAiOpen(true)}
+              title="让外部分 agent 读/改本程序（MCP）"
+              style={{ color: ai.status === "ok" ? "#2e7d32" : "var(--text-secondary)" }}>
+              🤖 AI{ai.status === "ok" ? "" : " •"}
+            </button>
             <button className="btn btn-ghost btn-sm" onClick={handleSave} title="保存工作区到本地，关闭时也会自动保存">💾 保存</button>
             <button className="btn btn-ghost btn-sm" onClick={handleClear} title="清空所有输入内容" style={{ color: "var(--red)" }}>🧹 清空</button>
             <button className="btn btn-primary btn-sm" onClick={handleGenerate} disabled={generating}>
@@ -434,6 +444,7 @@ function AppInner() {
         )}
       </div>
       {preview && <PreviewDialog content={preview} onClose={() => setPreview(null)} onRegenerate={handleGenerate} outputPath={outputPath} fileName={(deck.basic?.title || "MCNP_Input").replace(/[^a-zA-Z0-9_\-]/g,"_") + suffix} mcnpExe={mcnpInfo.exe || "mcnp6.exe"} />}
+      {aiOpen && <AiAccessPanel mcpUrl={ai.mcpUrl} status={ai.status} onClose={() => setAiOpen(false)} />}
     </div>
   );
 }
