@@ -12,6 +12,7 @@ inputcard_mcp.server — inputcard-mcp 的本地 stdio MCP 服务器。
 技术：mcp<2 的 FastMCP（v1 @mcp.tool 装饰器）。
 """
 
+import logging
 import os
 import sys
 
@@ -38,6 +39,24 @@ from api_server import (
 
 # 后端语义段（= deck_from_json 的 8 类读取入口；AI 可写单位）
 _SECTIONS = ("basic", "surfaces", "tr_cards", "cells", "materials", "sources", "tally", "advanced")
+
+
+def _configure_logging():
+    """让 MCP 传输默认不被服务端日志刷屏而卡死（见 diagnostics: stderr-hang）。
+
+    mcp / anyio / httpx 等 logger 默认 INFO，会在**每个请求**都往 stderr 打一条
+    "Processing request…"。Windows 管道缓冲很小（~12KB），在 stdio 客户端未消费
+    stderr 时，server 阻塞在写 stderr → stdout 停 → 整个 MCP 传输卡死。
+    这里把这类 logger 默认降到 WARNING（安静）。排查时设环境变量 INPUTCARD_MCP_LOG=DEBUG 放开。
+    """
+    level = logging.getLevelName(os.environ.get("INPUTCARD_MCP_LOG", "WARNING").upper())
+    if not isinstance(level, int):
+        level = logging.WARNING
+    for name in ("mcp", "anyio", "httpx", "httpcore", "starlette", "uvicorn", "h11"):
+        logging.getLogger(name).setLevel(level)
+
+
+_configure_logging()
 
 mcp = FastMCP("inputcard-mcp")
 
