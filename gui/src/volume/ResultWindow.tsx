@@ -23,6 +23,7 @@ import {
 import { DEFAULT_SHELL_OPACITY } from "../three/cellMaterial";
 import { defaultDisplayMin, minPositiveOfBytes } from "./colorize";
 import VolumeControlPanel from "./VolumeControlPanel";
+import SliceExportPanel from "./SliceExportPanel";
 
 interface BridgeData {
   stlData: Record<string, string>;
@@ -33,6 +34,7 @@ interface BridgeData {
   worldBox: { min: [number, number, number]; max: [number, number, number] } | null;
   scalarRange: { min: number; max: number };
   match: { matched: boolean; overlapFraction: number; centerOffsetFrac: number; reason: string; message: string } | null;
+  unit: string;
 }
 
 export default function ResultWindow() {
@@ -59,6 +61,8 @@ export default function ResultWindow() {
   energyIndexRef.current = energyIndex;
   const timeIndexRef = useRef(0);
   timeIndexRef.current = timeIndex;
+  // 当前 (energy,time) 帧标量（供切面/导出）
+  const [currentFrame, setCurrentFrame] = useState<VolumeFrame | null>(null);
 
   /** 取 (energy,time) 帧 → VolumeFrame（异常带 hint） */
   const fetchTexture = async (energyBin: number, timeIdx: number): Promise<VolumeFrame> => {
@@ -84,7 +88,9 @@ export default function ResultWindow() {
     const r = rendererRef.current;
     if (!r) return;
     try {
-      r.setFrame(await fetchTexture(energyBin, timeIdx));
+      const fr = await fetchTexture(energyBin, timeIdx);
+      r.setFrame(fr);
+      setCurrentFrame(fr);
     } catch (e: any) {
       setError(errorHint(e, "切换体积帧失败"));
     }
@@ -99,6 +105,7 @@ export default function ResultWindow() {
       try {
         const frame = await fetchTexture(0, 0);
         if (disposed) return;
+        setCurrentFrame(frame);
         // 数量级自适应色阶下限：由帧数据最小正值推算（sqrt(minPositive*max)），
         // 隐去零通量背景；同步到色阶输入框，与渲染器实际阈值一致
         const mp = minPositiveOfBytes(base64ToBytes(frame.dataBase64), frame.scalarRange);
@@ -252,6 +259,7 @@ export default function ResultWindow() {
           scalarMin={data.scalarRange?.min ?? 0}
           scalarMax={data.scalarRange?.max ?? 1}
           onColorRangeChange={onColorRangeChange}
+          unit={data.unit || "归一化计数"}
         />
 
         <div style={{ padding: "8px 14px", borderTop: "1px solid rgba(255,255,255,0.04)", display: "flex", gap: 6 }}>
@@ -259,6 +267,7 @@ export default function ResultWindow() {
           <button className="btn btn-ghost btn-xs" style={{ flex: 1, fontSize: 11 }} onClick={() => setAll(false)}>全部取消</button>
         </div>
         <CellList rows={cellRows} onToggle={toggleCell} />
+        <SliceExportPanel frame={currentFrame} displayMin={colorRange.min} />
         <div style={{ padding: "8px 14px", borderTop: "1px solid rgba(255,255,255,0.06)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>粒子 {data.meshtal.particle || "-"} · 网格 {data.meshtal.geom}</span>
           <button className="btn btn-primary btn-xs" onClick={() => { closeCurrentWindow(); }}>关闭</button>

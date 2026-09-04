@@ -356,3 +356,35 @@ describe("FMESH 关键字等号可选解析（imesh 51）", () => {
     expect(rows2[0].out).toBe("f");
   });
 });
+
+/* *FMESH 能量沉积前缀（fn_prefix="*" → MeV/g） */
+describe("*FMESH 能量沉积前缀（fn_prefix）", () => {
+  it("`*fmesh14:N` → fn_prefix='*'，回放带 *，payload 带 fn_prefix", () => {
+    const text = [
+      "*fmesh14:N GEOM=XYZ ORIGIN=-100 -100 -150",
+      "     IMESH=100 IINTS=10",
+      "     JMESH=100 JINTS=10",
+      "     KMESH=50 KINTS=100",
+    ].join("\n");
+    const rows = cardTextToFmesh(text);
+    expect(rows.length).toBe(1);
+    expect(rows[0].fn_prefix).toBe("*"); // 能量沉积（MeV/g）
+    expect(rows[0].number).toBe("14");
+    expect(rows[0].imesh).toBe("100");
+    const back = fmeshToCardText(rows);
+    expect(back).toContain("*FMESH14:N GEOM=XYZ ORIGIN=-100 -100 -150");
+    const payload = buildFmeshPayload(rows);
+    expect(payload[0].fn_prefix).toBe("*");
+    // 后端 parse 带 fn_prefix → rows 保留
+    const rows2 = fmeshDefsToRows([{ number: 14, kind: "FMESH", particle: "N", fn_prefix: "*", origin: "-100 -100 -150" }]);
+    expect(rows2[0].fn_prefix).toBe("*");
+  });
+
+  it("普通 fmesh 无 * 前缀，回放不带 *", () => {
+    const rows = cardTextToFmesh("FMESH4:N GEOM=XYZ ORIGIN=0 0 0\n     IMESH=10 IINTS=2");
+    expect(rows[0].fn_prefix).toBe("");
+    const back = fmeshToCardText(rows);
+    expect(back).toContain("FMESH4:N GEOM=XYZ");
+    expect(back).not.toContain("*FMESH");
+  });
+});

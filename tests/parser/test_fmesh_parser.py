@@ -434,3 +434,37 @@ def test_official_case_fixtures_grid_fields_nonempty():
             assert getattr(fd, attr) == exp, (
                 f"case{n} {attr} 值不符: {getattr(fd, attr)!r} != {exp!r}"
             )
+
+
+# ── 17. *FMESH 能量沉积前缀（*fmesh → MeV/g）────────────────────
+def test_star_fmesh_energy_deposition_parse_emit():
+    """`*fmesh14:N` → fn_prefix='*'（能量沉积 MeV/g）；回放带 *；再解析保留。"""
+    lines = [
+        "*fmesh14:N GEOM=XYZ ORIGIN=-100 -100 -150",
+        "     IMESH=100 IINTS=10",
+        "     JMESH=100 JINTS=10",
+        "     KMESH=50 KINTS=100",
+    ]
+    defs = parse_fmesh_lines(lines)
+    assert len(defs) == 1
+    fd = defs[0]
+    assert fd.kind == "FMESH" and fd.number == 14 and fd.particle == "N"
+    assert fd.fn_prefix == "*", f"fn_prefix 未解析为 *: {fd.fn_prefix!r}"
+    assert fd.imesh == "100" and fd.iints == "10", "带 * 后网格字段仍应解析"
+    emitted = fmesh_defs_to_lines(defs)
+    out = "\n".join(emitted)
+    assert "*FMESH14:N" in out, f"回放未带 *: {out}"
+    assert "IMESH=100" in out, f"回放丢失 IMESH: {out}"
+    defs2 = parse_fmesh_lines(emitted)
+    assert defs2[0].fn_prefix == "*", f"再解析丢失 fn_prefix: {defs2[0].fn_prefix!r}"
+    assert defs2[0].imesh == "100", f"再解析丢失 imesh: {defs2[0].imesh!r}"
+
+
+def test_plain_fmesh_no_star_prefix():
+    """普通 fmesh（无 *）→ fn_prefix 空；回放不带 *。"""
+    defs = parse_fmesh_lines(FMESH4)
+    assert defs[0].fn_prefix == "", "普通 fmesh fn_prefix 应为空"
+    out = "\n".join(fmesh_defs_to_lines(defs))
+    assert not any(ln.lstrip().startswith("*fmesh") for ln in out.splitlines()), (
+        f"普通 fmesh 不应带 *: {out}"
+    )

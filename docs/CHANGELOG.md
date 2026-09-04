@@ -13,7 +13,32 @@
 ## 一、批次详情档案（原 PROJECT_MEMORY.md 顶部修复横幅，含独有验收细节）
 
 
-### ✅ 材料库深化（2026-08-30，已打包部署 v1.7.4，版本沿用待上级指定）
+### ✅ 格阵覆盖完整性检测（universe 未编辑外部 → 红框预防，2026-09，已实现未commit）
+
+解决"阵列 universe 只定义内部、没定义外部，填进 lattice 出现红框、但边界重合致输运不报错"
+的隐蔽缺陷：在格阵编辑器涂色阶段，对当前选中 universe 判定其栅元是否填满格元盒。
+
+- **后端**：新增 `app/coverage_check.py`（纯 stdlib+numpy，无 FreeCAD 依赖）——`universe_coverage`
+  在格元盒内 16³ 采样，复用 `voxel_csg.surface_fn/eval_cell_field/_ast_surf_nums` 逐点解析判定
+  是否落在 universe 任一（叶）栅元内；未覆盖占比 > COVERAGE_TOL(1%) → covered=false。
+  含 `_sampling_domain`（格元盒有界轴按 0.5% span 内缩，避开与格元盒面共面的歧义边界）。
+  新端点 `POST /api/validate-universe-coverage`（operationId `validateUniverseCoverage`，
+  tag geometry）：入参 {surfaces, cells, tr_cards, lat, surface_expr, universe}；复用
+  `Geometry.from_mcnp(parenthesize_unions(expr))` + `resolve_cell_complements` 构造 AST JSON、
+  `parse_surfaces`+`_pymcnp_surf_to_dict` 构造 surfaces_by_num。响应 kind ∈ leaf/empty/lattice +
+  covered/uncoveredFraction/sampleCount/detailViable/unsupportedCells/message。
+- **前端**：`gui/src/utils/lattice.ts` 新增 `validateUniverseCoverage`（AbortSignal.timeout(30s)，
+  后端不可达兜底 kind=empty）；`LatticeEditDialog` 步骤 2 涂色时按 selectedU/surfaceExpr/lat/
+  localSurfaces 变化触发（250ms 防抖），调色板侧栏「当前涂色笔」下方显示覆盖徽标——
+  covered=绿「✓ U=n 已覆盖格元盒」/ 未覆盖=橙「⚠ U=n 未完整覆盖格元盒（约 x% 区域无定义，
+  会出现红框）」/ empty=灰「尚无栅元定义」/ lattice=灰「嵌套格阵，覆盖由子层保证」。**警告但不阻断保存。**
+- **设计契约**：`docs/contracts/lattice-coverage-check.md`（已确认方向：涂色时对当前选中 U 检测、
+  警告允许保存、U 任一栅元含 void 填满即可）。
+- **门禁**：pytest **752/0**（新增 test_coverage_check.py 8 单测 + test_api_contract.py 3 HTTP 集成，
+  契约闸门 handlers↔api.yaml 一致）+ vitest **546/0** + tsc EXIT 0。端到端冒烟：完整 deck
+  （内部圆柱+外围 void）→ covered=true；只留内部圆柱 → covered=false，未覆盖占比 0.9375。
+
+
 
 把材料库从 97 种静态预设升级为用户可编辑、可迁移、可自检的材料资产。
 
@@ -95,6 +120,7 @@
 
 | 日期 | 变更类型 | 改动描述 | 涉及 Agent |
 | :--- | :--- | :--- | :--- |
+| 2026-09 | 新增/后端+前端 | **格阵覆盖完整性检测（universe 未编辑外部 → 红框预防）**：阵列 universe 只定义内部、没定义外部时填进 lattice 出现红框，但边界重合致输运不报错——现于格阵编辑器涂色时对当前选中 universe 判定是否填满格元盒。新增 `app/coverage_check.py`（纯 stdlib+numpy，格元盒内 16³ 采样 + voxel_csg 逐点求值）+ `POST /api/validate-universe-coverage`（kind leaf/empty/lattice + covered/uncoveredFraction/detailViable/message）；前端 `validateUniverseCoverage` + `LatticeEditDialog` 涂色侧栏覆盖徽标（绿已覆盖/橙未覆盖/empty 无定义/lattice 嵌套）。警告但不阻断保存。pytest **752/0** + vitest **546/0** + tsc EXIT 0。设计契约 `docs/contracts/lattice-coverage-check.md` | 后端+前端 |
 | 2026-08-19 | 修复/前端 | **源卡文本模式生成漏源卡（用户实测「在源卡中键入后，生成时漏掉源卡」，commit 808349d，未 push）**：源卡文本模式把文本写 `deck.rawOverrides.sdef`，但 App.tsx handleGenerate 的 `raw_overrides` 载荷循环只有 materials/cells/tally；且 SourceTab 从未置 `deck.textMode.sdef`（即使补 key 也被 `tm[sec] && raw[sec]` 门控挡掉）→ 后端收到空 overrides → `_generate_sdef([])` 返回空 → INP 无源卡。修复：新增 `gui/src/utils/rawOverrides.ts`（`buildRawOverrides` 纯函数，`RAW_OVERRIDE_SECTIONS` 含 sdef），App.tsx 改调；SourceTab 进文本模式置 `textMode.sdef=true`（工作区恢复按此回显文本模式）、出文本模式清 `rawOverrides.sdef` + `textMode.sdef=false`。回归 `gui/test/rawOverrides.test.ts` 3 用例先红后绿；门禁 pytest **512/0** + vitest **337/0**（已知 flaky colorize 128³ 计时单跑 18/18 绿）+ tsc EXIT 0。已随 V1.7.2.2 批次打包部署 | 前端 |
 | 2026-08-19 | 修复/后端+前端 | **SDEF 表单模式漏生成（用户实测「在 sdef 卡中定义了但还是未进入生成」，未 commit，随 V1.7.2.2 重打包）**：前端「SDEF 通用源」表单字段写 `deck.sdefFields` → `adv.sdef_*`，但 `_sdef_dispatch` 只在有分布时读 `adv.sdef_*`；无分布时落 `_generate_sdef(sources)`，表单模式 `sources` 为空 → INP 无 SDEF。修复：`_SDEF_FORM_FIELDS`/`_sdef_form_has_values`/`_source_from_adv`（adv.sdef_* → 单源）+ `_sdef_dispatch` 回退分支（sources 优先保 R1 不动点 → 表单字段有值合成单源 → 全空 `[]`）；**顺带排查**：多点源/分布/KCODE/SSW/SSR 全 OK，另修 `_sources_from_list`/`_adv_from_dict` 漏映射 `sdef_extra`（导入 `EFF=` 等未知参数经 API 往返丢失）。回归：`tests/unit/test_generator_sdef.py` +4 + `tests/integration/test_api_contract.py` +2 先红后绿；pytest **518/0** + vitest **320/0** + tsc EXIT 0。详见 docs/backend-changes.md §R | 后端+前端 |
 | 2026-08-19 | 修复/后端 | **IMP 归一化（用户实测「1 entries not equal to number of cells = 2」，未 commit，随 V1.7.2.2 重打包）**：快捷建栅元「勾选才写 1」→ 部分栅元有 IMP、部分没有 → MCNP 要求某粒子 IMP 条目数=栅元数，混用即 fatal。修复：`_generate_cells` 生成时按粒子归一化——任一结构化栅元写了 imp_n/imp_p/imp_e → 全部结构化栅元补齐该粒子条目，缺省补 MCNP 默认重要性 1（0/0.5 显式值保留）；全空不输出；raw 条件行透传。生成器层单一权威，表单/导入/快捷建栅元全路径生效。回归：`tests/unit/test_generator_cells.py` +3；R2 加 KNOWN_NORMALIZATION 容忍（原空 imp 回读 "1" 属有意归一化）；pytest **521/0** + vitest **320/0** + tsc EXIT 0。详见 docs/backend-changes.md §S | 后端 |

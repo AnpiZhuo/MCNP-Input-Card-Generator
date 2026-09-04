@@ -1165,6 +1165,7 @@ def _fmesh_from_list(arr: list) -> list[FmeshDefinition]:
     """前端 fmesh_defs 列表 → FmeshDefinition（缺 key 容忍，照 FM multiplier 先例）。"""
     return [FmeshDefinition(
         number=f.get("number", 0), kind=f.get("kind", "FMESH"),
+        fn_prefix=f.get("fn_prefix", ""),
         particle=f.get("particle", ""), geom=f.get("geom", "xyz"),
         origin=f.get("origin", ""), imesh=f.get("imesh", ""), iints=f.get("iints", ""),
         jmesh=f.get("jmesh", ""), jints=f.get("jints", ""), kmesh=f.get("kmesh", ""),
@@ -1414,6 +1415,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             "/api/quick-add-check": self._handle_quick_add_check,
             "/api/validate-lattice-surfaces": self._handle_validate_lattice_surfaces,
             "/api/lattice-extent": self._handle_lattice_extent,
+            "/api/validate-universe-coverage": self._handle_validate_universe_coverage,
             "/api/preview-lattice": self._handle_preview_lattice,
             "/api/set-gpu-preference": self._handle_set_gpu_preference,
             "/api/material-library": self._handle_material_library,
@@ -2853,6 +2855,124 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 self._ok({"ok": True, "extent": extent, "msg": ""})
         except Exception as e:
             self._err(str(e))
+
+    # ── universe 覆盖完整性检测（格阵编辑器涂色提示）──
+    def _handle_validate_universe_coverage(self):
+        """判定 universe `U` 的栅元几何是否完整覆盖格元盒（红框预防）。
+
+        入参 {surfaces, cells, tr_cards, lat, surface_expr, universe}：
+          - surfaces / cells / tr_cards：与 preview-lattice 同源（cell 判别联合）。
+          - lat / surface_expr：当前格阵格元盒的 lat 与曲面表达式。
+          - universe：待检测的 universe 号。
+        响应 {status, ...} 见 coverage_check.universe_coverage（kind/covered/
+        uncoveredFraction/sampleCount/detailViable/unsupportedCells/message）。
+        覆盖判定：格元盒内采样，逐点判定是否落在 universe 任一（叶）栅元内。
+        无 FreeCAD 依赖，纯 stdlib+numpy + pymcnp AST。
+        """
+        try:
+            lattice = _import_app("lattice")
+            coverage = _import_app("coverage_check")
+            data = self._read_body() or {}
+            surf_text = data.get("surfaces", "")
+            cell_list = data.get("cells", []) or []
+            tr_text = data.get("tr_cards", "")
+            lat = str(data.get("lat", ""))
+            surface_expr = str(data.get("surface_expr", "") or "")
+            universe_u = str(data.get("universe", "") or "").strip()
+            if not universe_u:
+                self._ok({"status": "ok", "kind": "empty", "covered": False,
+                          "uncoveredFraction": 1.0, "sampleCount": 0,
+                          "detailViable": False, "unsupportedCells": 0,
+                          "message": "未指定 universe 号"})
+                return
+
+            # 1. 格元盒范围（无法解析 → detailViable=False，不误判）
+            box = lattice.lattice_cell_extent(surface_expr, lat, surf_text)
+
+            # 2. 收集 universe 的叶栅元（跳过 graveyard 与 fill/fill_grid 装配容器），
+            #    解析 surface_expr → pymcnp Geometry AST → JSON（覆盖检测消费格式）。
+            from freecad_preview import parenthesize_unions, resolve_cell_complements
+            from pymcnp.types.Geometry import Geometry
+            uni_cells = []
+            has_lattice_cell = False
+            for c in cell_list:
+                if not isinstance(c, dict) or c.get("kind") == "raw":
+                    continue
+                cell = c.get("cell") if c.get("kind") == "cell" and isinstance(c.get("cell"), dict) else c
+                if _cell_u(c) != universe_u:
+                    continue
+                if _imp_any_zero(cell):
+                    continue  # graveyard 不参与
+                if _cell_fill_grid(c):
+                    fg = lattice.FillGrid.from_json(_cell_fill_grid(c))
+                    if fg is not None and fg.kind == "lattice":
+                        has_lattice_cell = True
+                    continue  # fill 装配容器不产实体几何
+                if _cell_fill(c):
+                    continue
+                expr = str(cell.get("surface_expr", "") or "").strip()
+                if not expr:
+                    continue
+                uni_cells.append((expr, cell))
+            if has_lattice_cell:
+                # 嵌套格阵 universe：覆盖性由子层格阵整体保证，不在此判定（不误报）。
+                self._ok({"status": "ok", "kind": "lattice", "covered": False,
+                          "uncoveredFraction": 0.0, "sampleCount": 0,
+                          "detailViable": False, "unsupportedCells": 0,
+                          "message": f"U={universe_u} 为嵌套格阵，覆盖由子层保证"})
+                return
+            if not uni_cells:
+                self._ok({"status": "ok", "kind": "empty", "covered": False,
+                          "uncoveredFraction": 1.0, "sampleCount": 0,
+                          "detailViable": False, "unsupportedCells": 0,
+                          "message": f"U={universe_u} 尚无栅元定义，无法判定覆盖"})
+                return
+
+            # 3. 构造 AST JSON（含 #n 补集展开）+ surfaces_by_num + tr_cards
+            all_number_expr = {}
+            for expr, cell in uni_cells:
+                num = cell.get("number") or 0
+                all_number_expr[num] = expr
+            cells_by_num = {}
+            for num, expr in all_number_expr.items():
+                try:
+                    ast = Geometry.from_mcnp(parenthesize_unions(expr))
+                    cells_by_num[num] = ast.ast
+                except Exception:
+                    cells_by_num[num] = None
+            ast_jsons = []
+            for num, expr in all_number_expr.items():
+                ref = cells_by_num.get(num)
+                if ref is None:
+                    continue
+                resolved = resolve_cell_complements(ref, cells_by_num)
+                try:
+                    from freecad_preview import _geometry_ast_to_json
+                    ast_jsons.append(_geometry_ast_to_json(resolved))
+                except Exception:
+                    continue
+            if not ast_jsons:
+                self._ok({"status": "ok", "kind": "leaf", "covered": False,
+                          "uncoveredFraction": 1.0, "sampleCount": 0,
+                          "detailViable": False, "unsupportedCells": 0,
+                          "message": f"U={universe_u} 全部栅元几何无法解析"})
+                return
+            surfs = parse_surfaces(surf_text)
+            from freecad_preview import _pymcnp_surf_to_dict
+            surfaces_by_num = {int(s.number): _pymcnp_surf_to_dict(s)
+                               for s in surfs}
+            tr_cards = parse_tr_cards(tr_text)
+            result = coverage.universe_coverage(
+                box, ast_jsons, surfaces_by_num, tr_cards)
+            result = dict(result)
+            result.setdefault("message", "")
+            if result.get("kind") == "leaf":
+                result["message"] = (result["message"] or ""
+                                     or f"U={universe_u} 覆盖判定")
+            self._ok({"status": "ok", **result})
+        except Exception as e:
+            import traceback
+            self._err(str(e) + " | " + traceback.format_exc())
 
     # ── 格阵 3D 预览（阶段3 preview-lattice：universe 实例化 + 嵌套 fill 递归）──
     def _handle_preview_lattice(self):

@@ -1492,6 +1492,62 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
+  /api/validate-universe-coverage:
+    post:
+      operationId: validateUniverseCoverage
+      tags: [geometry]
+      summary: universe 覆盖完整性检测（未编辑外部 → 红框预防）
+      description: |
+        判定 universe `U` 的栅元几何是否完整覆盖格元盒。入参
+        {surfaces, cells, tr_cards, lat, surface_expr, universe}：
+        cells 为 deck 栅元（CellRow 判别联合），surface_expr/lat 为当前格阵格元盒的
+        曲面表达式与 lat。算法：在格元盒内均匀采样，逐点解析判定是否落在 universe 任意
+        （叶）栅元内；未覆盖占比 >1% → covered=false（「只定义内部、没定义外部」）。
+        无 FreeCAD 依赖（纯 stdlib+numpy + pymcnp AST）。响应：
+        - kind: "leaf"（叶 universe，执行采样判定）| "empty"（无栅元定义）|
+          "lattice"（嵌套格阵，覆盖由子层保证，不判定）。
+        - covered: bool（格元盒是否被 universe 填满）。
+        - uncoveredFraction / sampleCount / detailViable / unsupportedCells。
+        - message: 中文提示；detailViable=false 时不误判覆盖。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                surfaces: { type: string }
+                cells: { type: array, items: { $ref: '#/components/schemas/CellRow' } }
+                tr_cards: { type: string }
+                lat: { type: string, enum: ['1', '2'] }
+                surface_expr: { type: string, description: 当前格阵格元盒曲面表达式 }
+                universe: { type: string, description: 待检测的 universe 号 }
+      responses:
+        '200':
+          description: 覆盖判定结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      kind:
+                        type: string
+                        enum: [leaf, empty, lattice]
+                        description: 判定类别（lattice/empty 不执行采样）
+                      covered: { type: boolean, description: 是否完整覆盖格元盒 }
+                      uncoveredFraction: { type: number, description: 未覆盖体积占比 0~1 }
+                      sampleCount: { type: integer }
+                      detailViable: { type: boolean, description: 格元盒/几何可解析且所有栅元可求值 }
+                      unsupportedCells: { type: integer }
+                      message: { type: string }
+        '500':
+          description: 未捕获异常（附 traceback）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
   /api/lattice-extent:
     post:
       operationId: latticeExtent
@@ -1545,8 +1601,7 @@ paths:
     post:
       operationId: previewLattice
       tags: [geometry]
-      summary: 格阵 3D 预览（universe 实例化 + 嵌套 fill 递归）
-      description: |
+      summary: 格阵 3D 预览（universe 实例化 + 嵌套 fill 递归）      description: |
         入参 {surfaces, cells, tr_cards, latticeNum?, pitch?, height?}。
         latticeNum 可选：只展开指定格阵 cell；pitch/height 可选覆盖（缺省从
         lattice_cell_extent 解析）。嵌套 fill 递归在后端 compose_lattice_tree

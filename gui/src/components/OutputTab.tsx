@@ -117,7 +117,7 @@ export default function OutputTab() {
   const launchMeshWindow = async (path: string, tally: MeshtalTallyMeta, resolution: number, parseResult: MeshtalParseResult | null) => {
     setMeshBusy(true);
     try {
-      const out = await openVolume3DWindow({ path, tally, resolution, model: meshModel, parseResult });
+      const out = await openVolume3DWindow({ path, tally, resolution, model: meshModel, parseResult, fmesh: (deck.tally as any)?.fmesh });
       if (out.ok) {
         setMeshWorkflow("parsed");
       } else if (out.kind === "fallback") {

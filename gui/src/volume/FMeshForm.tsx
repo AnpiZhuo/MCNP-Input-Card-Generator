@@ -269,11 +269,13 @@ export default function FMeshForm({ value, onChange }: FMeshFormProps) {
                 ) : (
                   <select
                     className="form-select"
-                    value={r.kind}
-                    onChange={(e) => updateRow(r._uid, "kind", e.target.value)}
-                    style={{ height: 26, fontSize: 11, width: 90 }}
+                    value={r.fn_prefix === "*" ? "FMESH:*" : "FMESH"}
+                    onChange={(e) => updateRow(r._uid, "fn_prefix", e.target.value === "FMESH:*" ? "*" : "")}
+                    style={{ height: 26, fontSize: 11, width: 170 }}
+                    title="FMESH = 通量；*FMESH = 能量沉积（MeV/g，卡头带 *）"
                   >
-                    <option value="FMESH">FMESH</option>
+                    <option value="FMESH">FMESH（通量）</option>
+                    <option value="FMESH:*">*FMESH（能量沉积 MeV/g）</option>
                   </select>
                 )}
               </label>

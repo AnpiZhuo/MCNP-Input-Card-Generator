@@ -27,6 +27,7 @@ export type FmeshKind = "FMESH" | "TMESH";
 export interface FmeshRow {
   number: string;
   kind: FmeshKind;
+  fn_prefix: string; // 计数卡前缀修饰：""（通量）/"*"（能量沉积 MeV/g）；镜像后端 FmeshDefinition.fn_prefix
   particle: string; // N/P/E（FMESH 卡头设计符）
   geom: string; // 单 token 连写：XYZ/REC（直角）、CYL/RZT（圆柱）
   origin: string;
@@ -52,6 +53,7 @@ export interface FmeshRow {
 export const emptyFmeshRow = (): FmeshRow => ({
   number: "",
   kind: "FMESH",
+  fn_prefix: "",
   particle: "N",
   geom: "XYZ",
   origin: "",
@@ -214,7 +216,7 @@ export const FMESH_PLACEHOLDERS: Record<string, string> = {
   factor: "乘法因子（每网格单元乘一个系数，正整数；默认 1）",
 };
 
-const FAMILY_RE = /^(FMESH|TMESH|RMESH|CMESH)(\d*):?([NPEHAS]?)$/i;
+const FAMILY_RE = /^(\*?)(FMESH|TMESH|RMESH|CMESH)(\d*):?([NPEHAS]?)$/i;
 /** 关键字 token：`KEY` 或 `KEY=value`（等号可选——MCNP 允许空格分隔 `imesh 51`，镜像后端 fmesh_parser） */
 const KEY_RE = /^([A-Za-z]+)(?:=(.*))?$/;
 /** 带显式等号的 token（`KEY=`/`KEY=val`）——必定是关键字起点，无论已知未知 */
@@ -272,9 +274,10 @@ export function cardTextToFmesh(text: string): FmeshRow[] {
     const tok = tokens[i];
     const m = tok.match(FAMILY_RE);
     if (m) {
-      const family = m[1].toUpperCase();
-      const numberStr = m[2] || "";
-      const particle = m[3] || "";
+      const fnPrefix = m[1] || "";
+      const family = m[2].toUpperCase();
+      const numberStr = m[3] || "";
+      const particle = m[4] || "";
       if (family === "TMESH") {
         pendingTmeshNumber = numberStr || null;
         i += 1;
@@ -287,6 +290,7 @@ export function cardTextToFmesh(text: string): FmeshRow[] {
         ...emptyFmeshRow(),
         number,
         kind,
+        fn_prefix: fnPrefix,
         particle: normalizeParticle(particle), // 导入 `fmesh14:p` → "P"（下拉 option 大写值）
         geom,
       };
@@ -340,8 +344,9 @@ export function cardTextToFmesh(text: string): FmeshRow[] {
     if (first) {
       rows.push({
         ...emptyFmeshRow(),
-        number: first[2] || "",
-        kind: first[1].toUpperCase() === "FMESH" ? "FMESH" : "TMESH",
+        number: first[3] || "",
+        fn_prefix: first[1] || "",
+        kind: first[2].toUpperCase() === "FMESH" ? "FMESH" : "TMESH",
         raw: joinedRaw,
       });
     }
@@ -351,7 +356,9 @@ export function cardTextToFmesh(text: string): FmeshRow[] {
 
 function cardLines(r: FmeshRow, sub: string): string[] {
   const particle = r.particle ? `:${r.particle}` : "";
-  let head = `${sub}${r.number}${particle} GEOM=${normalizeGeom(r.geom)}`;
+  // 计数卡前缀修饰："" = 通量；"*" = 能量沉积（`*fmesh14:N`）
+  const prefix = r.fn_prefix || "";
+  let head = `${prefix}${sub}${r.number}${particle} GEOM=${normalizeGeom(r.geom)}`;
   if (r.origin) head += ` ORIGIN=${r.origin}`;
   const lines = [head];
   const order: [string, keyof FmeshRow][] = [
@@ -401,6 +408,7 @@ export function buildFmeshPayload(rows: FmeshRow[]): Record<string, any>[] {
   return (rows || []).map((r) => ({
     number: parseInt(r.number, 10) || 0,
     kind: r.kind,
+    fn_prefix: r.fn_prefix,
     particle: r.particle,
     geom: r.geom,
     origin: r.origin,
@@ -429,6 +437,7 @@ export function fmeshDefsToRows(defs: Record<string, any>[]): FmeshRow[] {
   return (defs || []).map((f) => ({
     number: String(f.number ?? ""),
     kind: (f.kind === "TMESH" ? "TMESH" : "FMESH") as FmeshKind,
+    fn_prefix: f.fn_prefix ?? "",
     particle: normalizeParticle(f.particle || ""),
     geom: normalizeGeom(f.geom || ""),
     origin: f.origin || "",

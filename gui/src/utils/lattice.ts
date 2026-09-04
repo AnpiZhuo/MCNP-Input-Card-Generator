@@ -729,3 +729,76 @@ export async function validateLatticeSurfaces(
     return { ok: false, msg: "无法连接后端校验曲面" };
   }
 }
+
+/* ── universe 覆盖完整性检测（涂色时红框预防，/api/validate-universe-coverage）── */
+
+export interface UniverseCoverageResult {
+  kind: "leaf" | "empty" | "lattice";
+  covered: boolean;
+  uncoveredFraction: number;
+  sampleCount: number;
+  detailViable: boolean;
+  unsupportedCells: number;
+  message: string;
+}
+
+/** 覆盖检测用的单栅元序列化（与 Preview3D 的 preview-lattice payload 同构） */
+interface CoverageCellPayload {
+  number: number;
+  material: string;
+  density: string;
+  surface_expr: string;
+  u: string;
+  fill: string;
+  lat: string;
+  trcl: string;
+  render: boolean;
+  fill_grid: string;
+}
+
+/** 涂色时判定当前选中 universe 是否完整覆盖格元盒（红框预防）。
+ *
+ * 后端不可达/异常 → 返回 kind="empty" 且 covered=false + message 提示，不阻断涂色。
+ * 请求用 AbortSignal.timeout(30s) 防挂起；调用方据 kind/covered 渲染徽标。
+ */
+export async function validateUniverseCoverage(
+  universe: string,
+  surfaceExpr: string,
+  lat: string,
+  surfacesText: string,
+  cells: CoverageCellPayload[],
+): Promise<UniverseCoverageResult> {
+  const fallback: UniverseCoverageResult = {
+    kind: "empty", covered: false, uncoveredFraction: 1.0,
+    sampleCount: 0, detailViable: false, unsupportedCells: 0,
+    message: "无法连接后端判定覆盖",
+  };
+  try {
+    const r = await fetch(apiUrl("/api/validate-universe-coverage"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        surfaces: surfacesText,
+        cells: cells.map((c) => ({ kind: "cell", cell: c })),
+        tr_cards: "",
+        lat,
+        surface_expr: surfaceExpr,
+        universe,
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+    const j = await r.json();
+    if (j.status === "error") return { ...fallback, message: String(j.message ?? j.msg ?? "覆盖判定失败") };
+    return {
+      kind: (j.kind as UniverseCoverageResult["kind"]) || "leaf",
+      covered: !!j.covered,
+      uncoveredFraction: Number(j.uncoveredFraction ?? 1),
+      sampleCount: Number(j.sampleCount ?? 0),
+      detailViable: !!j.detailViable,
+      unsupportedCells: Number(j.unsupportedCells ?? 0),
+      message: String(j.message ?? ""),
+    };
+  } catch (e: any) {
+    return { ...fallback, message: e?.name === "TimeoutError" ? "覆盖判定超时" : "无法连接后端判定覆盖" };
+  }
+}

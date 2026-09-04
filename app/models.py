@@ -213,6 +213,7 @@ class FmeshDefinition:
     """
     number: int = 0          # FMESHn/TMESHn 卡号
     kind: str = "FMESH"      # "FMESH" | "TMESH"（TMESH 内部 RMESH/CMESH 子卡统一 kind="TMESH"）
+    fn_prefix: str = ""      # 计数卡前缀修饰：""（通量）/ "*"（能量沉积 MeV/g）；照 TallyDefinition.fn_prefix 先例
     particle: str = ""       # "N"/"P"/"E"（卡头设计符）
     geom: str = "xyz"        # GEOM=xyz（v1 渲染仅此）；CMESH(cyl) → geom="cyl"（unsupported）
     origin: str = ""         # ORIGIN x y z

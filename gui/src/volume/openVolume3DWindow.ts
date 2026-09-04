@@ -7,6 +7,7 @@
  */
 import { errorHint, fetchPreview3dStl, type MeshtalTallyMeta, type MeshtalParseResult } from "../utils/api";
 import { openVolume3D } from "../utils/windows";
+import type { FmeshRow } from "./fmeshState";
 
 /** 从工作区读取 outputDir（App 把 outputPath 存进 mcnp_workspace_v1；原 FMeshForm 实现） */
 export function readOutputDir(): string {
@@ -42,6 +43,8 @@ export interface OpenVolume3DWindowParams {
   model?: Volume3DModel | null;
   /** 解析结果元数据（worldBox / match） */
   parseResult?: MeshtalParseResult | null;
+  /** 当前 deck 的 FMESH 行（判定能量沉积 *fmesh：tally.number 匹配 fn_prefix="*" → MeV/g） */
+  fmesh?: FmeshRow[];
 }
 
 export type OpenVolume3DWindowOutcome =
@@ -55,8 +58,19 @@ export type OpenVolume3DWindowOutcome =
  * 开窗：取 STL 外壳（有模型时）→ 组装桥数据 → openVolume3D → 非 Tauri fallback 提示。
  * 保持原 FMeshForm.openWindow 行为逐字节一致。
  */
+/**
+ * 判定某 meshtal tally 是否为能量沉积（*fmesh，MeV/g）：
+ * 当前 deck 的 fmesh 行里，卡号匹配本 tally.number 且 fn_prefix="*" → 能量沉积。
+ * 纯函数（vitest 可测）；这是最可靠来源（用户自建 *fmesh 卡）。
+ */
+export function isDepositionTally(fmesh: FmeshRow[] | undefined, tallyNumber: number): boolean {
+  return (fmesh || []).some(
+    (r) => String(r.number) === String(tallyNumber) && r.fn_prefix === "*",
+  );
+}
+
 export async function openVolume3DWindow(params: OpenVolume3DWindowParams): Promise<OpenVolume3DWindowOutcome> {
-  const { path, tally, resolution, model, parseResult } = params;
+  const { path, tally, resolution, model, parseResult, fmesh } = params;
   try {
     const hasModel = !!(model?.cells && model.cells.length) || !!model?.surfaces;
     const cellsForBackend = (model?.cells || []).map((c) => ({
@@ -70,6 +84,10 @@ export async function openVolume3DWindow(params: OpenVolume3DWindowParams): Prom
       : {};
     const energyOptions = buildBinOptions(tally.binEdges?.energy || []);
     const timeOptions = buildBinOptions(tally.binEdges?.time || []);
+    // 能量沉积（*fmesh）判定：当前 deck 的 fmesh 行里，卡号匹配本 tally 且 fn_prefix="*" → MeV/g。
+    // 这是最可靠来源（用户自建 *fmesh 卡）；meshtal 头无能量沉积标志也能正确显示单位。
+    const isDeposition = isDepositionTally(fmesh, tally.number);
+    const unit = isDeposition ? "MeV/g（能量沉积）" : "归一化计数";
     const opened = await openVolume3D({
       stlData,
       cells: (model?.cells || []).map((c) => ({ num: String(c.num), mat: c.mat, comment: c.comment || "" })),
@@ -85,6 +103,7 @@ export async function openVolume3DWindow(params: OpenVolume3DWindowParams): Prom
       worldBox: parseResult?.grid_bounds || null,
       scalarRange: { min: tally.range.min, max: tally.range.max },
       match: parseResult?.match || null,
+      unit,
     });
     if (!opened) {
       // 非 Tauri（浏览器模式）：桥数据已写 localStorage，提示可用 #/volume 调试入口

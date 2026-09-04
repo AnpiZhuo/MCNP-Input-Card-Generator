@@ -468,6 +468,63 @@ def test_http_preview_lattice_cycle(backend_base_url):
     assert {"1", "2"} <= set(chain), f"cycle 链应含 1/2: {chain}"
 
 
+# ── universe 覆盖完整性检测（validate-universe-coverage）──
+# 格元盒 = 六平面 ±1（曲面 1..6），内部圆柱 CZ=0.3（曲面 7），外围 void = 盒补柱。
+COV_SURF = "1 px -1\n2 px 1\n3 py -1\n4 py 1\n5 pz -1\n6 pz 1\n7 cz 0.3"
+COV_SURFACE_EXPR = "1 -2 3 -4 5 -6"
+COV_DECK = {
+    "surfaces": COV_SURF,
+    "tr_cards": "",
+    "lat": "1",
+    "surface_expr": COV_SURFACE_EXPR,
+    "cells": [
+        # universe 5：内部圆柱（-7 = 柱内）
+        {"kind": "cell", "cell": {"number": 11, "material": "1", "density": "-1.0",
+                                  "u": "5", "surface_expr": "-7", "render": True,
+                                  "fill_grid": ""}},
+        # 外围 void：盒 ∩ 柱外（7 正侧=柱外）→ 与内部一起填满格元盒
+        {"kind": "cell", "cell": {"number": 12, "material": "0", "density": "",
+                                  "u": "5", "surface_expr": "1 -2 3 -4 5 -6 7", "render": True,
+                                  "fill_grid": ""}},
+    ],
+}
+
+
+def test_http_validate_universe_coverage_leaf_uncovered(backend_base_url):
+    """universe 只定义内部（-7）没定义外部 → kind=leaf + covered=false（红框预防）。"""
+    deck = dict(COV_DECK)
+    # 移除外围 void，只留内部圆柱
+    deck["cells"] = [deck["cells"][0]]
+    resp = _post(backend_base_url, "/api/validate-universe-coverage",
+                 {**deck, "universe": "5"})
+    assert resp.get("status") == "ok", resp
+    assert resp.get("kind") == "leaf", resp
+    assert resp.get("covered") is False, resp
+    assert resp.get("uncoveredFraction", 0) > 0, resp
+    assert "未" in resp.get("message", "") or "红框" in resp.get("message", "")
+
+
+def test_http_validate_universe_coverage_leaf_covered(backend_base_url):
+    """universe 内部圆柱 + 外围 void 填满格元盒 → covered=true + detailViable=true。"""
+    resp = _post(backend_base_url, "/api/validate-universe-coverage",
+                 {**COV_DECK, "universe": "5"})
+    assert resp.get("status") == "ok", resp
+    assert resp.get("kind") == "leaf", resp
+    assert resp.get("covered") is True, resp
+    assert resp.get("detailViable") is True, resp
+    assert resp.get("uncoveredFraction", 1) < 0.01, resp
+
+
+def test_http_validate_universe_coverage_empty(backend_base_url):
+    """universe 无栅元定义 → kind=empty + covered=false + 不判定。"""
+    resp = _post(backend_base_url, "/api/validate-universe-coverage",
+                 {**COV_DECK, "universe": "99"})
+    assert resp.get("status") == "ok", resp
+    assert resp.get("kind") == "empty", resp
+    assert resp.get("covered") is False, resp
+    assert resp.get("detailViable") is False, resp
+
+
 def _stl_triangle_count(raw: bytes) -> int:
     """STL 字节 → 三角形数（ASCII 'facet' 计数 / 二进制头 offset80 uint32）。"""
     if not raw:

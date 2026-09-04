@@ -40,8 +40,9 @@ import {
   rhpModeAError,
   serializeFillGrid,
   validateLatticeSurfaces,
+  validateUniverseCoverage,
 } from "../utils/lattice";
-import type { CycleCellLike, FillGridCellJson, FillGridJson, ValidateLatticeResult } from "../utils/lattice";
+import type { CycleCellLike, FillGridCellJson, FillGridJson, UniverseCoverageResult, ValidateLatticeResult } from "../utils/lattice";
 
 const STEPS = ["类型与尺寸", "材料与曲面", "画布涂色", "保存"];
 
@@ -113,6 +114,75 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
   const defaultPaintU = universeList.find((u) => u !== "0") ?? "1";
   const [selectedU, setSelectedU] = useState<string>(defaultPaintU);
   const [cells, setCells] = useState<FillGridCellJson[]>(() => (init ? init.fg.cells : []));
+
+  /* ── 覆盖完整性检测（涂色时红框预防）：判定当前选中 U 是否填满格元盒 ── */
+  const [coverage, setCoverage] = useState<UniverseCoverageResult | null>(null);
+  const [coverageBusy, setCoverageBusy] = useState(false);
+  // 三态徽标：明确覆盖 / 明确未覆盖 / 待实测（解析失败、嵌套、采样置信低）
+  const covUncertain = coverage
+    ? (coverage.kind !== "leaf" || !coverage.detailViable || coverage.unsupportedCells > 0)
+    : false;
+  const covColor = coverageBusy
+    ? "var(--text-tertiary)"
+    : coverage && coverage.covered && !covUncertain
+      ? "#2e7d32"
+      : coverage && !coverage.covered
+        ? "#e0a12e"
+        : "var(--text-tertiary)";
+  const covBg = coverageBusy
+    ? "rgba(255,255,255,0.04)"
+    : coverage && coverage.covered && !covUncertain
+      ? "rgba(46,125,50,0.08)"
+      : coverage && !coverage.covered
+        ? "rgba(224,161,46,0.10)"
+        : "rgba(255,255,255,0.04)";
+  const covLabel = (() => {
+    if (coverageBusy) return "正在判定覆盖…";
+    if (!coverage) return "";
+    const u = selectedU;
+    if (covUncertain) {
+      // 未能可靠判定（嵌套格阵 / 解析失败 / 置信低）：不显示绿勾，建议实测
+      return coverage.kind === "lattice"
+        ? `⚠ U=${u} 为嵌套格阵，覆盖由子层保证（建议 MCNP 实测）`
+        : `⚠ U=${u} 未能可靠判定覆盖（建议 MCNP 实测）`;
+    }
+    if (coverage.covered) {
+      return `✓ U=${u} 几何覆盖完整（不代表全卡无错）`;
+    }
+    return `⚠ U=${u} ${coverage.message || "未完整覆盖格元盒（可能出现红框）"}`;
+  })();
+  // 触发时机：选中 U、格元曲面表达式、lat、曲面卡文本变化；仅步骤 2 涂色阶段有意义。
+  // 待检测 U 为 void（0/空）时无需判定（void 是透明格位，不定义实体覆盖）。
+  useEffect(() => {
+    const u = (selectedU ?? "").trim();
+    if (!u || u === "0" || !surfaceExpr.trim()) {
+      setCoverage(null);
+      return;
+    }
+    let cancelled = false;
+    setCoverageBusy(true);
+    const timer = setTimeout(async () => {
+      const payload = deckCells.map((c) => ({
+        number: parseInt(c.num, 10) || 0,
+        material: c.mat,
+        density: c.density,
+        surface_expr: c.surfaces,
+        u: c.u,
+        fill: c.fill,
+        lat: c.lat,
+        trcl: c.trcl,
+        render: c.render !== false,
+        fill_grid: c.fill_grid || "",
+      }));
+      const r = await validateUniverseCoverage(u, surfaceExpr.trim(), lat, localSurfaces, payload);
+      if (!cancelled) {
+        setCoverage(r);
+        setCoverageBusy(false);
+      }
+    }, 250);
+    return () => { cancelled = true; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedU, surfaceExpr, lat, localSurfaces, deckCells]);
 
   /* ── 项16：六棱柱宏体外接半径自动随格阵（OWEN 模式：宏体尺寸由格阵范围推导，
    * 参考格距 REF_PITCH 是相对基准；用户手动改 R 后不再覆盖，可点「按格阵重算」恢复）。 ── */
@@ -568,6 +638,19 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
             ),
             React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)" } },
               `当前涂色笔：U=${selectedU}`),
+            coverage &&
+              React.createElement("div", {
+                "data-testid": "coverage-badge",
+                style: {
+                  fontSize: 11, marginTop: 8, padding: "6px 8px", borderRadius: 6,
+                  border: "1px solid var(--border-glass)", lineHeight: 1.5,
+                  color: covColor,
+                  background: covBg,
+                },
+              },
+                coverageBusy
+                  ? "正在判定覆盖…"
+                  : covLabel),
           ),
           React.createElement("div", { style: { flex: 1, minWidth: 240, height: 380 } },
             React.createElement(LatticePreview3D, { lat, dims: effectiveDims, cells, palette, pitch: previewGeom.pitch, pitchY: previewGeom.pitchY, height: previewGeom.height }),

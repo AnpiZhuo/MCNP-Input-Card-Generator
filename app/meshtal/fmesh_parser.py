@@ -12,8 +12,9 @@ import re
 from app.models import FmeshDefinition
 
 _FAMILY_RE = re.compile(
-    r'^(FMESH|TMESH|RMESH|CMESH)(\d*):?([NPEHAS]?)$', re.IGNORECASE
+    r'^(\*?)(FMESH|TMESH|RMESH|CMESH)(\d*):?([NPEHAS]?)$', re.IGNORECASE
 )
+# 计数卡前缀修饰："" = 通量；"*" = 能量沉积（MeV/g）。照 TallyDefinition.fn_prefix 先例。
 # MCNP 关键字值可空格分隔（`imesh 51`）或等号（`IMESH=10`），`=` 可选。
 # 注：等号可选后该正则也会匹配任意裸字母词（如 `xyz`），不能直接用作边界判定，
 # 必须用 _is_boundary_token() 只认已知关键字/卡族头。
@@ -48,7 +49,7 @@ def _is_boundary_token(tok: str) -> bool:
 
 def _has_structured(fd: FmeshDefinition) -> bool:
     """是否有可回放的结构化字段（否则回放 raw）。"""
-    for attr in ("origin", "imesh", "iints", "jmesh", "jints", "kmesh", "kints",
+    for attr in ("fn_prefix", "origin", "imesh", "iints", "jmesh", "jints", "kmesh", "kints",
                  "emesh", "emints", "tmesh", "tmints", "mat", "out",
                  "factor", "axs", "vec", "tr"):
         if getattr(fd, attr):
@@ -73,9 +74,10 @@ def parse_fmesh_lines(lines) -> list:
         tok = tokens[i]
         m = _FAMILY_RE.match(tok)
         if m:
-            family = m.group(1).upper()
-            number_str = m.group(2)
-            particle = m.group(3) or ""
+            prefix = m.group(1)
+            family = m.group(2).upper()
+            number_str = m.group(3)
+            particle = m.group(4) or ""
             if family == "TMESH":
                 # TMESHn 标题行（不建定义，仅记录卡号供后续 RMESHn/CMESHn 子卡）
                 pending_tmesh_number = int(number_str) if number_str else None
@@ -87,6 +89,7 @@ def parse_fmesh_lines(lines) -> list:
             geom = "xyz" if family in ("FMESH", "RMESH") else "cyl"
             current = FmeshDefinition(
                 number=number, kind=kind, particle=particle, geom=geom,
+                fn_prefix=prefix,
             )
             defs.append(current)
             i += 1
@@ -152,6 +155,7 @@ def parse_fmesh_lines(lines) -> list:
             fd.kmesh = fd.kints = fd.emesh = fd.emints = fd.tmesh = ""
             fd.tmints = fd.mat = fd.out = fd.factor = ""
             fd.axs = fd.vec = fd.tr = ""
+            fd.fn_prefix = ""
 
     if not defs and pending_tmesh_number is None and tokens:
         # 无法识别为结构化 → 兜底 raw 单条
@@ -218,7 +222,9 @@ def _card_lines(fd: FmeshDefinition, sub: str) -> list:
     # GEOM 值连写：只取首 token（`GEOM=XYZ`/`GEOM=CYL`），避免 `GEOM=X Y Z` 非法输出。
     geom_raw = (fd.geom or "").strip()
     geom_token = geom_raw.split()[0] if geom_raw else "xyz"
-    head = f"{sub}{fd.number}{particle} GEOM={geom_token}"
+    # 计数卡前缀修饰："" = 通量；"*" = 能量沉积（`*fmesh14:N`）
+    prefix = fd.fn_prefix if fd.fn_prefix else ""
+    head = f"{prefix}{sub}{fd.number}{particle} GEOM={geom_token}"
     if fd.origin:
         head += f" ORIGIN={fd.origin}"
     lines = [head]
