@@ -16,7 +16,7 @@
 
 ## S1（当前批次）AI 接入 inputcard-mcp + 快捷建栅元六棱柱/四面体 + 深模块化（本会话，已实现，本次提交）
 - **批次目标**：① 让支持 MCP 的 AI 助手能在本地读写/生成 MCNP 输入卡；② 快捷建栅元扩到六棱柱(RHP)/四面体；③ IMP 改数值输入默认 0；④ 把 GeometryTab/Preview3D 重复的重合检测编排抽成深模块；⑤ 废弃一键打包、提示词做成页面。
-- **✅ inputcard-mcp（AI 接入，本地 stdio）**：新增 `inputcard_mcp/` 包（`server.py`/`__main__.py`/`__init__.py`/`requirements.txt`，`mcp>=1,<2`），FastMCP v1 @tool。**无状态**：每次工具调用 AI 携带完整文本文档，修改型工具「收当前 INP → 返回新 INP」。10 工具：`read_document/generate_document/validate_document/list_cells/get_cell/update_cell/set_mode/list_materials/set_material/add_shape`（add_shape 支持 rcc/rpp/sph/hex/tet）。复用后端 `parse_inp_text`/`generate_inp_from_deck`/`deck_from_json`/`deck_to_frontend_dict`；`add_shape` 的栅元/曲面生成在本服务内（公式等价前端快捷建栅元）。**命名刻意避开 "MCNP" 子串**（商标 + 区分 `mcnp_bridge`/`mcnp_sidecar`/`MCNP输入卡生成器`）。
+- **✅ inputcard-mcp（AI 接入，本地 stdio）**：新增 `inputcard_mcp/` 包（`server.py`/`__main__.py`/`__init__.py`/`requirements.txt`，`mcp>=1,<2`），FastMCP v1 @tool。**无状态**：每次工具调用 AI 携带完整文本文档，修改型工具「收当前 INP → 返回新 INP」。**6 工具**：`read_document/generate_document/validate_document/list_section/patch_section/add_shape`（可写=8 语义段 basic/surfaces/tr_cards/cells/materials/sources/tally/advanced；add_shape 支持 rcc/rpp/sph/hex/tet）。**深接口**：read/generate/list/patch 统一按 **sections（asdict）口径**，一个 `patch_section` 全量覆盖一段（复用 api_server `_xxx_from_dict`，与 `deck_from_json` 同口径）；已删 6 个旧浅工具（list_cells/get_cell/update_cell/set_mode/list_materials/set_material）。**边界：不建模 textMode/raw override**（raw_override 是 generate 第二参数非 deck 字段，MCP 结构化路径会重写该段）。复用后端 `parse_inp_text`/`generate_inp_from_deck`/`deck_from_json`；**命名刻意避开 "MCNP" 子串**。
 - **✅ 打包（随 sidecar）**：`gui/backend/mcnp_bridge.py` 加 `--mcp-server` 分派（仅此分支 import mcp/FastMCP，主 api_server 5001 路径不触碰 mcp）；`gui/mcnp_sidecar.spec` `_hidden` 加 `inputcard_mcp`/`inputcard_mcp.server`；打包版 `<部署>\python.exe --mcp-server` 可作 stdio MCP server（已用 MCP 客户端端到端验证自动发现全部 10 工具）。`gui/backend/api_server.py` 加公开别名 `deck_to_frontend_dict` 供复用。
 - **✅ 快捷建栅元新增**：`gui/src/utils/quickCell.ts` 加 `HexConfig`/`TetConfig`/`hexRadialBasis`（RHP R1 轴向）、`generateHex`（RHP 宏体，结构同 RCC）、`generateTet`（4 顶点→4 平面，法向朝体内）；`quickCellPreview.ts` 加 `buildHex`/`buildTet`；`QuickCellForm.tsx` 加 hex/tet 形状按钮与表单（hex 同圆柱参数 / tet 输入 4 顶点）。
 - **✅ IMP 数值化**：`QuickCellForm` N/P/E 由复选框改数值输入（默认 "0"，留空按基础页模式填 1）；`QuickCellContext.impN/impP/impE` 由 boolean→string；`cellBase` 相应改。
@@ -326,7 +326,7 @@
 | `app/mctal_parser.py` / `app/sweep.py` | **mctal 输出解析（k-eff/收敛/tally）** / **参数扫描纯函数（对齐 OWEN sweepCore）** | 后端 |
 | `app/meshtal/` | 网格计数解析/体积构建/配色/cache/deck_match/worker（8 模块） | 后端 |
 | `app/ptrac/` | PTRAC 粒子径迹解析 + worker | 后端 |
-| `inputcard_mcp/` | **AI 接入 MCP server（本地 stdio，10 工具；无状态，复用 parse/generate；打包用 `mcnp_bridge --mcp-server` 分派）** | 后端 |
+| `inputcard_mcp/` | **AI 接入 MCP server（本地 stdio，6 工具：read/generate/validate/list_section/patch_section/add_shape，按语义段全量读写；打包用 `mcnp_bridge --mcp-server` 分派）** | 后端 |
 | | | |
 | **前端（gui/src/）** | | |
 | `gui/src/App.tsx` | 主界面（顶栏/导入/生成/保存恢复/主题） | 前端 |

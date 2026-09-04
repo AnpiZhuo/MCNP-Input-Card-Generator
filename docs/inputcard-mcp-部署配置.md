@@ -37,7 +37,11 @@
 }
 ```
 
-注册后，AI 会自动发现这些工具：`read_document` / `generate_document` / `validate_document` / `list_cells` / `get_cell` / `update_cell` / `set_mode` / `list_materials` / `set_material` / `add_shape`（rcc/rpp/sph/hex/tet）。
+注册后，AI 会自动发现 **6 个工具**，覆盖全部 MCNP 数据段（按语义段读写）：
+
+- `read_document` / `generate_document` / `validate_document`（文档级：INP ⇄ 按段的 sections 结构 / 校验）
+- `list_section` / `patch_section`（按语义段读/写；`section` ∈ `basic / surfaces / tr_cards / cells / materials / sources / tally / advanced`，含源模式 SDEF/KCODE/SSW/SSR）
+- `add_shape`（几何便捷：rcc / rpp / sph / hex / tet）
 
 ## 二、给 AI 的提示词
 
