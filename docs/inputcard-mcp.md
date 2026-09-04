@@ -79,6 +79,8 @@ python -m inputcard_mcp
 
 > 打包版无需另外装依赖（`inputcard_mcp` + `mcp` 已随 sidecar 打进 `_internal`）。用户通常在 AI 客户端配置里**一次性注册**下面任一服务，之后无需手动启动。
 
+> **⚠️ 客户端/测试注意事项（stderr）**：MCP 传输靠 stdout 走协议，**stderr 是独立通道**。服务端默认已把日志降到 WARNING（不刷屏），所以即使客户端不读 stderr 也不会卡。但作为防御，建议客户端/测试用 `stdio_client(server, errlog=<会被持续消费的流>)` 或**同时 drain stdout+stderr 的双通道 reader**——尤其当你把 `INPUTCARD_MCP_LOG=DEBUG` 放开排查时，stderr 会变多，不消费就有缓冲满风险（Windows 下曾实测卡死，根因 `diagnostics: stderr-hang`）。
+
 **打包版配置**
 ```json
 {
