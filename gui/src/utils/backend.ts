@@ -3,10 +3,28 @@ import type { DeckData } from "./dataCollector";
 import { apiUrl } from "./api";
 
 let pythonProcess: any = null;
+let mcpProcess: any = null;
 let closeUnlisten: (() => void) | null = null;
+
+/** 启动 AI 接入通道：MCP over HTTP（inputcard-mcp --mcp-http → 本机 8100 /mcp + /workspace） */
+async function startMcpHttp(): Promise<void> {
+  if (mcpProcess) return;
+  try {
+    const { Command } = await import("@tauri-apps/api/shell");
+    mcpProcess = Command.sidecar("python", ["--mcp-http"]);
+    mcpProcess.stdout?.on("data", (line: string) => console.log("[MCP HTTP]", line));
+    mcpProcess.stderr?.on("data", (line: string) => console.error("[MCP HTTP ERROR]", line));
+    await mcpProcess.spawn();
+    console.log("MCP over HTTP (AI access) started on 8100");
+  } catch (e) {
+    console.warn("MCP over HTTP not available (browser mode?)", e);
+  }
+}
 
 /** 启动 Python 后端（Tauri sidecar 拉起 api_server → 常驻 5001）；浏览器模式自动失效 */
 export async function startPythonBackend(): Promise<void> {
+  // 无论 5001 是否已在跑，都要保证 AI 接入通道（8100）
+  await startMcpHttp();
   if (pythonProcess) return;
   try {
     // 5001 已有后端在跑则不再拉起（避免双实例 / 重复绑定）
@@ -49,10 +67,8 @@ export async function startPythonBackend(): Promise<void> {
 /** 停止 Python 后端（关闭窗口 / App 卸载时调用） */
 export async function stopPythonBackend(): Promise<void> {
   if (closeUnlisten) { closeUnlisten(); closeUnlisten = null; }
-  if (pythonProcess) {
-    try { pythonProcess.kill(); } catch { /* 已退出 */ }
-    pythonProcess = null;
-  }
+  if (mcpProcess) { try { mcpProcess.kill(); } catch { /* 已退出 */ } mcpProcess = null; }
+  if (pythonProcess) { try { pythonProcess.kill(); } catch { /* 已退出 */ } pythonProcess = null; }
 }
 
 export async function generateInp(data: DeckData): Promise<string> {
