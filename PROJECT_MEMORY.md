@@ -22,7 +22,7 @@
 - **✅ IMP 数值化**：`QuickCellForm` N/P/E 由复选框改数值输入（默认 "0"，留空按基础页模式填 1）；`QuickCellContext.impN/impP/impE` 由 boolean→string；`cellBase` 相应改。
 - **✅ 深模块 useQuickAddOverlap**：新增 `gui/src/utils/useQuickAddOverlap.ts`（3 getter + 统一写回 + 可选 onCheckFail，把后端请求体/appendCardText/applyQuickAddChoice 藏进实现）；`GeometryTab.tsx`/`Preview3D.tsx` 改用，删各自重复 fetch+决策逻辑。
 - **✅ 一键打包废弃**：删除 `release.bat`/`README-release.md`/`scripts\release.ps1`；`README.md`/手动打包方法/PROJECT_MEMORY 改"仅手动打包，一键已废弃"。
-- **✅ 提示词页面**：新增项目根 `AI接入提示词.md`（与 README 同级，简单版 + System Prompt 版，修正两处不一致：无 get_surfaces／validate_document 不含几何重合）；`docs/inputcard-mcp.md` 方式二指向该页。
+- **✅ 提示词页面**：新增项目根 `AI接入.md`（与 README 同级，① 配置 ② 给 AI 的提示，合并原 AI接入提示词/部署配置；简单版 + System Prompt 版）；`docs/inputcard-mcp.md` 方式二指向该页。
 - **✅ 门禁**：前端 vitest **554/0**（69 文件）；tsc EXIT 0；`gui/dist/python/python.exe --mcp-server` 端到端 list_tools 10 工具全通。后端零核心改动（api_server 仅加别名）。
 - **改动清单**：`inputcard_mcp/`(新)、`gui/src/utils/quickCell.ts`、`gui/src/three/quickCellPreview.ts`、`gui/src/components/QuickCellForm.tsx`、`gui/src/components/GeometryTab.tsx`、`gui/src/components/Preview3D.tsx`、`gui/src/utils/useQuickAddOverlap.ts`(新)、`gui/backend/api_server.py`、`gui/backend/mcnp_bridge.py`、`gui/mcnp_sidecar.spec`、`docs/inputcard-mcp.md`(新)、`AI接入提示词.md`(新)、`README.md`、`docs/手动打包方法.md`、`requirements.txt`、删除 `release.bat`/`README-release.md`/`scripts/release.ps1`、`gui/test/quickCell.test.ts`/`quickCellPreview.test.ts`/`quickAddCheckWarn.test.ts`/`useQuickAddOverlap.test.tsx`(新)。
 - **⚠️ 注意**：`inputcard_mcp/server.py` 顶层 import `mcp.server.fastmcp`、`generator.parsers`、`api_server`；源码 dev 用 `python -m inputcard_mcp`（需 PYTHONPATH 含项目根/app/gui-backend，server 已自加路径）。

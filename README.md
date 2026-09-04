@@ -65,7 +65,7 @@ A desktop application for visually creating, editing, and validating **MCNP** in
 | **MCNP 检测与运行** | 自动检测 mcnp6.exe，一键运行、跑完清理临时文件；默认走独显 GPU |
 | **输出分析 Output analysis** | 解析 MCNP 输出文件并绘图 |
 | **高级特性 Advanced** | 计数乘子 FMn、材料/栅元条件编译行、能谱/时间网格（E0/En/T0/Tn）、栅元拖拽排序、文字内容一键切换 |
-| **AI 接入（inputcard-mcp）** | 支持 MCP 的 AI 助手可在本地直接读写/生成 MCNP 输入卡（6 工具：read/generate/validate/list_section/patch_section/add_shape，按语义段覆盖全部 INP 段；本地 stdio，数据不出本机）。见 [`docs/inputcard-mcp.md`](docs/inputcard-mcp.md) 与 [`AI接入提示词.md`](AI接入提示词.md) |
+| **AI 接入（inputcard-mcp）** | 支持 MCP 的 AI 助手可在本地直接读写/生成 MCNP 输入卡（6 工具 + 「当前工作区」会话；外部 agent 用 `http://127.0.0.1:8100/mcp` 连接即可读/改程序全部标签页；数据不出本机）。见 [`docs/inputcard-mcp.md`](docs/inputcard-mcp.md) 与 [`AI接入.md`](AI接入.md) |
 
 ---
 
