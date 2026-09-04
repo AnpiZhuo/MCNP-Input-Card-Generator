@@ -164,14 +164,25 @@ export async function exportLibrary(format: "json" | "csv", entries: LibraryEntr
   return post("/api/material-library/export", { format, entries });
 }
 
-/** 一次性迁移旧 localStorage 用户预设 → 后端库（成功后才清 localStorage）。 */
+/** 一次性迁移旧 localStorage 用户预设 → 后端库（成功后才清 localStorage）。
+ * 规则（原 JSON 优先）：后端库文件里已存在的 key → 保留文件原条目、跳过迁移；
+ * 只新增文件中不存在的新 key；迁移成功后才清空 localStorage。 */
 export async function migrateLegacyUserPresets(): Promise<number> {
   let legacy: PresetItem[] = [];
   try { legacy = JSON.parse(localStorage.getItem(LEGACY_UP_KEY) || "[]"); } catch { legacy = []; }
   if (!legacy.length) return 0;
+  // 先读当前文件已入库的 key，保证后续迁移不覆盖已有条目（原 JSON 优先）。
+  let existing = new Set<string>();
+  try {
+    const res = await listLibrary();
+    existing = new Set(Object.keys(res.materials || {}));
+  } catch {
+    existing = new Set(); // 后端不可用：视为无已有条目（后续 save 仍会失败，走原路径）
+  }
   let done = 0;
   for (const it of legacy) {
     if (!it || !it.key) continue;
+    if (existing.has(it.key)) continue; // 文件已有同名 key → 保留原条目，跳过迁移
     const entry = normalizeEntry({
       key: it.key, name: it.name, category: "我的材料", formula: it.formula ?? "",
       desc: it.desc ?? "", density: it.density ?? "", options: it.options ?? "",
@@ -179,6 +190,7 @@ export async function migrateLegacyUserPresets(): Promise<number> {
     });
     // eslint-disable-next-line no-await-in-loop
     await saveLibraryEntry(entry);
+    existing.add(it.key);
     done++;
   }
   localStorage.removeItem(LEGACY_UP_KEY);

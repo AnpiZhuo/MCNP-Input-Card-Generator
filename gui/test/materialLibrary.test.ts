@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   normalizeEntry, mergeLibrary, builtinToEntries, materialToEntry,
+  migrateLegacyUserPresets, LEGACY_UP_KEY,
 } from "../src/data/materialLibrary";
 import type { LibraryEntry } from "../src/data/materialLibrary";
 
@@ -83,5 +84,76 @@ describe("materialToEntry", () => {
   it("generates key when pool.key empty", () => {
     const e = materialToEntry({ key: "", origin: "custom", material: { name: "My Mat", density: "", options: "", mtCard: "", nuclides: [] } });
     expect(e.key).toBe("my_mat");
+  });
+});
+
+// ── 迁移（原 JSON 优先：文件已存在的 key 跳过，只新增） ──────────────
+describe("migrateLegacyUserPresets", () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  function makeFetch(existing: Record<string, unknown>, saved: string[]) {
+    return vi.fn(async (url: unknown, opts?: any) => {
+      const entry = opts?.body ? JSON.parse(opts.body).entry : null;
+      if (String(url).includes("/api/material-library/save")) {
+        saved.push(entry.key);
+        return { json: async () => ({ entry, warnings: [] }) };
+      }
+      // GET /api/material-library（list）
+      return { json: async () => ({ materials: existing, path: "" }) };
+    });
+  }
+
+  function makeStorage(init?: Record<string, string>) {
+    const store = new Map(Object.entries(init ?? {}));
+    return {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => { store.set(k, String(v)); },
+      removeItem: (k: string) => { store.delete(k); },
+      _store: store,
+    };
+  }
+
+  it("skips the legacy key that already exists in file (原 JSON 优先)", async () => {
+    const existing = { water: normalizeEntry({ key: "water", name: "文件水", origin: "custom" }) };
+    const saved: string[] = [];
+    vi.stubGlobal("fetch", makeFetch(existing, saved));
+    const storage = makeStorage({
+      [LEGACY_UP_KEY]: JSON.stringify([
+        { key: "water", name: "旧水", formula: "H2O:1", rows: [["1001", "-0.11"]] },
+        { key: "mynew", name: "新材料", rows: [["92235", "-0.05"]] },
+      ]),
+    });
+    vi.stubGlobal("localStorage", storage);
+
+    const done = await migrateLegacyUserPresets();
+    expect(done).toBe(1);
+    expect(saved).toEqual(["mynew"]); // water 被跳过（保留文件原条目）
+    expect(storage._store.has(LEGACY_UP_KEY)).toBe(false); // 迁移后清 localStorage
+  });
+
+  it("migrates all when the file is empty", async () => {
+    const saved: string[] = [];
+    vi.stubGlobal("fetch", makeFetch({}, saved));
+    const storage = makeStorage({
+      [LEGACY_UP_KEY]: JSON.stringify([
+        { key: "a", name: "A", rows: [["1001", "-1"]] },
+        { key: "b", name: "B", rows: [["1002", "-1"]] },
+      ]),
+    });
+    vi.stubGlobal("localStorage", storage);
+
+    const done = await migrateLegacyUserPresets();
+    expect(done).toBe(2);
+    expect(saved).toEqual(["a", "b"]);
+  });
+
+  it("does nothing when there are no legacy presets", async () => {
+    const saved: string[] = [];
+    vi.stubGlobal("fetch", makeFetch({}, saved));
+    vi.stubGlobal("localStorage", makeStorage({}));
+
+    const done = await migrateLegacyUserPresets();
+    expect(done).toBe(0);
+    expect(saved).toEqual([]);
   });
 });
