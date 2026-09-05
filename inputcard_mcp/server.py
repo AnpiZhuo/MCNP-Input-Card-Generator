@@ -202,14 +202,16 @@ def list_section(inp: str | None = None, section: str | None = None) -> dict:
 
 
 @mcp.tool()
-def patch_section(inp: str | None = None, section: str | None = None, data: dict | None = None) -> str:
+def patch_section(inp: str | None = None, section: str | None = None, data: dict | list | None = None) -> str:
     """整体替换**某一个语义段**并返回新 INP 文本（全量覆盖一段）。两种用法：
     - 传 inp（INP 文本）→ 改该文档并生成；
     - **不传 inp → 改「程序当前工作区」**的该段，并更新工作区（前端界面随之变化）。
-    section ∈ basic / surfaces / tr_cards / cells / materials / sources / tally / advanced。"""
+    section ∈ basic / surfaces / tr_cards / cells / materials / sources / tally / advanced。
+
+    data 的类型随段而异：list 段（sources / cells / materials）= 元素列表；
+    dict 段（basic / tally / advanced）= 字段 dict；字符串段（surfaces / tr_cards）= 字符串。"""
     if section not in _SECTIONS:
         raise ValueError(f"未知 section: {section}（可选 {', '.join(_SECTIONS)}）")
-    data = data or {}
     if inp:
         deck, _ = parse_inp_text(inp)
         deck = _apply_section_patch(deck, section, data)
@@ -438,29 +440,47 @@ def add_shape(inp: str, shape: str, params: dict) -> dict:
 
 
 def _mcp_http_main(host="127.0.0.1", port=8100):
-    """MCP over HTTP：uvicorn 跑 FastMCP 于 /mcp，外加 /workspace 供前端同步「当前工作区」。
+    """MCP over HTTP：uvicorn 直接跑 FastMCP 的 streamable_http_app()，外加 /workspace 供前端同步。
 
-    - /mcp（GET/POST，MCP 协议）：AI 客户端用 http://127.0.0.1:<port>/mcp 连接。
+    - /mcp（MCP 协议）：AI 客户端用 http://127.0.0.1:<port>/mcp 连接。
     - /workspace（GET/PUT，纯 JSON）：前端把当前全部标签页 deck 推上来(PUT)，读当前工作区(GET，供回显)。
     均共享同一进程的 _WORKSPACE → AI 经 /mcp 读写的就是前端推上来的「当前工作区」。
+
+    ⚠️ mcp>=1.29 修复：streamable_http_app() 自己已在 /mcp 注册路由并带 lifespan=session_manager.run()。
+    不能再用 Starlette Mount("/mcp", ...) 包它——那会造成双挂载（真实端点变成 /mcp/mcp，/mcp 返回 404），
+    且 Mount 不传播子应用 lifespan（session_manager.run() 不执行 → /mcp 报 500 "Task group is not initialized"）。
+    正确做法：把 /workspace 用 mcp.custom_route 挂到 FastMCP 自己的 Starlette 上，然后直接 serve
+    streamable_http_app()（/mcp 路由与 lifespan 都由 FastMCP 自己处理，uvicorn 会跑它的 lifespan）。
+
+    streamable_http_app() 不带 CORS 中间件，故 /workspace 手动加 CORS 响应头（前端 webview 跨域访问）。
     """
     import uvicorn
-    from starlette.applications import Starlette
-    from starlette.routing import Route, Mount
-    from starlette.responses import JSONResponse
-    from starlette.middleware import Middleware
-    from starlette.middleware.cors import CORSMiddleware
+    from starlette.requests import Request
+    from starlette.responses import Response, JSONResponse
 
-    async def get_ws(_request):
+    _CORS_HEADERS = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, PUT, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, MCP-Protocol-Version, Mcp-Session-Id",
+    }
+
+    def _cors(resp: Response) -> Response:
+        for k, v in _CORS_HEADERS.items():
+            resp.headers.setdefault(k, v)
+        return resp
+
+    @mcp.custom_route("/workspace", methods=["GET"])
+    async def get_ws(_request: Request) -> Response:
         # 回显给前端：revision（用于判断 AI 是否改动）+ sections + 前端形态 deck（loadDeck 用）
-        return JSONResponse({
+        return _cors(JSONResponse({
             "revision": _WORKSPACE["revision"],
             "sections": _ws_sections(),
             "deck": deck_to_frontend_dict(_ws_deck()),
-        })
+        }))
 
-    async def put_ws(request):
-        # 前端把当前全部标签页 deck 推上来（前端 JSON 形态），后端转成 sessions 作权威
+    @mcp.custom_route("/workspace", methods=["PUT"])
+    async def put_ws(request: Request) -> Response:
+        # 前端把当前全部标签页 deck 推上来（前端 JSON 形态），后端转成 sections 作权威
         body = await request.json()
         if isinstance(body, dict):
             if body.get("deck"):
@@ -471,15 +491,15 @@ def _mcp_http_main(host="127.0.0.1", port=8100):
                 _set_ws_sections(body)
         else:
             _set_ws_sections(body)
-        return JSONResponse({"ok": True, "revision": _WORKSPACE["revision"]})
+        return _cors(JSONResponse({"ok": True, "revision": _WORKSPACE["revision"]}))
 
-    app = Starlette(routes=[
-        Route("/workspace", get_ws, methods=["GET"]),
-        Route("/workspace", put_ws, methods=["PUT"]),
-        Mount("/mcp", app=mcp.streamable_http_app()),
-    ], middleware=[Middleware(CORSMiddleware, allow_origins=["*"],
-                              allow_methods=["*"], allow_headers=["*"])])
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    @mcp.custom_route("/workspace", methods=["OPTIONS"])
+    async def ws_options(_request: Request) -> Response:
+        # 供前端跨域 preflight
+        return _cors(Response(status_code=204))
+
+    # 直接 serve FastMCP 的 app：uvicorn 会运行其 lifespan（session_manager.run()），/mcp 正常。
+    uvicorn.run(mcp.streamable_http_app(), host=host, port=port, log_level="warning")
 
 
 def main():
