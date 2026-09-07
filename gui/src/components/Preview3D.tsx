@@ -14,6 +14,7 @@ import CrossSectionView from "./CrossSectionView";
 import QuickCellForm from "./QuickCellForm";
 import { buildLatticeInstances, DETAIL_MAX_INSTANCES } from "../three/latticeInstances";
 import { buildUniversePalette } from "../utils/lattice";
+import { useAppScale } from "../utils/appScale";
 
 /** base64 STL → THREE.BufferGeometry（格阵装配 STL 解码，与 loadStlMeshes 同法） */
 function decodeStlBase64(b64: string): THREE.BufferGeometry {
@@ -516,6 +517,9 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   const ctrlRef = useRef<ReturnType<typeof initScene> | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const { deck } = useDeck();
+  // 主窗口等比缩放时，clientX/clientY 为「真实像素」，材料浮层定位走缩放后坐标系，需除以 scale；
+  // 独立预览子窗口不缩放，scale=1，行为不变。
+  const scale = useAppScale();
   // 独立窗口模式：材料列表由宿主传入（materials），否则回退主窗口 deck
   const matList = materials ?? deck.materials;
   // 格阵装配（用户要求：唯一 3D 预览，MCNP 真实装配）——有 fill/fill_grid 时
@@ -1356,8 +1360,8 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         className: "preview-overlay",  // 强制深色文字变量，亮色主题下可读
         style: {
           position: "fixed",
-          left: Math.min(matPicker.x, window.innerWidth - 220),
-          top: Math.min(matPicker.y, window.innerHeight - 300),
+          left: Math.min(matPicker.x / scale, window.innerWidth / scale - 220),
+          top: Math.min(matPicker.y / scale, window.innerHeight / scale - 300),
           zIndex: 1200, width: 210, maxHeight: 300, overflow: "auto",
           background: "rgba(15,15,40,0.97)",
           border: "1px solid rgba(255,255,255,0.15)", borderRadius: 8,

@@ -1,5 +1,6 @@
 import React from "react";
 import pkg from "../../package.json";
+import { useAppScale } from "../utils/appScale";
 
 interface Props {
   active: string;
@@ -22,6 +23,9 @@ export default function Sidebar({ active, onSelect, tabs, theme, onThemeChange, 
   const [expanded, setExpanded] = React.useState(false);
   const [tip, setTip] = React.useState<{ x: number; y: number } | null>(null);
   const timer = React.useRef<number | null>(null);
+  // 主窗口等比缩放时，getBoundingClientRect 返回「缩放后」坐标，而浮窗走缩放后的坐标系，
+  // 需除以 scale 转回设计坐标才能与按钮位置对齐（子窗口不缩放，scale=1，行为不变）。
+  const scale = useAppScale();
   const cycleTheme = () => { const idx = THEMES.findIndex(t => t.key === theme); onThemeChange(THEMES[(idx + 1) % THEMES.length].key); };
   const cur = THEMES.find(t => t.key === theme) || THEMES[0];
   return (
@@ -50,7 +54,7 @@ export default function Sidebar({ active, onSelect, tabs, theme, onThemeChange, 
       ))}
       <div style={{ marginTop: "auto" }}>
         <button className="sidebar-btn" onClick={onImport}
-          onMouseEnter={(e) => { const r = e.currentTarget.getBoundingClientRect(); setTip({ x: r.right + 10, y: r.top + r.height / 2 }); }}
+          onMouseEnter={(e) => { const r = e.currentTarget.getBoundingClientRect(); setTip({ x: (r.right + 10) / scale, y: (r.top + r.height / 2) / scale }); }}
           onMouseLeave={() => setTip(null)}>
           <span className="sidebar-icon">📂</span>
           <span className="sidebar-label" style={{ opacity: expanded ? 1 : 0 }}>导入</span>

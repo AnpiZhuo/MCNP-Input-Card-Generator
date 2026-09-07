@@ -18,6 +18,8 @@ import { buildFmeshPayload, fmeshDefsToRows } from "./volume/fmeshState";
 import { startPythonBackend, stopPythonBackend } from "./utils/backend";
 import { apiUrl } from "./utils/api";
 import { buildRawOverrides } from "./utils/rawOverrides";
+import { canonicalSourceMode } from "./utils/sourceAdv";
+import AppScaleProvider from "./utils/appScale";
 
 const TABS = [
   { key: "basic", label: "基本" },
@@ -83,25 +85,9 @@ function AppInner() {
   const { deck, patch, loadDeck } = useDeck();
   // AI 接入：当前工作区同步到 /workspace + 轮询回显 + 状态（MCP over HTTP）
   const [aiOpen, setAiOpen] = useState(false);
-  // 把后端 adv（源/高级）语义投影回前端中间态，让「源项」等页签随 AI 修改更新
-  const aiProject = (aiDeck: any) => {
-    const adv = aiDeck.adv || {};
-    const sm = adv.source_mode;
-    const srcMode = sm === "kcode" ? "kcode" : sm === "surface" ? "surface" : "sdef";
-    const sf: any = {};
-    ["sdef_par","sdef_erg","sdef_pos_x","sdef_pos_y","sdef_pos_z","sdef_wgt","sdef_dir","sdef_vec",
-     "sdef_axs","sdef_rad","sdef_ext","sdef_cel","sdef_sur","sdef_nrm","sdef_tr","sdef_ccc","sdef_ara","sdef_rate"]
-      .forEach(k => { if (adv[k] !== undefined && adv[k] !== "") sf[k] = adv[k]; });
-    return {
-      sourceMode: srcMode,
-      sdefFields: sf,
-      sdefRawText: adv.sdef_raw_text || "",
-      distributions: (adv.sdef_distributions ? (() => { try { return JSON.parse(adv.sdef_distributions); } catch { return []; } })() : []),
-      sswFields: (adv.ssw_surf || adv.ssw_sym || adv.ssw_pty || adv.ssw_cel) ? { surf: adv.ssw_surf||"", sym: adv.ssw_sym||"", pty: adv.ssw_pty||"", cel: adv.ssw_cel||"" } : {},
-      ssrFields: (adv.ssr_surf || adv.ssr_mode || adv.ssr_cel || adv.ssr_pty || adv.ssr_col || adv.ssr_wgt || adv.ssr_tr || adv.ssr_psc) ? { surf: adv.ssr_surf||"", mode: adv.ssr_mode||"", cel: adv.ssr_cel||"", pty: adv.ssr_pty||"", col: adv.ssr_col||"", wgt: adv.ssr_wgt||"", tr: adv.ssr_tr||"", psc: adv.ssr_psc||"" } : {},
-    };
-  };
-  const ai = useAiWorkspace(deck, (aiDeck: any) => loadDeck({ ...deck, ...aiDeck, ...aiProject(aiDeck) }));
+  // deck.adv 已是源/高级唯一权威。AI 回显直接把后端 deck（adv 权威）整份并入，loadDeck 内做旧存档迁移兜底；
+  // 「源项」页从 deck.adv 派生 → AI 改 adv 后界面自动跟随（无需 aiProject 中间态投影）。
+  const ai = useAiWorkspace(deck, (aiDeck: any) => loadDeck({ ...deck, ...aiDeck }));
 
   useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, [theme]);
   // 主题一变就持久化到独立键（清空工作区不影响主题）
@@ -133,7 +119,7 @@ function AppInner() {
     if (d.basic !== undefined && (typeof d.basic !== "object" || d.basic === null)) return false;
     for (const k of ["cells", "materials", "sources", "tallies"])
       if (d[k] !== undefined && !Array.isArray(d[k])) return false;
-    for (const k of ["tally", "grids", "adv", "sdefFields", "kcodeFields", "rawOverrides"])
+    for (const k of ["tally", "grids", "adv", "rawOverrides"])
       if (d[k] !== undefined && (typeof d[k] !== "object" || d[k] === null)) return false;
     return true;
   };
@@ -196,15 +182,10 @@ function AppInner() {
           fmesh: fmeshDefsToRows((d.tally?.fmesh_defs || [])),
         },
         grids: buildGridsFromTally(d.tally || {}),
-        adv: d.adv || {},
-        sourceMode: d.sourceMode || 'fixed', sdefFields: d.sdefFields || {},
-        sdefRawText: d.sdefRawText || '', kcodeFields: d.kcodeFields || {},
-        ksrcPoints: d.ksrcPoints || '', rawOverrides: d.rawOverrides || {},
+        adv: d.adv || {},          // parse 已产出权威 source_mode + sdef_*/kcode_*/…；不再读顶层中间态
+        rawOverrides: d.rawOverrides || {},
         textMode: d.textMode || {},
         sourceTemplate: d.sourceTemplate || 'free',
-        distributions: d.distributions || [],
-        sswFields: d.sswFields || { surf: '', sym: '', pty: '', cel: '' },
-        ssrFields: d.ssrFields || { surf: '', mode: '', cel: '', pty: '', col: '', wgt: '', tr: '', psc: '' },
       });
       alert('导入成功: ' + (d.basic?.title || '无标题'));
     } catch (err: any) {
@@ -327,14 +308,6 @@ function AppInner() {
       for (const p of ["n","p","e","h","he","d","t","a"])
         for (const f of ["t","e","wc1","wc2","swtm"])
           cutFields[`cut_${p}_${f}`] = deck.tally?.[`cut_${p}_${f}`] || "";
-      // SDEF/KCODE 从各自受控源（deck.sdefFields/deck.kcodeFields）映射到 adv
-      const SDEF_KEYS = ["sdef_par","sdef_erg","sdef_pos_x","sdef_pos_y","sdef_pos_z","sdef_wgt","sdef_dir","sdef_cel","sdef_tme","sdef_vec","sdef_axs","sdef_rad","sdef_ext","sdef_sur","sdef_nrm","sdef_tr","sdef_ccc","sdef_ara","sdef_rate"];
-      const sdefMap: Record<string, string> = {};
-      for (const k of SDEF_KEYS) sdefMap[k] = (deck.sdefFields || {})[k] || "";
-      const KCODE_KEYS = ["kcode_nsrc","kcode_rkk","kcode_ikz","kcode_kct","kcode_knrm"];
-      const kcodeMap: Record<string, string> = {};
-      for (const k of KCODE_KEYS) kcodeMap[k] = (deck.kcodeFields || {})[k] || "";
-
       const body = {
         basic: {
           title: b.title || "", nps: b.nps || "", ctme: b.ctme || "",
@@ -356,36 +329,9 @@ function AppInner() {
           // PTRAC 粒子径迹卡（ptracState，后端 key=ptrac；未启用时 undefined → JSON 省略）
           ptrac: (deck.tally as any)?.ptrac,
         },
-        adv: {
-          ...(deck.adv || {}),
-          // 前端用 "sdef"，后端模型用 "distribution"（parse 返回也是 distribution），边界映射
-          source_mode: deck.sourceMode === "sdef" ? "distribution" : (deck.sourceMode || "fixed"),
-          ...sdefMap,
-          sdef_raw_text: deck.sdefRawText || "",
-          // 结构化分布（新）——空数组发 ""，避免 "[]" truthy 误走分布生成
-          sdef_distributions: (deck.distributions && deck.distributions.length) ? JSON.stringify(deck.distributions) : "",
-          // SSW/SSR 面源
-          ssw_surf: deck.sswFields?.surf || "",
-          ssw_sym: deck.sswFields?.sym || "",
-          ssw_pty: deck.sswFields?.pty || "",
-          ssw_cel: deck.sswFields?.cel || "",
-          ssr_surf: deck.ssrFields?.surf || "",
-          ssr_mode: deck.ssrFields?.mode || "",
-          ssr_cel: deck.ssrFields?.cel || "",
-          ssr_pty: deck.ssrFields?.pty || "",
-          ssr_col: deck.ssrFields?.col || "",
-          ssr_wgt: deck.ssrFields?.wgt || "",
-          ssr_tr: deck.ssrFields?.tr || "",
-          ssr_psc: deck.ssrFields?.psc || "",
-          // KCODE 扩展 + HSRC
-          kcode_msrk: (deck.kcodeFields || {})["kcode_msrk"] || "",
-          kcode_mrkp: (deck.kcodeFields || {})["kcode_mrkp"] || "",
-          kcode_kc8: (deck.kcodeFields || {})["kcode_kc8"] || "",
-          hsrc_enabled: !!(deck.kcodeFields || {})["hsrc_enabled"],
-          hsrc_text: (deck.kcodeFields || {})["hsrc_text"] || "",
-          ...kcodeMap,
-          ksrc_points: deck.ksrcPoints || "",
-        },
+        // 源/高级：deck.adv 是唯一权威（源项页直接读写 deck.adv.*，含 source_mode/sdef_*/kcode_*/ssw_*/ssr_*/ksrc_points/sdef_distributions）。
+        // canonicalSourceMode 兜底：非 kcode/surface 一律 distribution（不再有独立 sourceMode 副本）。
+        adv: { ...(deck.adv || {}), source_mode: canonicalSourceMode(deck.adv) },
         // 文本模式：当前处于文本模式的 section 用文本数据，表单模式的用表单数据
         raw_overrides: buildRawOverrides(deck),
       };
@@ -463,6 +409,9 @@ function AppInner() {
       </div>
       {preview && <PreviewDialog content={preview} onClose={() => setPreview(null)} onRegenerate={handleGenerate} outputPath={outputPath} fileName={(deck.basic?.title || "MCNP_Input").replace(/[^a-zA-Z0-9_\-]/g,"_") + suffix} mcnpExe={mcnpInfo.exe || "mcnp6.exe"} />}
       {aiOpen && <AiAccessPanel mcpUrl={ai.mcpUrl} status={ai.status} onClose={() => setAiOpen(false)} />}
+      {/* Portal 根节点：createPortal 弹窗挂到这里才能随缩放容器一起等比缩放（见 utils/appScale.tsx）。
+          零尺寸 + absolute：不占布局、不遮挡点击；挂进来的固定定位弹窗按缩放容器（zoom）坐标系定位并缩放 */}
+      <div id="app-portal-root" style={{ position: "absolute", width: 0, height: 0 }} />
     </div>
   );
 }
@@ -476,11 +425,11 @@ function WindowRouter() {
     if (h === "preview3d" || h === "cross_section" || h === "volume" || h === "ptrac") { setLabel(h); return; }
     currentWindowLabel().then(setLabel).catch(() => setLabel("main"));
   }, []);
-  if (label === "preview3d") return <Preview3DWindow />;
-  if (label === "cross_section") return <CrossSectionWindow />;
-  if (label === "volume") return <ResultWindow />;
-  if (label === "ptrac") return <PtracWindow />;
-  return <DeckProvider><AppInner /></DeckProvider>;
+  if (label === "preview3d") return <AppScaleProvider designWidth={1300} designHeight={820}><Preview3DWindow /></AppScaleProvider>;
+  if (label === "cross_section") return <AppScaleProvider designWidth={1000} designHeight={700}><CrossSectionWindow /></AppScaleProvider>;
+  if (label === "volume") return <AppScaleProvider designWidth={1300} designHeight={820}><ResultWindow /></AppScaleProvider>;
+  if (label === "ptrac") return <AppScaleProvider designWidth={1300} designHeight={820}><PtracWindow /></AppScaleProvider>;
+  return <AppScaleProvider><DeckProvider><AppInner /></DeckProvider></AppScaleProvider>;
 }
 
 export default function App() { return <WindowRouter />; }

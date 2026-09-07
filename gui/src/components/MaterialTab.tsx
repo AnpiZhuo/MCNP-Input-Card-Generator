@@ -1,18 +1,24 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState } from "react";
 import MaterialEditDialog from "./MaterialEditDialog";
 import MaterialLibraryPanel from "./MaterialLibraryPanel";
 import { useDeck, MaterialData } from "../utils/DeckContext";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
+import { useDeckSynced } from "../utils/useDeckSynced";
 
 interface MatTabProps {
   onMaterialAdded?: (matNum: number) => void;
 }
 
 export default function MaterialTab({ onMaterialAdded }: MatTabProps) {
-  const [mats, setMats] = useState<MaterialData[]>([]);
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [showLibrary, setShowLibrary] = useState(false);
   const { deck, patch } = useDeck();
+  // 材料列表：deck.materials 单一权威，本地工作副本经共享 hook 推/拉（收敛 ad-hoc 守卫）
+  const [mats, setMats] = useDeckSynced<MaterialData[], MaterialData[]>({
+    deck, patch, key: "materials",
+    fromDeck: (v) => (Array.isArray(v) ? v : []),
+    toDeck: (v) => v,
+  });
 
   // 文本↔表单互转（深模块：逻辑在 useSectionTextMode 一处，这里只传回填回调）
   const text = useSectionTextMode("materials", {
@@ -20,20 +26,8 @@ export default function MaterialTab({ onMaterialAdded }: MatTabProps) {
     patch,
     overrideKey: "materials",
     onBackToForm: (data) => { if (data.materials) setMats(data.materials); },
-    initialText: deck.rawOverrides?.materials || "",
-    initialMode: deck.textMode?.materials,
   });
-  const { rawMode, rawText, busy, setRawText, toggleRawMode } = text;
-  const matsRef = useRef(mats);
-  matsRef.current = mats;
-  // local → deck（仅推不拉）
-  useEffect(() => { patch({ materials: mats }); }, [mats]);
-  // deck → local（仅外部导入时，避免死循环）
-  useEffect(() => {
-    if (deck.materials?.length && JSON.stringify(deck.materials) !== JSON.stringify(matsRef.current)) {
-      setMats(deck.materials);
-    }
-  }, [deck.materials]);
+  const { rawMode, rawText, busy, toggleRawMode } = text;
   const addMat = () => {
     const maxNum = mats.length > 0 ? Math.max(...mats.map((m) => m.number)) : 0;
     const newNum = maxNum + 1;
@@ -86,7 +80,7 @@ export default function MaterialTab({ onMaterialAdded }: MatTabProps) {
             <button className="btn btn-ghost btn-sm" onClick={() => setShowLibrary(true)}>📚 材料库</button>
           </div>
 
-        {rawMode ? <textarea className="form-input" value={rawText} onChange={e => {setRawText(e.target.value);patch({rawOverrides:{...deck.rawOverrides,materials:e.target.value}});}} style={{width:"100%",minHeight:200,fontFamily:"Consolas,monospace",fontSize:12}} placeholder="材料卡原始文本..." /> : <div className="table-wrap">
+        {rawMode ? <textarea className="form-input" value={rawText} onChange={e => patch({rawOverrides:{...deck.rawOverrides,materials:e.target.value}})} style={{width:"100%",minHeight:200,fontFamily:"Consolas,monospace",fontSize:12}} placeholder="材料卡原始文本..." /> : <div className="table-wrap">
           <table>
             <thead>
               <tr>

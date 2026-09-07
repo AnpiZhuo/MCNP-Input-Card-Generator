@@ -101,10 +101,10 @@
 
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%;font-family:var(--font);background:transparent;color:var(--text-primary);-webkit-font-smoothing:antialiased;overflow:hidden}
-#root{height:100vh;display:flex;flex-direction:column}
+#root{width:calc(100vw / var(--app-scale, 1));height:calc(100vh / var(--app-scale, 1));zoom:var(--app-scale, 1);display:flex;flex-direction:column}
 
 /* ===== App Shell ===== */
-.app-shell{display:flex;height:100vh;background:var(--bg-deepest);border-radius:12px;overflow:hidden}
+.app-shell{display:flex;height:100%;background:var(--bg-deepest);border-radius:12px;overflow:hidden}
 
 /* ===== Sidebar ===== */
 .sidebar{height:100%;background:var(--bg-surface);border-right:1px solid var(--border-glass);display:flex;flex-direction:column;align-items:flex-start;padding:8px 0;flex-shrink:0;z-index:10;transition:width 200ms cubic-bezier(0.4,0,0.2,1);overflow:hidden}

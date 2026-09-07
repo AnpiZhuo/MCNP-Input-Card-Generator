@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
+import { getAppPortalRoot } from "../utils/appScale";
 import FloatingDialog from "./FloatingDialog";
 
 interface Nuclide { zaid: string; fraction: string }
@@ -509,5 +510,5 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
           ),
         ),
       ),
-  ), document.body);
+  ), getAppPortalRoot());
 }

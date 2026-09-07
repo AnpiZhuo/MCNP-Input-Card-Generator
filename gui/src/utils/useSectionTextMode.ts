@@ -8,6 +8,10 @@
  *
  * 三个标签页（MaterialTab / GeometryTab / TallyTab）共用此模块，
  * 各自只需提供「解析结果 → 写回本地表单」的回调。互转逻辑只在此一处。
+ *
+ * 状态规则（deep module / 受控）：rawMode / rawText 不再存本地副本——
+ * 直接由 deck.textMode[section] 与 deck.rawOverrides[key] 派生（textarea 已每键写回
+ * rawOverrides），因此外部 loadDeck / AI 回显替换 deck 后自动跟随；busy 是瞬态可本地。
  */
 import { useState } from "react";
 import { SectionKey, sectionToText, textToSection } from "./sectionConvert";
@@ -21,16 +25,16 @@ interface Opts {
   overrideKey: string;
   /** 文本 → 表单 解析成功后，把结果写回本地表单（各标签页差异点） */
   onBackToForm: (data: any) => void;
-  /** 已有 rawOverrides 初值（供工作区恢复后回显） */
-  initialText?: string;
-  /** 当前是否文本模式（供外部恢复 textMode 状态） */
-  initialMode?: boolean;
 }
 
 export function useSectionTextMode(section: SectionKey, opts: Opts) {
-  const [rawMode, setRawMode] = useState(opts.initialMode ?? false);
-  const [rawText, setRawText] = useState(opts.initialText ?? "");
   const [busy, setBusy] = useState(false);
+
+  // 受控派生（无本地副本）：deck 替换 → 重渲染 → 自动跟随
+  const rawMode = opts.deck?.textMode?.[section] === true;
+  const rawText = opts.deck?.rawOverrides?.[opts.overrideKey] || "";
+  const deck = opts.deck;
+  const patch = opts.patch;
 
   const toggleRawMode = async () => {
     if (busy) return;
@@ -38,22 +42,19 @@ export function useSectionTextMode(section: SectionKey, opts: Opts) {
     try {
       if (!rawMode) {
         // 表单 → 文本
-        const t = await sectionToText(section, opts.deck);
-        setRawText(t);
-        opts.patch({
-          rawOverrides: { ...(opts.deck.rawOverrides || {}), [opts.overrideKey]: t },
-          textMode: { ...(opts.deck.textMode || {}), [section]: true },
+        const t = await sectionToText(section, deck);
+        patch({
+          rawOverrides: { ...(deck.rawOverrides || {}), [opts.overrideKey]: t },
+          textMode: { ...(deck.textMode || {}), [section]: true },
         });
-        setRawMode(true);
       } else {
         // 文本 → 表单
-        const txt = rawText || opts.deck.rawOverrides?.[opts.overrideKey] || "";
+        const txt = rawText || "";
         if (txt.trim()) {
           const data = await textToSection(section, txt);
           opts.onBackToForm(data);
         }
-        opts.patch({ textMode: { ...(opts.deck.textMode || {}), [section]: false } });
-        setRawMode(false);
+        patch({ textMode: { ...(deck.textMode || {}), [section]: false } });
       }
     } catch (e: any) {
       alert(`${section} 文本/表单切换失败: ${e?.message || e}`);
@@ -63,13 +64,11 @@ export function useSectionTextMode(section: SectionKey, opts: Opts) {
   };
 
   const onDiscard = () => {
-    setRawMode(false);
-    setRawText("");
-    opts.patch({
-      rawOverrides: { ...(opts.deck.rawOverrides || {}), [opts.overrideKey]: "" },
-      textMode: { ...(opts.deck.textMode || {}), [section]: false },
+    patch({
+      rawOverrides: { ...(deck.rawOverrides || {}), [opts.overrideKey]: "" },
+      textMode: { ...(deck.textMode || {}), [section]: false },
     });
   };
 
-  return { rawMode, rawText, busy, setRawText, toggleRawMode, onDiscard };
+  return { rawMode, rawText, busy, toggleRawMode, onDiscard };
 }

@@ -2,12 +2,15 @@
  * 源类型模板 — 深度模块（codebase-design）
  * 模板数据驱动向导：加新模板 = 加一条记录，不改渲染逻辑。
  * 对照：源分布卡说明.md 第二节（SDEF 各源写法）。
+ *
+ * 说明：sourceTemplate 仅驱动「模板向导」的字段过滤/分组，不参与生成；
+ * 源项字段的判别量与数值一律存 deck.adv（见 sourceAdv.ts）。
  */
 import type { SourceTemplateType } from "./DeckContext";
 
 /** SDEF 变量元数据（表 3.3 对应说明.md 二） */
 export interface SdefFieldMeta {
-  key: string;          // sdefFields 键名（sdef_par 等）
+  key: string;          // deck.adv 键名（sdef_par 等；sdef_eff 无后端字段，折叠进 adv.sdef_extra）
   keyword: string;      // MCNP 关键字（PAR/ERG/...）
   label: string;        // 中文名
   placeholder: string;  // 示例

@@ -19,6 +19,8 @@ import { applyRegroupToRows, groupByUniverse, groupHeaderLabel, isUngroupedU } f
 import { openPreview3D, onMaterialChange, onQuickCellGenerate } from "../utils/windows";
 import { apiUrl } from "../utils/api";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
+import { useDeckSynced } from "../utils/useDeckSynced";
+import { useAppScale, getAppPortalRoot } from "../utils/appScale";
 import { textToSection } from "../utils/sectionConvert";
 import { appendCardText, generatedCellToRow, quickAddCheckFailedMessage, type QuickCellResult } from "../utils/quickCell";
 import { useQuickAddOverlap } from "../utils/useQuickAddOverlap";
@@ -36,8 +38,18 @@ interface GeoProps {
 }
 
 export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
+  const { deck, patch } = useDeck();
+  // 主窗口等比缩放时，getBoundingClientRect / clientX 为「真实像素」，材料下拉（portal 到缩放容器）需除以 scale。
+  const scale = useAppScale();
   const [doc, setDoc] = useState<{path:string;title:string}|null>(null);
-  const [cells, setCells] = useState<LocalCellRow[]>([]);
+  // cells / surfaces / tr_cards：deck 单一权威，本地工作副本经共享 hook 推拉（收敛 ad-hoc 守卫）
+  const [cells, setCells] = useDeckSynced<LocalCellRow[], any[]>({
+    deck, patch, key: "cells",
+    fromDeck: (v) => deckToLocalCells(v || []),
+    toDeck: (v) => localToDeckCells(v),
+  });
+  const cellsRef = useRef(cells);
+  cellsRef.current = cells;
   const moveCellRow = (from: number, to: number) => {
     if (from === to) return;
     const c = [...cells]; const [m] = c.splice(from, 1); c.splice(to, 0, m); setCells(c);
@@ -53,8 +65,17 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const [editCell, setEditCell] = useState<number | null>(null);
   const [selectedCells, setSelectedCells] = useState<string[]>([]);
   const [batchOpen, setBatchOpen] = useState(false);
-  const [surfText, setSurfText] = useState("");
-  const [trText, setTrText] = useState("");
+  const [surfText, setSurfText] = useDeckSynced<string, string>({
+    deck, patch, key: "surfaces", fromDeck: (s) => s || "", toDeck: (s) => s,
+  });
+  const [trText, setTrText] = useDeckSynced<string, string>({
+    deck, patch, key: "tr_cards", fromDeck: (s) => s || "", toDeck: (s) => s,
+  });
+  // 最新值 ref（writeBack / 快捷添加重合检测请求用，避免 state 未 flush 读到旧文本）
+  const surfTextRef = useRef(surfText);
+  const trTextRef = useRef(trText);
+  surfTextRef.current = surfText;
+  trTextRef.current = trText;
   // 项4 辅助：读取当前 WebGL 实际使用的 GPU（主界面与 3D 预览同进程，可反映 3D 用卡）
   const [gpu, setGpu] = useState<GpuInfo | null>(null);
   const [gpuPrefBusy, setGpuPrefBusy] = useState(false);
@@ -122,14 +143,6 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   // 栅元表材料列点击下拉：i=正在编辑材料号的栅元行索引，x/y=按钮位置（用于 portal 定点浮层）
   const [matPicker, setMatPicker] = useState<{ i: number; x: number; y: number } | null>(null);
   const fc = useFreecadStatus();
-  const cellsRef = useRef(cells);
-  cellsRef.current = cells;
-  const surfRef = useRef(surfText);
-  surfRef.current = surfText;
-  const trRef = useRef(trText);
-  trRef.current = trText;
-  const { deck, patch } = useDeck();
-
   // 文本↔表单互转（深模块：逻辑在 useSectionTextMode 一处）
   // 切回表单时，把解析出的 cells（后端 CellRow 判别联合）映射回本地 LocalCellRow
   const cellsText = useSectionTextMode("cells", {
@@ -138,10 +151,8 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
       const mapped = deckToLocalCells(data.cells || []);
       if (mapped.length) setCells(mapped);
     },
-    initialText: deck.rawOverrides?.cells || "",
-    initialMode: deck.textMode?.cells,
   });
-  const { rawMode: cellRawMode, rawText: cellRawText, busy: cellBusy, setRawText: setCellRawText, toggleRawMode: toggleCellRawMode, onDiscard: discardCellRaw } = cellsText;
+  const { rawMode: cellRawMode, rawText: cellRawText, busy: cellBusy, toggleRawMode: toggleCellRawMode, onDiscard: discardCellRaw } = cellsText;
 
   // 材料→栅元联动：新材料添加时自动创建栅元行
   useEffect(() => {
@@ -376,34 +387,6 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     return () => { offMat(); offQuick(); };
   }, []);
 
-  // local → deck（只推 cells，曲面/TR 由 DOM 采集，避免频闪）
-  const lastCellsRef = useRef("");
-  const lastSurfRef = useRef("");
-  const lastTrRef = useRef("");
-  // 最新值 ref（快捷添加重合检测请求用，避免 state 未 flush 读到旧文本）
-  const surfTextRef = useRef(surfText);
-  const trTextRef = useRef(trText);
-  surfTextRef.current = surfText;
-  trTextRef.current = trText;
-  useEffect(() => {
-    // local → deck：cells（CellRow 判别联合）/ surfaces / tr 全部受控推送
-    const curCells = JSON.stringify(localToDeckCells(cells));
-    const p: Record<string, any> = {};
-    if (curCells !== lastCellsRef.current) { lastCellsRef.current = curCells; p.cells = JSON.parse(curCells); }
-    if (surfText !== lastSurfRef.current) { lastSurfRef.current = surfText; p.surfaces = surfText; }
-    if (trText !== lastTrRef.current) { lastTrRef.current = trText; p.tr_cards = trText; }
-    if (Object.keys(p).length) patch(p);
-  }, [cells, surfText, trText]);
-  useEffect(() => {
-    const newSurf = deck.surfaces || "";
-    const newTr = deck.tr_cards || "";
-    const newCells = deckToLocalCells(deck.cells);
-    if (newSurf !== surfText) setSurfText(newSurf);
-    if (newTr !== trText) setTrText(newTr);
-    if (newCells.length && JSON.stringify(newCells) !== JSON.stringify(cellsRef.current)) {
-      setCells(newCells);
-    }
-  }, [deck.surfaces, deck.tr_cards, deck.cells]);
 
   // 按 U 分组显示：raw 行原样 + 组间分隔头行（复用 raw 行分隔样式，拖到组头改 u）
   const renderGroupedBody = () => {
@@ -616,7 +599,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
       <div className="glass-card">
         <TextModeSection label="栅元列表" active={cellRawMode} onToggle={toggleCellRawMode} onDiscard={discardCellRaw} />
         {cellRawMode ? (
-          <textarea className="form-input" value={cellRawText} onChange={e => {setCellRawText(e.target.value);patch({rawOverrides:{...deck.rawOverrides,cells:e.target.value}});}}
+          <textarea className="form-input" value={cellRawText} onChange={e => patch({rawOverrides:{...deck.rawOverrides,cells:e.target.value}})}
             style={{width:"100%",minHeight:200,fontFamily:"Consolas,monospace",fontSize:12}} placeholder="栅元卡原始文本..." />
         ) : (
         <><div className="card-header">
@@ -682,12 +665,12 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
                       style={{ background: "transparent", border: "none", cursor: "pointer", padding: "0 4px", fontWeight: 600, color: c.cell.mat === "0" ? "var(--text-tertiary)" : "var(--accent)", fontFamily: "inherit", fontSize: "inherit" }}>
                       {c.cell.mat}
                     </button>
-                    {/* 材料下拉用 portal 渲染到 body：逃出 table-wrap 的 overflow 裁剪和 glass-card 的层叠上下文 */}
+                    {/* 材料下拉用 portal 渲染到缩放容器（#app-portal-root）：逃出 table-wrap 的 overflow 裁剪和 glass-card 的层叠上下文，同时随 .app-shell 等比缩放 */}
                     {matPicker && matPicker.i === i && createPortal(
                       <>
                         <div onClick={() => setMatPicker(null)} style={{ position: "fixed", inset: 0, zIndex: 1100, background: "transparent" }} />
                         <div className="preview-overlay"
-                          style={{ position: "fixed", left: clampDropdownLeft(matPicker.x, window.innerWidth || 0), top: matPicker.y, zIndex: 1200, width: 200, maxHeight: 260, overflow: "auto", background: "rgba(15,15,40,0.97)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 6, boxShadow: "0 8px 24px rgba(0,0,0,0.5)", padding: "6px" }}>
+                          style={{ position: "fixed", left: clampDropdownLeft(matPicker.x / scale, (window.innerWidth / scale) || 0), top: matPicker.y / scale, zIndex: 1200, width: 200, maxHeight: 260, overflow: "auto", background: "rgba(15,15,40,0.97)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 6, boxShadow: "0 8px 24px rgba(0,0,0,0.5)", padding: "6px" }}>
                           {matOptions.map(o => (
                             <button key={o.num} type="button"
                               onClick={() => applyMatFromPicker(i, o.num)}
@@ -697,7 +680,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
                           ))}
                         </div>
                       </>,
-                      document.body
+                      getAppPortalRoot()
                     )}
                   </td>
                   <td>{c.cell.density}</td>

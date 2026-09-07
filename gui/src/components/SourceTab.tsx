@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useMemo } from "react";
 import SourceEditDialog from "./SourceEditDialog";
 import DistributionEditor from "./DistributionEditor";
 import SswSsrForm from "./SswSsrForm";
@@ -6,10 +6,15 @@ import DocViewer from "./DocViewer";
 import { useDeck } from "../utils/DeckContext";
 import type { DistEntry, SourceItem } from "../utils/DeckContext";
 import { SOURCE_TEMPLATES, fieldsForTemplate, SDEF_FIELD_META } from "../utils/sourceTemplates";
-import TextModeSection from "./TextModeSection";
+import {
+  uiModeFromAdv, vocabForUi,
+  parseDistributions, serializeDistributions,
+  parseKsrc, serializeKsrc,
+  readExtraToken, setExtraToken, SDEF_EFF_KEY,
+} from "../utils/sourceAdv";
+import type { KsrcPoint, UiSourceMode } from "../utils/sourceAdv";
 
-interface KsrcPoint { x: string; y: string; z: string }
-/* 本地固定源（camelCase，推送 deck 时转 snake_case） */
+/* 本地显示用（camelCase）；deck.sources 存 snake_case，经 deckToFixed/fixedToDeck 桥接 */
 interface FixedSource {
   number: number; par: string; erg: string;
   posX: string; posY: string; posZ: string;
@@ -18,6 +23,23 @@ interface FixedSource {
   sur: string; nrm: string; tr: string;
   ccc: string; ara: string; rate: string; prob: string;
 }
+
+const deckToFixed = (s: SourceItem): FixedSource => ({
+  number: s.number, par: s.par || "", erg: s.erg || "",
+  posX: s.pos_x || "", posY: s.pos_y || "", posZ: s.pos_z || "",
+  wgt: s.wgt || "", dir_: s.dir_ || "", cel: s.cel || "", tme: s.tme || "",
+  vec: s.vec || "", axs: s.axs || "", rad: s.rad || "", ext: s.ext || "",
+  sur: s.sur || "", nrm: s.nrm || "", tr: s.tr || "",
+  ccc: s.ccc || "", ara: s.ara || "", rate: s.rate || "", prob: s.prob || "",
+});
+const fixedToDeck = (f: FixedSource): SourceItem => ({
+  number: f.number, par: f.par, erg: f.erg,
+  pos_x: f.posX, pos_y: f.posY, pos_z: f.posZ,
+  wgt: f.wgt, dir_: f.dir_, cel: f.cel, tme: f.tme,
+  vec: f.vec, axs: f.axs, rad: f.rad, ext: f.ext,
+  sur: f.sur, nrm: f.nrm, tr: f.tr,
+  ccc: f.ccc, ara: f.ara, rate: f.rate, prob: f.prob,
+});
 
 const PAR_LABELS: Record<string, string> = {
   "1": "1-中子", "2": "2-光子", "3": "3-电子",
@@ -35,71 +57,65 @@ const KCODE_FIELDS = [
   ["kcode_kc8", "KC8", "0/1"],
 ];
 
+const MODE_OPTS: { k: UiSourceMode; l: string }[] = [
+  { k: "sdef", l: "SDEF 通用源" },
+  { k: "surface", l: "面源 (SSW/SSR)" },
+  { k: "kcode", l: "KCODE 临界源" },
+  { k: "text", l: "✎ 文本模式" },
+];
+
 export default function SourceTab() {
   const { deck, patch } = useDeck();
-  // fixed 模式已并入 SDEF 多点源模板
-  const [mode, setMode] = useState<"sdef" | "surface" | "kcode" | "text">(
-    deck.textMode?.sdef
-      ? "text"
-      : deck.sourceMode === "surface" ? "surface" : deck.sourceMode === "kcode" ? "kcode" : "sdef"
-  );
+  // deck.adv 是源项唯一权威 → 面板与全部字段都由它派生（受控），外部 AI 回显/loadDeck 换 deck 即自动跟随
+  const adv: Record<string, any> = deck.adv || {};
+  const mode: UiSourceMode = uiModeFromAdv(adv, deck.textMode?.sdef);
   const template = deck.sourceTemplate || "free";
-  const sdefFields = deck.sdefFields || {};
-  const distributions = deck.distributions || [];
 
-  const [fixedSources, setFixedSources] = useState<FixedSource[]>([]);
   const [editSrcIdx, setEditSrcIdx] = useState<number | null>(null);
-  const [ksrcPoints, setKsrc] = useState<KsrcPoint[]>([]);
   const [editPt, setEditPt] = useState<number | null>(null);
   const [doc, setDoc] = useState<{ path: string; title: string } | null>(null);
 
-  // 旧 fixed 模式迁移 → SDEF 多点源模板（源模式已并入 SDEF）
-  useEffect(() => {
-    if (deck.sourceMode === "fixed" && deck.sources?.length) {
-      patch({ sourceMode: "sdef", sourceTemplate: "multi_point" });
+  /* ── 派生视图（每次 render 从 adv/deck 重算，无本地副本）── */
+  const distributions = useMemo(() => parseDistributions(adv.sdef_distributions), [adv.sdef_distributions]);
+  const ksrcPoints = useMemo(() => parseKsrc(adv.ksrc_points), [adv.ksrc_points]);
+  const fixedSources = useMemo(() => (deck.sources || []).map(deckToFixed), [deck.sources]);
+
+  const setAdvField = (k: string, v: string) => {
+    if (k === SDEF_EFF_KEY) {
+      // sdef_eff 后端无字段 → 折叠进 adv.sdef_extra 的 EFF 记号（避免静默不发射）
+      patch({ adv: { ...adv, sdef_extra: setExtraToken(adv.sdef_extra, "EFF", v) } });
+    } else {
+      patch({ adv: { ...adv, [k]: v } });
     }
-  }, [deck.sourceMode, deck.sources]);
+  };
+  const sdefVal = (k: string): string =>
+    k === SDEF_EFF_KEY ? readExtraToken(adv.sdef_extra, "EFF") : adv[k] || "";
+  const writeDistributions = (list: DistEntry[]) =>
+    patch({ adv: { ...adv, sdef_distributions: serializeDistributions(list) } });
+  const writeKsrc = (next: KsrcPoint[]) =>
+    patch({ adv: { ...adv, ksrc_points: serializeKsrc(next) } });
+  const writeSources = (next: SourceItem[]) => patch({ sources: next });
 
-  const setSdefField = (k: string, v: string) => patch({ sdefFields: { ...sdefFields, [k]: v } });
-  const setDistributions = (d: DistEntry[]) => patch({ distributions: d });
-  const setTemplate = (t: string) => { patch({ sourceTemplate: t as any, sourceMode: "sdef" }); setMode("sdef"); };
+  /* ── 模式切换：判别量写回 adv.source_mode（规范词汇）；✎文本写 textMode.sdef ── */
+  const pickMode = (k: Exclude<UiSourceMode, "text">) =>
+    patch({
+      adv: { ...adv, source_mode: vocabForUi(k) },
+      rawOverrides: { ...deck.rawOverrides, sdef: "" },
+      textMode: { ...deck.textMode, sdef: false },
+    });
+  const pickText = () => patch({ textMode: { ...deck.textMode, sdef: true } });
 
-  // 导入时同步 sources / ksrc（deck snake_case → 本地 camelCase）
-  useEffect(() => {
-    if (deck.sources?.length && !fixedSources.length) {
-      setFixedSources(deck.sources.map(s => ({
-        number: s.number, par: s.par, erg: s.erg,
-        posX: s.pos_x || "", posY: s.pos_y || "", posZ: s.pos_z || "",
-        wgt: s.wgt, dir_: s.dir_ || "", cel: s.cel || "", tme: s.tme || "",
-        vec: s.vec || "", axs: s.axs || "", rad: s.rad || "", ext: s.ext || "",
-        sur: s.sur || "", nrm: s.nrm || "", tr: s.tr || "",
-        ccc: s.ccc || "", ara: s.ara || "", rate: s.rate || "", prob: s.prob || "",
-      } as any)));
-    }
-  }, [deck.sources]);
-  // KSRC deck↔local 双向同步（加守卫防止来回 patch 造成频闪/死循环）
-  const lastKsrcRef = useRef("");
-  useEffect(() => {
-    const dv = deck.ksrcPoints || "";
-    if (!dv || dv === lastKsrcRef.current) return;
-    try {
-      const arr = JSON.parse(dv);
-      if (Array.isArray(arr)) {
-        lastKsrcRef.current = dv;
-        setKsrc(arr);
-      }
-    } catch {}
-  }, [deck.ksrcPoints]);
+  const setTemplate = (t: string) => patch({ sourceTemplate: t as any });
 
-  // Dn 自动检测：sdef 字段含 D{n} → 自动建分布条目
+  // Dn 自动检测：sdef 字段含 D{n} → 自动建分布条目（写 adv.sdef_distributions）
   const handleSdefChange = (k: string, v: string) => {
-    setSdefField(k, v);
+    setAdvField(k, v);
     const m = v.match(/D(\d+)/);
     if (m) {
       const id = parseInt(m[1]);
-      if (!distributions.some(d => d.id === id)) {
-        const param = SDEF_FIELD_META.find(f => f.key === k)?.keyword || "";
-        setDistributions([...distributions, {
+      if (!distributions.some((d) => d.id === id)) {
+        const param = SDEF_FIELD_META.find((f) => f.key === k)?.keyword || "";
+        writeDistributions([...distributions, {
           id, paramRef: param, auto: true,
           si: { type: "L", values: ["", ""] },
           sp: { type: "D", values: [], fnCode: "", fnParams: [] },
@@ -109,42 +125,27 @@ export default function SourceTab() {
     }
   };
 
+  /* ── 多点源（deck.sources 列表，snake_case）── */
   const addFixedSource = () => {
-    const n = fixedSources.length > 0 ? Math.max(...fixedSources.map(s => s.number)) + 1 : 1;
-    setFixedSources([...fixedSources, {
+    const cur = deck.sources || [];
+    const n = cur.length > 0 ? Math.max(...cur.map((s) => s.number)) + 1 : 1;
+    writeSources([...cur, fixedToDeck({
       number: n, par: "", erg: "", posX: "", posY: "", posZ: "",
       wgt: "", dir_: "", cel: "", tme: "", vec: "", axs: "", rad: "", ext: "",
       sur: "", nrm: "", tr: "", ccc: "", ara: "", rate: "", prob: "",
-    } as any]);
+    })]);
   };
-  const deleteFixedSource = (idx: number) => setFixedSources(fixedSources.filter((_, i) => i !== idx));
+  const deleteFixedSource = (idx: number) =>
+    writeSources((deck.sources || []).filter((_, i) => i !== idx));
   const saveFixedSource = (idx: number, data: any) => {
-    const c = [...fixedSources]; c[idx] = data; setFixedSources(c); setEditSrcIdx(null);
+    const cur = deck.sources || [];
+    const c = [...cur]; c[idx] = fixedToDeck(data as FixedSource); writeSources(c);
+    setEditSrcIdx(null);
   };
-  // 本地 camelCase → deck snake_case（后端 _sources_from_list 读 snake_case）
-  useEffect(() => {
-    if (fixedSources.length) {
-      patch({ sources: fixedSources.map(s => ({
-        number: s.number, par: s.par, erg: s.erg,
-        pos_x: s.posX, pos_y: s.posY, pos_z: s.posZ,
-        wgt: s.wgt, dir_: s.dir_, cel: s.cel, tme: s.tme,
-        vec: s.vec, axs: s.axs, rad: s.rad, ext: s.ext,
-        sur: s.sur, nrm: s.nrm, tr: s.tr,
-        ccc: s.ccc, ara: s.ara, rate: s.rate, prob: s.prob,
-      })) });
-    }
-  }, [fixedSources]);
-  useEffect(() => {
-    const json = JSON.stringify(ksrcPoints);
-    if (json !== lastKsrcRef.current) {
-      lastKsrcRef.current = json;
-      patch({ ksrcPoints: json });
-    }
-  }, [ksrcPoints]);
 
-  // 模板切换：仅切换模板 id（保留已有字段值；分布/字段过滤交给 fieldsForTemplate）
-  const applyTemplate = (id: string) => {
-    setTemplate(id);
+  /* ── KSRC 行编辑（受控写 adv.ksrc_points）── */
+  const updKsrc = (i: number, axis: "x" | "y" | "z", val: string) => {
+    writeKsrc(ksrcPoints.map((p, idx) => (idx === i ? { ...p, [axis]: val } : p)));
   };
 
   const tplFields = fieldsForTemplate(template);
@@ -157,7 +158,9 @@ export default function SourceTab() {
       )}
       {editPt !== null && (
         <SourceEditDialog point={ksrcPoints[editPt]} index={editPt} isKsrc={true}
-          onSave={(d: any) => { const c = [...ksrcPoints]; c[editPt] = d; setKsrc(c); setEditPt(null); }}
+          onSave={(d: any) => {
+            const c = [...ksrcPoints]; c[editPt] = d as KsrcPoint; writeKsrc(c); setEditPt(null);
+          }}
           onClose={() => setEditPt(null)} />
       )}
 
@@ -170,27 +173,9 @@ export default function SourceTab() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {[
-            { k: "sdef", l: "SDEF 通用源" },
-            { k: "surface", l: "面源 (SSW/SSR)" },
-            { k: "kcode", l: "KCODE 临界源" },
-            { k: "text", l: "✎ 文本模式" },
-          ].map((opt) => (
+          {MODE_OPTS.map((opt) => (
             <button key={opt.k} className={"btn btn-sm " + (mode === opt.k ? "btn-primary" : "btn-ghost")}
-              onClick={() => {
-                setMode(opt.k as any);
-                if (opt.k === "text") {
-                  // 进入源卡文本模式：标记 textMode.sdef，生成时 raw_overrides 才会带上 sdef 原文
-                  patch({ textMode: { ...deck.textMode, sdef: true } });
-                } else {
-                  // 切回表单模式时清掉 raw_overrides.sdef + textMode.sdef，让表单接管
-                  patch({
-                    sourceMode: opt.k as any,
-                    rawOverrides: { ...deck.rawOverrides, sdef: "" },
-                    textMode: { ...deck.textMode, sdef: false },
-                  });
-                }
-              }}>
+              onClick={() => (opt.k === "text" ? pickText() : pickMode(opt.k as Exclude<UiSourceMode, "text">))}>
               {opt.l}
             </button>
           ))}
@@ -206,7 +191,6 @@ export default function SourceTab() {
               <span style={{ fontSize: 10, color: "var(--text-tertiary)" }}>手动输入整个源段，生成时原样输出（SDEF/SI/SP/SB/DS/KCODE/KSRC/SSW/SSR）</span>
             </div>
             <button className="btn btn-ghost btn-xs" onClick={() => {
-              setMode("sdef");
               patch({
                 rawOverrides: { ...deck.rawOverrides, sdef: "" },
                 textMode: { ...deck.textMode, sdef: false },
@@ -238,7 +222,7 @@ export default function SourceTab() {
                   className={"btn btn-xs " + (template === t.id ? "btn-primary" : "btn-ghost")}
                   style={{ flexDirection: "column", alignItems: "center", height: "auto", padding: "6px 10px", gap: 2 }}
                   title={t.desc + "（对照说明书：" + t.doc + "）"}
-                  onClick={() => applyTemplate(t.id)}>
+                  onClick={() => setTemplate(t.id)}>
                   <span style={{ fontSize: 15 }}>{t.icon}</span>
                   <span style={{ fontSize: 10 }}>{t.name}</span>
                 </button>
@@ -258,7 +242,7 @@ export default function SourceTab() {
                   <div key={f.key} className="form-group" style={{ maxWidth: f.key === "sdef_vec" || f.key === "sdef_axs" ? 160 : 100 }}>
                     <label className="form-label" style={{ fontSize: 9 }} title={f.hint}>{f.keyword} {f.label}</label>
                     <input id={f.key} className="form-input" placeholder={f.placeholder} title={f.hint}
-                      value={sdefFields[f.key] || ""}
+                      value={sdefVal(f.key)}
                       onChange={e => handleSdefChange(f.key, e.target.value)}
                       style={{ height: 30, fontSize: 11 }} />
                   </div>
@@ -272,7 +256,7 @@ export default function SourceTab() {
                       <div key={f.key} className="form-group" style={{ maxWidth: 120 }}>
                         <label className="form-label" style={{ fontSize: 9 }} title={f.hint}>{f.keyword} {f.label}</label>
                         <input id={f.key} className="form-input" placeholder={f.placeholder} title={f.hint}
-                          value={sdefFields[f.key] || ""}
+                          value={sdefVal(f.key)}
                           onChange={e => handleSdefChange(f.key, e.target.value)}
                           style={{ height: 30, fontSize: 11 }} />
                       </div>
@@ -324,7 +308,7 @@ export default function SourceTab() {
               <span className="card-title">SI/SP/SB/DS 分布</span>
               <button className="btn btn-success btn-xs" onClick={() => {
                 const nextId = distributions.reduce((m, d) => Math.max(m, d.id), 0) + 1 || 1;
-                setDistributions([...distributions, {
+                writeDistributions([...distributions, {
                   id: nextId, paramRef: "", auto: false,
                   si: { type: "L", values: ["", ""] },
                   sp: { type: "D", values: [""], fnCode: "", fnParams: [] },
@@ -339,8 +323,8 @@ export default function SourceTab() {
             ) : (
               distributions.map((d, i) => (
                 <DistributionEditor key={d.id} entry={d}
-                  onChange={(nd) => { const c = [...distributions]; c[i] = nd; setDistributions(c); }}
-                  onDelete={() => setDistributions(distributions.filter((_, j) => j !== i))} />
+                  onChange={(nd) => { const c = [...distributions]; c[i] = nd; writeDistributions(c); }}
+                  onDelete={() => writeDistributions(distributions.filter((_, j) => j !== i))} />
               ))
             )}
           </div>
@@ -352,10 +336,20 @@ export default function SourceTab() {
         <div className="glass-card">
           <div className="card-header"><span className="card-title">面源 (SSW/SSR)</span></div>
           <SswSsrForm
-            ssw={deck.sswFields || { surf: "", sym: "", pty: "", cel: "" }}
-            ssr={deck.ssrFields || { surf: "", mode: "", cel: "", pty: "", col: "", wgt: "", tr: "", psc: "" }}
-            onChangeSsw={(s) => patch({ sswFields: s })}
-            onChangeSsr={(s) => patch({ ssrFields: s })} />
+            ssw={{ surf: adv.ssw_surf || "", sym: adv.ssw_sym || "", pty: adv.ssw_pty || "", cel: adv.ssw_cel || "" }}
+            ssr={{
+              surf: adv.ssr_surf || "", mode: adv.ssr_mode || "", cel: adv.ssr_cel || "", pty: adv.ssr_pty || "",
+              col: adv.ssr_col || "", wgt: adv.ssr_wgt || "", tr: adv.ssr_tr || "", psc: adv.ssr_psc || "",
+            }}
+            onChangeSsw={(s) => patch({ adv: {
+              ...adv,
+              ssw_surf: s.surf || "", ssw_sym: s.sym || "", ssw_pty: s.pty || "", ssw_cel: s.cel || "",
+            } })}
+            onChangeSsr={(s) => patch({ adv: {
+              ...adv,
+              ssr_surf: s.surf || "", ssr_mode: s.mode || "", ssr_cel: s.cel || "", ssr_pty: s.pty || "",
+              ssr_col: s.col || "", ssr_wgt: s.wgt || "", ssr_tr: s.tr || "", ssr_psc: s.psc || "",
+            } })} />
         </div>
       )}
 
@@ -369,27 +363,27 @@ export default function SourceTab() {
                 <div key={id} className="form-group" style={{ maxWidth: 150 }}>
                   <label className="form-label">{label}</label>
                   <input id={id} className="form-input" placeholder={ph}
-                    value={(deck.kcodeFields || {})[id] || ""}
-                    onChange={e => patch({ kcodeFields: { ...(deck.kcodeFields || {}), [id]: e.target.value } })}
+                    value={adv[id] || ""}
+                    onChange={e => setAdvField(id, e.target.value)}
                     style={{ height: 30, fontSize: 11 }} />
                 </div>
               ))}
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
               <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-secondary)" }}>
-                <input type="checkbox" checked={!!(deck.kcodeFields || {}).hsrc_enabled}
-                  onChange={e => patch({ kcodeFields: { ...(deck.kcodeFields || {}), hsrc_enabled: e.target.checked ? "1" : "" } })} />
+                <input type="checkbox" checked={!!adv.hsrc_enabled}
+                  onChange={e => patch({ adv: { ...adv, hsrc_enabled: e.target.checked } })} />
                 HSRC 香农熵网格
               </label>
               <input className="form-input" style={{ flex: 1, height: 28, fontSize: 11 }} placeholder="nx xmin xmax ny ymin ymax nz zmin zmax，如 10 -100 100 10 -100 100 10 -100 100"
-                value={(deck.kcodeFields || {}).hsrc_text || ""}
-                onChange={e => patch({ kcodeFields: { ...(deck.kcodeFields || {}), hsrc_text: e.target.value } })} />
+                value={adv.hsrc_text || ""}
+                onChange={e => setAdvField("hsrc_text", e.target.value)} />
             </div>
           </div>
           <div className="glass-card">
             <div className="card-header">
               <span className="card-title">KSRC 源点</span>
-              <button className="btn btn-success btn-xs" onClick={() => setKsrc([...ksrcPoints, { x: "0", y: "0", z: "0" }])}>+ 添加点</button>
+              <button className="btn btn-success btn-xs" onClick={() => writeKsrc([...ksrcPoints, { x: "0", y: "0", z: "0" }])}>+ 添加点</button>
             </div>
             <div className="table-wrap">
               <table>
@@ -397,12 +391,12 @@ export default function SourceTab() {
                 <tbody>
                   {ksrcPoints.map((p, i) => (
                     <tr key={i}>
-                      <td><input className="form-input" value={p.x} onChange={e => { const c = [...ksrcPoints]; c[i] = { ...c[i], x: e.target.value }; setKsrc(c); }} style={{ height: 28, fontSize: 12 }} /></td>
-                      <td><input className="form-input" value={p.y} onChange={e => { const c = [...ksrcPoints]; c[i] = { ...c[i], y: e.target.value }; setKsrc(c); }} style={{ height: 28, fontSize: 12 }} /></td>
-                      <td><input className="form-input" value={p.z} onChange={e => { const c = [...ksrcPoints]; c[i] = { ...c[i], z: e.target.value }; setKsrc(c); }} style={{ height: 28, fontSize: 12 }} /></td>
+                      <td><input className="form-input" value={p.x} onChange={e => updKsrc(i, "x", e.target.value)} style={{ height: 28, fontSize: 12 }} /></td>
+                      <td><input className="form-input" value={p.y} onChange={e => updKsrc(i, "y", e.target.value)} style={{ height: 28, fontSize: 12 }} /></td>
+                      <td><input className="form-input" value={p.z} onChange={e => updKsrc(i, "z", e.target.value)} style={{ height: 28, fontSize: 12 }} /></td>
                       <td>
                         <button className="btn btn-ghost btn-xs" onClick={() => setEditPt(i)}>✎</button>
-                        <button className="btn btn-danger btn-xs" onClick={() => setKsrc(ksrcPoints.filter((_, j) => j !== i))}>×</button>
+                        <button className="btn btn-danger btn-xs" onClick={() => writeKsrc(ksrcPoints.filter((_, j) => j !== i))}>×</button>
                       </td>
                     </tr>
                   ))}

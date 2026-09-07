@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useRef } from "react";
 import GridEditor from "./GridEditor";
 import TextModeSection from "./TextModeSection";
 import DocViewer from "./DocViewer";
@@ -8,6 +8,7 @@ import { ptracFromDict } from "../ptrac/ptracState";
 import { fmeshDefsToRows } from "../volume/fmeshState";
 import { useDeck } from "../utils/DeckContext";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
+import { useDeckSynced } from "../utils/useDeckSynced";
 
 type TallyType = "F1" | "F2" | "F4" | "F5" | "F6" | "F7" | "F8";
 type TallyPrefix = "" | "*" | "+";
@@ -73,8 +74,27 @@ export function parseF5Variant(val: string): { num: string; label: string } {
 
 export default function TallyTab() {
   const [doc, setDoc] = useState<{path:string;title:string}|null>(null);
-  const [tallies, setTallies] = useState<Tally[]>([]);
   const { deck, patch } = useDeck();
+  // 计数列表：deck.tallies(snake) 单一权威，本地工作副本带稳定 id（共享 hook 收敛推拉守卫）
+  const idsRef = useRef<number[]>([]);   // 按位置缓存上次的 tally id：number 变化不复位 key，避免输入光标丢失
+  const deckToLocalT = (ds: any[]): Tally[] => {
+    const used = new Set<number>();
+    return (ds || []).map((t, i) => {
+      let id = idsRef.current[i];
+      if (id === undefined || used.has(id)) {
+        id = (t.number && t.type) ? (t.number * 10 + (t.type.charCodeAt(1) - 48) + (t.particle?.charCodeAt(0) || 0)) : (i + 1);
+        while (used.has(id)) id++;
+      }
+      used.add(id);
+      return { id, prefix: "" as const, type: t.type as any, number: String(t.number), particle: t.particle, params: t.params, multiplier: t.multiplier || "", enableEn: t.enableEn || false, enableTn: t.enableTn || false };
+    });
+  };
+  const localToDeckT = (ts: Tally[]) => ts.map(t => ({ type: t.type, number: parseInt(t.number) || 0, particle: t.particle || "n", params: t.params, multiplier: t.multiplier, enableEn: t.enableEn, enableTn: t.enableTn }));
+  const [tallies, setTallies] = useDeckSynced<Tally[], any[]>({
+    deck, patch, key: "tallies",
+    fromDeck: (v) => { const next = deckToLocalT(v || []); idsRef.current = next.map(t => t.id); return next; },
+    toDeck: localToDeckT,
+  });
   // 文本↔表单互转（深模块：逻辑在 useSectionTextMode 一处）
   const tallyText = useSectionTextMode("tally", {
     deck, patch, overrideKey: "tally",
@@ -94,50 +114,8 @@ export default function TallyTab() {
         alert("F 计数卡含其它字段，已填入高级标签页的『其他卡片』框：\n\n" + others.join("\n"));
       }
     },
-    initialText: deck.rawOverrides?.tally || "",
-    initialMode: deck.textMode?.tally,
   });
-  const { rawMode: tallyRawMode, rawText: tallyRawText, busy: tallyBusy, setRawText: setTallyRawText, toggleRawMode: toggleTallyRawMode, onDiscard: discardTallyRaw } = tallyText;
-  const lastPushRef = useRef("[]");       // 初始为 []：挂载时空 tallies 不把导入的 deck.tallies 冲成 []
-  const lastPullRef = useRef<string|null>(null);  // 只在 deck 数据确实变了才拉
-  const idsRef = useRef<number[]>([]);    // 按位置缓存上次的 tally id：number 变化不复位 key，避免输入光标丢失
-  // local → deck
-  useEffect(() => {
-    const mapped = tallies.map(t => ({ type: t.type, number: parseInt(t.number)||0, particle: t.particle || "n", params: t.params, multiplier: t.multiplier, enableEn: t.enableEn, enableTn: t.enableTn }));
-    const json = JSON.stringify(mapped);
-    if (json !== lastPushRef.current) { lastPushRef.current = json; patch({ tallies: mapped }); }
-  }, [tallies]);
-  // deck → local（仅首次 + deck 真正变化时）
-  useEffect(() => {
-    if (!deck.tallies?.length) return;
-    const json = JSON.stringify(deck.tallies);
-    if (json === lastPullRef.current) return;
-    lastPullRef.current = json;
-    // 给每个 tally 分配稳定 id：优先按位置复用上次的 id（number 变化不改变 key，行不重挂载，输入光标不丢失）；
-    // 新行回退到 number+type+particle 种子，且保证不重复。
-    const used = new Set<number>();
-    const next = deck.tallies.map((t, i) => {
-      let id = idsRef.current[i];
-      if (id === undefined || used.has(id)) {
-        id = (t.number && t.type) ? (t.number * 10 + (t.type.charCodeAt(1)-48) + (t.particle?.charCodeAt(0)||0)) : (i + 1);
-        while (used.has(id)) id++;
-      }
-      used.add(id);
-      return {
-        id,
-        prefix: "" as const,
-        type: t.type as any,
-        number: String(t.number),
-        particle: t.particle,
-        params: t.params,
-        multiplier: t.multiplier || "",
-        enableEn: t.enableEn || false,
-        enableTn: t.enableTn || false,
-      };
-    });
-    idsRef.current = next.map(t => t.id);
-    setTallies(next);
-  }, [deck.tallies]);
+  const { rawMode: tallyRawMode, rawText: tallyRawText, busy: tallyBusy, toggleRawMode: toggleTallyRawMode, onDiscard: discardTallyRaw } = tallyText;
   const addTally = () => {
     const nums = tallies.map((t) => parseInt(t.number) || 0);
     const maxNum = nums.length > 0 ? Math.max(...nums) : 0;
@@ -167,7 +145,7 @@ export default function TallyTab() {
       <div className="glass-card">
         <TextModeSection label="计数卡" active={tallyRawMode} onToggle={toggleTallyRawMode} onDiscard={discardTallyRaw} />
         {tallyRawMode ? (
-          <textarea className="form-input" value={tallyRawText} onChange={e => {setTallyRawText(e.target.value);patch({rawOverrides:{...deck.rawOverrides,tally:e.target.value}});}}
+          <textarea className="form-input" value={tallyRawText} onChange={e => patch({rawOverrides:{...deck.rawOverrides,tally:e.target.value}})}
             style={{width:"100%",minHeight:200,fontFamily:"Consolas,monospace",fontSize:12}} placeholder="计数卡原始文本..." />
         ) : (
         <><div className="card-header"><span className="card-title" style={{flexShrink:0}}>计数卡 (Tally)</span>

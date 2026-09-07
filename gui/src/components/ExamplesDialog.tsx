@@ -5,6 +5,7 @@
  */
 import React, { useState } from "react";
 import { createPortal } from "react-dom";
+import { getAppPortalRoot } from "../utils/appScale";
 import FloatingDialog from "./FloatingDialog";
 import DocViewer from "./DocViewer";
 
@@ -92,10 +93,11 @@ export default function ExamplesDialog({ onClose }: { onClose: () => void }) {
       ),
     ),
     err ? React.createElement("div", { style: { color: "#e53935", fontSize: 12, marginTop: 6 } }, err) : null,
-    /* 查看卡文本用 portal 挂到 body，避免被示例库弹窗（overflow:hidden）裁剪 */
+    /* 查看卡文本用 portal 挂到缩放容器（#app-portal-root），随 .app-shell 一起等比缩放；
+       原挂 body 会不缩放。外层示例库弹窗有 overflow:hidden，仍由此 portal 避免裁剪 */
     doc ? createPortal(
       React.createElement(DocViewer, { path: doc.path, title: doc.title, onClose: () => setDoc(null) }),
-      document.body,
+      getAppPortalRoot(),
     ) : null,
   );
 }

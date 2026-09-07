@@ -6,6 +6,7 @@
  */
 import React, { useRef, useEffect, useState } from "react";
 import { useDeck } from "../utils/DeckContext";
+import { useAppScale } from "../utils/appScale";
 
 /* ---- 类型 ---- */
 interface Polygon3D {
@@ -82,6 +83,8 @@ function makeProjector(base: { u: number[]; v: number[]; ox: number; oy: number;
 export default function CrossSectionView({ slices, plane, onClose, onPlaneChange, cellComments }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const groupRef = useRef<SVGGElement>(null);
+  // 主/子窗口等比缩放时，悬停标签定位用「真实像素」坐标而容器走缩放后坐标系，需除以 scale。
+  const scale = useAppScale();
   const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: 600, h: 500 });
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
@@ -174,7 +177,7 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
     const g = groupRef.current;
     if (!svg || !g || !baseProj) return;
     const r = svg.getBoundingClientRect();
-    setHoverPos({ x: e.clientX - r.left + 10, y: e.clientY - r.top - 10 });
+    setHoverPos({ x: (e.clientX - r.left + 10) / scale, y: (e.clientY - r.top - 10) / scale });
     // 用 SVG DOM 自带的屏幕矩阵（getScreenCTM）换算鼠标坐标到 <g> 本地用户坐标。
     // 该矩阵已包含 viewBox 缩放 + preserveAspectRatio 留白 + 组变换
     // scale(1,-1) rotate(θ)，一键求逆即可，不再手工拆解变换 —— 消除所有位移偏差。
