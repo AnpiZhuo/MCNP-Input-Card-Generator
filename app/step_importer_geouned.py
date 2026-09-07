@@ -67,9 +67,9 @@ class GeoUnedConverter:
         freecad_bin = self._get_freecad_bin()
         if not freecad_bin:
             return "未检测到 FreeCAD，请安装或指定 FreeCAD 路径"
-        python_exe = os.path.join(freecad_bin, "python.exe")
-        if not os.path.isfile(python_exe):
-            return f"FreeCAD 缺少 python.exe: {python_exe}"
+        python_exe = self._find_python_exe(freecad_bin)
+        if not python_exe:
+            return f"FreeCAD 缺少 python.exe: {freecad_bin}"
         if not os.path.isfile(self._WORKER_SCRIPT):
             return f"缺少 geouned worker 脚本: {self._WORKER_SCRIPT}"
         geouned_path = self._resolve_geouned_path()
@@ -113,7 +113,9 @@ class GeoUnedConverter:
             "settings": _map_app_settings_to_geouned(settings),
         })
 
-        python_exe = os.path.join(self._get_freecad_bin(), "python.exe")
+        python_exe = self._find_python_exe(self._get_freecad_bin())
+        if not python_exe:
+            raise RuntimeError("FreeCAD python.exe 未找到")
         proc = subprocess.run(
             [python_exe, self._WORKER_SCRIPT],
             input=worker_input,
@@ -142,6 +144,18 @@ class GeoUnedConverter:
         return mcnp_path
 
     # ── 辅助 ──
+
+    @staticmethod
+    def _find_python_exe(freecad_bin: str) -> str | None:
+        """在 FreeCAD 目录中查找 python.exe（支持便携版）。"""
+        candidates = [
+            os.path.join(freecad_bin, "python.exe"),
+            os.path.join(freecad_bin, "bin", "python.exe"),
+        ]
+        for p in candidates:
+            if os.path.isfile(p):
+                return p
+        return None
 
     def _get_freecad_bin(self) -> Optional[str]:
         if self._freecad_bin:

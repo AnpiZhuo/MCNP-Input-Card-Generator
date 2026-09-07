@@ -41,22 +41,26 @@ fn start_dragging_window(window: tauri::Window) {
 // ── 独立弹出窗口（3D 预览 / 截面）──
 // 主窗口点按钮 → 写 localStorage 数据桥 → 调此命令开窗。
 // 若目标窗口已存在则 show + focus（不重复开），否则新建。
+// URL 带 hash 片段：前端 WindowRouter 同步读取 hash 立即渲染对应组件，
+// 消除「先闪主界面再切子窗口」的闪烁（P0，2026-09）。
 fn create_or_focus(
     app: &tauri::AppHandle,
     label: &str,
     title: &str,
     width: f64,
     height: f64,
+    hash: &str,
 ) -> Result<(), String> {
     if let Some(win) = app.get_window(label) {
         let _ = win.show();
         let _ = win.set_focus();
         return Ok(());
     }
+    let url = format!("index.html#/{}", hash);
     tauri::WindowBuilder::new(
         app,
         label,
-        tauri::WindowUrl::App("index.html".into()),
+        tauri::WindowUrl::App(url.into()),
     )
     .title(title)
     .inner_size(width, height)
@@ -67,25 +71,25 @@ fn create_or_focus(
 
 #[tauri::command]
 async fn open_preview3d_window(app: tauri::AppHandle) -> Result<(), String> {
-    create_or_focus(&app, "preview3d", "3D 预览", 1300.0, 820.0)
+    create_or_focus(&app, "preview3d", "3D 预览", 1300.0, 820.0, "preview3d")
 }
 
 #[tauri::command]
 async fn open_cross_section_window(app: tauri::AppHandle) -> Result<(), String> {
-    create_or_focus(&app, "cross_section", "截面", 1000.0, 700.0)
+    create_or_focus(&app, "cross_section", "截面", 1000.0, 700.0, "cross_section")
 }
 
 #[tauri::command]
 async fn open_volume3d_window(app: tauri::AppHandle) -> Result<(), String> {
     // label 必须与 App.tsx WindowRouter 路由分支同值（"volume"→ResultWindow）。
     // 曾用 "volume3d"：与路由 "volume" 不匹配 → 子窗口渲染整个主应用（P0，已修）。
-    create_or_focus(&app, "volume", "3D 结果", 1300.0, 820.0)
+    create_or_focus(&app, "volume", "3D 结果", 1300.0, 820.0, "volume")
 }
 
 #[tauri::command]
 async fn open_ptrac_window(app: tauri::AppHandle) -> Result<(), String> {
     // label 必须与 App.tsx WindowRouter 路由分支同值（"ptrac"→PtracWindow）。
-    create_or_focus(&app, "ptrac", "3D 径迹", 1300.0, 820.0)
+    create_or_focus(&app, "ptrac", "3D 径迹", 1300.0, 820.0, "ptrac")
 }
 
 fn main() {

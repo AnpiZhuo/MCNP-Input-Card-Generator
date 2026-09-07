@@ -416,13 +416,24 @@ function AppInner() {
   );
 }
 
-/** 独立窗口路由：按当前窗口 label 分派渲染（主界面 / 3D 预览 / 截面 / 3D 结果 / 3D 径迹） */
+/** 独立窗口路由：按当前窗口 label 分派渲染（主界面 / 3D 预览 / 截面 / 3D 结果 / 3D 径迹）
+ *
+ * 同步初始化策略：URL hash 在 DOM 挂载前即可读取，免去 useEffect 异步
+ * `currentWindowLabel()` 导致的「先闪主界面再切子窗口」闪烁（P0，2026-09）。
+ * Tauri 子窗口打开时 Rust 侧已写入 `index.html#/preview3d` 等 hash，
+ * 主窗口无 hash → 直接渲染 AppInner。
+ */
 function WindowRouter() {
-  const [label, setLabel] = useState<string>("main");
+  const [label, setLabel] = useState<string>(() => {
+    const h = window.location.hash.replace(/^#\/?/, "");
+    if (h === "preview3d" || h === "cross_section" || h === "volume" || h === "ptrac") return h;
+    return "main";
+  });
   useEffect(() => {
     // 调试入口：URL hash #/preview3d / #/cross_section / #/volume / #/ptrac 可强制窗口类型（浏览器模式测试用）
     const h = window.location.hash.replace(/^#\/?/, "");
     if (h === "preview3d" || h === "cross_section" || h === "volume" || h === "ptrac") { setLabel(h); return; }
+    // 无 hash 时回退到 Tauri window label（鲁棒性兜底）
     currentWindowLabel().then(setLabel).catch(() => setLabel("main"));
   }, []);
   if (label === "preview3d") return <AppScaleProvider designWidth={1300} designHeight={820}><Preview3DWindow /></AppScaleProvider>;

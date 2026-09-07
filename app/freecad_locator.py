@@ -179,9 +179,23 @@ def locate() -> Optional[str]:
 
 
 def bin_dir() -> Optional[str]:
-    """FreeCAD 的 bin 目录（StepImporter.detect_freecad 的契约）。"""
+    """FreeCAD 的 bin 目录（StepImporter.detect_freecad 的契约）。
+
+    便携版（免安装）FreeCAD 的 freecad.exe 可能直接放在根目录（如
+    D:\\FreeCAD\\FreeCAD.exe），而 python.exe 在 bin\\ 子目录。
+    本函数自动检测：如果 freecad.exe 所在目录不含 python.exe，
+    则尝试 bin/ 子目录。
+    """
     p = locate()
-    return os.path.dirname(p) if p else None
+    if not p:
+        return None
+    d = os.path.dirname(p)
+    # 便携版：freecad.exe 在根目录，python.exe 在 bin/ 子目录
+    if not os.path.isfile(os.path.join(d, "python.exe")):
+        alt = os.path.join(d, "bin")
+        if os.path.isfile(os.path.join(alt, "python.exe")):
+            return alt
+    return d
 
 
 def reset_cache() -> None:

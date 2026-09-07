@@ -35,9 +35,14 @@ def get_cross_section(data: dict) -> dict:
     freecad_bin = StepImporter.detect_freecad()
     if not freecad_bin:
         return {"slices": [], "message": "需要 FreeCAD"}
+    # 便携版（免安装）FreeCAD：python.exe 可能在 bin/ 子目录
     python_exe = os.path.join(freecad_bin, "python.exe")
     if not os.path.isfile(python_exe):
-        return {"slices": [], "message": "FreeCAD Python 未找到"}
+        alt = os.path.join(freecad_bin, "bin", "python.exe")
+        if os.path.isfile(alt):
+            python_exe = alt
+        else:
+            return {"slices": [], "message": "FreeCAD Python 未找到"}
 
     # 1. 解析曲面（同 preview-3d）
     pymcnp_surfs = []

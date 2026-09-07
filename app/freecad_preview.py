@@ -469,7 +469,14 @@ class FreeCADEngine:
         """写入临时 JSON → spawn FreeCAD Python → 收集输出"""
         python_exe = os.path.join(self._freecad_bin, "python.exe")
         if not os.path.isfile(python_exe):
-            raise RuntimeError(f"FreeCAD Python 未找到: {python_exe}")
+            # 便携版（免安装）FreeCAD：bin 目录可能不含 python.exe，
+            # 尝试 bin/ 子目录（freecad_locator.bin_dir() 已处理此情况，
+            # 但若调用方绕过 bin_dir() 直接传路径，此处兜底）
+            alt = os.path.join(self._freecad_bin, "bin", "python.exe")
+            if os.path.isfile(alt):
+                python_exe = alt
+            else:
+                raise RuntimeError(f"FreeCAD Python 未找到: {python_exe}")
 
         script_path = self._worker_script_path()
 
