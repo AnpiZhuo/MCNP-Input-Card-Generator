@@ -289,7 +289,8 @@ def parse_tr_cards(text: str) -> dict:
 
 
 
-def build_cells_data(cell_list: list, include_void: bool = True) -> list:
+def build_cells_data(cell_list: list, include_void: bool = True,
+                     force_include_numbers: set[int] | None = None) -> list:
     """把前端栅元 JSON（CellRow 判别联合或旧平铺格式）解析为 FreeCAD CSG 需要的
     cells_data（跳过 raw 条件行；同一栅元号多定义只取第一个）。
 
@@ -301,6 +302,10 @@ def build_cells_data(cell_list: list, include_void: bool = True) -> list:
     前端染成透明色；include_void=False（STEP 导出 / 格阵 universe 裁剪 STL）时跳过
     真空栅元，但 #n 解析仍会用到其几何。pymcnp 几何 AST 解析失败时 ast 置 None
     （预览时该栅元不渲染）。
+
+    force_include_numbers（可选）：强制包含的栅元号集合。水密/缝隙检测需要
+    「外部栅元」的 BRep 实体（通常是 imp=0 的 graveyard 外围，项14 规则平时
+    不渲染），这些栅元默认被跳过 → 用该参数把它们放行（其余跳过规则不变）。
 
     项14 cell 分类规则（用户已确认，2026-08-24）：
       - fill 装配容器（fill 非空 或 fill_grid 非空，含 fill="0"）→ 跳过自身 STL，
@@ -365,17 +370,20 @@ def build_cells_data(cell_list: list, include_void: bool = True) -> list:
     cells_data = []
     for (number, mat_val, density, ast_node, render,
          has_fill, has_fill_grid, is_graveyard) in entries:
-        if not include_void and str(mat_val).split()[0] == "0":
+        # 水密检测等场景强制包含指定栅元（如 graveyard 外部栅元，imp=0 平时不渲染）
+        force = (force_include_numbers is not None
+                 and number in force_include_numbers)
+        if not include_void and str(mat_val).split()[0] == "0" and not force:
             continue  # STEP 导出跳过真空；其几何已在上面的映射里用于 #n 解析
-        if not render:
+        if not render and not force:
             continue  # render:false → 跳过（死代码修复：此前前端传 render 但被忽略）
-        if has_fill or has_fill_grid:
+        if (has_fill or has_fill_grid) and not force:
             # 项14：fill 装配容器不产自身 STL——单值 fill=U（含 fill="0"）由
             # FILL 装配 /api/preview-lattice 展开；格阵 fill_grid 同。与有没有 u、
             # material 是否 0 无关。此前只 skip fill_grid、漏掉单值 fill → 用户
             # 看到「大紫方块」（fill cell 自身几何被当实体渲染）。
             continue
-        if is_graveyard:
+        if is_graveyard and not force:
             continue  # 项14：graveyard（imp=0 外围）不渲染
         if ast_node is not None:
             ast_node = resolve_cell_complements(ast_node, cells_by_num)
@@ -1453,6 +1461,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             "/api/sweep-dashboard": self._handle_sweep_dashboard,
             "/api/diff-inp": self._handle_diff_inp,
             "/api/check-overlap": self._handle_check_overlap,
+            "/api/check-cell-closure": self._handle_check_cell_closure,
             "/api/quick-add-check": self._handle_quick_add_check,
             "/api/validate-lattice-surfaces": self._handle_validate_lattice_surfaces,
             "/api/lattice-extent": self._handle_lattice_extent,
@@ -1813,6 +1822,56 @@ class MCNPHandler(BaseHTTPRequestHandler):
                       "zero_volume": engine.zero_volume}
             _PREVIEW_CACHE.put_overlaps(fp, report)
             self._ok(report)
+        except Exception as e:
+            import traceback
+            self._err(str(e) + " | " + traceback.format_exc())
+
+    def _handle_check_cell_closure(self):
+        """单个栅元封闭性判定：每个 cell 的 BRep 实体是否封闭有界，还是延伸到
+        包围盒边界（无限大空间）或空/退化。不需要外部栅元标记。
+
+        Worker 对每个 cell 判定状态：
+          - closed: 实体有限体积，AABB 不触及包围盒边界
+          - infinite: 实体延伸到包围盒边界（曲面外无限大空间）
+          - semi_infinite: 实体在某轴延伸至边界（非全包围的外无限）
+          - empty: 体积≈0（空/退化）
+          - voxel/unresolvable: GQ/SQ 或解析失败
+        """
+        try:
+            data = self._read_body()
+            surf_text = data.get("surfaces", "")
+            cell_list = [c for c in (data.get("cells", []) or [])
+                         if not _cell_u_of(c)]
+            tr_text = data.get("tr_cards", "")
+
+            StepImporter = _import_app("step_importer").StepImporter
+            FreeCADEngine = _import_app("freecad_preview").FreeCADEngine
+            freecad_bin = StepImporter.detect_freecad()
+            if not freecad_bin:
+                self._ok({"status": "ok", "closure_report": {},
+                          "message": "未检测到 FreeCAD，封闭性检测需要 FreeCAD"})
+                return
+
+            surfs = parse_surfaces(surf_text)
+            if not surfs:
+                self._ok({"status": "ok", "closure_report": {},
+                          "message": "未解析到有效曲面"})
+                return
+
+            tr_cards = parse_tr_cards(tr_text)
+            cells_data = build_cells_data(cell_list, include_void=True)
+            if not cells_data:
+                self._ok({"status": "ok", "closure_report": {},
+                          "message": "没有可检测的栅元"})
+                return
+
+            engine = FreeCADEngine(freecad_bin)
+            engine.build_geometry(surfs, cells_data, tr_cards, fmt="stl",
+                                  check_closure=True)
+            engine.cleanup()
+
+            self._ok({"status": "ok",
+                      "closure_report": engine.closure_report})
         except Exception as e:
             import traceback
             self._err(str(e) + " | " + traceback.format_exc())

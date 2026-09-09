@@ -115,34 +115,40 @@ def _check_surfaces_text(surfaces: str) -> list[str]:
         if stripped.startswith('C ') or stripped.startswith('c '):
             continue
 
-        # 拆分 $ 注释
-        before_dollar = stripped
-        if '$' in stripped:
-            before_dollar = stripped.split('$')[0].strip()
-            if not before_dollar:
-                continue  # 整行只有注释
+        # 拆分 $ 注释（保留原始前导空格以正确统计 MCNP 列号）
+        before_dollar_raw = raw_line.split('$')[0].rstrip()
+        if not before_dollar_raw.strip():
+            continue  # 整行只有注释/空白
+        stripped = before_dollar_raw.strip()
+        if not stripped:
+            continue
 
-        # 数据部分不能有中文
-        if re.search(r'[一-鿿]', before_dollar):
-            errors.append(
-                f"几何：曲面卡第 {line_num} 行的数据部分含有中文字符"
-            )
+        # C 注释行允许任何内容（包括中文）
+        if stripped.startswith('C ') or stripped.startswith('c '):
+            continue
 
-        # 行长度限制（OWEN mcnp.line-length）：数据部分列数 >128 报错，>80 警告
-        n_cols = len(before_dollar)
+        # 行长度限制（OWEN mcnp.line-length）：MCNP 数据区为 1–80 列（续行 81–128 列），
+        # 超出 128 列的部分被截断丢弃。按原始行的 1–128 列计数。
+        n_cols = len(before_dollar_raw)
         if n_cols > _COL_ERROR:
             errors.append(
-                f"几何：曲面卡第 {line_num} 行数据部分 {n_cols} 列超过 {_COL_ERROR} 列"
+                f"几何：曲面卡第 {line_num} 行 {n_cols} 列超过 {_COL_ERROR} 列"
                 "（MCNP 读取到第 128 列即截断，后续参数会丢失）"
             )
         elif n_cols > _COL_WARN:
             errors.append(
-                f"几何：曲面卡第 {line_num} 行数据部分 {n_cols} 列超过 {_COL_WARN} 列"
+                f"几何：曲面卡第 {line_num} 行 {n_cols} 列超过 {_COL_WARN} 列"
                 "（建议拆到续行）"
             )
 
+        # 数据部分不能有中文
+        if re.search(r'[一-鿿]', stripped):
+            errors.append(
+                f"几何：曲面卡第 {line_num} 行的数据部分含有中文字符"
+            )
+
         # 格式检查：曲面号 [TRn] 类型 参数…
-        parts = before_dollar.split()
+        parts = stripped.split()
         if len(parts) < 2:
             errors.append(f"几何：曲面卡第 {line_num} 行格式不完整（至少需要曲面号和类型）")
             continue
@@ -206,6 +212,26 @@ def _check_surfaces_text(surfaces: str) -> list[str]:
     return errors
 
 
+def _collect_surface_numbers(surfaces_text: str) -> set[int]:
+    """从曲面卡文本收集已定义的曲面号集合（用于未定义引用检查）。"""
+    nums = set()
+    for line in surfaces_text.split("\n"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("C ") or stripped.startswith("c "):
+            continue
+        if "$" in stripped:
+            stripped = stripped.split("$")[0].strip()
+            if not stripped:
+                continue
+        parts = stripped.split()
+        if not parts:
+            continue
+        first = parts[0].lstrip("-+")
+        if first.isdigit():
+            nums.add(int(first))
+    return nums
+
+
 def validate_all(
     basic: BasicSettings,
     surfaces: str,
@@ -251,9 +277,21 @@ def validate_all(
     if not cells:
         errors.append("几何：请至少定义一个栅元")
     else:
+        # 先收集已定义曲面号（用于未定义引用检查）
+        defined_surfaces = _collect_surface_numbers(surfaces) if surfaces else set()
         for cell in cells:
             if not cell.surface_expr.strip():
                 errors.append(f"几何：栅元 {cell.number} 的曲面表达式不能为空")
+                continue
+            # 未定义曲面引用检查：提取表达式中的所有数字（曲面号）检查是否已定义
+            if defined_surfaces:
+                expr = cell.surface_expr.strip()
+                for token in re.findall(r"\b\d+\b", expr):
+                    ref_num = int(token)
+                    if ref_num not in defined_surfaces:
+                        errors.append(
+                            f"几何：栅元 {cell.number} 引用了未定义的曲面 {ref_num}"
+                        )
             # 非真空栅元必须有密度
             if cell.material.strip() != "0" and "void" not in cell.material.lower():
                 if not cell.density.strip():

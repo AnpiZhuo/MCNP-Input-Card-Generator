@@ -1,7 +1,7 @@
 """校验器材料级规则测试（交叉核对 OWEN rules.ts validateMCNP 后新增）。"""
 
-from app.generator.validator import validate_all
-from app.models import AdvancedSettings, BasicSettings, MaterialData, MaterialRow
+from app.generator.validator import validate_all, _check_surfaces_text, _collect_surface_numbers
+from app.models import AdvancedSettings, BasicSettings, MaterialData, MaterialRow, CellData
 
 
 def _nuclide(zaid: str, fraction: str) -> MaterialRow:
@@ -69,3 +69,97 @@ def test_sab_target_missing_error():
 def test_unknown_sab_table_ignored():
     m = _mat(1, [_nuclide("92238", "-1.0")], mt_card="xyz.10t")
     assert _mat_errors([m]) == []
+
+
+# ── 曲面文本规则：宏体参数个数 / 行长度（OWEN mcnp.macrobody / mcnp.line-length）──
+
+def test_macrobody_correct_param_count_ok():
+    # RPP 6 参数 → 无错误
+    errs = _check_surfaces_text("1  RPP  -5 5 -5 5 -5 5")
+    assert not [e for e in errs if "参数个数" in e], errs
+
+
+def test_macrobody_wrong_param_count_error():
+    # RPP 缺 2 个参数 → 报参数个数错误
+    errs = _check_surfaces_text("1  RPP  -5 5 -5 5")
+    assert any("RPP" in e and "参数个数" in e for e in errs), errs
+
+
+def test_macrobody_rhp_legal_param_variants_ok():
+    # RHP 支持 9/12/15/18 → 9 参与 12 参都不报个数错
+    errs9 = _check_surfaces_text("2  RHP  0 0 0 0 0 10 5 0 0")
+    errs12 = _check_surfaces_text("2  RHP  0 0 0 0 0 10 5 0 0 2.5 4.33 0")
+    assert not [e for e in errs9 if "参数个数" in e], errs9
+    assert not [e for e in errs12 if "参数个数" in e], errs12
+
+
+def test_macrobody_rhp_illegal_param_count_error():
+    errs = _check_surfaces_text("2  RHP  0 0 0 0 0 10 5")
+    assert any("RHP" in e and "参数个数" in e for e in errs), errs
+
+
+def test_macrobody_with_trailing_trn_ok_and_truncated_error():
+    # 行尾 *TRn 属曲面变换引用，不计入参数个数 → 参数足够时不报错
+    ok_errs = _check_surfaces_text("3  SPH  0 0 0 2  *TR1")
+    assert not [e for e in ok_errs if "参数个数" in e], ok_errs
+    # 但参数不足（只有 3 个数值）仍应报错
+    bad_errs = _check_surfaces_text("3  SPH  0 0 0  *TR1")
+    assert any("SPH" in e and "参数个数" in e for e in bad_errs), bad_errs
+
+
+def test_surface_line_over_128_cols_error():
+    # 数据部分超过 128 列 → 报 >128 截断错误。用很多参数填到>128字。
+    line = "1  RPP  " + " ".join(str(i) for i in range(80))  # 参数填到爆 128 列
+    errs = _check_surfaces_text(line)
+    assert any("128" in e and "列" in e for e in errs), errs
+
+
+def test_surface_line_over_80_under_128_warning():
+    # 80–128 列之间 → 警告
+    # "1  PX  0" = 8 列，剩下填到约 85 列
+    line = "1  PX  0  " + " ".join(str(i) for i in range(30))
+    errs = _check_surfaces_text(line)
+    assert any("80" in e and "列" in e for e in errs), errs
+
+
+def test_surface_line_short_ok():
+    errs = _check_surfaces_text("6  PZ  1")
+    assert not [e for e in errs if "列" in e], errs
+
+
+# ── 未定义曲面引用检查 ──
+
+def _cell(number: int, surface_expr: str) -> CellData:
+    return CellData(number=number, material="0", density="", surface_expr=surface_expr)
+
+
+def _geo_errors(surfaces: str, cells) -> list[str]:
+    errs = validate_all(
+        BasicSettings(title="t", mode_n=True, nps="1000"),
+        surfaces, cells, [], [], None, AdvancedSettings(),
+    )
+    return errs
+
+
+def test_defined_surface_reference_ok():
+    errs = _geo_errors("1  PX  0\n2  PZ  0\n", [_cell(1, "-1 2"), _cell(2, "1 -2")])
+    assert not [e for e in errs if "未定义的曲面" in e], errs
+
+
+def test_undefined_surface_reference_error():
+    errs = _geo_errors("1  PX  0\n", [_cell(1, "-1 2"), _cell(2, "1 99")])
+    assert any("未定义的曲面 99" in e for e in errs), errs
+
+
+def test_collect_surface_numbers():
+    assert _collect_surface_numbers("1  PX  0\nC comment\n3  PZ  5\n") == {1, 3}
+
+
+def test_material_only_density_still_validated():
+    m = _mat(1, [_nuclide("1001", "-1.0")])
+    cell = CellData(number=1, material="1", density="-1.0", surface_expr="-1")
+    errs = validate_all(
+        BasicSettings(title="t", mode_n=True, nps="1000"),
+        "1  SPH  0 0 0  1", [cell], [m], [], None, AdvancedSettings(),
+    )
+    assert not [e for e in errs if "未定义的曲面" in e], errs

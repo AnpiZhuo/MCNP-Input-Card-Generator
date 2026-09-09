@@ -36,7 +36,7 @@
       "active": false,
       "targets": "all",
       "externalBin": [
-        "python"
+        "binaries/python"
       ],
       "identifier": "com.mcnp.generator",
       "icon": [

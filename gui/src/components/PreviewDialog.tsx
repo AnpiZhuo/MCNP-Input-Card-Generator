@@ -20,6 +20,9 @@ interface Props {
   outputPath?: string;
   fileName?: string;
   mcnpExe?: string;
+  /** 生成时栅元封闭性自检警告（可选） */
+  closureGenerateWarn?: string | null;
+  onClearClosureGenerateWarn?: () => void;
 }
 
 const DETECTED_CORES = Math.max(1, (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4);
@@ -85,7 +88,7 @@ const s = {
   err: { color: "#e53935", fontSize: 12, marginTop: 8 },
 };
 
-export default function PreviewDialog({ content, onClose, onRegenerate, outputPath, fileName, mcnpExe }: Props) {
+export default function PreviewDialog({ content, onClose, onRegenerate, outputPath, fileName, mcnpExe, closureGenerateWarn, onClearClosureGenerateWarn }: Props) {
   const safeName = fileName || "output.inp";
 
   const [sweeping, setSweeping] = useState(false);
@@ -295,6 +298,13 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
         <button className="btn btn-ghost btn-sm" onClick={() => { setSweeping(!sweeping); setRun(null); setErr(""); }}>⚙ 扫描参数</button>
         <button className="btn btn-ghost btn-sm" onClick={onClose}>关闭</button>
       </div>}>
+      {closureGenerateWarn && (
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 12px", marginBottom: 8, borderRadius: 6, background: "rgba(229,57,53,0.08)", border: "1px solid rgba(229,57,53,0.3)", fontSize: 11, lineHeight: 1.6 }}>
+          <span style={{ color: "#e53935", flexShrink: 0, fontWeight: 700 }}>⚠</span>
+          <pre style={{ margin: 0, whiteSpace: "pre-wrap", color: "var(--text-primary)" }}>{closureGenerateWarn}</pre>
+          {onClearClosureGenerateWarn && <button className="btn btn-ghost btn-xs" style={{ flexShrink: 0, marginLeft: "auto" }} onClick={onClearClosureGenerateWarn}>×</button>}
+        </div>
+      )}
       {sweeping ? (
         <div style={{ position: "relative", height: 380, border: "1px solid var(--border-glass)", borderRadius: 6, overflow: "hidden" }}>
           {/* 行底条层：每行一条彩色底衬，与 textarea 同行高，随滚动同步 */}

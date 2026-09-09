@@ -127,6 +127,14 @@ out["imp_any_zero"] = [
     _imp_any_zero({}),                             # 无 imp → False
 ]
 
+# 14. force_include_numbers：强制包含外部栅元（水密检测，imp=0 也不跳过）
+out["force_include"] = [
+    c["number"] for c in build_cells_data(
+        [cell(number=1, surface_expr="-1", material="0", impN="0"),
+         cell(number=2, surface_expr="-2")],
+        include_void=True, force_include_numbers={1})
+]
+
 print("RESULT=" + json.dumps(out, ensure_ascii=False))
 '''
 
@@ -218,3 +226,8 @@ def test_universe_entity_still_produces_stl(classify_results):
 def test_imp_any_zero_graveyard_filter(classify_results):
     """项15：handler 构造 sub_by_u 的 graveyard 过滤（_imp_any_zero）与 build_cells_data 口径一致。"""
     assert classify_results["imp_any_zero"] == [True, True, True, False, False]
+
+
+def test_force_include_graveyard_retained(classify_results):
+    """水密检测 force_include_numbers：graveyard（imp=0）在内的第一栅元被强制包含。"""
+    assert sorted(classify_results["force_include"]) == [1, 2]

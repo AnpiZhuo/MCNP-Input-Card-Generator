@@ -48,6 +48,7 @@ function AppInner() {
     return "dark";
   });
   const [preview, setPreview] = useState<string | null>(null);
+  const [closureGenerateWarn, setClosureGenerateWarn] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"form" | "raw">("form");
   const [rawInp, setRawInp] = useState("");
   const [generating, setGenerating] = useState(false);
@@ -299,6 +300,7 @@ function AppInner() {
 
   const handleGenerate = async () => {
     setGenerating(true);
+    setClosureGenerateWarn(null);
     try {
       // 载荷全部来自 deck（单一权威）——已无 DOM 采集
       const b: Record<string, any> = deck.basic || {};
@@ -337,8 +339,43 @@ function AppInner() {
       };
       const inp = await generateInp(body);
       setPreview(inp);
+      // 生成时栅元封闭性复核：优先读几何页已缓存的自检结果，无则自动检测
+      runGenerateClosureCheck(body, inp);
     } catch (e: any) { setPreview("// 生成失败: " + e.message); }
     finally { setGenerating(false); }
+  };
+
+  // 生成后封闭性复核（后台平行；有未封闭/空/未解析栅元才提示）
+  const runGenerateClosureCheck = async (body: any, inp: string) => {
+    try {
+      let report: any = (deck as any).cellClosureReport || null;
+      if (!report || Object.keys(report).length === 0) {
+        const r = await fetch(apiUrl("/api/check-cell-closure"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            surfaces: body.surfaces || "",
+            cells: body.cells || [],
+            tr_cards: body.tr_cards || "",
+          }),
+        });
+        const j = await r.json();
+        if (j.status !== "ok") return;
+        report = j.closure_report || {};
+        patch({ cellClosureReport: report });
+      }
+      const bad: string[] = [];
+      for (const [num, info] of Object.entries(report || {})) {
+        const st = (info as any)?.status;
+        if (st === "infinite" || st === "semi_infinite") bad.push(`栅元 ${num}（外无限）`);
+        else if (st === "empty") bad.push(`栅元 ${num}（空/退化）`);
+        else if (st === "unresolvable") bad.push(`栅元 ${num}（未解析）`);
+      }
+      if (bad.length) {
+        setClosureGenerateWarn(`⚠ 生成前封闭性自检发现：${bad.join("、")}。` +
+          "外无限栅元若为模型边界（imp=0 包围）属正常；空/未解析栅元请检查几何。");
+      }
+    } catch { /* 后端不可用 → 静默 */ }
   };
 
   const handleImport = () => { setViewMode("raw"); setRawInp("粘贴 INP 内容..."); };
@@ -407,7 +444,7 @@ function AppInner() {
           <TabPanels activeTab={activeTab} onMaterialAdded={(n) => setPendingCell(n)} pendingCellFromMaterial={pendingCell} />
         )}
       </div>
-      {preview && <PreviewDialog content={preview} onClose={() => setPreview(null)} onRegenerate={handleGenerate} outputPath={outputPath} fileName={(deck.basic?.title || "MCNP_Input").replace(/[^a-zA-Z0-9_\-]/g,"_") + suffix} mcnpExe={mcnpInfo.exe || "mcnp6.exe"} />}
+      {preview && <PreviewDialog content={preview} onClose={() => setPreview(null)} onRegenerate={handleGenerate} outputPath={outputPath} fileName={(deck.basic?.title || "MCNP_Input").replace(/[^a-zA-Z0-9_\-]/g,"_") + suffix} mcnpExe={mcnpInfo.exe || "mcnp6.exe"} closureGenerateWarn={closureGenerateWarn} onClearClosureGenerateWarn={() => setClosureGenerateWarn(null)} />}
       {aiOpen && <AiAccessPanel mcpUrl={ai.mcpUrl} status={ai.status} onClose={() => setAiOpen(false)} />}
       {/* Portal 根节点：createPortal 弹窗挂到这里才能随缩放容器一起等比缩放（见 utils/appScale.tsx）。
           零尺寸 + absolute：不占布局、不遮挡点击；挂进来的固定定位弹窗按缩放容器（zoom）坐标系定位并缩放 */}

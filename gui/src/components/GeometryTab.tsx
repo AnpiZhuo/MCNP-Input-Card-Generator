@@ -285,6 +285,46 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     onCheckFail: (e) => setQuickCheckWarn(quickAddCheckFailedMessage(e)),
   });
 
+  // ── 栅元封闭性检测（每个栅元独立的 closed/infinite/empty 判定，FreeCAD BRep）──
+  const [closureBusy, setClosureBusy] = useState(false);
+  const [closureReport, setClosureReport] = useState<Record<string, any> | null>(null);
+  const [closureErr, setClosureErr] = useState<string | null>(null);
+
+  const runCellClosureCheck = async (opts?: { silent?: boolean }) => {
+    setClosureBusy(true);
+    setClosureErr(null);
+    setClosureReport(null);
+    try {
+      const r = await fetch(apiUrl("/api/check-cell-closure"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          surfaces: surfTextRef.current,
+          cells: cellsRef.current,
+          tr_cards: trTextRef.current,
+        }),
+      });
+      const j = await r.json();
+      if (j.status !== "ok") throw new Error(j.message || "检测失败");
+      setClosureReport(j.closure_report || {});
+      if (opts?.silent && j.message) setClosureErr(j.message);
+    } catch (e: any) {
+      if (!opts?.silent) setClosureErr(e?.message || "检测失败");
+    } finally {
+      setClosureBusy(false);
+    }
+  };
+
+  // 保存栅元时自动触发（静默异步）
+  const saveCellAndCheck = (d: CellData) => {
+    const c = [...cells];
+    c[editCell!] = { kind: "cell", cell: d };
+    setCells(c);
+    setEditCell(null);
+    // 等 state flush 后异步触发封闭性检测
+    setTimeout(() => runCellClosureCheck({ silent: true }), 50);
+  };
+
   const handleQuickCellGenerate = (result: QuickCellResult) => {
     // 生成入口（3D 预览）已处理重合决策：应用补丁后直接加入，不再重复弹窗
     if (result.overlapHandled || result.checkOverlap === false) {
@@ -477,7 +517,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
 
   return (
     <>
-      {editCell !== null && cells[editCell]?.kind === "cell" && <CellEditDialog cell={cells[editCell].cell} onSave={(d) => { const c = [...cells]; c[editCell] = { kind: "cell", cell: d }; setCells(c); setEditCell(null); }} onClose={() => setEditCell(null)} availableMats={deck.materials} onOpenLattice={() => openLatticeEdit(editCell)} />}
+      {editCell !== null && cells[editCell]?.kind === "cell" && <CellEditDialog cell={cells[editCell].cell} onSave={saveCellAndCheck} onClose={() => setEditCell(null)} availableMats={deck.materials} onOpenLattice={() => openLatticeEdit(editCell)} />}
       {latticeOpen && <LatticeEditDialog
         surfacesText={surfText}
         deckCells={cells.filter(c => c.kind === "cell").map(c => c.cell)}
@@ -586,7 +626,55 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
           <button className="btn btn-ghost btn-xs" onClick={() => setShowStepDlg(true)}>📥 导入 STEP</button>
           <button className="btn btn-primary btn-xs" onClick={handlePreview3D}>🔍 3D 预览</button>
           <button className="btn btn-ghost btn-xs" onClick={handleExportSTEP}>📐 导出 STEP</button>
+          <button className="btn btn-primary btn-xs" style={{ marginLeft: 8 }}
+            disabled={closureBusy}
+            onClick={() => runCellClosureCheck()}>
+            {closureBusy ? "自检中…" : "🩺 几何自检"}
+          </button>
         </div>
+        {/* 栅元封闭性检测结果面板 */}
+        {closureErr && (
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
+            <span style={{ fontSize: 11, color: "#e53935", maxWidth: 640 }}>⚠ {closureErr}</span>
+          </div>
+        )}
+        {closureReport && !closureErr && (
+          <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.6, padding: "6px 10px", borderRadius: 6, background: "rgba(255,255,255,0.05)", border: "1px solid var(--border-glass)" }}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>栅元封闭性自检</div>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr style={{ color: "var(--text-secondary)", fontSize: 10 }}>
+                <th style={{ padding: "2px 6px", textAlign: "left" }}>栅元</th>
+                <th style={{ padding: "2px 6px", textAlign: "center" }}>状态</th>
+                <th style={{ padding: "2px 6px", textAlign: "right" }}>体积 (mm³)</th>
+                <th style={{ padding: "2px 6px", textAlign: "left" }}>说明</th>
+              </tr></thead>
+              <tbody>
+                {Object.entries(closureReport).map(([num, info]: [string, any]) => {
+                  const st = info?.status || "unknown";
+                  const color = st === "closed" ? "#2e7d32" : st === "infinite" ? "#e53935" : st === "semi_infinite" ? "#f9a825" : "var(--text-tertiary)";
+                  const label: Record<string, string> = { closed: "封闭 ✓", infinite: "外无限 ✗", semi_infinite: "部分无限", empty: "空/退化", voxel: "体素网格", unresolvable: "未解析" };
+                  const labelText = label[st] || st;
+                  const detail = st === "infinite" || st === "semi_infinite"
+                    ? `延伸至包围盒 ${(info.infinite_axes || []).join("/")} 轴`
+                    : st === "empty" ? "体积≈0"
+                    : st === "voxel" ? "GQ/SQ 体素网格"
+                    : st === "unresolvable" ? "几何解析失败"
+                    : (info?.aabb ? `包围盒有限` : "");
+                  return (
+                    <tr key={num} style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+                      <td style={{ padding: "2px 6px", fontWeight: 600 }}>{num}</td>
+                      <td style={{ padding: "2px 6px", textAlign: "center", color }}>{labelText}</td>
+                      <td style={{ padding: "2px 6px", textAlign: "right", fontFamily: "monospace" }}>
+                        {info?.volume != null ? info.volume.toFixed(1) : "—"}
+                      </td>
+                      <td style={{ padding: "2px 6px", color: "var(--text-tertiary)" }}>{detail}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
         {/* GPU 偏好提示（独占一行，右对齐，位于按钮行下方）：自检 / 设置结果 */}
         {(gpuPrefMsg || (gpu && !gpu.discrete && !gpuPrefSel)) && (
           <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>

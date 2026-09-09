@@ -1445,6 +1445,57 @@ paths:
                       truncated: { type: boolean }
                       unresolved: { type: array }
 
+  /api/check-cell-closure:
+    post:
+      operationId: checkCellClosure
+      tags: [geometry]
+      summary: 单个栅元封闭性判定（closed/infinite/semi_infinite/empty/voxel/unresolvable）
+      description: |
+        入参 {surfaces, cells, tr_cards}。无需外部栅元标记。FreeCAD BRep 对每个栅元
+        判定封闭性：实体 AABB 不触及包围盒边界且体积>0 → closed；实体延伸到包围盒
+        边界（曲面外无限大空间）→ infinite（三轴均触界）或 semi_infinite（部分轴）；
+        体积≈0 → empty；GQ/SQ 体素网格 → voxel；解析失败 → unresolvable。
+        响应 {status, closure_report: {cellNum: {status, volume, aabb, infinite_axes}}}。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                surfaces: { type: string }
+                cells: { type: array }
+                tr_cards: { type: string }
+      responses:
+        '200':
+          description: 检测结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      closure_report:
+                        type: object
+                        additionalProperties:
+                          type: object
+                          properties:
+                            status: { type: string }
+                            volume: { type: number, nullable: true }
+                            aabb:
+                              type: object
+                              nullable: true
+                              properties:
+                                xmin: { type: number }
+                                xmax: { type: number }
+                                ymin: { type: number }
+                                ymax: { type: number }
+                                zmin: { type: number }
+                                zmax: { type: number }
+                            infinite_axes: { type: array, nullable: true }
+                      message: { type: string }
+
   /api/validate-lattice-surfaces:
     post:
       operationId: validateLatticeSurfaces

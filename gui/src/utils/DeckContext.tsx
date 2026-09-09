@@ -69,6 +69,8 @@ export interface DeckData {
   // U 组头文字（项9，snake_case 与后端一致）：universeComments[U] = 用户自定义组头文本。
   // 可选（旧 deck / 旧 loadDeck 数据无此字段，向后兼容；DEFAULT 恒提供 {}）
   universeComments?: Record<string, string>;
+  /** 栅元封闭性检测结果缓存（GeometryTab 自检用，不参与 INP 生成） */
+  cellClosureReport?: Record<string, {status:string;volume?:number|null;aabb?:any;infinite_axes?:string[]}> | null;
 }
 
 const DEFAULT: DeckData = {
@@ -78,6 +80,7 @@ const DEFAULT: DeckData = {
   sourceTemplate: "free",
   rawOverrides: {}, textMode: {},
   universeComments: {},
+  cellClosureReport: null,
 };
 
 interface Ctx {

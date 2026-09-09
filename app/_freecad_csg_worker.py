@@ -1119,6 +1119,61 @@ def main():
         report = classify_overlaps(results_raw, cells_meta)
         overlaps = report["overlaps"]
 
+    # Step 3.6: 栅元封闭性判定 (check_closure 时)
+    # 对每个成功构建 BRep 的栅元判定三种状态：
+    #   closed  — BRep 实体有界（AABB 不触及包围盒边界），体积>0
+    #   infinite — 实体延伸到包围盒边界（曲面外无限大空间）
+    #   empty    — 空/退化几何（体积≈0）
+    # 体素网格（GQ/SQ）标记为 unresolvable（跳过判定）。
+    closure_report = {}
+    if data.get("check_closure"):
+        bb = bound_box.BoundBox
+        bb_lo = (bb.XMin, bb.YMin, bb.ZMin)
+        bb_hi = (bb.XMax, bb.YMax, bb.ZMax)
+        for cell in data.get("cells", []):
+            num = cell["number"]
+            shape = results.get(str(num))
+            if shape is None:
+                closure_report[num] = {"status": "unresolvable", "volume": None, "aabb": None}
+                continue
+            if isinstance(shape, FcMesh.Mesh):
+                closure_report[num] = {"status": "voxel", "volume": None, "aabb": None}
+                continue
+            try:
+                vol = float(shape.Volume)
+            except Exception:
+                closure_report[num] = {"status": "unresolvable", "volume": None, "aabb": None}
+                continue
+            if vol <= 1e-6:
+                closure_report[num] = {"status": "empty", "volume": vol, "aabb": None}
+                continue
+            # AABB 检查：cell 是否在某个轴上到达包围盒边界
+            try:
+                cb = shape.BoundBox
+                aabb = {"xmin": cb.XMin, "xmax": cb.XMax,
+                        "ymin": cb.YMin, "ymax": cb.YMax,
+                        "zmin": cb.ZMin, "zmax": cb.ZMax}
+            except Exception:
+                closure_report[num] = {"status": "closed", "volume": vol, "aabb": None}
+                continue
+            # 容差：与包围盒边界距离 < 包围盒 0.5% 长度 → 视为触及边界
+            tol = B * 0.005
+            touch = []
+            if abs(cb.XMin - bb_lo[0]) < tol or abs(cb.XMax - bb_hi[0]) < tol:
+                touch.append("x")
+            if abs(cb.YMin - bb_lo[1]) < tol or abs(cb.YMax - bb_hi[1]) < tol:
+                touch.append("y")
+            if abs(cb.ZMin - bb_lo[2]) < tol or abs(cb.ZMax - bb_hi[2]) < tol:
+                touch.append("z")
+            if len(touch) >= 3:
+                status = "infinite"
+            elif len(touch) > 0:
+                status = "semi_infinite"
+            else:
+                status = "closed"
+            closure_report[num] = {"status": status, "volume": vol, "aabb": aabb,
+                                   "infinite_axes": touch}
+
     # Step 4: 导出
     os.makedirs(out_dir, exist_ok=True)
     single_file = data.get("single_file", False)
@@ -1190,6 +1245,8 @@ def main():
         output["overlap_truncated"] = overlap_truncated
         output["overlap_unresolved"] = overlap_unresolved
         output["zero_volume"] = zero_volume
+    if data.get("check_closure"):
+        output["closure_report"] = closure_report
 
     print(json.dumps(output))
 

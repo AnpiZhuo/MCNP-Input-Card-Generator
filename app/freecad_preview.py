@@ -371,13 +371,24 @@ class FreeCADEngine:
         self.overlap_truncated = False
         self.overlap_unresolved = []
         self.zero_volume = []
+        # 水密/缝隙检测结果（build_geometry(check_watertight=True) 时填充）
+        self.gap_volume = None
+        self.gap_fraction = None
+        self.roi_volume = None
+        self.fused_volume = None
+        self.gap_unresolved_cells = []
+        # 栅元封闭性检测结果（build_geometry(check_closure=True) 时填充）
+        self.closure_report = {}
 
     def build_geometry(self, pymcnp_surfaces: list, cells_data: list,
                        tr_cards: dict, bound: float = 500,
                        fmt: str = "stl", single_file: bool = False,
                        check_overlaps: bool = False,
                        focus_num: int | None = None,
-                       focus_nums: list[int] | None = None) -> dict[int, str]:
+                       focus_nums: list[int] | None = None,
+                       check_watertight: bool = False,
+                       outside_cell_num: int | None = None,
+                       check_closure: bool = False) -> dict[int, str]:
         """从 pymcnp 对象和栅元数据构建各栅元的 CSG 几何。
 
         Args:
@@ -387,6 +398,13 @@ class FreeCADEngine:
             bound: 半空间包围盒半边长 (BOUND)
             fmt: 输出格式 ("stl" | "step")
             single_file: True=所有栅元合并为单个文件, False=每个栅元单独文件
+            check_overlaps: True=同时做栅元重合检测，结果存 self.overlaps 等
+            focus_num / focus_nums: 重合检测聚焦栅元（可选）
+            check_watertight: True=同时做水密/缝隙检测（best-effort 诊断，
+                结果存 self.gap_volume / self.gap_fraction 等）
+            outside_cell_num: 外部边界栅元号（check_watertight 时必填）
+            check_closure: True=同时做每个栅元的封闭性判定（closed/infinite/
+                empty/voxel/unresolvable），结果存 self.closure_report
 
         Returns:
             {cell_number: 输出文件路径}
@@ -429,6 +447,9 @@ class FreeCADEngine:
             "format": fmt,
             "single_file": single_file,
             "check_overlaps": check_overlaps,
+            "check_watertight": check_watertight,
+            "outside_cell_num": outside_cell_num,
+            "check_closure": check_closure,
             "focus_nums": focus_nums if focus_nums is not None
             else ([focus_num] if focus_num is not None else None),
         }
@@ -442,6 +463,12 @@ class FreeCADEngine:
         self.overlap_truncated = bool(result_data.get("overlap_truncated", False))
         self.overlap_unresolved = result_data.get("overlap_unresolved", []) or []
         self.zero_volume = result_data.get("zero_volume", []) or []
+        self.gap_volume = result_data.get("gap_volume")
+        self.gap_fraction = result_data.get("gap_fraction")
+        self.roi_volume = result_data.get("roi_volume")
+        self.fused_volume = result_data.get("fused_volume")
+        self.gap_unresolved_cells = result_data.get("gap_unresolved_cells", []) or []
+        self.closure_report = result_data.get("closure_report", {}) or {}
         for cell_num_str, entry in result_data.get("files", {}).items():
             if isinstance(entry, dict) and "vertices" in entry:
                 # fmt="mesh": 直接返回顶点/三角面数据

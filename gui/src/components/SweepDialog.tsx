@@ -38,7 +38,7 @@ interface RunResult { baseDir: string; records: RunRecord[]; summaryTsv: string;
 const s = {
   lbl: { fontSize: 10, fontWeight: 500, color: "var(--text-tertiary)", display: "block", marginBottom: 4 },
   inp: { height: 32, padding: "0 10px", borderRadius: 6, border: "1px solid var(--border-glass)", background: "var(--bg-input)", color: "var(--text-primary)", fontSize: 12, outline: "none", width: "100%" },
-  area: { width: "100%", minHeight: 120, maxHeight: 220, resize: "vertical", padding: 8, borderRadius: 6, border: "1px solid var(--border-glass)", background: "var(--bg-input)", color: "var(--text-primary)", fontSize: 11, fontFamily: "Consolas,monospace", lineHeight: 1.5, outline: "none" },
+  area: { width: "100%", minHeight: 120, maxHeight: 220, resize: "vertical" as const, padding: 8, borderRadius: 6, border: "1px solid var(--border-glass)", background: "var(--bg-input)", color: "var(--text-primary)", fontSize: 11, fontFamily: "Consolas,monospace", lineHeight: 1.5, outline: "none" },
   err: { color: "#e53935", fontSize: 12, marginTop: 8 },
   hint: { fontSize: 11, color: "var(--text-tertiary)", marginTop: 6, lineHeight: 1.5 },
 };
