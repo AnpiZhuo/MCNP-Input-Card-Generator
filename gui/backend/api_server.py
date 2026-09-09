@@ -2729,10 +2729,12 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 self._ok({"stl_files": {}, "message": "没有可预览的栅元"})
                 return
 
-            # 5. FreeCAD CSG → STL
+            # 5. FreeCAD CSG → STL（同时做封闭性检测）
             from freecad_preview import FreeCADEngine
             engine = FreeCADEngine(freecad_bin)
-            result = engine.build_geometry(surfs, cells_data, tr_cards, fmt="stl")
+            result = engine.build_geometry(surfs, cells_data, tr_cards, fmt="stl",
+                                           check_closure=True)
+            closure_report = engine.closure_report or {}
 
             # STL 复制到会话专用目录（engine 析构会删它自己的临时目录，必须复制走）
             _clear_stl_session()  # 覆盖上一轮预览
@@ -2761,7 +2763,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
             engine.cleanup()  # 引擎临时目录可删，会话目录已独立
             # 存入指纹缓存：会话 STL 拷入缓存自有目录，clear-stl 删除会话目录不影响缓存
             _PREVIEW_CACHE.put(fp, {"dir": session_dir, "cells": _STL_SESSION["cells"], "freecad": freecad_bin})
-            self._ok({"stl_files": stl_files, "stl_data": stl_data, "freecad": freecad_bin, "count": len(stl_data)})
+            self._ok({"stl_files": stl_files, "stl_data": stl_data, "freecad": freecad_bin,
+                      "count": len(stl_data), "closure_report": closure_report})
         except Exception as e:
             import traceback
             self._err(str(e) + " | " + traceback.format_exc())

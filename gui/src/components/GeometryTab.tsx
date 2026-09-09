@@ -285,44 +285,44 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     onCheckFail: (e) => setQuickCheckWarn(quickAddCheckFailedMessage(e)),
   });
 
-  // ── 栅元封闭性检测（每个栅元独立的 closed/infinite/empty 判定，FreeCAD BRep）──
-  const [closureBusy, setClosureBusy] = useState(false);
+  // ── 栅元封闭性检测：3D 预览后通过 localStorage 自动获得结果 ──
   const [closureReport, setClosureReport] = useState<Record<string, any> | null>(null);
-  const [closureErr, setClosureErr] = useState<string | null>(null);
 
-  const runCellClosureCheck = async (opts?: { silent?: boolean }) => {
-    setClosureBusy(true);
-    setClosureErr(null);
-    setClosureReport(null);
-    try {
-      const r = await fetch(apiUrl("/api/check-cell-closure"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          surfaces: surfTextRef.current,
-          cells: cellsRef.current,
-          tr_cards: trTextRef.current,
-        }),
-      });
-      const j = await r.json();
-      if (j.status !== "ok") throw new Error(j.message || "检测失败");
-      setClosureReport(j.closure_report || {});
-      if (opts?.silent && j.message) setClosureErr(j.message);
-    } catch (e: any) {
-      if (!opts?.silent) setClosureErr(e?.message || "检测失败");
-    } finally {
-      setClosureBusy(false);
-    }
+  // 状态列渲染 helper
+  const renderClosureStatus = (cellNum: string) => {
+    const info = closureReport?.[cellNum];
+    if (!info || !info.status) return <span style={{ color: "var(--text-tertiary)", fontSize: 11 }}>—</span>;
+    const st = info.status;
+    if (st === "closed") return <span style={{ color: "#2e7d32", fontSize: 12 }} title="封闭">✓</span>;
+    if (st === "infinite" || st === "semi_infinite") return <span style={{ color: "#f9a825", fontSize: 12, fontWeight: 700 }} title={`外无限（${(info.infinite_axes || []).join("/")}轴）`}>!</span>;
+    return <span style={{ color: "#e53935", fontSize: 12, fontWeight: 700 }} title={st === "empty" ? "空/退化" : st === "voxel" ? "体素网格" : "未解析"}>❌</span>;
   };
 
-  // 保存栅元时自动触发（静默异步）
-  const saveCellAndCheck = (d: CellData) => {
+  // 监听 3D 预览写回的封闭性报告
+  useEffect(() => {
+    const handler = () => {
+      try {
+        const raw = localStorage.getItem("mcnp_closure_report");
+        if (!raw) return;
+        const report = JSON.parse(raw);
+        setClosureReport(prev => {
+          const prevKey = prev ? JSON.stringify(prev) : "";
+          const newKey = raw;
+          return prevKey === newKey ? prev : report;
+        });
+      } catch {}
+    };
+    window.addEventListener("storage", handler);
+    handler(); // 首次检查
+    return () => window.removeEventListener("storage", handler);
+  }, []);
+
+  // 保存栅元（不再自动触发封闭性检测）
+  const saveCell = (d: CellData) => {
     const c = [...cells];
     c[editCell!] = { kind: "cell", cell: d };
     setCells(c);
     setEditCell(null);
-    // 等 state flush 后异步触发封闭性检测
-    setTimeout(() => runCellClosureCheck({ silent: true }), 50);
   };
 
   const handleQuickCellGenerate = (result: QuickCellResult) => {
@@ -438,7 +438,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
       out.push(
         <tr key={`raw-${i}`} style={{ background: "rgba(255,255,255,0.04)" }}>
           <td style={{ textAlign: "center" }}><input type="checkbox" disabled /></td>
-          <td colSpan={6} style={{ fontFamily: "Consolas,monospace", fontSize: 12, color: "#ce93d8" }}>{c.text}</td>
+          <td colSpan={7} style={{ fontFamily: "Consolas,monospace", fontSize: 12, color: "#ce93d8" }}>{c.text}</td>
           <td style={{ whiteSpace: "nowrap" }}>
             <button className="btn btn-danger btn-xs" onClick={() => setCells(cells.filter((_, j) => j !== i))}>×</button>
           </td>
@@ -466,7 +466,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
               title="勾选 / 取消该 U 组全部栅元"
             />
           </td>
-          <td colSpan={7} style={{ fontFamily: "Consolas,monospace", fontSize: 12, color: "#ce93d8", fontWeight: 600 }}
+          <td colSpan={8} style={{ fontFamily: "Consolas,monospace", fontSize: 12, color: "#ce93d8", fontWeight: 600 }}
             onDoubleClick={g.u < 0 ? undefined : () => { setEditingGroupU(g.u); setGroupDraft(groupComment); }}
             title={g.u < 0 ? undefined : "双击编辑组头文字（生成 INP 时输出 C 注释）"}>
             {editingGroupU === g.u ? (
@@ -496,6 +496,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
               <input type="checkbox" checked={selectedCells.includes(r.num)} onChange={() => toggleSelect(r.num)} />
             </td>
             <td style={{ fontWeight: 600, color: "var(--text-primary)" }}>{r.num}</td>
+            <td style={{ textAlign: "center" }}>{renderClosureStatus(r.num)}</td>
             <td style={{ fontSize: 11, color: "var(--text-secondary)" }}>{r.mat}</td>
             <td>{r.density}</td>
             <td>
@@ -517,7 +518,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
 
   return (
     <>
-      {editCell !== null && cells[editCell]?.kind === "cell" && <CellEditDialog cell={cells[editCell].cell} onSave={saveCellAndCheck} onClose={() => setEditCell(null)} availableMats={deck.materials} onOpenLattice={() => openLatticeEdit(editCell)} />}
+      {editCell !== null && cells[editCell]?.kind === "cell" && <CellEditDialog cell={cells[editCell].cell} onSave={saveCell} onClose={() => setEditCell(null)} availableMats={deck.materials} onOpenLattice={() => openLatticeEdit(editCell)} surfacesText={surfText} trCardsText={trText} />}
       {latticeOpen && <LatticeEditDialog
         surfacesText={surfText}
         deckCells={cells.filter(c => c.kind === "cell").map(c => c.cell)}
@@ -626,55 +627,8 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
           <button className="btn btn-ghost btn-xs" onClick={() => setShowStepDlg(true)}>📥 导入 STEP</button>
           <button className="btn btn-primary btn-xs" onClick={handlePreview3D}>🔍 3D 预览</button>
           <button className="btn btn-ghost btn-xs" onClick={handleExportSTEP}>📐 导出 STEP</button>
-          <button className="btn btn-primary btn-xs" style={{ marginLeft: 8 }}
-            disabled={closureBusy}
-            onClick={() => runCellClosureCheck()}>
-            {closureBusy ? "自检中…" : "🩺 几何自检"}
-          </button>
         </div>
-        {/* 栅元封闭性检测结果面板 */}
-        {closureErr && (
-          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
-            <span style={{ fontSize: 11, color: "#e53935", maxWidth: 640 }}>⚠ {closureErr}</span>
-          </div>
-        )}
-        {closureReport && !closureErr && (
-          <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.6, padding: "6px 10px", borderRadius: 6, background: "rgba(255,255,255,0.05)", border: "1px solid var(--border-glass)" }}>
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>栅元封闭性自检</div>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead><tr style={{ color: "var(--text-secondary)", fontSize: 10 }}>
-                <th style={{ padding: "2px 6px", textAlign: "left" }}>栅元</th>
-                <th style={{ padding: "2px 6px", textAlign: "center" }}>状态</th>
-                <th style={{ padding: "2px 6px", textAlign: "right" }}>体积 (mm³)</th>
-                <th style={{ padding: "2px 6px", textAlign: "left" }}>说明</th>
-              </tr></thead>
-              <tbody>
-                {Object.entries(closureReport).map(([num, info]: [string, any]) => {
-                  const st = info?.status || "unknown";
-                  const color = st === "closed" ? "#2e7d32" : st === "infinite" ? "#e53935" : st === "semi_infinite" ? "#f9a825" : "var(--text-tertiary)";
-                  const label: Record<string, string> = { closed: "封闭 ✓", infinite: "外无限 ✗", semi_infinite: "部分无限", empty: "空/退化", voxel: "体素网格", unresolvable: "未解析" };
-                  const labelText = label[st] || st;
-                  const detail = st === "infinite" || st === "semi_infinite"
-                    ? `延伸至包围盒 ${(info.infinite_axes || []).join("/")} 轴`
-                    : st === "empty" ? "体积≈0"
-                    : st === "voxel" ? "GQ/SQ 体素网格"
-                    : st === "unresolvable" ? "几何解析失败"
-                    : (info?.aabb ? `包围盒有限` : "");
-                  return (
-                    <tr key={num} style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-                      <td style={{ padding: "2px 6px", fontWeight: 600 }}>{num}</td>
-                      <td style={{ padding: "2px 6px", textAlign: "center", color }}>{labelText}</td>
-                      <td style={{ padding: "2px 6px", textAlign: "right", fontFamily: "monospace" }}>
-                        {info?.volume != null ? info.volume.toFixed(1) : "—"}
-                      </td>
-                      <td style={{ padding: "2px 6px", color: "var(--text-tertiary)" }}>{detail}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+        {/* 栅元封闭性检测结果（3D 预览后自动获得；无面板，直接在栅元行标注） */}
         {/* GPU 偏好提示（独占一行，右对齐，位于按钮行下方）：自检 / 设置结果 */}
         {(gpuPrefMsg || (gpu && !gpu.discrete && !gpuPrefSel)) && (
           <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
@@ -718,6 +672,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
                 <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} title="全选 / 取消全选" />
               </th>
               <th>#</th>
+              <th style={{ width: 28, fontSize: 10, fontWeight: 400, color: "var(--text-secondary)" }}>封闭</th>
               <th>材料</th>
               <th>密度</th>
               <th>曲面表达式</th>
@@ -730,7 +685,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
                 <tr key={i} {...cellDrag.rowHandlers(i)}
                   style={{ background: "rgba(255,255,255,0.04)", ...cellDrag.rowStyle(i) }}>
                   <td style={{ textAlign: "center" }}><input type="checkbox" disabled /></td>
-                  <td colSpan={6} style={{ fontFamily: "Consolas,monospace", fontSize: 12, color: "#ce93d8" }}>{c.text}</td>
+                  <td colSpan={7} style={{ fontFamily: "Consolas,monospace", fontSize: 12, color: "#ce93d8" }}>{c.text}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button className="btn btn-danger btn-xs" onClick={() => setCells(cells.filter((_, j) => j !== i))}>×</button>
                   </td>
@@ -742,6 +697,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
                     <input type="checkbox" checked={selectedCells.includes(c.cell.num)} onChange={() => toggleSelect(c.cell.num)} />
                   </td>
                   <td style={{fontWeight:600,color:"var(--text-primary)"}}>{c.cell.num}</td>
+                  <td style={{ textAlign: "center" }}>{renderClosureStatus(c.cell.num)}</td>
                   <td style={{ position: "relative" }}>
                     {/* 材料号可点击，弹下拉选择（同 3D 预览）；样式：可点外观 */}
                     <button type="button" className="mat-cell-btn" title="点击选择材料"

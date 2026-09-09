@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import type { MaterialData } from "../utils/DeckContext";
 import FloatingDialog from "./FloatingDialog";
+import { apiUrl } from "../utils/api";
 
 export interface CellData {
   num: string;
@@ -32,6 +33,10 @@ interface Props {
   availableMats?: MaterialData[];
   /** 打开格阵编辑器（该栅元含 fill_grid 时显示入口） */
   onOpenLattice?: () => void;
+  /** 曲面卡文本（自检此栅元封闭性用） */
+  surfacesText?: string;
+  /** TR 变换卡文本 */
+  trCardsText?: string;
 }
 
 const style: Record<string, React.CSSProperties> = {
@@ -42,8 +47,58 @@ const style: Record<string, React.CSSProperties> = {
 };
 const tarea = { ...style.inp, height: 50, resize: "vertical" as const, fontFamily: "Consolas,monospace" as const, fontSize: 11, paddingTop: 6 };
 
-export default function CellEditDialog({ cell, onSave, onClose, availableMats, onOpenLattice }: Props) {
+// 封闭状态 → 展示文本/颜色
+const STATUS_META: Record<string, { label: string; color: string }> = {
+  closed: { label: "封闭 ✓", color: "#2e7d32" },
+  infinite: { label: "外无限（曲面外空间）", color: "#e53935" },
+  semi_infinite: { label: "部分无限（某轴延伸）", color: "#f9a825" },
+  empty: { label: "空/退化几何", color: "var(--text-tertiary)" },
+  voxel: { label: "体素网格（GQ/SQ）", color: "var(--text-tertiary)" },
+  unresolvable: { label: "几何未解析", color: "var(--text-tertiary)" },
+};
+
+export default function CellEditDialog({ cell, onSave, onClose, availableMats, onOpenLattice, surfacesText, trCardsText }: Props) {
   const [data, setData] = useState(cell);
+  const [checkBusy, setCheckBusy] = useState(false);
+  const [checkResult, setCheckResult] = useState<{ status: string; volume?: number | null; infinite_axes?: string[] } | null>(null);
+  const [checkErr, setCheckErr] = useState<string | null>(null);
+
+  // 自检当前栅元封闭性（只发这一个栅元）
+  const runSelfCheck = async () => {
+    setCheckBusy(true);
+    setCheckErr(null);
+    setCheckResult(null);
+    try {
+      const num = parseInt(data.num, 10);
+      if (!num || isNaN(num)) { setCheckErr("请先填写有效栅元号"); return; }
+      const cellPayload = {
+        number: num, material: data.mat, density: data.density,
+        surface_expr: data.surfaces, render: data.render,
+        fill: data.fill, fill_grid: data.fill_grid, u: data.u,
+        impN: data.impN, impP: data.impP, impE: data.impE,
+      };
+      const r = await fetch(apiUrl("/api/check-cell-closure"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          surfaces: surfacesText || "",
+          cells: [cellPayload],
+          tr_cards: trCardsText || "",
+        }),
+      });
+      const j = await r.json();
+      if (j.status !== "ok") throw new Error(j.message || "检测失败");
+      const report = j.closure_report || {};
+      const mine = report[String(num)];
+      if (!mine) { setCheckErr("未返回该栅元检测结果"); return; }
+      setCheckResult(mine);
+    } catch (e: any) {
+      setCheckErr(e?.message || "检测失败");
+    } finally {
+      setCheckBusy(false);
+    }
+  };
+
   const set = (k: keyof CellData, v: string) => {
     if (k === "mat" && availableMats?.length) {
       const matNum = parseInt(v);
@@ -97,6 +152,24 @@ export default function CellEditDialog({ cell, onSave, onClose, availableMats, o
           placeholder: "如: -1 2 -3 4 -5 6"
         }),
       ),
+    ),
+    // 几何自检：按钮 + 结果
+    React.createElement("div", { style: { ...style.row, alignItems: "center", marginBottom: 8 } },
+      React.createElement("button", {
+        className: "btn btn-sm",
+        style: { flexShrink: 0, ...(checkBusy ? { opacity: 0.7 } : {}) },
+        disabled: checkBusy,
+        onClick: runSelfCheck,
+      }, checkBusy ? "自检中…" : "🩺 自检此栅元"),
+      checkResult || checkErr
+        ? React.createElement("span", {
+          style: { fontSize: 11, marginLeft: 10, color: checkErr ? "#e53935" : STATUS_META[checkResult!.status]?.color || "var(--text-tertiary)" },
+        },
+          checkErr
+            ? `⚠ ${checkErr}`
+            : `${STATUS_META[checkResult!.status]?.label || "未知"} ${checkResult!.volume != null ? `(${checkResult!.volume.toFixed(1)} mm³)` : ""}${checkResult!.infinite_axes?.length ? ` [延伸至 ${checkResult!.infinite_axes.join("/")} 轴]` : ""}`
+        )
+        : null,
     ),
     React.createElement("div", { style: style.row },
       React.createElement("div", { style: { ...style.grp, maxWidth: 80 } },

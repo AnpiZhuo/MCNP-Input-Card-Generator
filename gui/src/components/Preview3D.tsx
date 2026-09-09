@@ -696,6 +696,10 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       } else {
         setFreecadStatus("  ");
       }
+      // 把封闭性检测结果写回主窗口（storage 事件驱动）
+      if (j.closure_report) {
+        try { localStorage.setItem("mcnp_closure_report", JSON.stringify(j.closure_report)); } catch {}
+      }
     }).catch(function() { setFreecadStatus("  "); }).finally(function() { setLoading(false); });
   }, [genTick, hasLattice]);
 
