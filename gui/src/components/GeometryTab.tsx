@@ -17,6 +17,8 @@ import { useRowDrag } from "../utils/useRowDrag";
 import { useDragToGroup } from "../utils/useDragToGroup";
 import { applyRegroupToRows, groupByUniverse, groupHeaderLabel, isUngroupedU } from "../utils/universeGroups";
 import { openPreview3D, onMaterialChange, onQuickCellGenerate } from "../utils/windows";
+import { useCellClosure } from "../utils/useCellClosure";
+import { closureMeta } from "../utils/cellClosure";
 import { apiUrl } from "../utils/api";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
 import { useDeckSynced } from "../utils/useDeckSynced";
@@ -221,6 +223,8 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
       deck,
     });
     if (!opened) setShow3D(true); // 非 Tauri 环境回退
+    // 3D 预览后触发封闭性检测刷新（深模块内部不重复请求同 deck）
+    setTimeout(refreshClosure, 100);
   };
   const handleExportSTEP = async () => {
     if (!fc.require()) return;
@@ -285,39 +289,25 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     onCheckFail: (e) => setQuickCheckWarn(quickAddCheckFailedMessage(e)),
   });
 
-  // ── 栅元封闭性检测：3D 预览后通过 localStorage 自动获得结果 ──
-  const [closureReport, setClosureReport] = useState<Record<string, any> | null>(null);
+  // ── 栅元封闭性检测（深模块 useCellClosure，3D 预览后自动刷新）──
+  const { statusOf, refresh: refreshClosure } = useCellClosure(() => ({
+    surfaces: surfTextRef.current,
+    cells: cellsRef.current,
+    tr_cards: trTextRef.current,
+  }));
 
-  // 状态列渲染 helper
+  // 状态列渲染（用深模块的 closureMeta 纯函数）
   const renderClosureStatus = (cellNum: string) => {
-    const info = closureReport?.[cellNum];
-    if (!info || !info.status) return <span style={{ color: "var(--text-tertiary)", fontSize: 11 }}>—</span>;
-    const st = info.status;
-    if (st === "closed") return <span style={{ color: "#2e7d32", fontSize: 12 }} title="封闭">✓</span>;
-    if (st === "infinite" || st === "semi_infinite") return <span style={{ color: "#f9a825", fontSize: 12, fontWeight: 700 }} title={`外无限（${(info.infinite_axes || []).join("/")}轴）`}>!</span>;
-    return <span style={{ color: "#e53935", fontSize: 12, fontWeight: 700 }} title={st === "empty" ? "空/退化" : st === "voxel" ? "体素网格" : "未解析"}>❌</span>;
+    const entry = statusOf(cellNum);
+    if (!entry) return <span style={{ color: "var(--text-tertiary)", fontSize: 11 }}>—</span>;
+    const meta = closureMeta(entry.status);
+    const extra = (entry.status === "infinite" || entry.status === "semi_infinite")
+      ? `（${(entry.infinite_axes || []).join("/")}轴）`
+      : "";
+    return <span style={{ color: meta.color, fontSize: 12, fontWeight: meta.allowed ? 400 : 700 }} title={meta.title + extra}>{meta.icon}</span>;
   };
 
-  // 监听 3D 预览写回的封闭性报告
-  useEffect(() => {
-    const handler = () => {
-      try {
-        const raw = localStorage.getItem("mcnp_closure_report");
-        if (!raw) return;
-        const report = JSON.parse(raw);
-        setClosureReport(prev => {
-          const prevKey = prev ? JSON.stringify(prev) : "";
-          const newKey = raw;
-          return prevKey === newKey ? prev : report;
-        });
-      } catch {}
-    };
-    window.addEventListener("storage", handler);
-    handler(); // 首次检查
-    return () => window.removeEventListener("storage", handler);
-  }, []);
-
-  // 保存栅元（不再自动触发封闭性检测）
+  // 保存栅元
   const saveCell = (d: CellData) => {
     const c = [...cells];
     c[editCell!] = { kind: "cell", cell: d };

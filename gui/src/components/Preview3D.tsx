@@ -696,11 +696,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       } else {
         setFreecadStatus("  ");
       }
-      // 把封闭性检测结果写回主窗口（storage 事件驱动）
-      if (j.closure_report) {
-        try { localStorage.setItem("mcnp_closure_report", JSON.stringify(j.closure_report)); } catch {}
-      }
-    }).catch(function() { setFreecadStatus("  "); }).finally(function() { setLoading(false); });
+      }).catch(function() { setFreecadStatus("  "); }).finally(function() { setLoading(false); });
   }, [genTick, hasLattice]);
 
   /* 格阵装配：把 universe 实例化装配融进主 3D 预览场景（用户要求唯一 3D 预览，
