@@ -1840,8 +1840,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
         try:
             data = self._read_body()
             surf_text = data.get("surfaces", "")
-            cell_list = [c for c in (data.get("cells", []) or [])
-                         if not _cell_u_of(c)]
+            cell_list = data.get("cells", []) or []
             tr_text = data.get("tr_cards", "")
 
             StepImporter = _import_app("step_importer").StepImporter
@@ -1859,7 +1858,20 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 return
 
             tr_cards = parse_tr_cards(tr_text)
-            cells_data = build_cells_data(cell_list, include_void=True)
+            # 强制包含全部栅元（不跳过 graveyard/fill/void/render:false），
+            # 封闭性需要每个栅元都参与检测。收集所有栅元号用于 force_include。
+            all_nums = set()
+            for c in cell_list:
+                if not isinstance(c, dict): continue
+                if c.get("kind") == "cell": c = c.get("cell") or {}
+                n = c.get("number") or (c.get("num") and int(c["num"])) or 0
+                if n > 0: all_nums.add(n)
+            cells_data = build_cells_data(cell_list, include_void=True,
+                                          force_include_numbers=all_nums)
+            if not cells_data:
+                self._ok({"status": "ok", "closure_report": {},
+                          "message": "没有可检测的栅元"})
+                return
             if not cells_data:
                 self._ok({"status": "ok", "closure_report": {},
                           "message": "没有可检测的栅元"})
@@ -2729,12 +2741,10 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 self._ok({"stl_files": {}, "message": "没有可预览的栅元"})
                 return
 
-            # 5. FreeCAD CSG → STL（同时做封闭性检测）
+            # 5. FreeCAD CSG → STL
             from freecad_preview import FreeCADEngine
             engine = FreeCADEngine(freecad_bin)
-            result = engine.build_geometry(surfs, cells_data, tr_cards, fmt="stl",
-                                           check_closure=True)
-            closure_report = engine.closure_report or {}
+            result = engine.build_geometry(surfs, cells_data, tr_cards, fmt="stl")
 
             # STL 复制到会话专用目录（engine 析构会删它自己的临时目录，必须复制走）
             _clear_stl_session()  # 覆盖上一轮预览
@@ -2764,7 +2774,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             # 存入指纹缓存：会话 STL 拷入缓存自有目录，clear-stl 删除会话目录不影响缓存
             _PREVIEW_CACHE.put(fp, {"dir": session_dir, "cells": _STL_SESSION["cells"], "freecad": freecad_bin})
             self._ok({"stl_files": stl_files, "stl_data": stl_data, "freecad": freecad_bin,
-                      "count": len(stl_data), "closure_report": closure_report})
+                      "count": len(stl_data)})
         except Exception as e:
             import traceback
             self._err(str(e) + " | " + traceback.format_exc())
