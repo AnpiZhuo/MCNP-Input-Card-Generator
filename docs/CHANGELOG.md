@@ -12,6 +12,15 @@
 
 ## 一、批次详情档案（原 PROJECT_MEMORY.md 顶部修复横幅，含独有验收细节）
 
+### ✅ 源分布 v2 双态（无字母 SI 不回填 L + raw 直通）+ 原文模式值网格化（本会话/上一会话，2026-09-09，工作区未提交）
+
+**目标**：修 q1112 输入卡"程序导入-再生成后 MCNP 结果与原生不一致"根因——无字母 `SI` 行被自动补成 `L`（MCNP 里无字母 SI 默认是 H 直方图）；分布编辑器导入后处于"原文模式(raw)"，行数据一多就整行挤成一个长输入框——改为值拆网格（每格一个值，MCNP 卡 8 数据区形态）。
+
+- **根因修复**：`app/generator/distributions.py` 新增（纯 stdlib）——`parse_distribution_lines` 解析 SI/SP/SB/DS/SC，无字母 SI → type `""`（MCNP 缺省 H 直方图），绝不回填 L；`emit_distribution_entries` 发射（editMode=raw → rawText 逐字直通，round-trip 字节级一致；structured 规范重建）。同步 `parsers/core.py`（改调 parse_distribution_lines，sdef_raw_text 停写转 sdef_distributions 权威）、`inp_generator.py`（删旧 _generate_structured_distributions）、`validator.py`（sdef_distributions 非空判定）、`models.py` schema 升级、`api.yaml` DistEntry 补 editMode/rawText/si null。
+- **前端 v2 双态**：`gui/src/utils/distDual.ts` 新增（TS 镜像后端，isRawMode/switchToRaw/switchToStructured/withStructuredEdit）；`DistributionEditor.tsx` raw⇄structured 切换；`DeckContext.tsx` DistEntry/SiEntry/SpEntry 类型升级；`sourceTemplates.ts` SI_TYPES 加空值直方图省略、SP_TYPES 注明 D 裸值语义。
+- **原文模式值网格化（本次 UI 修复）**：`DistributionEditor.tsx` raw 模式把值部分拆成**固定 8 列网格**（`repeat(8, minmax(0,1fr))`、monospace 右对齐，同 MCNP 卡 80 列/8 数据区形态，与导出卡一致），值多自动换行；行尾 `$` 注释从值中剥离、单独在网格下方编辑（清空注释自动去 `$`；改值/注释互不丢失）。
+- **测试**：`tests/unit/test_distributions.py`（25 项：解析/发射/同步/合并/D1 链/raw 直通）; `gui/test/distDual.test.ts`（13 项 TS 镜像）; `gui/test/distributionEditorRaw.dom.test.tsx`（4 项 DOM：值拆格、$ 注释分离、改值保留注释、清注释去 $）。回归 test_regress_sdef_sc_chain / test_core_data_cards 全绿。
+- **门禁**：pytest **46 new + 674 total all passed**；vitest **590/591**（1 colorize 计时 flaky，非回归）；tsc EXIT 0；vite build EXIT 0。
 
 ### ✅ 格阵覆盖完整性检测（universe 未编辑外部 → 红框预防，2026-09，已实现未commit）
 

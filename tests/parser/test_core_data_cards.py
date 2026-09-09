@@ -1,4 +1,6 @@
 """解析管线单测：parse_data_cards 数据卡段主解析。"""
+import json
+
 from app.generator.parsers.core import parse_data_cards
 
 
@@ -26,9 +28,14 @@ def test_parse_sdef_with_si_sp():
     r = parse_data_cards(["sdef erg=d1 pos=0 0 0", "si1 0 14", "sp1 0.5 0.5"])
     assert r["source_mode"] == "distribution"
     assert r["sdef_erg"] == "d1"
-    # SI/SP 行原样小写保留在 sdef_raw_text（序列化 JSON 串）
-    assert "si1 0 14" in r["sdef_raw_text"].lower()
-    assert "sp1 0.5 0.5" in r["sdef_raw_text"].lower()
+    # v2 双态分布（distributions.py）：无字母 SI → type=""（不再回填 L）+ rawText 原文保留
+    dist = json.loads(r["sdef_distributions"])
+    assert len(dist) == 1 and dist[0]["id"] == 1
+    assert dist[0]["editMode"] == "raw"
+    assert dist[0]["si"] == {"type": "", "values": ["0", "14"]}
+    assert dist[0]["sp"]["values"] == ["0.5", "0.5"]
+    assert "si1 0 14" in dist[0]["rawText"].lower()
+    assert "sp1 0.5 0.5" in dist[0]["rawText"].lower()
 
 
 def test_parse_tally():

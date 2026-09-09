@@ -19,6 +19,26 @@ _SURFACE_TYPES = {
     'REC', 'TRC', 'ELL', 'WED', 'ARB',
 }
 
+# 宏体类型 → (最小参数个数, 别名说明)
+# 对照 OWEN rules.ts `mcnp.macrobody` 参数范围检查；RHP/HEX 支持 9/12/15/18 四种长度。
+_MACROBODY_PARAM_MIN = {
+    "RPP": (6,             "xmin xmax ymin ymax zmin zmax"),
+    "SPH": (4,             "x y z r"),
+    "RCC": (7,             "x y z hx hy hz r"),
+    "RHP": (9,             "vx vy vz hx hy hz r1 [r2 [r3]]（可选 r2/r3 使总数 9/12/15/18）"),
+    "HEX": (9,             "vx vy vz hx hy hz r1 [r2 [r3]]（可选 r2/r3 使总数 9/12/15/18）"),
+    "TRC": (8,             "x y z hx hy hz r1 r2"),
+    "REC": (12,            "x y z hx hy hz v1x v1y v1z v2x v2y v2z"),
+    "ELL": (7,             "v1x v1y v1z v2x v2y v2z rm"),
+    "WED": (12,            "x y z v1x v1y v1z v2x v2y v2z v3x v3y v3z"),
+    "BOX": (9,             "x y z a1x a1y a1z a2x a2y a2z [a3x a3y a3z]（9 或 12 参）"),
+    "ARB": (30,            "A-H 顶点(24) + n1..n6(6)"),
+}
+
+# 行长度限制（OWEN mcnp.line-length）
+_COL_WARN = 80            # 超过此值发出警告
+_COL_ERROR = 128          # 超过此值报错
+
 
 # ===== 材料级规则（交叉核对 OWEN src/language/rules.ts validateMCNP）=====
 _ZAID_RE = re.compile(r"^\d{4,6}(?:\.\d{2,}[a-zA-Z])?$")
@@ -108,6 +128,19 @@ def _check_surfaces_text(surfaces: str) -> list[str]:
                 f"几何：曲面卡第 {line_num} 行的数据部分含有中文字符"
             )
 
+        # 行长度限制（OWEN mcnp.line-length）：数据部分列数 >128 报错，>80 警告
+        n_cols = len(before_dollar)
+        if n_cols > _COL_ERROR:
+            errors.append(
+                f"几何：曲面卡第 {line_num} 行数据部分 {n_cols} 列超过 {_COL_ERROR} 列"
+                "（MCNP 读取到第 128 列即截断，后续参数会丢失）"
+            )
+        elif n_cols > _COL_WARN:
+            errors.append(
+                f"几何：曲面卡第 {line_num} 行数据部分 {n_cols} 列超过 {_COL_WARN} 列"
+                "（建议拆到续行）"
+            )
+
         # 格式检查：曲面号 [TRn] 类型 参数…
         parts = before_dollar.split()
         if len(parts) < 2:
@@ -124,10 +157,10 @@ def _check_surfaces_text(surfaces: str) -> list[str]:
 
         # 判断类型关键字在第2还是第3个位置（第2个可能是 TRn 号）
         if parts[1].upper() in _SURFACE_TYPES:
-            pass  # parts[1] 就是类型
+            type_idx = 1
         elif len(parts) >= 3 and parts[2].upper() in _SURFACE_TYPES:
-            pass  # parts[1] 是 TRn，parts[2] 是类型
-        elif len(parts) >= 2:
+            type_idx = 2
+        else:
             # 非已知类型——可能是宏体或拼写错误
             if not parts[1].replace('-', '').replace('.', '').isdigit():
                 errors.append(
@@ -142,6 +175,32 @@ def _check_surfaces_text(surfaces: str) -> list[str]:
                 errors.append(
                     f"几何：曲面卡第 {line_num} 行的类型 '{parts[2]}' 不是"
                     f"已知的曲面类型"
+                )
+            continue
+
+        # 宏体参数个数检查（OWEN mcnp.macrobody）：type_idx 之后的数值 token 计数
+        kw = parts[type_idx].upper()
+        spec = _MACROBODY_PARAM_MIN.get(kw)
+        if spec is not None:
+            min_params, expected_desc = spec
+            rest = parts[type_idx + 1:]
+            # 只统计数值 token（*TRn 等非数值属于行列外层信息，不计入曲面参数）
+            n_params = sum(
+                1 for tok in rest
+                if tok.lstrip('-+').replace('.', '', 1).replace('e', '', 1).replace('E', '', 1).isdigit()
+            )
+            if kw in ("RHP", "HEX"):
+                if n_params not in (9, 12, 15, 18):
+                    errors.append(
+                        f"几何：曲面卡第 {line_num} 行的 {kw} 宏体参数个数为 {n_params}，"
+                        f"应为 9/12/15/18（{expected_desc}）"
+                    )
+            elif kw in ("BOX",) and n_params in (9, 12):
+                pass  # BOX 允许 9 或 12 参（省略 a3 = 正交补全）
+            elif n_params != min_params:
+                errors.append(
+                    f"几何：曲面卡第 {line_num} 行的 {kw} 宏体参数个数为 {n_params}，"
+                    f"应为 {min_params}（{expected_desc}）"
                 )
 
     return errors
@@ -250,8 +309,18 @@ def validate_all(
 
     # ----- SDEF / KCODE -----
     if adv and adv.source_mode == "distribution":
-        # 分布源模式：不校验 sources，而是校验分布源文本
-        if not adv.sdef_raw_text.strip():
+        # 分布源模式：不校验 sources，而是校验分布源文本（v2 结构化 sdef_distributions
+        # 为主；sdef_raw_text 为旧数据兜底）
+        def _dist_json_has_entries(s: str) -> bool:
+            if not s or not s.strip():
+                return False
+            try:
+                import json as _json
+                arr = _json.loads(s)
+                return isinstance(arr, list) and len(arr) > 0
+            except Exception:
+                return False
+        if not adv.sdef_raw_text.strip() and not _dist_json_has_entries(adv.sdef_distributions):
             errors.append("源项：分布源模式下 SI/SP 内容不能为空")
     elif adv and adv.source_mode == "kcode":
         # KCODE 临界源模式

@@ -19,6 +19,7 @@ from app import lattice
 from app.models import CellData, CellRow, MaterialData, MaterialRow, SourceData, TallyDefinition, PTRACSettings
 from app.meshtal.fmesh_parser import parse_fmesh_lines
 from ..banners import is_universe_group_comment, parse_universe_group_comment
+from ..distributions import parse_distribution_lines, merge_distribution_entry
 from .lines import _SURFACE_TYPES, extract_comment, strip_comment
 
 
@@ -97,91 +98,20 @@ def _is_d_ref(val: str) -> bool:
     return bool(re.match(r'^D\d+$', val.strip().upper())) if val else False
 
 
-def _parse_sisp_structured(sisp_lines: list[str]) -> list[dict]:
-    """将 SI/SP/SB/DS 行解析为结构化分布列表（源分布卡说明.md 三/四节）。
-
-    返回 [{"id", "paramRef", "si":{"type","values"}, "sp":{"type","values","fnCode","fnParams"},
-           "sb":{"type","values"} | None, "ds":{"type","param","distributionIds"} | None}]
-    """
-    entries: dict[int, dict] = {}
-    order: list[int] = []
-    for line in sisp_lines:
-        s = line.strip()
-        if not s:
-            continue
-        # 剥 $ 注释（MCNP $ 后为注释，不参与分布值）
-        if "$" in s:
-            s = s.split("$", 1)[0].strip()
-        upper = s.split()[0].upper() if s.split() else ""
-        m = re.match(r'^(SI|SP|SB|DS|SC)(\d+)', upper)
-        if not m:
-            continue
-        kind, num = m.group(1), int(m.group(2))
-        rest = s[m.end():].strip()
-        if num not in entries:
-            entries[num] = {"id": num, "paramRef": "", "si": None, "sp": None, "sb": None, "ds": None, "sc": None, "auto": False}
-            order.append(num)
-        e = entries[num]
-        toks = rest.split()
-        if kind == "SI":
-            typ = "L"
-            vals = toks
-            if toks and toks[0].upper() in ("L", "H", "A", "S", "Q", "T", "F", "V"):
-                typ = toks[0].upper(); vals = toks[1:]
-            e["si"] = {"type": typ, "values": vals}
-        elif kind == "SP":
-            sp = {"type": "", "values": [], "fnCode": "", "fnParams": []}
-            if toks and re.match(r'^-\d+$', toks[0]):
-                sp["fnCode"] = toks[0]; sp["fnParams"] = toks[1:]
-            elif toks and toks[0].upper() in ("D", "C", "V"):
-                sp["type"] = toks[0].upper(); sp["values"] = toks[1:]
-            else:
-                sp["values"] = toks
-            e["sp"] = sp
-        elif kind == "SB":
-            sb = {"type": "D", "values": toks}
-            if toks and toks[0] in ("-21", "-31"):
-                sb["type"] = toks[0]; sb["values"] = toks[1:]
-            elif toks and toks[0].upper() == "D":
-                sb["type"] = "D"; sb["values"] = toks[1:]
-            e["sb"] = sb
-        elif kind == "DS":
-            ds = {"type": "S", "param": "", "distributionIds": []}
-            if toks and toks[0].upper() in ("H", "L", "S", "T", "Q"):
-                ds["type"] = toks[0].upper(); toks = toks[1:]
-            if ds["type"] == "T":
-                pass
-            elif toks:
-                ds["param"] = toks[0]
-                ds["distributionIds"] = toks[1:]
-            e["ds"] = ds
-        elif kind == "SC":
-            # SCn 源注释卡（源分布卡说明.md §三）——挂到对应分布条目，生成器回放 SC{idx}
-            e["sc"] = rest
-    return [entries[n] for n in order]
-
-
 def _merge_sisp_entry(existing_json: str, new_entry: dict) -> str:
-    """把单个结构化分布条目并入已有 sdef_distributions JSON（按 id 合并 SI/SP/SB/DS 子字段）。
+    """把单个结构化分布条目并入已有 sdef_distributions JSON（按 id 合并，D-01 面源）。
 
-    D-01 增强：面源（SSW/SSR）后跟的独立 SIn/SPn 逐行解析后并入结构化分布，
-    与 SDEF 分支的收集结果同构（来源分布卡说明.md 三节）。
+    实现已迁至 app/generator/distributions.merge_distribution_entry（v2 双态 schema）；
+    此薄壳保持调用点/旧测试的字符串入参契约。
     """
-    acc = {}
-    if existing_json:
-        try:
-            for e in json.loads(existing_json):
-                acc[e["id"]] = e
-        except Exception:
-            acc = {}
-    eid = new_entry.get("id")
-    if eid in acc:
-        for k in ("si", "sp", "sb", "ds", "sc"):
-            if new_entry.get(k) is not None:
-                acc[eid][k] = new_entry[k]
-    else:
-        acc[eid] = new_entry
-    return json.dumps(list(acc.values()), ensure_ascii=False)
+    try:
+        existing = json.loads(existing_json) if existing_json else []
+        if not isinstance(existing, list):
+            existing = []
+    except (json.JSONDecodeError, TypeError):
+        existing = []
+    merged = merge_distribution_entry(existing, new_entry)
+    return json.dumps(merged, ensure_ascii=False)
 
 
 def extract_universe_comments(cell_lines: list[str]) -> dict:
@@ -1219,20 +1149,10 @@ def parse_data_cards(data_lines: list[str]) -> dict:
                     break
             if sisp_lines:
                 result["source_mode"] = "distribution"
-                # 结构化分布（新）+ 旧格式 sdef_raw_text（兼容）并存
-                result["sdef_distributions"] = json.dumps(_parse_sisp_structured(sisp_lines), ensure_ascii=False)
-                # 旧格式：SI/SP 配对 [{si, sp}, ...]
-                pairs = []
-                for line in sisp_lines:
-                    upper = line.strip().split()[0].upper() if line.strip().split() else ""
-                    if upper.startswith("SI"):
-                        pairs.append({"si": line.strip(), "sp": ""})
-                    elif upper.startswith("SP"):
-                        if pairs and not pairs[-1]["sp"]:
-                            pairs[-1]["sp"] = line.strip()
-                        else:
-                            pairs.append({"si": "", "sp": line.strip()})
-                result["sdef_raw_text"] = json.dumps(pairs, ensure_ascii=False)
+                # v2 双态分布（distributions.py）：条目含 editMode=raw + rawText 原文逐字保留，
+                # 结构化 si/sp/sb/ds/sc 由原文派生。生成时 raw 侧直通 → round-trip 字节级一致。
+                result["sdef_distributions"] = json.dumps(
+                    parse_distribution_lines(sisp_lines), ensure_ascii=False)
         elif (re.match(r'^[*+]?F\d+:', first) or re.match(r'^[*+]?F\d+$', first)
               or re.match(r'^[*+]?FM\d+$', first)
               or re.match(r'^[*+]?F(?:IP|IR|IC)\d+:', first) or re.match(r'^[*+]?F(?:IP|IR|IC)\d+$', first)
@@ -1308,10 +1228,10 @@ def parse_data_cards(data_lines: list[str]) -> dict:
         elif first.startswith("SI") or first.startswith("SP"):
             # D-01：独立 SIn/SPn 卡不再静默丢弃——保底进 other_cards（round-trip 保真）。
             # 面源（SSW/SSR，source_mode=surface）后跟的 SI/SP 是源分布，增强并入结构化
-            # 分布（复用 _parse_sisp_structured，与 SDEF 分支一致）；source_mode 保持 surface。
+            # 分布（复用 parse_distribution_lines，与 SDEF 分支一致）；source_mode 保持 surface。
             result["other_cards"].append(raw_line)
             if result.get("source_mode") == "surface":
-                _parsed = _parse_sisp_structured([line])
+                _parsed = parse_distribution_lines([line])
                 if _parsed:
                     result["sdef_distributions"] = _merge_sisp_entry(
                         result.get("sdef_distributions", ""), _parsed[0])

@@ -14,6 +14,16 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
+## S1（当前批次）源分布 v2 双态 + 原文模式值网格化（本会话/上一会话，已实现，未提交）
+
+- **批次目标**：① 修 q1112 输入卡"程序导入-再生成后 MCNP 结果与原生不一致"根因——无字母 `SI` 行被解析时自动补成 `L`（MCNP 里无字母 SI 默认是 H 直方图，不是 L 离散列表）；② 分布编辑器导入后处于"原文模式(raw)"，行数据一多就整行挤成一个长输入框/一长串，观感差——改为**值拆网格**（每格一个值，MCNP 卡形态）。
+- **✅ 根因修复（无字母 SI 不再回填 L）**：后端新增 `app/generator/distributions.py`（权威实现，纯 stdlib）——`parse_distribution_lines` 解析 SI/SP/SB/DS/SC，无字母 SI → type `""`（MCNP 缺省 H 直方图），绝不回填 `L`；`emit_distribution_entries` 发射（`editMode=raw` 时 rawText 逐字直通，round-trip 字节级一致；structured 规范重建）；同步 `inp_generator.py`（删旧 `_generate_structured_distributions` 内联逻辑）、`parsers/core.py`（改调 parse_distribution_lines，sdef_raw_text 停写转 sdef_distributions 权威）、`validator.py`（sdef_distributions 非空判定）、`models.py` AdvancedSettings 注释升级 v2 双态 schema、`api.yaml` DistEntry 补 editMode/rawText/si null。
+- **✅ 前端 v2 双态**：新增 `gui/src/utils/distDual.ts`（TS 镜像，structuredToRawLines/rawToStructured/isRawMode/switchToRaw/switchToStructured/withStructuredEdit）；`DistributionEditor.tsx` raw⇄structured 切换、SI/SP 类型选择改为无字母省略项；`DeckContext.tsx` DistEntry/SiEntry/SpEntry 类型升级；`sourceTemplates.ts` SI_TYPES 加空值直方图省略、SP_TYPES 注明 D 裸值语义。
+- **✅ 原文模式值网格化（本次 UI 修复）**：`DistributionEditor.tsx` raw 模式把**值部分拆成固定 8 列网格**（`repeat(8, minmax(0,1fr))`、monospace、右对齐，同 MCNP 卡 80 列/8 数据区形态，与导出卡一致），值多了自动换行不再拉长；行尾 `$` 注释从值中剥离、单独在网格下方编辑（清空注释自动去掉 `$`，改值/注释互不丢失）；SC 注释行/含标点行仍走 textarea。
+- **✅ 测试**：`tests/unit/test_distributions.py`（25 项：解析/发射/同步/合并/D1 链/raw 直通）；`gui/test/distDual.test.ts`（13 项 TS 镜像）；`gui/test/distributionEditorRaw.dom.test.tsx`（4 项：值拆格、$ 注释分离、改值保留注释、清注释去 $）；相关旧回归 test_regress_sdef_sc_chain / test_core_data_cards 全绿。
+- **门禁**：pytest（parser+unit+integration 相关）**46 passed**；vitest **587+4 passed**（73+1 文件）；tsc EXIT 0；vite build EXIT 0。改动未 commit、未打包。
+- **⚠️ 待办**：本批含上一会话遗留未提交改动（分布 v2 双态整体），打包/提交前先确认工作区全部意图内改动（见下方 S2 改动清单）。
+
 ## S1（当前批次）AI 接入 inputcard-mcp + 快捷建栅元六棱柱/四面体 + 深模块化（本会话，已实现，本次提交）
 - **批次目标**：① 让支持 MCP 的 AI 助手能在本地读写/生成 MCNP 输入卡；② 快捷建栅元扩到六棱柱(RHP)/四面体；③ IMP 改数值输入默认 0；④ 把 GeometryTab/Preview3D 重复的重合检测编排抽成深模块；⑤ 废弃一键打包、提示词做成页面。
 - **✅ inputcard-mcp（AI 接入，本地 stdio）**：新增 `inputcard_mcp/` 包（`server.py`/`__main__.py`/`__init__.py`/`requirements.txt`，`mcp>=1,<2`），FastMCP v1 @tool。**无状态**：每次工具调用 AI 携带完整文本文档，修改型工具「收当前 INP → 返回新 INP」。**6 工具**：`read_document/generate_document/validate_document/list_section/patch_section/add_shape`（可写=8 语义段 basic/surfaces/tr_cards/cells/materials/sources/tally/advanced；add_shape 支持 rcc/rpp/sph/hex/tet）。**深接口**：read/generate/list/patch 统一按 **sections（asdict）口径**，一个 `patch_section` 全量覆盖一段（复用 api_server `_xxx_from_dict`，与 `deck_from_json` 同口径）；已删 6 个旧浅工具（list_cells/get_cell/update_cell/set_mode/list_materials/set_material）。**边界：不建模 textMode/raw override**（raw_override 是 generate 第二参数非 deck 字段，MCP 结构化路径会重写该段）。复用后端 `parse_inp_text`/`generate_inp_from_deck`/`deck_from_json`；**命名刻意避开 "MCNP" 子串**。

@@ -2086,14 +2086,21 @@ components:
         enableTn: { type: boolean }
     DistEntry:
       type: object
-      description: 结构化 SI/SP/SB/DS 分布（adv.sdef_distributions，非空时优先于 sdef_raw_text）
+      description: |
+        结构化 SI/SP/SB/DS 分布（adv.sdef_distributions，非空时优先于 sdef_raw_text）。
+        v2 双态（app/generator/distributions.py）：editMode=raw → rawText 逐字直通（导入文件的
+        直接形态）；editMode=structured/缺省 → 结构化字段规范重建（新建默认）。无字母 SI 记
+        type=''（MCNP 缺省 H 直方图），生成时不回填 L。
       properties:
         id: { type: integer }
         paramRef: { type: string, description: 引用的 SDEF 变量（ERG/POS/PAR…） }
-        si: { type: object, properties: { type: { type: string, enum: [L, H, A, S, Q, T, F] }, values: { type: array, items: { type: string } } } }
-        sp: { type: object, properties: { type: { type: string, enum: [D, C, V, ''] }, values: { type: array, items: { type: string } }, fnCode: { type: string }, fnParams: { type: array, items: { type: string } } } }
+        editMode: { type: string, enum: [raw, structured], description: 权威侧；缺省=structured }
+        rawText: { type: string, description: 原文卡行（\n 分隔；editMode=raw 时发射逐字直通） }
+        si: { type: object, nullable: true, properties: { type: { type: string, enum: ['', L, H, A, S, Q, T, F] }, values: { type: array, items: { type: string } } } }
+        sp: { type: object, nullable: true, properties: { type: { type: string, enum: [D, C, V, ''] }, values: { type: array, items: { type: string } }, fnCode: { type: string }, fnParams: { type: array, items: { type: string } } } }
         sb: { type: object, nullable: true }
         ds: { type: object, nullable: true }
+        sc: { type: string, nullable: true, description: SCn 源注释卡文字 }
         auto: { type: boolean }
     SswFields:
       type: object
@@ -2117,8 +2124,8 @@ components:
       type: object
       description: |
         app/models.py:297 AdvancedSettings 的前端形态（adv section）。
-        other_cards 为原始文本；sdef_raw_text 为 SI/SP 回退路径；
-        sdef_distributions 结构化 JSON 非空时优先。
+        other_cards 为原始文本；sdef_raw_text 为旧数据回退路径（新解析已停写，仅读兼容）；
+        sdef_distributions v2 双态 JSON 非空时优先（editMode raw/structured，见 DistEntry）。
       properties:
         other_cards: { type: string, description: 用户手动其他 MCNP 卡（原样输出） }
         source_mode: { type: string, enum: [fixed, distribution, kcode, surface] }

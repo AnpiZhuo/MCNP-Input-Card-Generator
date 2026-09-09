@@ -84,17 +84,18 @@ export function builtinFn(code: string): BuiltinFn | undefined {
   return BUILTIN_FNS.find(f => f.code === code);
 }
 
-/** SI 类型选项 */
+/** SI 类型选项（"" = 省略：MCNP 缺省为 H 直方图——不得自动回填 L） */
 export const SI_TYPES = [
-  { v: "L", n: "离散列表", d: "SI L v1 v2 ...（栅元号/谱线能量等）" },
+  { v: "", n: "直方图(省略)", d: "SI 无字母（MCNP 缺省 H：分箱边界，如 SI1 0 14）" },
+  { v: "L", n: "离散列表", d: "SI L v1 v2 ...（栅元号/谱线能量等离散值）" },
   { v: "H", n: "直方图", d: "SI H E1 E2 ...（分箱边界，单调递增）" },
   { v: "A", n: "概率密度点", d: "SI A v1 v2 ...（单调递增密度点）" },
   { v: "S", n: "分布编号", d: "SI S n1 n2 ...（先选分布再取样）" },
 ];
 
-/** SP 类型选项 */
+/** SP 类型选项（""/D = 省略：MCNP 缺省 D 分箱概率；生成时 D 不带字母发射） */
 export const SP_TYPES = [
-  { v: "D", n: "分箱概率", d: "SP D p1 p2 ...（默认，不需归一化）" },
-  { v: "C", n: "累积概率", d: "SP C c1 c2 ..." },
-  { v: "V", n: "按体积加权", d: "SP V v1 v2 ...（仅 CEL 体积源）" },
+  { v: "D", n: "D 分箱概率(默认)", d: "SP D p1 p2 ...（默认，不需归一化）" },
+  { v: "C", n: "C 累积概率", d: "SP C c1 c2 ..." },
+  { v: "V", n: "V 按体积加权", d: "SP V v1 v2 ...（仅 CEL 体积源）" },
 ];

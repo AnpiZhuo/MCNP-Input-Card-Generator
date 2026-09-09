@@ -26,6 +26,12 @@ from app.generator.parsers import parse_inp_text
 from tests.conftest import load_sample
 
 
+def _norm(text: str) -> str:
+    """空白 + 大小写归一化，使断言对间距/卡片大小写不敏感
+    （v2 双态 raw 直通保留原文间距与大小写，MCNP 本身不区分）。"""
+    return re.sub(r'\s+', ' ', text.strip()).lower()
+
+
 SRC_BLOCK = (
     "SDEF  CEL D4  X D1  Y D2  Z D3  ERG=1\n"
     "SI1  -5 5\n"
@@ -74,9 +80,23 @@ def test_scn_does_not_break_sdef_distribution_chain():
 def test_scn_chain_round_trip_keeps_distribution_cards():
     deck, _w = parse_inp_text(_shell_wrap(SRC_BLOCK))
     out = generate_inp_from_deck(deck)
-    for token in ("SI2  A  -5  5", "SB2  D  1  2", "SP4  V",
-                  "SI4  L  1", "SC2  position is biased"):
-        assert token in out, f"round-trip 输出缺 {token!r}:\n{out}"
+    norm = _norm(out)
+    for token in ("si2 a -5 5", "sb2 1 2", "sp4 v",
+                  "si4 l 1", "sc2 position is biased toward the dxtran"):
+        assert token in norm, f"round-trip 输出缺 {token!r}:\n{out}"
+
+
+def test_scn_chain_round_trip_preserves_original_lines():
+    """导入即 raw 直通：输出逐字保留原文 SI/SP/SB/SC 分布卡行（v2 双态，editMode=raw）。
+
+    SDEF 主卡行由字段重建（不在 raw 直通范围），故只校验分布卡家族行。
+    """
+    deck, _w = parse_inp_text(_shell_wrap(SRC_BLOCK))
+    out = generate_inp_from_deck(deck)
+    for line in SRC_BLOCK.splitlines():
+        head = line.strip().split()[0].upper()
+        if re.match(r'^(SI|SP|SB|DS|SC)\d+$', head):
+            assert line.strip() in out, f"原文分布行未直通: {line.strip()!r}"
 
 
 # ── 全文件实卡回归（inp02.i fixture）───────────────────────
@@ -90,6 +110,7 @@ def test_inp02_full_roundtrip_distributions_structured():
     assert not _dist_heads_not_in_other(deck), \
         f"inp02.i 分布卡仍落 other_cards: {_dist_heads_not_in_other(deck)}"
     out = generate_inp_from_deck(deck)
-    for token in ("SI2  A  -5  5", "SB2  D  1  2", "SC2  position is biased",
-                  "SI4  L  1", "SP4  V"):
-        assert token in out, f"inp02.i round-trip 缺 {token!r}"
+    norm = _norm(out)
+    for token in ("si2 a -5 5", "sb2 1 2", "sc2 position is biased",
+                  "si4 l 1", "sp4 v"):
+        assert token in norm, f"inp02.i round-trip 缺 {token!r}: {norm}"

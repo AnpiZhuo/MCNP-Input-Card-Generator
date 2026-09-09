@@ -460,12 +460,15 @@ class AdvancedSettings:
     sdef_rate: str = ""    # Source strength / 源强度
     sdef_extra: str = ""   # Extra SDEF fields (preserved verbatim) / SDEF 额外字段（原样保留）
 
-    # Distribution source mode: SI/SP pair serialized text (each pair separated by \n---\n)
-    # 分布源模式：SI/SP 对序列化文本（每个对用 \n---\n 分隔）
+    # 旧格式 SI/SP 对序列化文本（\n---\n 时代遗留）：新解析已停写，仅作旧存档回退读取
+    # （v2 sdef_distributions 是唯一权威存储；生成器在 distributions 为空时才读此字段）
     sdef_raw_text: str = ""
 
-    # 结构化分布（新）：SI/SP/SB/DS 结构化 JSON，非空时优先于 sdef_raw_text
-    # 格式: [{"id":1,"paramRef":"ERG","si":{"type":"L","values":[...]},"sp":{"type":"D","values":[...],"fnCode":"","fnParams":[]},"sb":null,"ds":null,"auto":true}]
+    # 结构化分布 v2 双态（app/generator/distributions.py；SI/SP/SB/DS/SC 唯一权威存储）
+    # 格式: [{"id":1,"paramRef":"ERG","editMode":"raw"|"structured","rawText":"…",
+    #         "si":{"type":""|"L"…,"values":[…]}|null,"sp":{…}|null,
+    #         "sb":{…}|null,"ds":{…}|null,"sc":"…"|null,"auto":bool}]
+    # 无字母 SI → type ""（MCNP 缺省 H），生成时绝不回填 L。非空时优先于 sdef_raw_text。
     sdef_distributions: str = ""
 
     # ── SSW/SSR 面源（source_mode 面源时使用）──

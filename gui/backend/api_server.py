@@ -1606,23 +1606,31 @@ class MCNPHandler(BaseHTTPRequestHandler):
             self._err(str(e))
 
     def _handle_sweep_run(self):
-        """参数扫描执行：逐组合写 INP → 调 MCNP → 提取 keff → 汇总 TSV。
+        """参数扫描执行：笛卡尔组合 → 线程池并行（workers 个同时跑）写 INP 调 MCNP →
+        提取 keff → 汇总 TSV。
 
-        总时长预算纪律：组合数 × 单次超时 ≤ 预算（默认 30 分钟），超预算/超上限
+        总时长预算纪律：组合数 × 单次超时 ÷ 并行数 ≤ 预算（默认 30 分钟），超预算/超上限
         直接拒绝（code="budget_exceeded" + 中文消息）；单组合保持 300s 超时。
+        每个组合在独立 run_XXX 子目录里以 ``name=sweep-{i:03d}.`` 命名输出
+        （sweep-001.o / sweep-001.r …），并发互不覆盖、结果与组合号一一对应。
         临时目录在成功/失败后清理（摘要先拷到稳定目录再删）。
         """
         try:
             import glob
+            import math
             import shutil
             import subprocess
             import tempfile
+            from concurrent.futures import ThreadPoolExecutor
             sweep = _import_app("sweep")
             data = self._read_body() or {}
             deck_text = data.get("deck") or ""
             parameters = data.get("parameters") or []
+            workers = int(data.get("workers") or 1)
+            workers = max(1, min(workers, 32))
             combos = sweep.cartesian(parameters)
-            budget = sweep.sweep_budget_status(len(combos))
+            budget = sweep.sweep_budget_status(
+                len(combos), workers=max(1, workers))
             if budget is not None:
                 self._ok({"status": "error", **budget})
                 return
@@ -1632,8 +1640,10 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 return
             base_dir = tempfile.mkdtemp(prefix="mcnp_sweep_")
             try:
-                records = []
-                for i, combo in enumerate(combos, 1):
+                def run_one(idx: int):
+                    """跑第 idx 个组合（1-based）。独立子进程 + 独立子目录，天然可并发。"""
+                    i = idx + 1
+                    combo = combos[idx]
                     inp = sweep.apply_parameters(deck_text, combo, parameters)
                     run_dir = os.path.join(base_dir, sweep.run_dir_name(i))
                     os.makedirs(run_dir, exist_ok=True)
@@ -1643,18 +1653,23 @@ class MCNPHandler(BaseHTTPRequestHandler):
                     rec = {"index": i, "parameters": combo, "inputFile": inp_path,
                            "outputDir": run_dir, "exitCode": None, "keff": None}
                     try:
+                        # name=sweep-XXX. → 输出文件 sweep-001.o / sweep-001.r …，
+                        # 多组合并行时互不覆盖（与组合序号一一对应）。
                         proc = subprocess.run(
-                            [exe, "i=sweep.i"], cwd=run_dir,
-                            capture_output=True, text=True, timeout=300,
+                            [exe, "i=sweep.i", f"name=sweep-{i:03d}."],
+                            cwd=run_dir, capture_output=True, text=True, timeout=300,
                         )
                         rec["exitCode"] = proc.returncode
                         rec["keff"] = sweep.parse_keff(
                             (proc.stdout or "") + "\n" + (proc.stderr or ""))
                     except subprocess.TimeoutExpired:
                         pass
-                    # 收敛序列（仪表盘小图）：优先读 run 目录里的 mctal
+                    # 收敛序列（仪表盘小图）：优先读该组合目录里的 mctal
+                    # （name= 前缀可能影响 mctal 命名，故两种 glob 都试）
                     try:
-                        mctal_paths = sorted(glob.glob(os.path.join(run_dir, "mctal*")))
+                        mctal_paths = sorted(
+                            glob.glob(os.path.join(run_dir, "mctal*")) +
+                            glob.glob(os.path.join(run_dir, f"sweep-{i:03d}.m*")))
                         if mctal_paths:
                             with open(mctal_paths[0], "r", encoding="utf-8",
                                       errors="replace") as f:
@@ -1665,7 +1680,15 @@ class MCNPHandler(BaseHTTPRequestHandler):
                                     rec["keffStd"] = hist["std"][-1]
                     except Exception:
                         pass
-                    records.append(rec)
+                    return rec
+
+                records = []
+                if workers > 1 and len(combos) > 1:
+                    with ThreadPoolExecutor(max_workers=workers) as pool:
+                        records = list(pool.map(run_one, range(len(combos))))
+                else:
+                    records = [run_one(idx) for idx in range(len(combos))]
+                records.sort(key=lambda r: r["index"])
                 tsv = sweep.build_summary_tsv(parameters, records)
                 manifest = sweep.build_manifest("sweep.i", "mcnp", parameters, records)
                 # 摘要（manifest + TSV）拷到稳定目录后清理临时目录（T8）
@@ -1673,6 +1696,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
                     base_dir, manifest, tsv)
                 self._ok({"status": "ok", "baseDir": summary_base,
                           "records": records, "summaryTsv": tsv,
+                          "workers": workers,
                           "manifest": manifest, "manifestPath": manifest_path})
             finally:
                 shutil.rmtree(base_dir, ignore_errors=True)

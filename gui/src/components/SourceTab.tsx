@@ -117,7 +117,8 @@ export default function SourceTab() {
         const param = SDEF_FIELD_META.find((f) => f.key === k)?.keyword || "";
         writeDistributions([...distributions, {
           id, paramRef: param, auto: true,
-          si: { type: "L", values: ["", ""] },
+          // 默认规范形态 + SI 直方图省略（无字母，MCNP 缺省 H；不默认 L）
+          si: { type: "", values: ["", ""] },
           sp: { type: "D", values: [], fnCode: "", fnParams: [] },
           sb: null, ds: null,
         }]);
@@ -310,7 +311,8 @@ export default function SourceTab() {
                 const nextId = distributions.reduce((m, d) => Math.max(m, d.id), 0) + 1 || 1;
                 writeDistributions([...distributions, {
                   id: nextId, paramRef: "", auto: false,
-                  si: { type: "L", values: ["", ""] },
+                  // 默认规范形态 + SI 直方图省略（无字母；新建默认=规范形态）
+                  si: { type: "", values: ["", ""] },
                   sp: { type: "D", values: [""], fnCode: "", fnParams: [] },
                   sb: null, ds: null,
                 }]);

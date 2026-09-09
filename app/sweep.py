@@ -4,9 +4,14 @@
 清单与汇总 TSV。执行编排（子进程、目录布局）在 api_server 端点里。
 
 约定：
-- ``SweepParameter``: ``{"name", "pattern", "values"}``——pattern 为正则，
-  组 1 是被替换的值（保留组 1 前后文本），如 ``r"(NPS\\s+)(\\d+)"``。
+- ``SweepParameter``: ``{"name", "pattern"|("anchor"+"context"), "values"}``。
+  - 正则模式：pattern 为正则，组 1 是被替换的值（保留组 1 前后文本），
+    如 ``r"(NPS\\s+)(\\d+)"``。
+  - 锚点模式（免正则，GUI「选中即参数」产出）：``anchor`` 是用户选中的原文
+    （如 ``1000000``），``context`` 是选中处所在的整行（如 ``nps 1000000``）；
+    替换时找含 context 的首行、行内替换首个 anchor。
 - ``apply_parameters`` 每个参数只替换首个匹配；组合之间互不影响（作用于原文本）。
+- 锚点模式下多个参数在同一份原始文本上统一定位后一起替换，支持同参数行多值。
 """
 
 from __future__ import annotations
@@ -106,7 +111,17 @@ def cartesian(parameters: list[dict]) -> list[dict]:
 
 
 def apply_parameters(text: str, params: dict, schema: list[dict]) -> str:
-    """把一组参数替换进文本：每参数首个正则匹配，组 1 换成值，保留上下文。"""
+    """把一组参数替换进文本。
+
+    两种参数模式（不混用）：
+    - 锚点模式（anchor + context）：免正则，由「选中即参数」产出；在同一份原始文本上
+      统一定位、原地替换（多参数同一行也能互不干扰）。
+    - 正则模式（pattern）：兼容旧数据/内部调用。
+    """
+    # 检测锚点模式
+    if any("anchor" in p for p in schema):
+        return _apply_anchors(text, schema, params)
+    # 正则模式（兼容）
     out = text
     for p in schema:
         value = str(params.get(p["name"], ""))
@@ -116,6 +131,50 @@ def apply_parameters(text: str, params: dict, schema: list[dict]) -> str:
             continue
         out = re_.sub(lambda m: _substitute(m, value), out, count=1)
     return out
+
+
+def _apply_anchors(text: str, schema: list[dict], params: dict) -> str:
+    """锚点多参数同时替换：所有参数基于同一份原始文本定位，从后往前原地替换。
+
+    定位规则：找到包含 context 的首行，在该行内找到首个 anchor 出现位置；
+    context 为空则全文搜首个 anchor。
+    """
+    edits = []  # (start, end, value)
+    for p in schema:
+        value = str(params.get(p["name"], ""))
+        anchor = p.get("anchor", "")
+        context = p.get("context", "")
+        start = _anchor_pos(text, anchor, context)
+        if start is None:
+            continue
+        edits.append((start, start + len(anchor), value))
+    if not edits:
+        return text
+    edits.sort(key=lambda e: e[0], reverse=True)  # 从后往前防止偏移错位
+    out = text
+    for start, end, val in edits:
+        out = out[:start] + str(val) + out[end:]
+    return out
+
+
+def _anchor_pos(text: str, anchor: str, context: str) -> int | None:
+    """返回 anchor 在 text 中的起始位置，或 None。
+
+    用法：若 context 非空，在包含 context 的首行内搜索 anchor；
+    否则全文本搜索首个 anchor。
+    """
+    idx = 0
+    for line in text.splitlines(keepends=True):
+        if context:
+            if context in line:
+                rel = line.find(anchor)
+                if rel >= 0:
+                    return idx + rel
+        else:
+            rel = text.find(anchor)
+            return rel if rel >= 0 else None
+        idx += len(line)
+    return None
 
 
 def _substitute(m: re.Match, value: str) -> str:
@@ -136,24 +195,26 @@ def run_dir_name(index: int) -> str:
 
 
 def sweep_budget_status(num_combos, per_run_timeout=SWEEP_PER_RUN_TIMEOUT,
-                        total_budget=SWEEP_TOTAL_BUDGET):
+                        total_budget=SWEEP_TOTAL_BUDGET, workers=1):
     """检查 sweep-run 是否超出总时长预算（命令硬性超时纪律）。
 
-    预算 = 组合数 × 单次超时。组合数超上限或预计总耗时超过预算 → 返回
+    预算 = ceil(组合数 / 并行数) × 单次超时。组合数超上限或预计总耗时超过预算 → 返回
     ``{"code": "budget_exceeded", "message": ...}``（含当前组合数/预算说明）；
     可执行返回 ``None``。
     """
     if num_combos > SWEEP_MAX_COMBOS:
         message = f"组合数 {num_combos} 超上限 {SWEEP_MAX_COMBOS}，请缩小参数范围"
     else:
-        expected = num_combos * per_run_timeout
+        batches = (num_combos + workers - 1) // workers  # ceil 取整
+        expected = batches * per_run_timeout
         if expected <= total_budget:
             return None
         message = (
-            f"组合数 {num_combos} × 单次超时 {per_run_timeout}s = 预计耗时 "
-            f"{expected}s（{expected // 60} 分钟），超过总预算 "
+            f"组合数 {num_combos}，同时跑 {workers} 个 ≈ {batches} 批 × "
+            f"单次超时 {per_run_timeout}s = 预计耗时 {expected}s"
+            f"（{expected // 60} 分钟），超过总预算 "
             f"{total_budget}s（{total_budget // 60} 分钟）。"
-            f"请缩小参数范围或缩短单次运行时间。"
+            f"请缩小参数范围、增加并行数或缩短单次运行时间。"
         )
     return {"code": "budget_exceeded", "message": message}
 

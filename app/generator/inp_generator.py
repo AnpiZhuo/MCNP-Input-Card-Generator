@@ -22,6 +22,7 @@ from .banners import (
     skipped_card_banner, multi_source_comment_banner,
     universe_group_banner,
 )
+from .distributions import emit_distribution_entries, has_d1_probability_chain, multi_source_probability_count
 
 
 # ===== Cells & Surfaces: 保留原始文本 pass-through =====
@@ -498,30 +499,21 @@ def _generate_distribution_sdef(adv: AdvancedSettings) -> list[str]:
 
 
 def _multi_source_comment_reemit(dist_json: str) -> list[str]:
-    """分布回放后重发多源概率键控注释（根因 #5）。
+    """分布回放后重发多源概率键控注释（根因 #5，实现已迁 distributions.py）。
 
-    结构化分布 ≥2 条且存在 SP 卡为 D1 引用（`sp.values == ["D1"]` 键控链）时，
-    发 multi_source_comment_banner(n)，n = 首张含数值 SP 卡的 values 长度。
+    结构化分布 ≥2 条且存在 SP 卡为 D1 引用（键控链）时，发
+    multi_source_comment_banner(n)，n = 首张含数值 SP 卡的 values 长度。
     保守触发：单分布无 D1 键控链（avr13/prob41c/inp24）不发。
     """
     try:
         entries = json.loads(dist_json)
     except (json.JSONDecodeError, TypeError):
         return []
-    if not isinstance(entries, list) or len(entries) < 2:
+    if not isinstance(entries, list):
         return []
-    has_d1_chain = any(
-        (e.get("sp") or {}).get("values") == ["D1"]
-        for e in entries
-    )
-    if not has_d1_chain:
+    if not has_d1_probability_chain(entries):
         return []
-    n = 0
-    for e in entries:
-        sp_vals = (e.get("sp") or {}).get("values") or []
-        if sp_vals and sp_vals != ["D1"]:
-            n = len(sp_vals)
-            break
+    n = multi_source_probability_count(entries)
     return [multi_source_comment_banner(n)] if n else []
 
 
@@ -914,13 +906,15 @@ def _generate_kcode(adv: AdvancedSettings) -> list[str]:
 
 # ── 结构化分布生成（SI/SP/SB/DS，源分布卡说明.md 第三/四节）──
 def _generate_structured_distributions(dist_json: str) -> list[str]:
-    """从 sdef_distributions JSON 生成 SI/SP/SB/DS 卡。
+    """从 sdef_distributions JSON 生成 SI/SP/SB/DS 卡（v2 双态，实现已迁 distributions.py）。
 
-    格式: [{"id":1,"paramRef":"ERG",
+    格式: [{"id":1,"paramRef":"ERG","editMode":"raw"|"structured","rawText":"…",
             "si":{"type":"L","values":[...]},
-            "sp":{"type":"D","values":[...],"fnCode":"-3","fnParams":["0.965","2.29"]},
-            "sb":{"type":"-31","values":["1.5"]} | null,
-            "ds":{"type":"S","param":"ERG","distributionIds":["3","4"]} | null}]
+            "sp":{"type":"D","values":[...],"fnCode":"","fnParams":[]},
+            "sb":{...}|null,"ds":{...}|null,"sc":"…"|null}]
+
+    - editMode=raw 且 rawText 非空 → 原文逐字直通（round-trip 字节级一致，含 L-default 修复）
+    - 否则（structured / v1 旧条目）→ 结构化字段规范重建（无字母 SI 不再打印成 L）
     """
     if not dist_json:
         return []
@@ -928,60 +922,9 @@ def _generate_structured_distributions(dist_json: str) -> list[str]:
         entries = json.loads(dist_json)
     except (json.JSONDecodeError, TypeError):
         return []
-    lines = []
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        idx = entry.get("id", 1)
-        si = entry.get("si") or {}
-        sp = entry.get("sp") or {}
-        sb = entry.get("sb")
-        ds = entry.get("ds")
-        # SC: SCn 源注释卡（源分布卡说明.md §三）——先于该分布卡族回放
-        sc = (entry.get("sc") or "").strip()
-        if sc:
-            lines.append(f"SC{idx}  {sc}")
-        # SI: SIn type values (L/H/A/S)
-        si_type = (si.get("type") or "L").upper()
-        si_vals = [str(v) for v in (si.get("values") or []) if str(v).strip()]
-        if si_vals:
-            lines.append(f"SI{idx}  {si_type}  {'  '.join(si_vals)}")
-        # SP: SPn [type] values 或内置函数
-        if sp:
-            sp_type = (sp.get("type") or "").upper()
-            fn = (sp.get("fnCode") or "").strip()
-            fn_params = [str(v) for v in (sp.get("fnParams") or []) if str(v).strip()]
-            vals = [str(v) for v in (sp.get("values") or []) if str(v).strip()]
-            if fn:
-                params_str = "  ".join(fn_params)
-                lines.append(f"SP{idx}  {fn}" + (f"  {params_str}" if params_str else ""))
-            elif sp_type in ("C", "V"):
-                lines.append(f"SP{idx}  {sp_type}  {'  '.join(vals)}")
-            elif vals:
-                lines.append(f"SP{idx}  {'  '.join(vals)}")
-        # SB: SBn [D] values 或 SBn -21/-31 a
-        if sb:
-            sb_type = (sb.get("type") or "D")
-            sb_vals = [str(v) for v in (sb.get("values") or []) if str(v).strip()]
-            if str(sb_type) in ("-21", "-31"):
-                lines.append(f"SB{idx}  {sb_type}  {'  '.join(sb_vals)}")
-            elif sb_vals:
-                lines.append(f"SB{idx}  D  {'  '.join(sb_vals)}")
-        # DS: DSn [type] [param] distIds（依赖分布）
-        if ds:
-            ds_type = (ds.get("type") or "S").upper()
-            param = (ds.get("param") or "").strip()
-            refs = [str(r) for r in (ds.get("distributionIds") or []) if str(r).strip()]
-            if ds_type == "T":
-                lines.append(f"DS{idx}  T")
-            else:
-                head = f"DS{idx}  {ds_type}"
-                if param:
-                    head += f"  {param}"
-                if refs:
-                    head += "  " + "  ".join(refs)
-                lines.append(head)
-    return lines
+    if not isinstance(entries, list):
+        return []
+    return emit_distribution_entries(entries)
 
 
 def _generate_ssw(adv: AdvancedSettings) -> list[str]:

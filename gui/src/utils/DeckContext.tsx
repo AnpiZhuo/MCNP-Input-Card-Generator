@@ -25,20 +25,26 @@ export interface SourceItem {
 }
 export interface TallyDef { type: string; number: number; particle: string; params: string; multiplier?: string; enableEn: boolean; enableTn: boolean }
 
-/* ── 源项结构化分布（对齐 MCNP 源分布卡说明.md）── */
-export interface SiEntry { type: "L" | "H" | "A" | "S" | "Q" | "T" | "F"; values: string[] }
-export interface SpEntry { type: "D" | "C" | "V" | ""; values: string[]; fnCode: string; fnParams: string[] }
+/* ── 源项结构化分布（对齐 MCNP 源分布卡说明.md；v2 双态：raw 原文 ↔ structured 表单）── */
+/** SI 类型；"" = 无字母（MCNP 缺省 H 直方图，不得再回填 L） */
+export interface SiEntry { type: "" | "L" | "H" | "A" | "S" | "Q" | "T" | "F"; values: string[] }
+export interface SpEntry { type: "" | "D" | "C" | "V"; values: string[]; fnCode: string; fnParams: string[] }
 export interface SbEntry { type: "D" | "-21" | "-31"; values: string[] }
 export interface DsEntry { type: "H" | "L" | "S" | "T" | "Q"; param: string; distributionIds: string[] }
 export interface DistEntry {
   id: number;
   paramRef: string;          // 引用的 SDEF 变量（ERG/POS/PAR...）
-  si: SiEntry;
-  sp: SpEntry;
+  si: SiEntry | null;
+  sp: SpEntry | null;
   sb: SbEntry | null;
   ds: DsEntry | null;
   sc?: string;               // SCn 源注释卡文字（可选，导入自 inp 时携带）
   auto: boolean;
+  // ── v2 双态（app/generator/distributions.py schema）──
+  /** "raw" = 直接形态（导入文件时逐字原文权威）；"structured"/缺省 = 规范形态（新建默认） */
+  editMode?: "raw" | "structured";
+  /** 原文行（\n 分隔；editMode=raw 时发射逐字直通） */
+  rawText?: string;
 }
 export type SourceTemplateType =
   | "point" | "multi_point" | "free";

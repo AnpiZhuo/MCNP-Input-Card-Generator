@@ -190,3 +190,42 @@ def test_parse_keff_warns_on_mctal_failure(caplog, monkeypatch):
     with caplog.at_level("WARNING", logger="app.sweep"):
         assert parse_keff("k-eff = 1.0123") == 1.0123
     assert any("parse_keff" in rec.message for rec in caplog.records)
+
+
+# ── 锚点模式（GUI「选中即参数」产出，免正则）──
+def test_apply_anchor_mode_basic():
+    """anchor+context：替换含 context 的首行内的 anchor，行内其余文本保留。"""
+    text = "NPS    1000\nkcode 1000 1.0 50 100\n"
+    schema = [
+        {"name": "nps", "anchor": "1000", "context": "NPS    1000"},
+        {"name": "rkk", "anchor": "1.0", "context": "kcode 1000 1.0 50 100"},
+    ]
+    out = apply_parameters(text, {"nps": "5000", "rkk": "1.2"}, schema)
+    assert out == "NPS    5000\nkcode 1000 1.2 50 100\n"
+
+
+def test_apply_anchor_same_line_multi_values():
+    """同一行多个参数：基于同一份原始文本定位，两个数都能同时替换。"""
+    text = "kcode 1000 1.0 50 100\n"
+    schema = [
+        {"name": "cyc", "anchor": "1000", "context": "kcode 1000 1.0 50 100"},
+        {"name": "rkk", "anchor": "1.0", "context": "kcode 1000 1.0 50 100"},
+    ]
+    out = apply_parameters(text, {"cyc": "500", "rkk": "1.2"}, schema)
+    assert out == "kcode 500 1.2 50 100\n"
+
+
+def test_apply_anchor_empty_context_whole_text_first():
+    """context 为空 → 全文首个 anchor 命中替换（仅一次）。"""
+    text = "1.0 1.0\n"
+    schema = [{"name": "v", "anchor": "1.0", "context": ""}]
+    out = apply_parameters(text, {"v": "2.0"}, schema)
+    assert out == "2.0 1.0\n"
+
+
+def test_apply_anchor_only_target_line():
+    """context 唯一锁定目标行：别处相同的数字不受影响。"""
+    text = "1 0 -1\n2 1 1.0 -1\nm1 1001 1.0\n"
+    schema = [{"name": "d", "anchor": "1.0", "context": "2 1 1.0 -1"}]
+    out = apply_parameters(text, {"d": "0.5"}, schema)
+    assert out == "1 0 -1\n2 1 0.5 -1\nm1 1001 1.0\n"

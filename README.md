@@ -61,7 +61,7 @@ A desktop application for visually creating, editing, and validating **MCNP** in
 | **格阵 3D 装配** | 嵌套 fill 展开 + InstancedMesh 实例化渲染全堆芯；按 MCNP「窗口」机制裁剪（实体 = universe ∩ 格元盒 ∩ 容器 cell），不超壳、无虚假外块；3D 预览侧边栏按 U 分组显示（+ 保留未分组栅元） |
 | **STEP 导入（GEOUNED）** | `.STEP/.STP` 经 FreeCAD + GEOUNED 自动转换为 MCNP 曲面/栅元 |
 | **材料库 Material library** | 50+ 预设 + 48 PNNL-15870 同位素级（97 种）+ **用户可编辑持久材料库**（自定义保存 / 导入导出 JSON·CSV / 恢复原始，存 `D:\MCNP\material`）；化学式换算，xsdir 校验 + 反向索引 + 组成自洽校验 |
-| **源模式 Source modes** | 固定多源 / SDEF 分布源（SI/SP）/ KCODE 临界源 |
+| **源模式 Source modes** | 固定多源 / SDEF 分布源（SI/SP/SB/DS，v2 双态：raw 原文直通 ⇄ 结构化表单）/ KCODE 临界源 / 面源（SSW/SSR） |
 | **MCNP 检测与运行** | 自动检测 mcnp6.exe，一键运行、跑完清理临时文件；默认走独显 GPU |
 | **输出分析 Output analysis** | 解析 MCNP 输出文件并绘图 |
 | **高级特性 Advanced** | 计数乘子 FMn、材料/栅元条件编译行、能谱/时间网格（E0/En/T0/Tn）、栅元拖拽排序、文字内容一键切换 |

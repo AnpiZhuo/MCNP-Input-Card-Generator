@@ -7,7 +7,7 @@
 
 export interface SweepParameter {
   name: string;
-  pattern: string;
+  pattern?: string;
   values: Array<string | number>;
 }
 
