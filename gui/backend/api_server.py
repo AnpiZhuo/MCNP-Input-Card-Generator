@@ -1466,6 +1466,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             "/api/validate-lattice-surfaces": self._handle_validate_lattice_surfaces,
             "/api/lattice-extent": self._handle_lattice_extent,
             "/api/validate-universe-coverage": self._handle_validate_universe_coverage,
+            "/api/source-demo-sample": self._handle_source_demo_sample,
             "/api/preview-lattice": self._handle_preview_lattice,
             "/api/set-gpu-preference": self._handle_set_gpu_preference,
             "/api/material-library": self._handle_material_library,
@@ -3112,6 +3113,96 @@ class MCNPHandler(BaseHTTPRequestHandler):
         except Exception as e:
             import traceback
             self._err(str(e) + " | " + traceback.format_exc())
+
+    # ── 源粒子演示抽样（TODO #6 SDEF 源粒子可视化）──
+    def _handle_source_demo_sample(self):
+        """SDEF 源粒子抽样（source-demo-visualization 契约 §3）。
+
+        入参 {sdefFields, sdefDistributions, surfaces, cells, trCards, nParticles?}。
+        响应 {status, particles, energyRange, bounds} 或 {status, error}。
+        CEL/SUR 几何判定复用本文件 parse_surfaces / Geometry.from_mcnp /
+        resolve_cell_complements / voxel_csg 构造 field 函数，再交 source_sampler 抽样。
+        """
+        try:
+            data = self._read_body() or {}
+            sdef_fields = data.get("sdefFields") or {}
+            distributions = data.get("sdefDistributions") or []
+            n_particles = int(data.get("nParticles") or 500)
+            surf_text = str(data.get("surfaces") or "")
+            cells = data.get("cells") or []
+            tr_text = str(data.get("trCards") or "")
+            geometry = self._prepare_source_geometry(surf_text, cells, tr_text)
+            from app.generator.source_sampler import sample_source
+            self._ok(sample_source(sdef_fields, distributions, geometry,
+                                   n_particles=n_particles))
+        except Exception as e:
+            self._err(str(e))
+
+    def _prepare_source_geometry(self, surf_text, cells, tr_text):
+        """CEL/SUR 抽样所需几何：{cells:{num:{field,aabb}}, surfaces:{num:{type,params,field}}}。
+
+        field 为 voxel_csg 隐式求值函数（cell → 布尔场；surface → 标量场），
+        #n 补集经 resolve_cell_complements 展开；宏体由 voxel_csg.surface_fn 支持。
+        """
+        import app.voxel_csg as vc
+        from freecad_preview import parenthesize_unions, resolve_cell_complements, _pymcnp_surf_to_dict
+        from pymcnp.types.Geometry import Geometry
+
+        surfs = parse_surfaces(surf_text)
+        tr_cards = parse_tr_cards(tr_text)
+        surfaces = {}
+        for s in surfs:
+            try:
+                d = _pymcnp_surf_to_dict(s)
+                typ = (d.get("type") or "").upper()
+                params = d.get("params") or []
+                field = vc.surface_fn(typ, params, vc._surface_tr(d, tr_cards))
+                surfaces[int(s.number)] = {"type": typ, "params": params, "field": field}
+            except Exception:
+                continue
+
+        cells_by_num = {}
+        for c in cells:
+            if not isinstance(c, dict):
+                continue
+            cell = c.get("cell") if c.get("kind") == "cell" and isinstance(c.get("cell"), dict) else c
+            expr = str(cell.get("surface_expr") or "").strip()
+            num = cell.get("number") or c.get("num")
+            if not expr or num is None:
+                continue
+            try:
+                ast = Geometry.from_mcnp(parenthesize_unions(expr))
+                cells_by_num[int(num)] = ast.ast
+            except Exception:
+                cells_by_num[int(num)] = None
+
+        cell_fields = {}
+        for num, ast in cells_by_num.items():
+            if ast is None:
+                continue
+            try:
+                resolved = resolve_cell_complements(ast, cells_by_num)
+                nums = vc._ast_surf_nums(resolved)
+                fns = {}
+                for sn in nums:
+                    s = surfaces.get(sn)
+                    if s is None:
+                        raise ValueError(f"栅元 {num} 引用未定义曲面 {sn}")
+                    fns[sn] = s["field"]
+
+                def make_field(resolved_ast, fns_map):
+                    def field(x, y, z):
+                        return vc.eval_cell_field(resolved_ast, fns_map, x, y, z)
+                    return field
+
+                aabb = vc.cell_aabb(resolved, {sn: {"type": surfaces[sn]["type"],
+                                                    "params": surfaces[sn]["params"]}
+                                               for sn in nums}, 1e6)
+                cell_fields[num] = {"field": make_field(resolved, fns), "aabb": aabb}
+            except Exception:
+                continue
+
+        return {"cells": cell_fields, "surfaces": surfaces}
 
     # ── 格阵 3D 预览（阶段3 preview-lattice：universe 实例化 + 嵌套 fill 递归）──
     def _handle_preview_lattice(self):

@@ -112,8 +112,57 @@ def _transform_aabb(lo, hi, transform):
     return tuple(glo.tolist()), tuple(ghi.tolist())
 
 
+def _polyhedron_field(verts, faces):
+    """凸多面体 → 标量场 f(x, y, z)：f<0 内部、f>0 外部（宏体判定复用）。
+
+    每面法向朝外（体心定向：面心 − 体心）；f = max_i dot(n_i, P − p_i)。
+    f<0 ⇔ 所有面半空间内侧（凸多面体内部）。BOX/RHP/HEX/WED/ARB 本质是
+    多面体，统一经此求值，避免各宏体写特殊坐标判定。
+    """
+    arr = np.asarray(verts, dtype=float)
+    center = arr.mean(axis=0)
+    planes = []
+    for f in faces:
+        pts = arr[f]
+        if len(f) < 3:
+            continue
+        nrm = np.cross(pts[1] - pts[0], pts[2] - pts[0])
+        ln = float(np.linalg.norm(nrm))
+        if ln < 1e-15:
+            continue
+        nrm = nrm / ln
+        fc = pts.mean(axis=0)
+        if float(np.dot(nrm, fc - center)) < 0:
+            nrm = -nrm
+        planes.append((nrm, fc))
+
+    def field(x, y, z):
+        X = np.stack(np.broadcast_arrays(x, y, z), axis=-1)
+        out = None
+        for n, p0 in planes:
+            d = X @ n - float(n @ p0)
+            out = d if out is None else np.maximum(out, d)
+        return out
+    return field
+
+
+def _rot60(v, axis):
+    """向量 v 绕单位轴 axis 转 60°（Rodrigues；RHP/HEX 9 参时推断 R2/R3）。"""
+    v = np.asarray(v, dtype=float)
+    k = np.asarray(axis, dtype=float)
+    c = 0.5
+    s = math.sqrt(3.0) / 2.0
+    kxv = np.cross(k, v)
+    dot = float(k @ v)
+    return c * v + s * kxv + k * dot * (1.0 - c)
+
+
 def surface_fn(surf_type: str, params: list, transform=None):
     """返回向量化函数 f(x, y, z)，f > 0 为正侧（与 make_halfspace 一致）。
+
+    宏体（RPP/SPH/RCC/TRC/REC/ELL/WED/BOX/RHP/HEX/ARB）的约定：f<0 = 宏体
+    内部、f>0 = 外部（MCNP 宏体「负号=内部」语义），使 cell 表达式 `-n`
+    经 eval_cell_field 的 neg 得到「内部」。
 
     ``transform`` 为 parse_tr_cards 产出的 TR dict 时，世界坐标先变换到
     曲面局部系再求值，修正此前 *TRn 被忽略的问题。
@@ -218,6 +267,131 @@ def surface_fn(surf_type: str, params: list, transform=None):
     if t == "SPH":
         vx, vy, vz, r = p[0], p[1], p[2], p[3]
         return wrap(lambda x, y, z: (x - vx) ** 2 + (y - vy) ** 2 + (z - vz) ** 2 - r * r)
+
+    # ── 其余宏体（MCNP 语义：f<0 内部）──
+    if t == "RCC":
+        vx, vy, vz, hx, hy, hz, r = p
+        h2 = hx * hx + hy * hy + hz * hz
+        if h2 <= 1e-30:
+            raise ValueError("RCC 高度向量退化")
+
+        def _rcc(x, y, z):
+            dx, dy, dz = x - vx, y - vy, z - vz
+            axial = (dx * hx + dy * hy + dz * hz) / h2
+            rx = dx - axial * hx
+            ry = dy - axial * hy
+            rz = dz - axial * hz
+            rad2 = rx * rx + ry * ry + rz * rz
+            inside = (axial >= 0) & (axial <= 1) & (rad2 <= r * r)
+            return np.where(inside, -1.0, 1.0)
+        return wrap(_rcc)
+
+    if t == "TRC":
+        vx, vy, vz, hx, hy, hz, r1, r2 = p
+        h2 = hx * hx + hy * hy + hz * hz
+        if h2 <= 1e-30:
+            raise ValueError("TRC 高度向量退化")
+
+        def _trc(x, y, z):
+            dx, dy, dz = x - vx, y - vy, z - vz
+            axial = (dx * hx + dy * hy + dz * hz) / h2
+            rx = dx - axial * hx
+            ry = dy - axial * hy
+            rz = dz - axial * hz
+            rad2 = rx * rx + ry * ry + rz * rz
+            r_at = r1 + (r2 - r1) * axial
+            inside = (axial >= 0) & (axial <= 1) & (rad2 <= r_at * r_at)
+            return np.where(inside, -1.0, 1.0)
+        return wrap(_trc)
+
+    if t == "REC":
+        vx, vy, vz, hx, hy, hz, v1x, v1y, v1z, v2x, v2y, v2z = p
+        h2 = hx * hx + hy * hy + hz * hz
+        v1l2 = v1x * v1x + v1y * v1y + v1z * v1z
+        v2l2 = v2x * v2x + v2y * v2y + v2z * v2z
+        if h2 <= 1e-30 or v1l2 <= 1e-30 or v2l2 <= 1e-30:
+            raise ValueError("REC 高度/半轴向量退化")
+
+        def _rec(x, y, z):
+            dx, dy, dz = x - vx, y - vy, z - vz
+            axial = (dx * hx + dy * hy + dz * hz) / h2
+            u = dx * v1x + dy * v1y + dz * v1z
+            w = dx * v2x + dy * v2y + dz * v2z
+            # 椭圆方程 (dot(P,V1)/|V1|²)² + (dot(P,V2)/|V2|²)² <= 1（|V1|=半轴长）
+            inside = (axial >= 0) & (axial <= 1) & (
+                (u * u) / (v1l2 * v1l2) + (w * w) / (v2l2 * v2l2) <= 1.0)
+            return np.where(inside, -1.0, 1.0)
+        return wrap(_rec)
+
+    if t == "ELL":
+        v1x, v1y, v1z, v2x, v2y, v2z, rm = p
+
+        def _ell(x, y, z):
+            d1 = np.sqrt((x - v1x) ** 2 + (y - v1y) ** 2 + (z - v1z) ** 2)
+            d2 = np.sqrt((x - v2x) ** 2 + (y - v2y) ** 2 + (z - v2z) ** 2)
+            inside = (d1 + d2) <= 2.0 * rm
+            return np.where(inside, -1.0, 1.0)
+        return wrap(_ell)
+
+    if t == "BOX":
+        v = np.asarray(p[0:3], dtype=float)
+        a1 = np.asarray(p[3:6], dtype=float)
+        a2 = np.asarray(p[6:9], dtype=float)
+        a3 = np.asarray(p[9:12], dtype=float)
+        pts = [v, v + a1, v + a1 + a2, v + a2,
+               v + a3, v + a1 + a3, v + a1 + a2 + a3, v + a2 + a3]
+        faces = [[0, 1, 2, 3], [4, 7, 6, 5],
+                 [0, 4, 5, 1], [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0]]
+        return wrap(_polyhedron_field(pts, faces))
+
+    if t == "WED":
+        v = np.asarray(p[0:3], dtype=float)
+        v1 = np.asarray(p[3:6], dtype=float)
+        v2 = np.asarray(p[6:9], dtype=float)
+        v3 = np.asarray(p[9:12], dtype=float)
+        bot = [v, v + v1, v + v2]
+        top = [q + v3 for q in bot]
+        pts = bot + top
+        faces = [[0, 1, 2], [3, 5, 4],
+                 [0, 3, 4, 1], [1, 4, 5, 2], [2, 5, 3, 0]]
+        return wrap(_polyhedron_field(pts, faces))
+
+    if t in ("RHP", "HEX"):
+        v = np.asarray(p[0:3], dtype=float)
+        h = np.asarray(p[3:6], dtype=float)
+        r1 = np.asarray(p[6:9], dtype=float)
+        hn = float(np.linalg.norm(h))
+        if hn < 1e-15:
+            raise ValueError("RHP/HEX 高度向量退化")
+        k = h / hn
+        r2 = np.asarray(p[9:12], dtype=float) if len(p) >= 12 else _rot60(r1, k)
+        r3 = np.asarray(p[12:15], dtype=float) if len(p) >= 15 else _rot60(r2, k)
+        base = [v + r1, v + r2, v + r3, v - r1, v - r2, v - r3]
+        top = [q + h for q in base]
+        pts = base + top
+        faces = [[0, 1, 2, 3, 4, 5], [6, 7, 8, 9, 10, 11]]
+        for i in range(6):
+            j = (i + 1) % 6
+            faces.append([i, j, j + 6, i + 6])
+        return wrap(_polyhedron_field(pts, faces))
+
+    if t == "ARB":
+        coords = p[:24]
+        face_defs = p[24:30]
+        pts = [np.asarray(coords[i * 3:i * 3 + 3], dtype=float) for i in range(8)]
+        faces = []
+        for fd in face_defs:
+            fd_int = int(abs(fd))
+            vi = []
+            for _ in range(4):
+                if fd_int == 0:
+                    break
+                vi.append((fd_int % 10) - 1)
+                fd_int //= 10
+            vi.reverse()  # MCNP 编码 MSD 在前，取出的 LSD 在后，需反转
+            if len(vi) >= 3:
+                faces.append(vi)
+        return wrap(_polyhedron_field(pts, faces))
 
     raise ValueError(f"体素 CSG 暂不支持曲面类型: {t}")
 

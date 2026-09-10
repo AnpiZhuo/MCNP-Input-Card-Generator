@@ -5,6 +5,8 @@ import SswSsrForm from "./SswSsrForm";
 import DocViewer from "./DocViewer";
 import { useDeck } from "../utils/DeckContext";
 import type { DistEntry, SourceItem } from "../utils/DeckContext";
+import { sourceDemoSample } from "../utils/api";
+import { openSourceDemo } from "../utils/windows";
 import { SOURCE_TEMPLATES, fieldsForTemplate, SDEF_FIELD_META } from "../utils/sourceTemplates";
 import {
   uiModeFromAdv, vocabForUi,
@@ -74,6 +76,8 @@ export default function SourceTab() {
   const [editSrcIdx, setEditSrcIdx] = useState<number | null>(null);
   const [editPt, setEditPt] = useState<number | null>(null);
   const [doc, setDoc] = useState<{ path: string; title: string } | null>(null);
+  const [demoError, setDemoError] = useState("");
+  const [demoLoading, setDemoLoading] = useState(false);
 
   /* ── 派生视图（每次 render 从 adv/deck 重算，无本地副本）── */
   const distributions = useMemo(() => parseDistributions(adv.sdef_distributions), [adv.sdef_distributions]);
@@ -106,6 +110,41 @@ export default function SourceTab() {
   const pickText = () => patch({ textMode: { ...deck.textMode, sdef: true } });
 
   const setTemplate = (t: string) => patch({ sourceTemplate: t as any });
+
+  /* ── 演示源：抽样校验（有错就地报，不开窗）→ 写桥开窗 ── */
+  const handleDemoSource = async () => {
+    setDemoError("");
+    setDemoLoading(true);
+    try {
+      const res = await sourceDemoSample({
+        sdefFields: adv,
+        sdefDistributions: distributions,
+        surfaces: deck.surfaces || "",
+        cells: deck.cells || [],
+        trCards: deck.tr_cards || "",
+        nParticles: 500,
+      });
+      if (res.status === "error" || !res.particles) {
+        setDemoError(res.error || "源抽样失败");
+        return;
+      }
+      await openSourceDemo({
+        cells: (deck.cells || []).filter((c: any) => c.kind === "cell").map((c: any) => ({
+          num: c.cell.number, mat: c.cell.material, comment: c.cell.comment || "",
+        })),
+        surfaces: deck.surfaces || "",
+        trCards: deck.tr_cards || "",
+        particles: res.particles,
+        energyRange: res.energyRange || { min: 0, max: 1 },
+        sdefFields: adv,
+        sdefDistributions: distributions,
+      });
+    } catch (e: any) {
+      setDemoError(String(e?.message || e));
+    } finally {
+      setDemoLoading(false);
+    }
+  };
 
   // Dn 自动检测：sdef 字段含 D{n} → 自动建分布条目（写 adv.sdef_distributions）
   const handleSdefChange = (k: string, v: string) => {
@@ -209,6 +248,26 @@ export default function SourceTab() {
       {/* ═══ SDEF 通用源 ═══ */}
       {mode === "sdef" && (
         <>
+          {/* 演示源入口 */}
+          <div className="glass-card">
+            <div className="card-header">
+              <span className="card-title" style={{ flexShrink: 0 }}>源粒子演示</span>
+              <div style={{ flex: 1, display: "flex", justifyContent: "center" }}>
+                <button className="btn btn-primary btn-sm" onClick={handleDemoSource} disabled={demoLoading}>
+                  {demoLoading ? "抽样中…" : "🎬 演示源"}
+                </button>
+              </div>
+            </div>
+            {demoError && (
+              <div style={{ marginTop: 6, padding: "6px 10px", background: "rgba(229,57,53,0.12)", borderRadius: 6, color: "#e53935", fontSize: 12 }}>
+                {demoError}
+              </div>
+            )}
+            <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 6 }}>
+              按当前 SDEF + SI/SP/SB/DS 抽样 500 个粒子，在 3D 窗口显示源的位置分布与发射方向（按粒子类型着色、能量深浅）
+            </div>
+          </div>
+
           {/* 模板向导 */}
           <div className="glass-card">
             <div className="card-header">

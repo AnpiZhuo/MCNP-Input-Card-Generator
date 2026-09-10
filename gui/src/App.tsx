@@ -6,6 +6,7 @@ import Preview3DWindow from "./components/Preview3DWindow";
 import CrossSectionWindow from "./components/CrossSectionWindow";
 import ResultWindow from "./volume/ResultWindow";
 import PtracWindow from "./ptrac/PtracWindow";
+import SourceDemoWindow from "./source/SourceDemoWindow";
 import { generateInp } from "./utils/dataCollector";
 import { currentWindowLabel, clearStlSession } from "./utils/windows";
 
@@ -463,13 +464,13 @@ function AppInner() {
 function WindowRouter() {
   const [label, setLabel] = useState<string>(() => {
     const h = window.location.hash.replace(/^#\/?/, "");
-    if (h === "preview3d" || h === "cross_section" || h === "volume" || h === "ptrac") return h;
+    if (["preview3d", "cross_section", "volume", "ptrac", "source-demo"].includes(h)) return h;
     return "main";
   });
   useEffect(() => {
-    // 调试入口：URL hash #/preview3d / #/cross_section / #/volume / #/ptrac 可强制窗口类型（浏览器模式测试用）
+    // 调试入口：URL hash #/preview3d / #/cross_section / #/volume / #/ptrac / #/source-demo 可强制窗口类型
     const h = window.location.hash.replace(/^#\/?/, "");
-    if (h === "preview3d" || h === "cross_section" || h === "volume" || h === "ptrac") { setLabel(h); return; }
+    if (["preview3d", "cross_section", "volume", "ptrac", "source-demo"].includes(h)) { setLabel(h); return; }
     // 无 hash 时回退到 Tauri window label（鲁棒性兜底）
     currentWindowLabel().then(setLabel).catch(() => setLabel("main"));
   }, []);
@@ -477,6 +478,7 @@ function WindowRouter() {
   if (label === "cross_section") return <AppScaleProvider designWidth={1000} designHeight={700}><CrossSectionWindow /></AppScaleProvider>;
   if (label === "volume") return <AppScaleProvider designWidth={1300} designHeight={820}><ResultWindow /></AppScaleProvider>;
   if (label === "ptrac") return <AppScaleProvider designWidth={1300} designHeight={820}><PtracWindow /></AppScaleProvider>;
+  if (label === "source-demo") return <AppScaleProvider designWidth={1300} designHeight={820}><SourceDemoWindow /></AppScaleProvider>;
   return <AppScaleProvider><DeckProvider><AppInner /></DeckProvider></AppScaleProvider>;
 }
 

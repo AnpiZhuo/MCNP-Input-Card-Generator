@@ -126,6 +126,41 @@ export async function fetchPreview3dStl(cells: any[], surfaces: string, trCards:
   return (j && j.stl_data) || {};
 }
 
+/* ── SDEF 源粒子演示（契约 source-demo-visualization.md §3/§5）── */
+
+export interface SourceParticle {
+  id: number;
+  x: number;
+  y: number;
+  z: number;
+  dx: number;
+  dy: number;
+  dz: number;
+  energy: number;
+  weight: number;
+  particle: string;
+}
+
+export interface SourceDemoResult {
+  status: "ok" | "error";
+  particles?: SourceParticle[];
+  energyRange?: { min: number; max: number };
+  bounds?: { min: [number, number, number]; max: [number, number, number] };
+  error?: string;
+}
+
+/** POST /api/source-demo-sample：SDEF 源粒子抽样（演示源） */
+export async function sourceDemoSample(payload: {
+  sdefFields: Record<string, string>;
+  sdefDistributions: any[];
+  surfaces?: string;
+  cells?: any[];
+  trCards?: string;
+  nParticles?: number;
+}): Promise<SourceDemoResult> {
+  return postJson<SourceDemoResult>("/api/source-demo-sample", payload);
+}
+
 /* ── PTRAC 粒子径迹（契约 ptrac-visualization.md §3/§4）── */
 
 /** 单条径迹：一个源粒子的历史（nps）+ 事件点序列 */

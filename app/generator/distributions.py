@@ -32,8 +32,12 @@ v2 schema（adv.sdef_distributions 内 JSON 串，数组 = 按 id 升序的条�
 
 from __future__ import annotations
 
+import math
+import random
 import re
 from typing import Any
+
+import numpy as np
 
 # ── 卡语法词表（唯一事实；源分布卡说明.md 三/四节 + MCNP5 Manual Vol II p.3-62~64）──
 _SI_LETTERS = ("L", "H", "A", "S", "Q", "T", "F", "V")
@@ -331,3 +335,416 @@ def multi_source_probability_count(entries: list[dict]) -> int:
         if sp_vals and sp_vals != ["D1"]:
             return len(sp_vals)
     return 0
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# 抽样（source-demo-visualization 契约 §1 模块 A：深模块）
+# ────────────────────────────────────────────────────────────────────────────
+
+class SourceSamplingError(ValueError):
+    """源抽样错误（MCNP 语义错误；调用方捕获后转 error 提示，不静默降级）。"""
+
+
+# C810 Table 3.4 融合谱常数（b=-1 → D-T，b=-2 → D-D）
+_DT_ENERGY = 14.08
+_DD_ENERGY = 2.45
+
+
+def _pick(weights: list[float], rng: random.Random) -> int:
+    """按权重列表选索引（权重不需归一化，可含负数视为 0）。全非正 → 抛错。"""
+    ws = [max(0.0, float(w)) for w in weights]
+    total = sum(ws)
+    if total <= 0:
+        raise SourceSamplingError("概率之和为零，无法抽样")
+    r = rng.uniform(0.0, total)
+    acc = 0.0
+    for i, w in enumerate(ws):
+        acc += w
+        if r < acc:
+            return i
+    return len(ws) - 1
+
+
+class DistributionSampler:
+    """v2 分布列表 → 可反复抽样的对象（深模块：小接口 + 深实现）。
+
+    接口：
+        DistributionSampler(entries)                        # 编译（按 id 索引）
+        .sample(eid, rng) -> float                          # 从分布 eid 抽一个标量值
+        .resolve_ds(eid, parent_value, parent_si=None) -> dict
+            # DS 卡查表：{"value": v} / {"distribution": d} / {"default": True}
+
+    抽样覆盖（C810 §3.3.2 SI/SP/SB/DS）：
+        SI H（默认）/L/A/S；SP D/C/内置函数（-2~-6/-21/-31/-41）；
+        SB 表概率偏倚（权重补偿经 ``weight_factor``）；DS H/L/S/T/Q。
+    """
+
+    def __init__(self, entries):
+        self._by_id: dict[int, dict] = {}
+        for e in entries or []:
+            if isinstance(e, dict) and e.get("id") is not None:
+                try:
+                    self._by_id[int(e["id"])] = e
+                except (TypeError, ValueError):
+                    continue
+
+    def _entry(self, eid) -> dict:
+        e = self._by_id.get(int(eid))
+        if e is None:
+            raise SourceSamplingError(f"分布 D{int(eid)} 未定义")
+        return e
+
+    # ── 主接口 ──────────────────────────────────────────────
+    def sample(self, eid, rng: random.Random) -> float:
+        return self._sample_entry(self._entry(eid), rng, 0)
+
+    def resolve_ds(self, eid, parent_value, parent_si=None) -> dict:
+        ds = self._entry(eid).get("ds")
+        if not ds:
+            return {"default": True}
+        return self._resolve_ds(ds, float(parent_value), parent_si)
+
+    def weight_factor(self, eid, value) -> float:
+        """SB 偏倚的权重补偿（真概率 / 偏倚概率）。无 SB → 1.0。"""
+        e = self._entry(eid)
+        sb = e.get("sb")
+        if not sb:
+            return 1.0
+        sp = e.get("sp") or {}
+        if (sp.get("fnCode") or "").strip() or (sb.get("fnCode") or "").strip():
+            return 1.0  # 内置函数偏倚（罕见）不补偿
+        si = e.get("si") or {}
+        si_type = (si.get("type") or "").strip().upper()
+        si_vals = self._floats(si.get("values"))
+        n = len(si_vals) - 1 if si_type in ("", "H") else len(si_vals)
+        p_true = self._probs_of(sp, n)
+        p_bias = self._probs_of(sb, n)
+        i = self._index_of(value, si_type, si_vals)
+        if i is None:
+            return 1.0
+        if p_bias[i] <= 0:
+            return 1.0
+        return p_true[i] / p_bias[i] if p_true[i] > 0 else 1.0
+
+    # ── 内部：单条目抽样 ────────────────────────────────────
+    def _sample_entry(self, e, rng, depth):
+        if depth > 20:
+            raise SourceSamplingError("SI S 嵌套深度超限（MCNP 上限约 20）")
+        si = e.get("si") or {}
+        sp = e.get("sp") or {}
+        sb = e.get("sb")
+        si_type = (si.get("type") or "").strip().upper()
+        si_vals = self._floats(si.get("values"))
+        fn = (sp.get("fnCode") or "").strip()
+
+        if fn:
+            return self._sample_builtin(fn, sp, si_vals, rng)
+
+        if si_type == "S":
+            ids = [int(float(v)) for v in (si.get("values") or [])]
+            sp_type = (sp.get("type") or "D").strip().upper() or "D"
+            sp_vals = self._floats(sp.get("values"))
+            probs = self._probs(sp_type, sp_vals, len(ids), sb)
+            idx = _pick(probs, rng)
+            return self._sample_entry(self._entry(ids[idx]), rng, depth + 1)
+
+        if si_type in ("", "H"):
+            if len(si_vals) < 2:
+                raise SourceSamplingError(f"分布 D{e.get('id')} 直方图边界不足（需 ≥2）")
+            n_bins = len(si_vals) - 1
+            probs = self._probs((sp.get("type") or "D").strip().upper() or "D",
+                                self._floats(sp.get("values")), n_bins, sb,
+                                allow_leading_zero=True)
+            idx = _pick(probs, rng)
+            lo, hi = si_vals[idx], si_vals[idx + 1]
+            if hi < lo:
+                raise SourceSamplingError(f"分布 D{e.get('id')} 直方图边界非单调递增")
+            return lo + rng.uniform(0.0, 1.0) * (hi - lo)
+
+        if si_type == "L":
+            probs = self._probs((sp.get("type") or "D").strip().upper() or "D",
+                                self._floats(sp.get("values")), len(si_vals), sb)
+            return si_vals[_pick(probs, rng)]
+
+        if si_type == "A":
+            return self._sample_A(si_vals, self._floats(sp.get("values")), rng)
+
+        raise SourceSamplingError(f"SI 类型 {si_type or '空'} 无效（MCNP 仅支持 H/L/A/S）")
+
+    # ── 概率解析 ────────────────────────────────────────────
+    @staticmethod
+    def _floats(vals) -> list[float]:
+        out = []
+        for v in (vals or []):
+            try:
+                out.append(float(v))
+            except (TypeError, ValueError):
+                raise SourceSamplingError(f"分布值无法解析为数值: {v}")
+        return out
+
+    def _probs(self, sp_type, sp_vals, n, sb=None, allow_leading_zero=False) -> list[float]:
+        """按 SP 类型把 SP 值解析成 n 个权重。sb 非空时用 SB 概率（偏倚）。"""
+        if sb is not None and not (sb.get("fnCode") or "").strip():
+            sb_vals = self._floats(sb.get("values"))
+            if sb_vals:
+                return self._resolve_probs((sb.get("type") or "D").strip().upper() or "D",
+                                           sb_vals, n, allow_leading_zero)
+        return self._resolve_probs(sp_type, sp_vals, n, allow_leading_zero)
+
+    def _resolve_probs(self, sp_type, sp_vals, n, allow_leading_zero=False) -> list[float]:
+        if n <= 0:
+            return []
+        if not sp_vals:
+            return [1.0] * n  # 省略 SP → 等概率
+        if sp_type == "C":
+            # 累积概率：差分（c_i − c_{i−1}，c_0=0）为 bin 概率
+            diffs = [sp_vals[0]]
+            for i in range(1, len(sp_vals)):
+                diffs.append(sp_vals[i] - sp_vals[i - 1])
+            return self._pad(diffs, n, allow_leading_zero)
+        # D / V / 其它 → 直接用值（V 的体积语义由 source_sampler 层处理）
+        return self._pad(sp_vals, n, allow_leading_zero)
+
+    @staticmethod
+    def _pad(vals, n, allow_leading_zero=False) -> list[float]:
+        if len(vals) == n:
+            return list(vals)
+        # MCNP H/C 分布：首条目可为 0 占位（H 直方图对应首个 bin 边界 / C 累积首 0）
+        if allow_leading_zero and len(vals) == n + 1:
+            return list(vals[1:])
+        if len(vals) > n:
+            return list(vals[:n])
+        raise SourceSamplingError(f"SP 概率个数（{len(vals)}）与 SI 值个数不匹配（需 {n}）")
+
+    # ── SI A 概率密度点（线性插值逆 CDF）────────────────────
+    def _sample_A(self, xs, densities, rng):
+        k = len(xs)
+        if k < 2:
+            raise SourceSamplingError("SI A 概率密度点不足（需 ≥2）")
+        if len(densities) != k:
+            raise SourceSamplingError(f"SI A 密度点数（{len(densities)}）与值点数（{k}）不匹配")
+        for i in range(1, k):
+            if xs[i] < xs[i - 1]:
+                raise SourceSamplingError("SI A 密度点非单调递增")
+        masses = []
+        total = 0.0
+        for i in range(k - 1):
+            m = (densities[i] + densities[i + 1]) * 0.5 * (xs[i + 1] - xs[i])
+            if m < 0:
+                m = 0.0
+            masses.append(m)
+            total += m
+        if total <= 0:
+            raise SourceSamplingError("SI A 概率密度积分为零，无法抽样")
+        r = rng.uniform(0.0, total)
+        for i in range(k - 1):
+            if r < masses[i]:
+                x0, x1 = xs[i], xs[i + 1]
+                d0, d1 = densities[i], densities[i + 1]
+                dx = x1 - x0
+                s = (d1 - d0) / dx if dx > 0 else 0.0
+                # 解 s/2 t² + d0 t - r = 0（段内累积质量 = r）
+                if abs(s) < 1e-15:
+                    t = r / d0 if d0 > 0 else 0.0
+                else:
+                    disc = d0 * d0 + 2.0 * s * r
+                    t = (-d0 + math.sqrt(max(0.0, disc))) / s
+                return x0 + min(max(t, 0.0), dx)
+            r -= masses[i]
+        return xs[k - 1]
+
+    # ── 内置函数（C810 Table 3.4）───────────────────────────
+    def _sample_builtin(self, fn, sp, si_vals, rng):
+        params = self._floats(sp.get("fnParams") or [])
+        if fn == "-2":
+            self._need(params, 0, 1, "-2")
+            a = params[0] if params else 1.2895
+            return a * (-math.log(rng.uniform(1e-15, 1.0)) + 0.5 * rng.gauss(0, 1) ** 2)
+        if fn == "-5":
+            self._need(params, 0, 1, "-5")
+            a = params[0] if params else 1.2895
+            return -a * math.log(rng.uniform(1e-15, 1.0) * rng.uniform(1e-15, 1.0))
+        if fn == "-3":
+            self._need(params, 0, 2, "-3")
+            a = params[0] if len(params) > 0 else 0.965
+            b = params[1] if len(params) > 1 else 2.29
+            return self._inverse_cdf(lambda E: math.exp(-E / a) * math.sinh(math.sqrt(b * E)),
+                                     lo=0.0, hi=max(20.0, 12.0 * a), rng=rng)
+        if fn == "-4":
+            self._need(params, 0, 2, "-4")
+            a = abs(params[0]) if params else 0.01
+            b = params[1] if len(params) > 1 else -1
+            b = self._fusion_energy(b)
+            return self._trunc_gauss(b, a / math.sqrt(2.0), rng)
+        if fn == "-6":
+            self._need(params, 0, 2, "-6")
+            a = abs(params[0]) if params else 0.01
+            b = params[1] if len(params) > 1 else -1
+            b = self._fusion_energy(b)
+            v = rng.gauss(math.sqrt(max(b, 0.0)), a / math.sqrt(2.0))
+            return max(0.0, v) ** 2
+        if fn == "-21":
+            self._need(params, 1, 1, "-21")
+            a = params[0]
+            lo, hi = self._range(si_vals, (0.0, 1.0))
+            return self._power_law(a, lo, hi, rng)
+        if fn == "-31":
+            self._need(params, 1, 1, "-31")
+            a = params[0]
+            lo, hi = self._range(si_vals, (-1.0, 1.0))
+            return self._exponential(a, lo, hi, rng)
+        if fn == "-41":
+            self._need(params, 2, 2, "-41")
+            a, b = params[0], params[1]
+            sigma = a / math.sqrt(8.0 * math.log(2.0))
+            return rng.gauss(b, sigma)
+        raise SourceSamplingError(f"内置函数 {fn} 不支持抽样")
+
+    @staticmethod
+    def _need(params, lo, hi, fn):
+        if not (lo <= len(params) <= hi):
+            raise SourceSamplingError(f"内置函数 {fn} 参数个数错误（需 {lo}~{hi}，实 {len(params)}）")
+
+    @staticmethod
+    def _fusion_energy(b):
+        if b == -1:
+            return _DT_ENERGY
+        if b == -2:
+            return _DD_ENERGY
+        return b
+
+    @staticmethod
+    def _range(si_vals, default):
+        if not si_vals:
+            return default
+        if len(si_vals) == 1:
+            return (0.0, si_vals[0])  # RAD 语义 [0, x]（EXT [-x,x] 由 source_sampler 补全）
+        return (si_vals[0], si_vals[1])
+
+    @staticmethod
+    def _power_law(a, lo, hi, rng):
+        # p(x)=c|x|^a。数值逆 CDF 统一处理同号/跨零区间（避免负数小数次方）。
+        if hi <= lo:
+            raise SourceSamplingError("幂律范围无效（hi<=lo）")
+        return DistributionSampler._inverse_cdf(lambda x: abs(x) ** a, lo, hi, rng)
+
+    @staticmethod
+    def _exponential(a, lo, hi, rng):
+        if hi <= lo:
+            raise SourceSamplingError("指数范围无效（hi<=lo）")
+        u = rng.uniform(0.0, 1.0)
+        if abs(a) < 1e-15:
+            return lo + u * (hi - lo)
+        ea_lo, ea_hi = math.exp(a * lo), math.exp(a * hi)
+        return (1.0 / a) * math.log(ea_lo + u * (ea_hi - ea_lo))
+
+    @staticmethod
+    def _trunc_gauss(mean, sigma, rng):
+        for _ in range(100):
+            x = rng.gauss(mean, sigma)
+            if x > 0:
+                return x
+        return max(mean, 0.0)
+
+    @staticmethod
+    def _inverse_cdf(pdf, lo, hi, rng, n=4096):
+        """数值逆 CDF：pdf 在 [lo,hi] 上梯形积分 → 查表线性插值。"""
+        xs = np.linspace(lo, hi, n + 1)
+        ys = np.array([max(0.0, pdf(float(x))) for x in xs])
+        cdf = np.zeros(n + 1)
+        for i in range(1, n + 1):
+            cdf[i] = cdf[i - 1] + 0.5 * (ys[i - 1] + ys[i]) * (xs[i] - xs[i - 1])
+        total = float(cdf[n])
+        if total <= 0:
+            raise SourceSamplingError("内置函数概率密度积分为零")
+
+        def draw():
+            u = rng.uniform(0.0, total)
+            i = int(np.searchsorted(cdf, u)) - 1
+            i = max(0, min(i, n - 1))
+            seg = float(cdf[i + 1] - cdf[i])
+            frac = (u - float(cdf[i])) / seg if seg > 0 else 0.0
+            return float(xs[i]) + frac * (float(xs[i + 1]) - float(xs[i]))
+        return draw()
+
+    # ── DS 卡查表（C810 DS 卡 H/L/S/T/Q）────────────────────
+    def _resolve_ds(self, ds, parent_value, parent_si) -> dict:
+        ds_type = (ds.get("type") or "").strip().upper()
+        if ds_type == "T":
+            return {"default": True}  # T 需独立离散值匹配，source_sampler 用 resolve_ds_t 处理
+        vals = ds.get("values") or []
+        if ds_type == "Q":
+            # Q: V1 S1 V2 S2 ...（V 上界 + S 分布编号）
+            pairs = list(zip(vals[0::2], vals[1::2])) if len(vals) >= 2 else []
+            for v, s in pairs:
+                if parent_value <= float(v):
+                    sid = int(float(s))
+                    return {"default": True} if sid == 0 else {"distribution": sid}
+            return {"default": True}
+        ids = ds.get("distributionIds") or []
+        if ds_type == "S":
+            # S: 分布编号列表，按独立变量的离散索引直接取（J[idx]）
+            idx = int(parent_value)
+            if idx < 0 or idx >= len(ids):
+                return {"default": True}
+            sid = int(float(ids[idx]))
+            return {"default": True} if sid == 0 else {"distribution": sid}
+        if ds_type == "L":
+            idx = int(parent_value)
+            if idx < 0 or idx >= len(vals):
+                return {"default": True}
+            return {"value": float(vals[idx])}
+        if ds_type in ("", "H"):
+            # H: 连续插值（J0..Jn，对应 parent_si 的 bin 边界）
+            si = self._floats(parent_si) if parent_si else []
+            if len(si) < 2 or len(vals) < len(si):
+                return {"default": True}
+            i = self._bin_of(parent_value, si)
+            lo, hi = si[i], si[i + 1]
+            f = (parent_value - lo) / (hi - lo) if hi > lo else 0.0
+            f = min(max(f, 0.0), 1.0)
+            j0, j1 = float(vals[i]), float(vals[i + 1])
+            return {"value": j0 + f * (j1 - j0)}
+        raise SourceSamplingError(f"DS 类型 {ds_type or '空'} 无效（MCNP 仅支持 H/L/S/T/Q）")
+
+    def resolve_ds_t(self, eid, parent_value) -> dict:
+        """DS T 匹配模式（source_sampler 专用）：I1 J1 ... Ik Jk 成对匹配。"""
+        ds = self._entry(eid).get("ds") or {}
+        vals = ds.get("values") or []
+        pairs = list(zip(vals[0::2], vals[1::2])) if len(vals) >= 2 else []
+        for iv, jv in pairs:
+            if abs(float(iv) - float(parent_value)) < 1e-12:
+                return {"value": float(jv)}
+        return {"default": True}
+
+    @staticmethod
+    def _ds_index(parent_value, parent_si):
+        """独立变量值 → 离散索引（parent_si 为独立变量的 SI 离散值）。"""
+        if not parent_si:
+            return None
+        for i, v in enumerate(parent_si):
+            try:
+                if abs(float(v) - float(parent_value)) < 1e-9:
+                    return i
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    @staticmethod
+    def _bin_of(v, si):
+        for i in range(len(si) - 1):
+            if si[i] <= v <= si[i + 1]:
+                return i
+        return 0 if v <= si[0] else len(si) - 2
+
+    @staticmethod
+    def _index_of(value, si_type, si_vals):
+        if si_type in ("", "H"):
+            for i in range(len(si_vals) - 1):
+                if si_vals[i] <= value <= si_vals[i + 1]:
+                    return i
+            return None
+        for i, v in enumerate(si_vals):
+            if abs(v - value) < 1e-9:
+                return i
+        return None

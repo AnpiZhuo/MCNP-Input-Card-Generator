@@ -1599,6 +1599,72 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
+  /api/source-demo-sample:
+    post:
+      operationId: sourceDemoSample
+      tags: [source]
+      summary: SDEF 源粒子抽样（演示源：只表从哪发出/往哪飞，不做输运）
+      description: |
+        按 SDEF 字段 + SI/SP/SB/DS 分布抽样 nParticles 个粒子（位置/方向/能量/权重/
+        粒子类型）。CEL/SUR 几何判定复用 voxel_csg 隐式求值（含宏体拆解 + #n 补集展开）。
+        响应 status=ok 给 particles/energyRange/bounds；status=error 给 error（MCNP
+        语义错误，如引用不存在/概率不匹配/边界非单调，不降级近似）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sdefFields: { type: object, description: SDEF 字段（sdef_pos_x/y/z、sdef_erg、sdef_dir、sdef_vec、sdef_axs、sdef_rad、sdef_ext、sdef_cel、sdef_sur、sdef_par、sdef_wgt 等） }
+                sdefDistributions: { type: array, items: { $ref: '#/components/schemas/DistEntry' } }
+                surfaces: { type: string, description: 曲面卡原文（CEL/SUR 判定用） }
+                cells: { type: array, items: { $ref: '#/components/schemas/CellRow' }, description: 栅元列表（CEL 判定用） }
+                trCards: { type: string, description: TR 卡原文 }
+                nParticles: { type: integer, default: 500 }
+      responses:
+        '200':
+          description: 抽样结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      status: { type: string, enum: [ok, error] }
+                      particles:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: integer }
+                            x: { type: number }
+                            y: { type: number }
+                            z: { type: number }
+                            dx: { type: number }
+                            dy: { type: number }
+                            dz: { type: number }
+                            energy: { type: number }
+                            weight: { type: number }
+                            particle: { type: string, enum: [n, p, e, h, a, s, other] }
+                      energyRange:
+                        type: object
+                        properties:
+                          min: { type: number }
+                          max: { type: number }
+                      bounds:
+                        type: object
+                        properties:
+                          min: { type: array, items: { type: number } }
+                          max: { type: array, items: { type: number } }
+                      error: { type: string, description: status=error 时的 MCNP 语义错误信息 }
+        '500':
+          description: 未捕获异常（附 traceback）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
   /api/lattice-extent:
     post:
       operationId: latticeExtent

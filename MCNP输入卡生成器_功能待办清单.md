@@ -17,11 +17,12 @@
 - 状态说明：重合检测"点击对红色高亮"已做；悬停显示栅元号/材料/重要性、栅元编号标签切换未做。
 
 ## P2 · 长期 / 按需（明确有需求再做）
-### 6. SDEF 源粒子演示可视化（新增 2026-09-09）
-- 做什么：在源（SDEF）定义界面加「演示源」入口——后端按 SDEF + SI/SP/SB/DS 分布做随机抽样（位置/方向/能量/权重），前端在 3D 预览窗口（几何外壳）用粒子点 + 方向箭头 + 按能量着色 + 发射动画，直观演示源的形状与分布（像 MCNP 那样"看到源定义长什么样"）。
-- 说明：非从零。复用 `Preview3D` / `PtracRenderer` 的渲染管线（PTRAC 径迹可视化同款）与 `distributions.py` v2 结构化分布（sdef_distributions JSON 可直接喂采样器）。抽样保真度分档：先做演示级（POS 体源/点源 + ERG 谱/DIR 常用形态），MCNP 全量抽样规则（SI L/H/A/S/F/V、SP C/V/-21/-31、DS 依赖链、多源概率链）按需加深；几何约束可用现有 STL/FreeCAD 体积判定。
-- 来源：用户需求（2026-09-09 会话）；参照 MCNP 源分布展示。
+### 6. SDEF 源粒子演示可视化 ✅（2026-09-10 完成）
+- 做什么：在源（SDEF）定义界面加「🎬 演示源」入口——后端按 SDEF + SI/SP/SB/DS 分布抽样 **500 个粒子**（位置/方向/能量/权重/粒子类型，**不做输运**），前端在独立 3D 窗口（几何外壳内）用粒子点 + 方向短线 + 粒子类型基色 + 能量深浅展示源的形状与分布。
+- 说明：非从零。复用 `PtracRenderer` 渲染管线（`trackColors` 分色/深浅 + `alignWorld` 对齐）与 `distributions.py` v2 结构化分布。**用户拍板做全**：全量按 MCNP 语义（SI H/L/A/S、SP D/C + 内置函数 -2~-6/-21/-31/-41、SB、DS H/L/S/T/Q 依赖链、位置四路 + 面源/栅元均匀），**不降级不近似**；有 MCNP 语义错误就地提示、不开窗。
+- 来源：用户需求（2026-09-09 会话）；参照 MCNP 源分布展示。权威依据 **`D:\MCNP\MCNP6\C810.pdf` 3-57~3-67**。
 - 工作量：中（估算 ~1000–1500 行 + 配套测试，1–2 个迭代轮；主体是后端采样器）。
+- 状态说明：**全部落地（2026-09-10）**。后端三深模块：`app/generator/distributions.py` 新增 `DistributionSampler`（分布抽样）、`app/generator/source_sampler.py`（新，源抽样编排）、`app/voxel_csg.py` 补全**全部宏体**（BOX/RCC/RHP/HEX/TRC/REC/ELL/WED/ARB）拆解；端点 `POST /api/source-demo-sample`；前端 `gui/src/source/{SourceDemoRenderer.ts,SourceDemoWindow.tsx}` + `SourceTab`「演示源」按钮 + 独立窗口路由；契约 `docs/contracts/source-demo-visualization.md`。门禁：后端新单测 **49 passed** + 回归零退化，前端 tsc EXIT 0。**未做（用户确认不需要）**：契约 §7 的 WebGL/重组件两处 vitest。未打包未升版。
 
 ### 7. 真正的文本编辑器模式 ❌（按需）
 - 做什么：工作区加"代码视图"（语法高亮、80 列标尺、自动补全），与现有表单双向同步。

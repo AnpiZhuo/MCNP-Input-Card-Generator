@@ -627,3 +627,31 @@ def test_http_preview_lattice_universe_stl_nonempty_container_hash(backend_base_
             assert tri > 0, (
                 f"universe u{u} cell {cell_num} STL 空（{len(raw)}B/0 三角形）——"
                 "容器 # 补集仍被塞进裁剪表达式")
+
+
+def test_http_source_demo_sample(backend_base_url):
+    """源粒子演示抽样：点源 + 能量谱 → status ok + 500 粒子。"""
+    resp = _post(backend_base_url, "/api/source-demo-sample", {
+        "sdefFields": {"sdef_pos_x": "0", "sdef_pos_y": "0", "sdef_pos_z": "0", "sdef_erg": "14"},
+        "sdefDistributions": [],
+        "surfaces": "", "cells": [], "trCards": "",
+        "nParticles": 500,
+    })
+    assert resp.get("status") == "ok", resp
+    assert len(resp.get("particles", [])) == 500
+    p = resp["particles"][0]
+    for k in ("id", "x", "y", "z", "dx", "dy", "dz", "energy", "weight", "particle"):
+        assert k in p, f"粒子缺字段 {k}"
+    assert resp.get("energyRange", {}).get("max") == 14.0
+
+
+def test_http_source_demo_sample_error(backend_base_url):
+    """源粒子演示抽样：引用未定义分布 → status error（不静默降级）。"""
+    resp = _post(backend_base_url, "/api/source-demo-sample", {
+        "sdefFields": {"sdef_pos_x": "0", "sdef_pos_y": "0", "sdef_pos_z": "0", "sdef_erg": "D7"},
+        "sdefDistributions": [],
+        "surfaces": "", "cells": [], "trCards": "",
+        "nParticles": 10,
+    })
+    assert resp.get("status") == "error", resp
+    assert "D7" in resp.get("error", "")
