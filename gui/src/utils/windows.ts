@@ -49,6 +49,30 @@ async function invoke(cmd: string): Promise<boolean> {
   }
 }
 
+/**
+ * 开子窗口：Tauri 环境走 Rust command；**浏览器环境降级为 window.open(hash)**
+ * （2026-09-10 加，为"浏览器端测试"提供能力——不必每次打包即可验收）。
+ *
+ * 前提（均已具备）：① 子窗口路由已由 `App.tsx` 按 `location.hash` 分派
+ * （`#/preview3d` `#/cross_section` `#/volume` `#/ptrac` `#/source-demo`）；
+ * ② 数据桥走 localStorage（同源共享，`window.open` 打开的是同源同 localStorage）。
+ * 注意：必须**先写桥再开窗**（调用方顺序已如此），否则同源新窗口读不到数据。
+ */
+async function openChildWindow(cmd: string, hash: string): Promise<boolean> {
+  const ok = await invoke(cmd);
+  if (ok) return true;
+  if (typeof window !== "undefined" && typeof window.open === "function") {
+    try {
+      const url = window.location.origin + window.location.pathname + "#/" + hash;
+      window.open(url, "_blank");
+      return true;
+    } catch (e) {
+      console.warn("window.open fallback failed:", hash, e);
+    }
+  }
+  return false;
+}
+
 /** 主窗口：打开 3D 预览独立窗口（先写数据桥再开窗） */
 export async function openPreview3D(data: {
   cells: any[];
@@ -155,7 +179,7 @@ export async function openSourceDemo(data: Record<string, any>): Promise<boolean
   } catch (e) {
     console.warn("source-demo bridge write failed", e);
   }
-  return invoke("open_source_demo_window");
+  return openChildWindow("open_source_demo_window", "source-demo");
 }
 
 /** 读取「演示源」桥数据（新窗口一次性消费） */

@@ -6,6 +6,7 @@ import DocViewer from "./DocViewer";
 import { useDeck } from "../utils/DeckContext";
 import type { DistEntry, SourceItem } from "../utils/DeckContext";
 import { sourceDemoSample } from "../utils/api";
+import { localToDeckCells, type LocalCellRow } from "../utils/cellBridge";
 import { openSourceDemo } from "../utils/windows";
 import { SOURCE_TEMPLATES, fieldsForTemplate, SDEF_FIELD_META } from "../utils/sourceTemplates";
 import {
@@ -77,6 +78,7 @@ export default function SourceTab() {
   const [editPt, setEditPt] = useState<number | null>(null);
   const [doc, setDoc] = useState<{ path: string; title: string } | null>(null);
   const [demoError, setDemoError] = useState("");
+  const [demoWarning, setDemoWarning] = useState("");
   const [demoLoading, setDemoLoading] = useState(false);
 
   /* ── 派生视图（每次 render 从 adv/deck 重算，无本地副本）── */
@@ -111,16 +113,53 @@ export default function SourceTab() {
 
   const setTemplate = (t: string) => patch({ sourceTemplate: t as any });
 
-  /* ── 演示源：抽样校验（有错就地报，不开窗）→ 写桥开窗 ── */
+  /* ── 演示源：抽样校验（有错就地报，不开窗）→ 写桥开窗 ──
+   *
+   * ⚠️ 栅元必须先变成后端认的格式：`deck.cells` 是 CellRow 判别联合（`{kind:"cell",
+   * cell:{...}}`），而 `/api/source-demo-sample` 的 `_prepare_source_geometry` 与
+   * `/api/preview-3d` 的 `build_cells_data` 都读**扁平** `{number, material, surface_expr, ...}`
+   * （source-demo 的 `surface_expr` 是 CEL/SUR 抽样判定几何的唯一来源；preview-3d 用它建外壳 STL）。
+   * 此前这里只传了 `{num, mat, comment}`（`SourceTab.tsx:132`）且原样传 `deck.cells`，
+   * 两者都会让 `expr` 为空 → 全部栅元被跳过 → **外壳 STL 空 + 粒子全堆原点**（"一坨"）。
+   * 修法与 `Preview3D.tsx:679-681` 同口径。
+   */
+  const demoCellsForBackend = () =>
+    localToDeckCells(((deck.cells || []) as LocalCellRow[])).map((r: any) => {
+      const c = r?.kind === "cell" ? r.cell : r;
+      return {
+        number: parseInt(c?.number) || 0,
+        material: c?.material ?? "",
+        density: c?.density ?? "",
+        surface_expr: c?.surface_expr ?? "",
+        imp_n: c?.imp_n ?? "", imp_p: c?.imp_p ?? "", imp_e: c?.imp_e ?? "",
+        u: c?.u ?? "", fill: c?.fill ?? "", lat: c?.lat ?? "",
+        trcl: c?.trcl ?? "", render: c?.render !== false, fill_grid: c?.fill_grid ?? "",
+      };
+    });
+
   const handleDemoSource = async () => {
     setDemoError("");
+    setDemoWarning("");
     setDemoLoading(true);
+    const cellsForBackend = demoCellsForBackend();
+    // ⚠️ 位置未配置时不静默演示：后端 `_position` 在无 SUR/CEL/RAD/EXT/D 引用时会兜底
+    // `return (0.0, 0.0, 0.0)`，500 个粒子全叠在原点 → 视觉上就是"一坨"（2026-09-10 用户实测）。
+    // 这里就地提示，让用户先指定源的位置形态。
+    const posKeys = ["sdef_sur", "sdef_cel", "sdef_pos_x", "sdef_pos_y", "sdef_pos_z",
+                     "sdef_rad", "sdef_ext"];
+    const hasPos = posKeys.some((k) => String((adv as any)[k] ?? "").trim() !== "");
+    if (!hasPos) {
+      setDemoError("未指定源的位置：请填 SUR（面源）/ CEL（栅元源）/ POS+RAD（球、柱）/ EXT，"
+        + "或把 POS 设为 Dn 分布。否则全部粒子会叠在原点，看不到源的形状。");
+      setDemoLoading(false);
+      return;
+    }
     try {
       const res = await sourceDemoSample({
         sdefFields: adv,
         sdefDistributions: distributions,
         surfaces: deck.surfaces || "",
-        cells: deck.cells || [],
+        cells: cellsForBackend,
         trCards: deck.tr_cards || "",
         nParticles: 500,
       });
@@ -128,10 +167,14 @@ export default function SourceTab() {
         setDemoError(res.error || "源抽样失败");
         return;
       }
+      // 几何部分失败时给出警告（非阻断）：后端只在栅元解析失败时返回该字段
+      const gw = (res as any).geometryWarnings as string[] | undefined;
+      if (gw && gw.length) {
+        setDemoWarning("部分栅元几何未能解析（" + gw.slice(0, 3).join("；")
+          + (gw.length > 3 ? " 等 " + gw.length + " 项" : "") + "），相关源形状可能不准。");
+      }
       await openSourceDemo({
-        cells: (deck.cells || []).filter((c: any) => c.kind === "cell").map((c: any) => ({
-          num: c.cell.number, mat: c.cell.material, comment: c.cell.comment || "",
-        })),
+        cells: cellsForBackend,
         surfaces: deck.surfaces || "",
         trCards: deck.tr_cards || "",
         particles: res.particles,
@@ -261,6 +304,11 @@ export default function SourceTab() {
             {demoError && (
               <div style={{ marginTop: 6, padding: "6px 10px", background: "rgba(229,57,53,0.12)", borderRadius: 6, color: "#e53935", fontSize: 12 }}>
                 {demoError}
+              </div>
+            )}
+            {!demoError && demoWarning && (
+              <div style={{ marginTop: 6, padding: "6px 10px", background: "rgba(249,168,37,0.12)", borderRadius: 6, color: "#f9a825", fontSize: 12 }}>
+                ⚠ {demoWarning}
               </div>
             )}
             <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 6 }}>

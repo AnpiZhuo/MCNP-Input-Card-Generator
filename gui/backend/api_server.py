@@ -3164,8 +3164,13 @@ class MCNPHandler(BaseHTTPRequestHandler):
             tr_text = str(data.get("trCards") or "")
             geometry = self._prepare_source_geometry(surf_text, cells, tr_text)
             from app.generator.source_sampler import sample_source
-            self._ok(sample_source(sdef_fields, distributions, geometry,
-                                   n_particles=n_particles))
+            result = sample_source(sdef_fields, distributions, geometry,
+                                   n_particles=n_particles)
+            # 几何解析若有失败，随响应带出（前端可提示），避免"静默无几何"
+            errs = geometry.get("geometryErrors") or []
+            if errs and isinstance(result, dict):
+                result["geometryWarnings"] = errs
+            self._ok(result)
         except Exception as e:
             self._err(str(e))
 
@@ -3176,12 +3181,14 @@ class MCNPHandler(BaseHTTPRequestHandler):
         #n 补集经 resolve_cell_complements 展开；宏体由 voxel_csg.surface_fn 支持。
         """
         import app.voxel_csg as vc
-        from freecad_preview import parenthesize_unions, resolve_cell_complements, _pymcnp_surf_to_dict
+        from freecad_preview import (parenthesize_unions, resolve_cell_complements,
+                                     _pymcnp_surf_to_dict, _geometry_ast_to_json)
         from pymcnp.types.Geometry import Geometry
 
         surfs = parse_surfaces(surf_text)
         tr_cards = parse_tr_cards(tr_text)
         surfaces = {}
+        _source_geometry_errors: list[str] = []
         for s in surfs:
             try:
                 d = _pymcnp_surf_to_dict(s)
@@ -3189,7 +3196,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 params = d.get("params") or []
                 field = vc.surface_fn(typ, params, vc._surface_tr(d, tr_cards))
                 surfaces[int(s.number)] = {"type": typ, "params": params, "field": field}
-            except Exception:
+            except Exception as e:
+                _source_geometry_errors.append(f"曲面 {getattr(s, 'number', '?')}: {e}")
                 continue
 
         cells_by_num = {}
@@ -3212,7 +3220,16 @@ class MCNPHandler(BaseHTTPRequestHandler):
             if ast is None:
                 continue
             try:
-                resolved = resolve_cell_complements(ast, cells_by_num)
+                resolved_node = resolve_cell_complements(ast, cells_by_num)
+                # ⚠️ 必须转成 list 形式 AST：`vc._ast_surf_nums` / `vc.cell_aabb` /
+                # `vc.eval_cell_field` 全部按 `["surf", n]` / `["intersect", a, b]`
+                # `/ ["unary", a, "neg"]` 这种 list 结构索引（见 voxel_csg.py:401/516/574），
+                # 而 `resolve_cell_complements` 返回的是 **pymcnp 节点对象**
+                # （`_Paren`/`_Union`/`_Intersection`）—— 少了这一步就会抛
+                # `TypeError: '_Paren' object is not subscriptable`，
+                # 被下面的 except 静默吞掉 ⇒ `cells` 恒为空 ⇒ **CEL/SUR 源永远判定不了几何**
+                # （2026-09-10 实测：pincell_mcnp.i 的 CEL=1 报"栅元不存在或无法判定"）。
+                resolved = _geometry_ast_to_json(resolved_node)
                 nums = vc._ast_surf_nums(resolved)
                 fns = {}
                 for sn in nums:
@@ -3230,10 +3247,13 @@ class MCNPHandler(BaseHTTPRequestHandler):
                                                     "params": surfaces[sn]["params"]}
                                                for sn in nums}, 1e6)
                 cell_fields[num] = {"field": make_field(resolved, fns), "aabb": aabb}
-            except Exception:
+            except Exception as e:
+                # 不再静默：记录原因（此前 `continue` 让"几何全丢"看起来像"没有栅元"）
+                _source_geometry_errors.append(f"栅元 {num}: {e}")
                 continue
 
-        return {"cells": cell_fields, "surfaces": surfaces}
+        return {"cells": cell_fields, "surfaces": surfaces,
+                "geometryErrors": _source_geometry_errors}
 
     # ── 格阵 3D 预览（阶段3 preview-lattice：universe 实例化 + 嵌套 fill 递归）──
     def _handle_preview_lattice(self):

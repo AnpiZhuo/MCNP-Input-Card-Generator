@@ -15,7 +15,10 @@ import { createSourceDemoRenderer, type SourceDemoRendererHandle } from "./Sourc
 import { TRACK_LEGEND, TRACK_PARTICLE_LABELS, TRACK_COLORS } from "../ptrac/trackColors";
 
 interface BridgeData {
-  cells: { num: string; mat: string; comment?: string }[];
+  /** 栅元的**后端格式**（{number, material, surface_expr, ...}）—— fetchPreview3dStl 建外壳
+   *  与 resample 的 CEL/SUR 判定都要它；此前桥里只存 {num, mat, comment} ⇒ 外壳 STL 空、
+   *  粒子全堆原点（"一坨"），已修。 */
+  cells: any[];
   surfaces: string;
   trCards: string;
   materials: { number: number; comment?: string }[];
@@ -45,8 +48,12 @@ export default function SourceDemoWindow() {
     if (!data || !canvasRef.current) return;
     dataRef.current = data;
     let disposed = false;
-    const cellViews = (data.cells || []).map((c) => ({
-      num: String(c.num), mat: c.mat, comment: c.comment || "", color: getMatColor(c.mat),
+    // 外壳配色沿用材料色；兼容桥里两种形状（后端格式 number/material 或旧 num/mat）
+    const cellViews = (data.cells || []).map((c: any) => ({
+      num: String(c.number ?? c.num ?? ""),
+      mat: String(c.material ?? c.mat ?? ""),
+      comment: c.comment || "",
+      color: getMatColor(String(c.material ?? c.mat ?? "")),
     }));
     const renderer = createSourceDemoRenderer(canvasRef.current!, {
       stlData: {},
