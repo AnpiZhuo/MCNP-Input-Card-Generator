@@ -1435,6 +1435,12 @@ python -m pytest tests/unit/test_lattice.py -q            # 66 passed
 **用户裁决执行：删除未实现的水密/ROI 骨架**
 - `app/freecad_preview.py`：删除 `check_watertight` / `outside_cell_num` 两个形参（含 `build_geometry` docstring 对应条目）与 worker payload 键；删除 `FreeCADEngine.gap_volume` / `gap_fraction` / `roi_volume` / `fused_volume` / `gap_unresolved_cells` 的初始化与结果读回。理由：这些符号**全仓零调用点、worker 无计算分支**（恒为 `None`/`[]`），文档却宣称"已上线"。**代码侧 grep 零残留**；契约改名 `docs/contracts/watertight-check.md` → **`cell-closure-check.md`**（只描述已实现事实）。
 
+**gen 侧：TD-35 修复（SI 类型 `V` → 合法 `L`，用户裁决）**
+- `app/generator/inp_generator.py:_build_multi_sisp_cards`：原对 `POS_VEC` 参数发 `SI{di}  V  <平坦值>`，而 **`V` 不是合法的 SI 字母**（C810 只认 H/L/A/S，与 `distributions._SI_LETTERS` 一致）⇒ 多源生成的卡**本身非法**，多源往返必然走到（解析侧容忍、抽样侧报错）。已改为**一律发 `SI{di}  L`** —— POS_VEC 本质是位置向量**列表**，用 `L` 声明才符合 C810 语义。
+- `app/generator/distributions.py`：`_LEGACY_SI_LETTERS = ("V",)` **保留**（注释重写）—— 容忍**旧输入卡**的 `SI V`，保证旧文件 生成→解析→再生成 往返不崩；但**新生成的卡不再含 `V`**，且抽样侧仍会对 `V` 报"SI 类型 无效"。
+- `tests/unit/test_generator_multi_source.py:75`：原断言锁死旧行为 `SI1  V`，改为断言 `SI1  L` + **反向断言"生成结果不得含 `  V  `"**。
+- **风险实测（原担心冲击字节断言）**：全量 pytest **875 passed / 0 skipped**，**R1 不动点 / R4 kitchen-sink 字节断言未回归**，仅上述 1 处断言需随修 ⇒ 改动比预估安全。
+
 **spec 修正（TD-34 闸门抓出）**
 - `gui/mcnp_sidecar.spec`：`_keep_py` 中**误列 `_cross_section_helper.py`** —— 该文件在 `gui/backend/` 而非 `app/`（spec 第 41-44 行本就另有一段从 `GUI_BACKEND` 取它并投放到 `app`），`_keep_py` 里的那一条是无用项，会让 TD-34 闸门报"spec 与源码漂移"。已删除该条并加注释指路。
 - `tests/unit/test_sidecar_spec_keep.py`：`_parse_hidden` 原用 `re.findall(r'"([^"]+)"', spec_text)` 取"全 spec 字符串字面量"，实测在**同一份文本**上**静默丢内容**（返回 74 项且不含 `models.py`/`meshtal`/`generator`/`docs`；逐引号配对扫描返回 76 对且四者俱全；`[^"]+` 与 `\x22([^\x22]+)\x22` 两种写法均复现）⇒ 改为**显式配对扫描**（ASCII 双引号位置逐对切片），消除闸门的假红/假绿风险。该文件 6 例**首次执行，全绿**。

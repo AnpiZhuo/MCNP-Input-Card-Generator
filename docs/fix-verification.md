@@ -199,5 +199,5 @@ vite build → PyInstaller sidecar → 复制 dist/python → src-tauri/binaries
 
 1. **TD-02 / TD-03 是否真修好 → 必须重打包后冒烟**（§1 的只读请求验证的是**当前已部署的 1.7.5，不含本批修复**）。按 §4 走：`/api/diff-inp`、`/api/lattice-extent`、`/api/source-demo-sample` 均 200，且 `_internal\app\diff_inp.py`、`lattice.py` 都在。
 2. **`C810.pdf` 仍未人工核对**（§6.4 继续有效）—— 尤其 `DSn` 卡的 `param`/J 起点语义。
-3. **TD-35（P2，新增）**：`app/generator/inp_generator.py:664` 对 POS_VEC 仍发 C810 非法的 `SI{di} V`（用户裁决：本批维持保守，留到打包前处理）。
+3. ~~**TD-35（P2）**：`app/generator/inp_generator.py:664` 对 POS_VEC 仍发 C810 非法的 `SI{di} V`~~ → **已修（2026-09-10，用户裁决"本批修"）**：改为一律发合法 `L`；解析侧保留 `V` 容忍以兼容**旧输入卡**。全量 pytest **875 passed**（R1 不动点 / R4 kitchen-sink 字节断言**未回归**），仅 `test_generator_multi_source.py:75` 一处旧断言随修。
 4. **TD-19**（214 处 `any`）条件已具备（tsc 可跑），可列入下一批。

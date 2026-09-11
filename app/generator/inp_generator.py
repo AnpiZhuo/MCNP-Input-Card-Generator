@@ -648,7 +648,10 @@ def _build_multi_sisp_cards(dist_params: list[tuple[str, list[str]]],
                             prob_norm: list[str], n_sources: int) -> list[str]:
     """(e) SI/SP 构造（等价于结构拆解前 501-517 行 + SI 值扁平化）。
 
-    SI 卡序 = dist_params 序；POS_VEC → `SI{di}  V  平坦值`，其余 → `SI{di}  L  平坦值`；
+    SI 卡序 = dist_params 序；**一律 `SI{di}  L  平坦值`** —— POS_VEC 的多个位置向量
+    本质是一个**列表**，按 C810 用 `L` 声明才对；原实现对 POS_VEC 发 `SI{di}  V`，
+    而 **`V` 不是合法的 SI 字母**（C810 只认 H/L/A/S，与 `_SI_LETTERS` 一致），
+    多源往返时会被解析侧容忍、抽样侧报错（TD-35，2026-09-10 修）。
     每个 value 先 split() 拆 token 再 '  '.join 全部 token（与回放字节一致）；
     首张 SI 的 SP 带 prob_norm（`SP{di}  {prob}`），其余 `SP{di}  D1`；
     dist_params 非空 → 末尾 multi_source_comment_banner(n_sources)。
@@ -656,12 +659,9 @@ def _build_multi_sisp_cards(dist_params: list[tuple[str, list[str]]],
     lines = []
     si_di = 1
     first_dist = True
-    for param_name, values in dist_params:
+    for _param_name, values in dist_params:
         flat = "  ".join(tok for v in values for tok in v.split())
-        if param_name == "POS_VEC":
-            lines.append(f"SI{si_di}  V  {flat}")
-        else:
-            lines.append(f"SI{si_di}  L  {flat}")
+        lines.append(f"SI{si_di}  L  {flat}")
         if first_dist:
             lines.append(f"SP{si_di}  {'  '.join(prob_norm)}")
             first_dist = False

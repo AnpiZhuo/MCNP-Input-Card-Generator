@@ -72,7 +72,10 @@ def test_multi_source_different_pos_uses_pos_vector_dist():
     lines = _generate_multi_source(srcs)
     sdef = next(l for l in lines if l.startswith("SDEF"))
     assert "POS=F D1" in sdef
-    assert any(l.startswith("SI1  V") for l in lines)
+    # TD-35（2026-09-10 用户裁决修复）：POS_VEC 是位置向量**列表** → 按 C810 发合法 `L`，
+    # 不再发非法的 `V`（C810 的 SI 只认 H/L/A/S）。解析侧仍容忍旧输入卡的 `SI V`。
+    assert any(l.startswith("SI1  L") for l in lines)
+    assert not any("  V  " in l for l in lines)
 
 
 def test_multi_source_varying_erg_produces_si_sp_pair():
