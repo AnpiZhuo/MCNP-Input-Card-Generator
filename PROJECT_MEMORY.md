@@ -77,6 +77,18 @@
 - **`@types/node@^22.20.2`**（**devDependency**，不影响运行时与打包体积）：供 4 个测试文件的 `node:fs`/`node:url`/`node:path`/`node:crypto` 类型（TD-17 盲区的 10 处错误）。
 - **放宽 3 处过严类型**（行为等价）：`CellEditDialog.CellData.fill_grid`、`DeckContext.CellData.fill_grid` 改**可选**（代码处处 `|| ""` 兜底）；`CycleCellLike.fill_grid` 加 `| null`（`parseFillGrid` 本就容错）。连带 `LatticeEditDialog.tsx` 补 `|| ""`。
 
+### 🔧 S1.0c 源演示修复（2026-09-11，用户实测报障；**已提交 `a255a3f`，待用户终验 + 待打包**）
+
+用户原话：**"只有一坨蓝色方块，这些蓝色方块永远会面向摄像头，且好像有一部分空间排布，没有原本设计好的栅元之类的"**。查出**两个独立真 bug + 一处防呆缺失**：
+
+1. **栅元完全没传给后端（"没有栅元"的直接原因）**：`gui/src/components/SourceTab.tsx` 把栅元"简化"成 `{num, mat, comment}` 再传，**曲面表达式丢了**；而 `surface_expr` 是**建外壳 STL**（`build_cells_data`）与**判定 CEL/SUR 源几何**（`_prepare_source_geometry`）的唯一来源。→ 改为扁平 `{number, material, surface_expr, ...}`（与 `Preview3D.tsx:679-681` 同口径）。**实测外壳 STL 栅元数：pincell `0→4`、hex_lattice `0→2`、assembly_17x17 `0→12`、avr13 `0→2`（修前 4 张真实卡全 0）**。
+2. **CEL 源永远失败（被 `except` 吞掉的隐藏异常）**：`gui/backend/api_server.py:_prepare_source_geometry` 中 `resolve_cell_complements()` 返回 **pymcnp 节点对象**（`_Paren`/`_Union`），而 `voxel_csg._ast_surf_nums`/`cell_aabb`/`eval_cell_field` **只认 list 形式 AST**（`["surf", n]`）——少了 `_geometry_ast_to_json()`（`app/freecad_preview.py:63`）这一步 ⇒ `TypeError: '_Paren' object is not subscriptable` ⇒ **几何全丢**，且被 `except Exception: continue` 静默吞掉。→ 补 AST 转换 + `except` 改记录原因（新增 `geometryErrors`，随响应返回 `geometryWarnings`，前端黄字提示）。**实测 `CEL=1` 由 error → ok（粒子落在燃料芯块内，x/y 跨度 0.705，芯块半径 0.392）**。
+3. **防呆**：默认 SDEF 的 POS 全空时后端 `_position` 兜底 `return (0.0,0.0,0.0)` ⇒ 500 粒子全叠原点（"一坨"的另一半原因）。前端现在**直接报红字**拦截。
+4. **"方块永远面向摄像头"不是 bug**：`THREE.Points` **点精灵**固有行为（`SourceDemoRenderer.ts:185`），**本批未改**；若要体积感需改 `InstancedMesh` 小球（视觉设计变更，须先问用户）。
+5. **本轮新增"浏览器端验收"能力**：`gui/src/utils/windows.ts` 新增 `openChildWindow()`——非 Tauri 环境降级 `window.open(hash)`（否则浏览器里点「演示源」没反应）。配套做法：后端 `python _run_backend.py`（5001 源码版）+ 前端 `vite build` 后静态托管 `gui/dist`（8080）→ **改完刷新浏览器即可，不必每次打包**。⚠️ 那两个临时脚本**未入仓库**（避免污染），启动命令见交接文档 §2.3。
+6. **门禁**：pytest **875/0/0**、vitest **78 files / 625/0**、tsc 两档 EXIT 0、vite build EXIT 0（改后重跑）。
+7. **未做**：① 用户浏览器**终验**（唯一"改了但没确认"的东西）；② **重新打包部署**（部署版不含 `a255a3f`）；③ 点源场景方向线长度趋近 0（`arrowLen` 依赖粒子跨度，点源跨度=0）——**未处理**。
+
 ### 🧹 待办（本轮**未做**，明确记录，勿当作已做）
 
 1. **M-10**：`app/UI_ARCHITECTURE.md` 仍陈旧（`25 端点` 实际 **49**、`pytest 251 绿` 实际 **875**，共 3 处）→ 审计处置①要求"整体重锚定或标为历史快照"。
