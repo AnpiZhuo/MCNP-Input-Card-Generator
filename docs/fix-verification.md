@@ -35,6 +35,26 @@ python -c "import pytest_timeout; print('ok')"
 
 > 详细审计依据见 `docs/audit/t4-consolidated.md`（TD 编号）与 `docs/tech-debt-report.md`。
 
+### ✅ 批次 0 · 已实测（2026-09-10，接手方执行）：TD-02 定性完成
+
+**结论：TD-02 确认是「真缺口」，且比原判更精确 —— 坏的只有 `diff_inp`，`lattice` 实际可用。**
+
+部署版（用户手上的 1.7.5）实测（先确认 5001 空闲 → 起 sidecar → 逐个只读请求 → 杀进程 → 确认无残留）：
+
+| 端点 | 实测 | 含义 |
+| :--- | :--- | :--- |
+| `/api/diff-inp` | **HTTP 500** `{"message":"No module named 'diff_inp'"}`，traceback 指向 `api_server.py:36 _import_app` | **真缺口，已复现** —— 用户当前安装版**这个功能就是坏的** |
+| `/api/lattice-extent` | 200（`ok:false`） | **可导入**（未 500）→ 原判"lattice 也缺口"**与实机不符** |
+| `/api/preview-lattice` | 200 | 同上 |
+| `/api/validate-lattice-surfaces` | 200 | 同上 |
+| `/api/check-cell-closure` | 200（降级 message） | 正常（该能力已含在部署版） |
+| `/api/source-demo-sample` | **HTTP 404** | 部署版**不含**该端点 ⇒ 坐实"SDEF 演示已提交但**不在用户安装的 1.7.5 里**" |
+
+**文件系统取证**：部署版 `_internal\app\` 下**有** `material_library.py`、`gpu_pref.py`（同类 `_import_app` 动态导入且已登记），**独独没有** `lattice.py` 与 `diff_inp.py`；`base_library.zip` 内亦无 `lattice`/`diff_inp` 字样。
+⇒ **`_keep_py` 补 `diff_inp.py` 是必需的**（正对应上面那个 500）；**补 `lattice.py` 属"多补不害"**（实机显示它另有一条可导入路径，但显式登记能让行为不依赖隐式路径）。
+
+⚠️ **仍需重打包后复验**：本批修复**不在部署版里**，故上表数字描述的是**旧包**。要确认修好，须重打包后重跑本节（预期 `/api/diff-inp` 转 200、`/api/source-demo-sample` 出现并 200）。
+
 ### 批次 0 · 先验证一条悬而未决的 P0 候选（**只需 1 次请求，2 分钟**）
 
 **TD-02**：打包版可能无法 import `lattice` / `diff_inp`（`_import_app()` 走顶层 `__import__`，而 spec 白名单原先没有这两个文件）。
