@@ -164,6 +164,54 @@
 
 > 粒子类型一侧**无问题**：卡里 `sdef … par=1` 即粒子类型 = 1，后端实测返回 `particle:"n"`、面板"中子 500 / 光子 0 / 电子 0"，与卡一致。
 
+### ⚙️ S1.0e 一键运行 MCNP 支持多核（tasks N）+ 排他卡提示（2026-09-11，**新功能，未升版**）
+
+**用户实测结论**：`mcnp6.exe i=… o=… tasks 9` 这种写法**真能多核**，但 **`tasks` 不是越大越好**，且**部分卡与 `tasks > 1` 互斥**。
+
+**① 权威依据（C810.pdf 页 875）**
+
+> **TASKS n** — Invokes OpenMP threading on shared memory systems. n = number of threads to be used.
+> **DBCN(2,3,4), SSW, and PTRAC are incompatible with tasks > 1 (FATAL error).**
+
+**② 实测（AMD Ryzen 7 4800H，8 物理核 / 16 逻辑核；同一张卡 10M 历史）**
+
+| tasks | 墙钟 | CPU | CPU/墙钟 | 备注 |
+| :-- | :-- | :-- | :-- | :-- |
+| 1 | 22.35s | 22.22s | 0.99 | 单核 |
+| 4 | 8.38s | 33.2s | 3.96 | |
+| **8** | **8.36s** | 65.5s | 7.83 | **最优 = 物理核数** |
+| 9 | 8.81s | 78.48s | 8.91 | 略差于 8 |
+| 16 | **15.06s** | **205.73s** | 13.66 | **超订，最差**（SMT 无吞吐收益 + 大量自旋） |
+
+⇒ **`tasks` 应取物理核数，不是逻辑核数**。Amdahl 反推：串行 ≈6.35s、可并行 ≈16s ⇒ 理论上限 ≈3.5×，实测 2.67×（达上限 76%）。
+> ⚠️ 这是**极简铁球模型**（碰撞少、可并行占比低）；真实屏蔽模型占比更大、收益更好 —— 建议用**自己的卡**调小 NPS 后比墙钟选优。
+> ⚠️ `tasks` 只在 **OpenMP 构建**上生效；判据是输出出现 `comment.  threading will be used …`，非线程版**静默忽略**（不报错也不加速）。
+
+**③ 复用与实现（10 文件）**
+
+| 文件 | 改动 |
+| :-- | :-- |
+| `gui/src/utils/detectedCores.ts`（新） | **抽共享核数模块**（此前 `DETECTED_CORES` 在 SweepDialog 与 PreviewDialog **各复制一份**）：`DETECTED_CORES` 逻辑核（滑杆上限）/ `DEFAULT_WORKERS` = 既有 `min(8,核)`（**不改行为**）/ `SUGGESTED_WORKERS` = ⌈逻辑/2⌉（物理核估计）/ `clampWorkers` |
+| `gui/src/components/SweepDialog.tsx` | 改用共享模块；新增「推荐 N（物理核）」按钮 |
+| `gui/src/components/PreviewDialog.tsx` | `runMcnp` 传 `tasks: workers`；**footer 加核数滑杆**（与扫描面板共享同一 `workers`）；回显 `tasks`/`tasksNote` |
+| `gui/src/components/TasksIncompatibleHint.tsx`（新） | **统一"与 tasks>1 不兼容"提示组件**（避免三处各写一份文案） |
+| `gui/src/ptrac/PtracForm.tsx` | 勾选「启用 PTRAC」→ **就地显示提示** |
+| `gui/src/components/SswSsrForm.tsx` | 「面源 (SSW/SSR)」表单顶部**常显提示**（该表单无启用开关，渲染即代表处在该模式） |
+| `app/mcnp_tasks.py`（新） | `detect_tasks_conflict`（扫 PTRAC/SSW/SSR/DBCN(2,3,4)，正确处理 `nJ` 跳格与 `$`/`C` 注释）+ `resolve_mcnp_tasks` → `(tasks, note)` |
+| `gui/backend/api_server.py` | `_handle_run_mcnp` 经 `_import_app("mcnp_tasks")` 解析；bat 末尾追加 ` tasks N`；响应带 `tasks`/`tasksNote` |
+| `gui/mcnp_sidecar.spec` | `_keep_py` 登记 `mcnp_tasks.py`（**不登记即 TD-02 那个"冻结包 import 失败"**） |
+| `tests/unit/test_mcnp_tasks.py`（新） | **25 例**：跳格展开 / 三种排他卡 / DBCN 第 2·3·4 项 / `28j 0 13j 0` **不误报** / 注释行跳过 / 缺省·非法·超限夹取 |
+
+> **为什么单列 `app/` 模块**：项目纪律禁止 pytest import `gui/backend/api_server`（pyvista/FreeCAD 污染），逻辑必须住 `app/` 才能被测 —— 与 `diff_inp`/`lattice` 同构，受 `test_sidecar_spec_keep.py` 双向闸门守护。
+> **两层防线**：UI 前置提示（选模式时） + 后端扫卡兜底（经「高级→额外卡片」手写进来也拦得住）。
+
+**④ 门禁**：pytest **900 passed**（875 基线 + 25 新增）、vitest **78 files / 625/0**、tsc 两档 **EXIT 0**、vite build **EXIT 0**。
+
+**⑤ UI 复验（截图三连）**：勾选 PTRAC → 黄框提示现；切「面源 (SSW/SSR)」→ 提示现；生成预览 footer → `CPU [滑杆] 8`（= 实测最优值）。
+
+**⑥ 三态**：**已改源码 ✅ / 未提交 ❌ / 未打包 ❌**。
+> ⚠️ 这是**新功能**（非 bug 修复批），按项目规则"**升版由上级指定**" —— **本次未升版，版本仍 1.7.5**。
+
 ### 🧹 待办（本轮**未做**，明确记录，勿当作已做）
 
 1. **M-10**：`app/UI_ARCHITECTURE.md` 仍陈旧（`25 端点` 实际 **49**、`pytest 251 绿` 实际 **875**，共 3 处）→ 审计处置①要求"整体重锚定或标为历史快照"。
@@ -456,6 +504,8 @@
 - **❗`!n` 这类"值域重载"会把「缺失」与「特定值」混为一谈（2026-09-11 实证）**：`getMatColor` 原实现 `const n = parseInt(mat); if (!n) return "transparent";` 本意是"M0 = 真空"，但 `parseInt("")` 是 NaN、`!NaN` 为真 ⇒ **空材料号也被当成真空**，下游 `buildCellMaterial` 直接给 `opacity: 0` ⇒ 整个几何不可见。⇒ **纪律：判"特定值"用 `n === 0`，"缺失/非法"单独一条分支**（本次改为返回中性灰 `#888888`）。凡"0 是合法值"的场合，`!x` / `x || 默认` 都要警惕。
 - **❗跨模块复用"为别的场景调过的取景/布局启发式"会静默失效（2026-09-11 实证）**：`computeFramingBox` 的 `VOLUME_FRAMING_RATIO=0.25` 是**为体积窗口**设计的（网格层 ≪ 模型时聚焦网格层），被 `SourceDemoRenderer`/`PtracRenderer` 复用后，遇到"源/径迹在屏蔽体内部"（**演示源与径迹窗口的常态**，实测 ratio≈0.057）就把几何外壳挤出视野，且**不报任何错**。⇒ **纪律：复用带阈值/启发式的几何工具前，先问"这条启发式对**本**场景语义是否成立"**；本次两处调用点改为 `unionBoxes`（外壳优先），**共用函数本身与其 3 个测试文件保持不动**。
 - **headless Edge + CDP 端到端取证三坑（2026-09-11 实测，本项目首次具备"看图判读"能力）**：① **`alert()` 在 headless 里永久冻结渲染进程**（本程序"导入成功"必弹 `alert`）⇒ CDP `Runtime.evaluate` 永不返回、看起来像"页面卡死"；必须在**同一 CDP 会话内**监听 `Page.javascriptDialogOpening` 并 `Page.handleJavaScriptDialog({accept:true})`。② **导航到"含相同 hash 的同一 URL"不会重新加载文档** ⇒ 是假"重载"（两次截图 sha256 完全相同，一度被误判为"渲染确定性"）⇒ 真重载须用 `Page.reload`；要在加载**前**注入钩子须用 `Page.addScriptToEvaluateOnNewDocument`。③ **PowerShell 调原生程序时空字符串参数会被丢弃** ⇒ 位置参数错位（`run ... "" 8000` 把等待时长当成输出文件名，**在仓库根生成了垃圾截图 `3000`/`8000`**，已删）⇒ 占位参数用 `-` 而非 `""`。**另**：headless SwiftShader 下主界面 `Page.captureScreenshot` 会超时、子窗口正常 ⇒ 只在子窗口截图。
+- **MCNP 多核（`tasks N`）知识（2026-09-11 实测 + C810 页 875 定案）**：① 语法 = 命令行**末尾** `tasks N`（**无等号**）；② **只在 OpenMP 构建上生效**（判据：输出出现 `comment.  threading will be used …`；非线程版**静默忽略** —— 不报错、也不加速）；③ **`tasks` 取物理核数**，不是逻辑核数 —— 本机 8 物理核/16 逻辑核：`tasks 8` 8.36s 最优，`tasks 16` 反而 **15.06s**（烧 205s CPU，大半自旋）；④ **`DBCN(2,3,4)` / `SSW` / `SSR` / `PTRAC` 与 `tasks > 1` 不兼容（FATAL error）** ⇒ 程序必须扫卡拦截（见 S1.0e，`app/mcnp_tasks.py`）；⑤ 判据：**`CPU时间 / 墙钟 ≈ N`** 即 N 个核在跑。**本机 MCNP 路径 = `D:\MCNP\MCNP6\MCNP_CODE\bin\mcnp6.exe`**（下划线、少一层），与用户 bat 里写的 `D:\MCNP6\MCNP6\MCNP CODE\…`（带空格）**不是同一路径**。
+- **`C810.pdf` 已可直读（2026-09-11 打通，重要能力）**：本机 **PyMuPDF（`fitz`）已安装** ⇒ **零新依赖**即可提取这份 1001 页权威手册的文本，卡格式语义不必再靠 `app/docs/` 派生 md 猜（§4 待办 5 的 `DSn` 语义亦可照此核对）。范例脚本在仓库外：`D:\MCNP\_agent_probe\{pdf_index.py,pdf_extract.py,pdf_tasks.py}`。**已提取定案**：SI/SP（页 746-747）、tasks（页 520/875）。
 
 ## §7 技术争议与决议（语义记忆）
 

@@ -333,6 +333,32 @@ vite build → PyInstaller sidecar → 复制 dist/python → src-tauri/binaries
 
 **门禁**：tsc 两档 **EXIT 0**、vitest **78 files / 625/0**、vite build **EXIT 0**（纯前端）。
 
-### 8.7 三态表述
+### 8.7 一键运行 MCNP 多核（tasks N）+ 排他卡提示（S1.0e，同日）
+
+**用户实测结论**：`mcnp6.exe i=… o=… tasks 9` **真能多核**，但 **`tasks` 不是越大越好**，且**部分卡与 `tasks > 1` 互斥**。
+
+**权威依据**（C810.pdf 页 875）：`TASKS n` 走 OpenMP 线程；**"DBCN(2,3,4), SSW, and PTRAC are incompatible with tasks > 1 (FATAL error)."**
+
+**实测**（AMD Ryzen 7 4800H，8 物理核 / 16 逻辑核，同一张卡 10M 历史）：
+
+| `tasks` | 1 | 4 | **8** | 9 | 16 |
+| :-- | :-- | :-- | :-- | :-- | :-- |
+| 墙钟 | 22.35 s | 8.38 s | **8.36 s** | 8.81 s | **15.06 s** |
+| CPU | 22.22 s | 33.2 s | 65.5 s | 78.5 s | **205.7 s** |
+| CPU/墙钟 | 0.99 | 3.96 | 7.83 | 8.91 | 13.66 |
+
+⇒ **`tasks` 取物理核数，不是逻辑核数**（16 超订，SMT 无吞吐收益且大量自旋）。Amdahl 反推：串行 ≈6.35 s、可并行 ≈16 s ⇒ 理论上限 ≈3.5×，实测 2.67×。
+> ⚠️ 该模型是**极简铁球**（碰撞少、可并行占比低）；真实屏蔽模型收益更好，建议用**自己的卡**调小 NPS 后比墙钟选优。
+> ⚠️ `tasks` **只在 OpenMP 构建上生效** —— 判据：输出出现 `comment.  threading will be used …`；非线程版**静默忽略**。
+
+**实现（10 文件）**：抽共享模块 `gui/src/utils/detectedCores.ts`（**消除 SweepDialog / PreviewDialog 里重复的 `DETECTED_CORES`**）+ 新增统一提示组件 `TasksIncompatibleHint.tsx`（挂 **PTRAC 启用** 与 **SSW/SSR 面源** 两处，**选模式即提示**）+ `PreviewDialog` footer 核数滑杆与 `tasks` 传参 + 纯模块 `app/mcnp_tasks.py`（扫卡/降级，**正确处理 `nJ` 跳格**）+ 后端 bat 追加 ` tasks N` + spec `_keep_py` 登记 + **25 例**单测。
+
+**门禁**：pytest **900 passed**（875 基线 + 25 新增）、vitest **78 files / 625/0**、tsc 两档 **EXIT 0**、vite build **EXIT 0**、spec 一致性闸门 **绿**（spec 登记双向一致，未重蹈 TD-02）。
+
+**UI 复验（截图三连）**：勾选 PTRAC → 黄框提示现（`shots/21-ptrac-on.png`）；切「面源 (SSW/SSR)」→ 提示现（`22-ssw-hint.png`）；生成预览 footer → `CPU [滑杆] 8` = 实测最优值（`23-generate-footer.png`）。
+
+> ⚠️ **这是新功能，未升版**（项目规则"升版由上级指定"），版本仍 **1.7.5**。
+
+### 8.8 三态表述
 
 **已改源码 ✅ / 未提交 ❌ / 未打包 ❌** —— 部署版仍不含 `a255a3f` 与本批修复。

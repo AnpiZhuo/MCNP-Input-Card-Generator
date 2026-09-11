@@ -25,7 +25,7 @@ interface Props {
   onClearClosureGenerateWarn?: () => void;
 }
 
-const DETECTED_CORES = Math.max(1, (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4);
+import { DETECTED_CORES, DEFAULT_WORKERS, SUGGESTED_WORKERS, clampWorkers } from "../utils/detectedCores";
 
 const bodyStyle: React.CSSProperties = {
   flex: 1, padding: 0, fontFamily: "Consolas,monospace",
@@ -99,7 +99,7 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
   const [quickA, setQuickA] = useState("");
   const [quickB, setQuickB] = useState("");
   const [quickC, setQuickC] = useState("5");
-  const [workers, setWorkers] = useState(Math.min(8, DETECTED_CORES));
+  const [workers, setWorkers] = useState(DEFAULT_WORKERS);
   const [run, setRun] = useState<{ baseDir: string; records: any[]; summaryTsv: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -211,9 +211,15 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
 
   const runMcnp = () => {
     const dir = outputPath || "D:/MCNP/new";
-    fetch(apiUrl("/api/run-mcnp"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ inp: content, filename: safeName, outputDir: dir, mcnpExe: mcnpExe || "" }) })
+    // tasks = 本对话框的核数（与「扫描参数」面板共享同一 workers，见 detectedCores.ts）。
+    // 后端会扫卡：命中 PTRAC / SSW / SSR / DBCN(2,3,4) 时强制降为 1 并回传 tasksNote
+    //（C810 页 875：这些与 tasks > 1 不兼容，MCNP 会直接 FATAL）。
+    fetch(apiUrl("/api/run-mcnp"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ inp: content, filename: safeName, outputDir: dir, mcnpExe: mcnpExe || "", tasks: workers }) })
       .then(r => r.json()).then(j => {
-        if (j.status === "ok" || j.status === "started") { alert("🚀 MCNP 已启动"); meshtalDetect(dir).then(det => { if (det.status === "ok" && det.files?.length > 0) alert("发现 " + det.files.length + " 个 MESHTAL 文件"); }).catch(() => {}); }
+        if (j.status === "ok" || j.status === "started") {
+          alert("🚀 MCNP 已启动" + (j.tasks ? `（tasks ${j.tasks}）` : "") + (j.tasksNote ? "\n\n⚠ " + j.tasksNote : ""));
+          meshtalDetect(dir).then(det => { if (det.status === "ok" && det.files?.length > 0) alert("发现 " + det.files.length + " 个 MESHTAL 文件"); }).catch(() => {});
+        }
         else alert("启动失败: " + (j.message || "未知错误"));
       }).catch(() => alert("需要后端支持运行 MCNP"));
   };
@@ -293,6 +299,14 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
       footer={<div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <button className="btn btn-primary btn-sm" onClick={saveToDir}>💾 保存到目录</button>
         <button className="btn btn-ghost btn-sm" onClick={runMcnp}>▶ 运行 MCNP</button>
+        {/* 核数：同时决定「运行 MCNP」的 tasks 与「扫描参数」的并发路数（共享同一 workers state）。
+            ⚠️ MCNP 的 tasks 取**物理核数**最优 —— 实测本机（8 物理核/16 逻辑核）tasks 8 用 8.36s，
+            而 tasks 16 反而要 15.06s（超订，SMT 无吞吐收益且大量自旋）。见 utils/detectedCores.ts。 */}
+        <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}
+          title={`本机 ${DETECTED_CORES} 个逻辑核；MCNP 的 tasks 取物理核数最优（推荐 ${SUGGESTED_WORKERS}）—— 超过物理核会因超订反而变慢`}>CPU</span>
+        <input type="range" min={1} max={DETECTED_CORES} step={1} value={workers}
+          style={{ width: 76 }} onChange={e => setWorkers(clampWorkers(Number(e.target.value)))} />
+        <span style={{ fontSize: 11, color: workers === SUGGESTED_WORKERS ? "var(--accent)" : "var(--text-tertiary)" }}>{workers}</span>
         <button className="btn btn-ghost btn-sm" onClick={() => navigator.clipboard.writeText(content)}>复制</button>
         {onRegenerate && <button className="btn btn-ghost btn-sm" onClick={onRegenerate}>重新生成</button>}
         <button className="btn btn-ghost btn-sm" onClick={() => { setSweeping(!sweeping); setRun(null); setErr(""); }}>⚙ 扫描参数</button>

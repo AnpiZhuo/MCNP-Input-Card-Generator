@@ -2526,9 +2526,15 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 f.write(inp_text)
             # 显卡选择：本机 GPU0 是核显，GPU1 是独显（CUDA 只认 NVIDIA）。
             # CUDA_VISIBLE_DEVICES=1 让 MCNP 跳过核显直接用独显加速。
+            # ── CPU 线程数（tasks N）──
+            # C810 页 875：DBCN(2,3,4) / SSW / SSR / PTRAC 与 tasks > 1 不兼容（FATAL error），
+            # 故先扫卡；命中即压回单线程并把原因回传前端（前端 alert 显示 tasksNote）。
+            # 纯逻辑在 app/mcnp_tasks.py（独立成模块才能被单测覆盖 —— pytest 禁止 import 本文件）。
+            tasks, tasks_note = _import_app("mcnp_tasks").resolve_mcnp_tasks(data.get("tasks"), inp_text)
+            tasks_arg = f" tasks {tasks}" if tasks > 1 else ""
             gpu_device = os.environ.get("MCNP_GPU_DEVICE", "1")
             run_bat = (f"@echo off\r\nset CUDA_VISIBLE_DEVICES={gpu_device}\r\n"
-                       f"call \"{exe}\" inp={filename} outp={base}.o\r\npause\r\n")
+                       f"call \"{exe}\" inp={filename} outp={base}.o{tasks_arg}\r\npause\r\n")
             with open(bat_path, "w", encoding="utf-8") as f:
                 f.write(run_bat)
             # 后台线程：在新控制台窗口里跑 run.bat（窗口可见，用户能看到 MCNP 在跑，
@@ -2554,7 +2560,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
                         except OSError:
                             pass
             threading.Thread(target=_run_and_cleanup, daemon=True).start()
-            self._ok({"status": "started", "path": inp_path, "exe": exe})
+            self._ok({"status": "started", "path": inp_path, "exe": exe,
+                      "tasks": tasks, "tasksNote": tasks_note})
             _open_in_explorer(output_dir)
         except Exception as e:
             self._err(str(e))

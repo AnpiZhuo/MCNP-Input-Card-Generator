@@ -1,5 +1,6 @@
 import React from "react";
 import type { SswFields, SsrFields } from "../utils/DeckContext";
+import TasksIncompatibleHint from "./TasksIncompatibleHint";
 
 /* 面源 SSW/SSR 表单（源分布卡说明.md 四） */
 
@@ -16,6 +17,9 @@ const grp = { display: "flex", flexDirection: "column", gap: 2, flex: 1 } as Rea
 
 export default function SswSsrForm({ ssw, ssr, onChangeSsw, onChangeSsr }: Props) {
   return React.createElement("div", null,
+    // 与多核冲突的前置提示（C810 页 875）：SSW/SSR 一律不能配 tasks > 1。
+    // 本表单没有"启用"开关 —— 它被渲染即代表用户正处在该模式，故常显。
+    React.createElement(TasksIncompatibleHint, { what: "SSW / SSR 面源", style: { marginBottom: 12 } }),
     React.createElement("div", {
       style: { fontSize: 11, color: "var(--text-secondary)", background: "var(--bg-input)", border: "1px solid var(--border-glass)", borderRadius: 8, padding: "10px 12px", marginBottom: 12, lineHeight: 1.6 },
     },

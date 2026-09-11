@@ -15,6 +15,27 @@
 
 ## 一、批次详情档案（原 PROJECT_MEMORY.md 顶部修复横幅，含独有验收细节）
 
+### ⚙️ 一键运行 MCNP 支持多核（tasks N）+ 排他卡提示（2026-09-11，**新功能；未提交 / 未打包 / 未升版**）
+
+**用户实测结论**：`mcnp6.exe i=… o=… tasks 9` **真能多核**，但 **`tasks` 不是越大越好**，且**部分卡与 `tasks > 1` 互斥**。要点见 `PROJECT_MEMORY` S1.0e。
+
+**权威依据**（C810.pdf 页 875）：`TASKS n` 走 OpenMP 线程（*Invokes OpenMP threading on shared memory systems*），且 **"DBCN(2,3,4), SSW, and PTRAC are incompatible with tasks > 1 (FATAL error)."**
+
+**实测**（AMD Ryzen 7 4800H，8 物理核 / 16 逻辑核，同一张卡 10M 历史）：
+
+| tasks | 1 | 4 | **8** | 9 | 16 |
+| :-- | :-- | :-- | :-- | :-- | :-- |
+| 墙钟 | 22.35s | 8.38s | **8.36s** | 8.81s | **15.06s** |
+| CPU/墙钟 | 0.99 | 3.96 | 7.83 | 8.91 | 13.66 |
+
+⇒ **取物理核数而非逻辑核数**（16 烧 205s CPU、大半自旋）。且 `tasks` **只在 OpenMP 构建上生效**（判据：输出含 `comment.  threading will be used …`；非线程版静默忽略）。
+
+**实现（10 文件）**：抽 `gui/src/utils/detectedCores.ts`（**消除 SweepDialog / PreviewDialog 里重复的 `DETECTED_CORES`**，并新增"推荐 = 物理核估计"）；`PreviewDialog` footer 加核数滑杆，`runMcnp` 传 `tasks: workers`；新增统一提示组件 `TasksIncompatibleHint.tsx`，挂到 **PTRAC 启用**与 **SSW/SSR 面源**两处（**用户一选模式就提示**，不必等运行时）；新增纯模块 `app/mcnp_tasks.py`（扫卡 `PTRAC`/`SSW`/`SSR`/`DBCN(2,3,4)` + 强制降级 + 说明文案，正确处理 `nJ` 跳格与 `$`/`C` 注释），由 `_handle_run_mcnp` 经 `_import_app` 调用、bat 末尾追加 ` tasks N`、响应回带 `tasks`/`tasksNote`；spec `_keep_py` 登记该模块（**不登记即 TD-02 那个"冻结包 import 失败"**）；新增 **25 例**单测。
+
+**门禁**：pytest **900 passed**（875 基线 + 25 新增）、vitest **78 files / 625/0**、tsc 两档 **EXIT 0**、vite build **EXIT 0**。
+**UI 复验**：勾选 PTRAC → 黄框提示现；切「面源 (SSW/SSR)」→ 提示现；生成预览 footer → `CPU [滑杆] 8`。
+> ⚠️ **新功能，未升版**（按项目规则"升版由上级指定"），版本仍 **1.7.5**。
+
 ### 🔧 源演示「看不见栅元」根因二批（2026-09-11，用户实测 Practice3 热室卡；**已改源码，未提交/未打包**）
 
 **背景**：`a255a3f`（S1.0c）修完"cells 未传几何 + CEL AST 未转换"后判定"待用户终验"。**用用户真实卡 `Practice3 (3).TXT`（热室屏蔽：14 栅元 / 6 材料 / SDEF 位置由 D2·D3·D4 分布给出）实跑浏览器端，现象依旧**——演示源仍是一坨蓝色方块、「显示几何外壳」勾选也看不到任何栅元 ⇒ **上一轮漏了第三个真 bug**。
@@ -167,6 +188,7 @@
 
 | 日期 | 变更类型 | 改动描述 | 涉及 Agent |
 | :--- | :--- | :--- | :--- |
+| **2026-09-11** | 新增/后端+前端 | **一键运行 MCNP 支持多核（tasks N）+ 排他卡提示**（S1.0e）：C810 页 875 权威 —— `TASKS n` 走 OpenMP 线程，且 **DBCN(2,3,4)/SSW/SSR/PTRAC 与 `tasks>1` 不兼容（FATAL）**。实测（8 物理核/16 逻辑核，10M 历史）tasks 1/4/**8**/9/16 = 22.35 / 8.38 / **8.36** / 8.81 / **15.06** 秒 ⇒ **取物理核数而非逻辑核数**。实现 **10 文件**：抽 `utils/detectedCores.ts`（**消除两处重复定义**）、`PreviewDialog` footer 加核数滑杆并传 `tasks`、新增 `TasksIncompatibleHint` 挂到 PTRAC 启用与 SSW/SSR 两处（**选模式即提示**）、新增纯模块 `app/mcnp_tasks.py`（扫卡+强制降级，正确处理 `nJ` 跳格）+ 后端 bat 追加 ` tasks N` + spec 登记 + **25 例单测**。门禁 pytest **900** / vitest **625** / tsc 0 / build 0。**⚠️ 未打包；新功能未升版（仍 1.7.5）** | 后端+前端 |
 | **2026-09-11** | 改进/前端 + 诊断 | **源演示粒子圆点化 + SDEF 能量非正值诊断**（S1.0d-3）：① 用户裁决"换圆形贴图点" → 新增模块级单例 `getDotTexture()`（64² canvas 径向渐变圆 + `PointsMaterial.alphaTest=0.5`），把 `THREE.Points` 默认的**轴对齐方块**渲成**圆点**（零新依赖/零性能代价，保住屏幕空间可见性；jsdom 无 canvas 静默降级为方块）。② **`C810.pdf` 首次访问成功**（本机 PyMuPDF 已装、零新依赖）：提取 SI/SP 权威定义（PDF 页 746-747 / 印刷页 3-63）—— **SI = 自变量值，SP = 对应概率；H（默认）下 SI 是分箱边界、SP 首个数值项必须为 0（占位符）**，抽样 = 选分箱后**箱内均匀**。③ **定案用户报的"粒子颜色不对"**：其卡 `si1 -2 1` + `sp1 0 1` 即**能量 [-2,1] MeV 均匀**（**定义范围的是 `si1`，`sp1` 的 0 是占位符**）⇒ 约 2/3 粒子负能量 → `source_sampler.py:431` 的 `energy > 0` 过滤使 `energyRange` 失真 → 前端 `normalizeEnergy01` 钳到最浅色 → **颜色层次塌成一片近白**。A/B 实证（改注入副本 `si1 0 2`，**用户原卡未动**）：负能量 **0**、`energyRange` 与真实一致、t 值 **10 桶均匀** `[49,48,50,43,55,56,54,45,51,49]`、观感恢复**完整浅蓝→深蓝层次** ⇒ **程序符合 C810 无 bug**；缺口是**缺"能量分布可能产生非正值"的校验**（待裁决）。门禁 tsc 两档 **0** / vitest **625/0** / build **0**。**⚠️ 未打包** | 前端 |
 | **2026-09-11** | 修复/前端 | **源演示方向线不可见 + 「方向线长度」滑杆失效**（S1.0d-2，接上条的用户人工验收反馈）：① 方向线长度是**世界空间固定值**（粒子跨度×0.03 = 1.17），在"外壳优先"取景（盒对角线 ≈914）下只占**约 1px** —— **S1.0d 的取景修复牵出的回归**；② `setDirectionLength` 只改 `directionScale` + `markDirty()`，而 `arrowLen` 仅在 `setParticles` 里用过一次 ⇒ **滑杆完全无效**（范围 0.2~5）。修法：改为**屏幕空间恒定**（`2×相机距离×tan(fov/2)×0.03×倍率`，随相机距离实时重算 + 0.5% 去抖）+ 缓存锚点/单位方向。门禁 tsc 两档 **EXIT 0** / vitest **625/0** / build **EXIT 0**（纯前端，pytest 不受影响）。视觉复验三连：全局可见 / 放大 20 档不爆炸 / 滑杆 1→5 生效。**⚠️ 仍未打包** | 前端 |
 | **2026-09-11** | 修复/后端+前端 | **源演示「看不见栅元」根因二批**（详见 `docs/fix-verification.md` §8 + 本文件「一、批次详情档案」同名节）：`a255a3f` 之外**还有第三个真 bug**。根因链——① `api_server.py:1439-1443` 补 camelCase 别名时**漏 `mat`** ⇒ ② `SourceTab.demoCellsForBackend()` 把 snake_case `deck.cells` **强断言**成 camelCase `LocalCellRow` ⇒ `material=""` ⇒ ③ `getMatColor("")` 返回 `"transparent"` ⇒ ④ `buildCellMaterial` 判为**真空 M0**（`opacity: 0`）⇒ 13 个外壳全不可见；⑤ 取景误用体积窗口的 `computeFramingBox`（`VOLUME_FRAMING_RATIO=0.25`，源区/热室 ≈0.057）⇒ 外壳被挤出视野。修 **5 文件**（含 `PtracRenderer.ts` 同类缺陷；`computeFramingBox` 本身未改）。门禁 pytest **875/0/0** + vitest **625/0** + tsc 两档 **0** + build **0**。用户真实卡 Practice3 实测：外壳完整可见、500 粒子全落源区。**⚠️ 未提交 / 未打包** | 后端+前端 |

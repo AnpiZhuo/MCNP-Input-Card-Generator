@@ -10,6 +10,7 @@ import {
   type PtracState, emptyPtracState,
   PTRAC_FILE_OPTIONS, PTRAC_WRITE_OPTIONS, PTRAC_TYPE_OPTIONS,
 } from "./ptracState";
+import TasksIncompatibleHint from "../components/TasksIncompatibleHint";
 
 interface Props {
   value: PtracState | undefined;
@@ -45,6 +46,8 @@ export default function PtracForm({ value, onChange }: Props) {
         </div>
       ) : (
         <>
+          {/* 与多核冲突的前置提示（C810 页 875）：启用 PTRAC 时就不该再开 tasks > 1 */}
+          <TasksIncompatibleHint what="PTRAC 粒子径迹" style={{ margin: "8px 14px 0" }} />
           {/* 常用 7 项平铺 */}
           <div style={{ padding: "8px 14px", display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end" }}>
             <Field label="FILE">

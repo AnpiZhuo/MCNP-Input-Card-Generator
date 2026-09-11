@@ -15,13 +15,11 @@ import { useDeck } from "../utils/DeckContext";
 import { generateInp } from "../utils/dataCollector";
 import FloatingDialog from "./FloatingDialog";
 import SweepDashboard from "./SweepDashboard";
+import { DETECTED_CORES, DEFAULT_WORKERS, SUGGESTED_WORKERS, clampWorkers } from "../utils/detectedCores";
 
 /** doRun 请求级超时（ms）：后端负责预算拒绝/请求级超时（返回明确错误消息），
  *  前端超时只作兜底，防止大组合 fetch 无限挂起。MCNP 逐组合运行较久，故给 120s。 */
 const SWEEP_RUN_TIMEOUT_MS = 120000;
-
-/** 本机逻辑核数（Tauri WebView / 浏览器均支持 navigator.hardwareConcurrency） */
-const DETECTED_CORES = Math.max(1, (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4);
 
 /** 参数行：anchor=用户选中的原文（要替换的值）；context=所在整行（用于唯一定位） */
 export interface ParamRow { name: string; anchor: string; context: string; values: string; }
@@ -252,14 +250,12 @@ export default function SweepDialog({ onClose }: { onClose: () => void }) {
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <input type="range" min={1} max={DETECTED_CORES} step={1} value={workers}
               style={{ flex: 1 }}
-              onChange={e => setWorkers(Number(e.target.value))} />
+              onChange={e => setWorkers(clampWorkers(Number(e.target.value)))} />
             <input type="number" min={1} max={DETECTED_CORES} value={workers}
               style={{ ...s.inp, width: 70, textAlign: "center" }}
-              onChange={e => {
-                const v = Number(e.target.value);
-                setWorkers(Number.isFinite(v) ? Math.max(1, Math.min(DETECTED_CORES, v)) : 1);
-              }} />
-            <button className="btn btn-ghost btn-xs" onClick={() => setWorkers(Math.min(8, DETECTED_CORES))}>默认 8</button>
+              onChange={e => setWorkers(clampWorkers(Number(e.target.value)))} />
+            <button className="btn btn-ghost btn-xs" onClick={() => setWorkers(DEFAULT_WORKERS)}>默认 {DEFAULT_WORKERS}</button>
+            <button className="btn btn-ghost btn-xs" title="MCNP 的 tasks 取物理核数最优（实测 16 逻辑核机上 tasks 8 比 16 快 80%）；前端只能拿到逻辑核，按 SMT×2 估算" onClick={() => setWorkers(SUGGESTED_WORKERS)}>推荐 {SUGGESTED_WORKERS}（物理核）</button>
             <button className="btn btn-ghost btn-xs" onClick={() => setWorkers(DETECTED_CORES)}>全核 {DETECTED_CORES}</button>
           </div>
         </div>

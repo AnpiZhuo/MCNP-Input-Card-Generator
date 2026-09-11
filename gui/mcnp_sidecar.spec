@@ -28,6 +28,7 @@ _keep_py = [
     "stl_cross_section.py", "gpu_pref.py",
     "material_library.py",
     "lattice.py", "diff_inp.py",  # _import_app() 动态导入 → 需显式保留
+    "mcnp_tasks.py",              # tasks N 解析（纯 stdlib；_import_app 动态导入 → 必须登记，勿重蹈 TD-02）
 ]
 _keep_dirs = ["generator", "docs", "meshtal", "ptrac"]  # generator（含 parsers）+ 参考文档 + meshtal 网格计数 + ptrac 粒子径迹模块
 
