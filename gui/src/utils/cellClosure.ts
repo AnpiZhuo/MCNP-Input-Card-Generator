@@ -52,11 +52,3 @@ export function closureMeta(status: string): ClosureMeta {
   return _META[status]
     ?? { icon: "?", color: "var(--text-tertiary)", label: status, allowed: false, title: "未知状态" };
 }
-
-/** 从 closure_report 中提取某个栅元的状态（不存在返回 undefined） */
-export function getClosureStatus(
-  report: ClosureReport | null | undefined,
-  cellNum: number | string,
-): ClosureEntry | undefined {
-  return report?.[String(cellNum)];
-}

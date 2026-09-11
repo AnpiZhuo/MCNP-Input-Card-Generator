@@ -27,6 +27,7 @@ _keep_py = [
     "_freecad_cross_section_worker.py",
     "stl_cross_section.py", "gpu_pref.py",
     "material_library.py",
+    "lattice.py", "diff_inp.py",  # _import_app() 动态导入 → 需显式保留
 ]
 _keep_dirs = ["generator", "docs", "meshtal", "ptrac"]  # generator（含 parsers）+ 参考文档 + meshtal 网格计数 + ptrac 粒子径迹模块
 
@@ -37,7 +38,7 @@ for f in _keep_py:
         _datas.append((sp, "app"))
 
 # gui/backend 里 api_server 运行时要 import 的辅助模块（通过 app 目录路径找到）
-for f in ["_cross_section_helper.py", "generate_step.py"]:
+for f in ["_cross_section_helper.py"]:
     sp = os.path.join(GUI_BACKEND, f)
     if os.path.isfile(sp):
         _datas.append((sp, "app"))

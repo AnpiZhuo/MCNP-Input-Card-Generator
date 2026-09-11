@@ -54,7 +54,8 @@ for label, path in files:
 
     # 5. 分布源检验
     if deck.adv.source_mode == "distribution":
-        print(f"  SI/SP: {deck.adv.sdef_raw_text[:100]}")
+        # TD-23（t5）：旧 adv.sdef_raw_text 已退役 → 改看唯一权威 sdef_distributions
+        print(f"  SI/SP 分布 JSON: {(deck.adv.sdef_distributions or '')[:100]}")
 
     # 6. PHYS / CUT
     t = deck.tally

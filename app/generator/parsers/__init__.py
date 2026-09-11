@@ -76,7 +76,8 @@ def parse_inp_text(text: str) -> tuple[DeckData, list[str]]:
                 "nps": "", "ctme": "", "nonu": False,
                 "materials": [], "sources": [], "tallies": {},
                 "other_cards": [], "e0_values": [], "warnings": [],
-                "source_mode": "fixed", "sdef_raw_text": ""}
+                # TD-23（t5）：旧 sdef_raw_text 已退役，兜底默认值一并删除
+                "source_mode": "fixed"}
 
     # Build BasicSettings: title, particle modes, NPS/CTME, and NONU (inverted as phys_fis)
     basic = BasicSettings(
@@ -266,7 +267,7 @@ def parse_inp_text(text: str) -> tuple[DeckData, list[str]]:
         sdef_ara=data.get("sdef_ara", ""),
         sdef_rate=data.get("sdef_rate", ""),
         sdef_extra=data.get("sdef_extra", ""),
-        sdef_raw_text=data.get("sdef_raw_text", ""),
+        # TD-23（t5）：不再接 data["sdef_raw_text"]（解析侧早已只写 sdef_distributions）
         sdef_distributions=data.get("sdef_distributions", ""),
         # SSW/SSR 面源
         ssw_surf=data.get("ssw_surf", ""),

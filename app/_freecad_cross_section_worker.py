@@ -1,7 +1,7 @@
 """
 FreeCAD Cross-Section Worker
 """
-import sys, json, math
+import sys, json, math, traceback
 try:
     import FreeCAD
     import Part
@@ -638,6 +638,9 @@ def main():
 
     bound_box = _make_box(-B, B, -B, B, -B, B)
     surfaces = {}
+    # TD-26（t5）：原为裸 `except: pass`（连 KeyboardInterrupt/SystemExit 都吞，且无任何痕迹）。
+    # 改为 `except Exception` + 收集，随响应透传 surfaceErrors，让"截面缺块"可归因到具体曲面。
+    surface_errors = []
     for s in data.get("surfaces", []):
         num = s["number"]
         try:
@@ -653,8 +656,10 @@ def main():
                 shape = make_halfspace(s["type"], s["params"], B)
                 if tr_data: apply_trn(shape, tr_data)
             surfaces[num] = shape
-        except:
-            pass
+        except Exception as e:  # noqa: BLE001 —— 逐曲面降级，但要留下归因
+            surface_errors.append({"number": num, "type": s.get("type", ""),
+                                   "error": f"{type(e).__name__}: {e}"})
+            traceback.print_exc()
 
     results = []
     for cell in data.get("cells", []):
@@ -714,7 +719,8 @@ def main():
         except Exception:
             results.append({"number": num, "material": mat, "polygons": []})
 
-    print(json.dumps({"status":"ok", "slices":results}))
+    # TD-26（t5）：把逐曲面构造失败随响应透传（原裸 except 完全无痕，用户只看到"截面缺块"）
+    print(json.dumps({"status":"ok", "slices":results, "surfaceErrors": surface_errors}))
 
 if __name__ == "__main__":
     main()

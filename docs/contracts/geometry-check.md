@@ -1,7 +1,8 @@
 # 3D 预览几何检查（重合栅元预警）契约
 
-> 契约人：架构师 | 施工方：后端 + 前端 | **本轮不施工（P0/P1 在修，仅存档，未排期）**
-> 日期：2026-08-13 | 状态：**契约已锁定（存档）**
+> 契约人：架构师 | 施工方：后端 + 前端 | **✅ 已交付（2026-08-22 施工，见 `docs/CHANGELOG.md` 该日条目）：原"本轮不施工（仅存档，未排期）"的状态已失效，2026-09-10 更正**
+> 日期：2026-08-13 | 状态：**已交付** —— `/api/check-overlap`（`docs/contracts/api.yaml:1379`，operationId `checkOverlap`）与 `/api/quick-add-check`（`:1412`）均已上线；`app/overlap_classify.py` / `app/spatial_index.py` / `app/overlap_probe.py` 均已在册；下方 §9 的"本轮不施工"表述为**历史记录**，勿据此判断未实现。
+> 端点数量说明：文中"25→26"等为 2026-08-13 当时值（现 api.yaml 共 49 path）。
 > 依据：用户反馈 #7（3D 预览缺几何检查 / 重合栅元无预警，参考 VISED，P2 功能增强）+ `PROJECT_MEMORY.md` + 现有 3D 预览链路
 > 目标：方案 A（FreeCAD 精确布尔求交 + AABB 预过滤）落地为可施工契约；preview-3d 性能契约（缓存命中 ≤1s / 冷启动 ≤3s）零回归
 > 行号说明：本契约行号为 2026-08-13 工作树 Grep 锚定值，施工以每次 Grep 重锚定为准（见 §10）。
@@ -218,7 +219,7 @@ truncated = candidate_pairs 数 > max_boolean_ops
 2. 不碰 `/api/preview-3d` 响应结构与冷/热路径（性能契约零回归）。
 3. 测试不 import `gui.backend.api_server`、不 import FreeCAD（纯逻辑走 `overlap_classify` seam）。
 4. 不新增运行时依赖。
-5. 本轮不施工：契约存档待排期。
+5. ~~本轮不施工：契约存档待排期。~~ → **2026-09-10 更正：本项已失效 —— 功能已于 2026-08-22 交付，见文件头状态行（`/api/check-overlap` 在 `api.yaml:1379`）。**
 
 ### 9.2 风险
 | 风险 | 缓解 |

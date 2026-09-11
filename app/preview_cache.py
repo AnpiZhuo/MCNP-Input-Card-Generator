@@ -20,6 +20,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 
 
 class PreviewCache:
@@ -39,6 +40,10 @@ class PreviewCache:
         self._builder = builder
         self._index = {}   # fp -> {"dir", "cells", "freecad"}
         self._order = []   # fp 最近使用序，index 0 = 最旧
+        # TD-20（t5）：api_server 是 ThreadingHTTPServer（每请求一线程），此前 _index/_order
+        # 完全无锁：get/put/evict_lru/_drop 可并发进入 → 索引与 LRU 序可能被改坏，且 _drop 的
+        # rmtree 可能删掉另一请求刚 put 的目录。用 RLock（put → evict_lru → _drop 是嵌套调用）。
+        self._lock = threading.RLock()
 
     # ── 指纹 ───────────────────────────────────────────────
     def fingerprint(self, surfaces: str, cells: list, tr_cards: str,
@@ -66,25 +71,27 @@ class PreviewCache:
         目录已删（悬挂）→ 清理索引并返回 None（isdir 兜底 miss）。
         内存 miss 时尝试从磁盘恢复（meta.json）——跨进程重启后仍能命中，
         同一 deck 无需重新调 FreeCAD（「只算一次、往后复用」）。
+        TD-20（t5）：全程持锁（索引/LRU 序/目录检查是一组原子读改写）。
         """
-        entry = self._index.get(fp)
-        if entry is None:
-            cache_dir = os.path.join(self._base_dir, fp)
-            if os.path.isdir(cache_dir):
-                recovered = self._load_meta(cache_dir)
-                if recovered is not None:
-                    entry = recovered
-                    self._index[fp] = entry
-                    self._touch(fp)
+        with self._lock:
+            entry = self._index.get(fp)
+            if entry is None:
+                cache_dir = os.path.join(self._base_dir, fp)
+                if os.path.isdir(cache_dir):
+                    recovered = self._load_meta(cache_dir)
+                    if recovered is not None:
+                        entry = recovered
+                        self._index[fp] = entry
+                        self._touch(fp)
+                    else:
+                        return None
                 else:
                     return None
-            else:
+            if not os.path.isdir(entry.get("dir", "")):
+                self._drop(fp)
                 return None
-        if not os.path.isdir(entry.get("dir", "")):
-            self._drop(fp)
-            return None
-        self._touch(fp)
-        return entry
+            self._touch(fp)
+            return entry
 
     def put(self, fp: str, session: dict) -> None:
         """把会话目录的 STL 拷贝进缓存自有目录后登记。
@@ -92,69 +99,76 @@ class PreviewCache:
         session: {"dir": 会话目录, "cells": {num: {"material", "path"}},
                   "freecad": freecad_bin}。会话目录可能随后被 clear-stl 删除，
         缓存持有自己的拷贝，不受影响。
+        TD-20（t5）：全程持锁（拷贝 + 索引登记 + LRU 驱逐 + meta 落盘为一组原子操作）。
         """
-        src_dir = session.get("dir")
-        cells = session.get("cells") or {}
-        if not src_dir or not os.path.isdir(src_dir):
-            return  # 源目录无效，不缓存
-        cache_dir = os.path.join(self._base_dir, fp)
-        shutil.rmtree(cache_dir, ignore_errors=True)  # 同指纹重入 → 精确重建
-        os.makedirs(cache_dir, exist_ok=True)
-        cached_cells = {}
-        for num, info in cells.items():
-            src_path = info.get("path")
-            if src_path and os.path.isfile(src_path):
-                dst = os.path.join(cache_dir, f"cell_{num}.stl")
-                try:
-                    shutil.copy2(src_path, dst)
-                except OSError:
-                    continue
-                cached_cells[num] = {
-                    "material": info.get("material", "0"),
-                    "path": dst,
-                }
-        if not cached_cells:
-            shutil.rmtree(cache_dir, ignore_errors=True)
-            return  # 无 STL 可缓存
-        self._index[fp] = {
-            "dir": cache_dir,
-            "cells": cached_cells,
-            "freecad": session.get("freecad"),
-        }
-        self._touch(fp)
-        self.evict_lru(self._max_entries)
-        # 把 cells/freecad 元数据持久化到磁盘（meta.json）：进程重启后 get 内存 miss 时
-        # 能从磁盘恢复，真正实现「同一 deck 只算一次、跨启动复用」（无需重新调 FreeCAD）。
-        self._persist_meta(cache_dir, cached_cells, session.get("freecad"))
+        with self._lock:
+            src_dir = session.get("dir")
+            cells = session.get("cells") or {}
+            if not src_dir or not os.path.isdir(src_dir):
+                return  # 源目录无效，不缓存
+            cache_dir = os.path.join(self._base_dir, fp)
+            shutil.rmtree(cache_dir, ignore_errors=True)  # 同指纹重入 → 精确重建
+            os.makedirs(cache_dir, exist_ok=True)
+            cached_cells = {}
+            for num, info in cells.items():
+                src_path = info.get("path")
+                if src_path and os.path.isfile(src_path):
+                    dst = os.path.join(cache_dir, f"cell_{num}.stl")
+                    try:
+                        shutil.copy2(src_path, dst)
+                    except OSError:
+                        continue
+                    cached_cells[num] = {
+                        "material": info.get("material", "0"),
+                        "path": dst,
+                    }
+            if not cached_cells:
+                shutil.rmtree(cache_dir, ignore_errors=True)
+                return  # 无 STL 可缓存
+            self._index[fp] = {
+                "dir": cache_dir,
+                "cells": cached_cells,
+                "freecad": session.get("freecad"),
+            }
+            self._touch(fp)
+            self.evict_lru(self._max_entries)
+            # 把 cells/freecad 元数据持久化到磁盘（meta.json）：进程重启后 get 内存 miss 时
+            # 能从磁盘恢复，真正实现「同一 deck 只算一次、跨启动复用」（无需重新调 FreeCAD）。
+            self._persist_meta(cache_dir, cached_cells, session.get("freecad"))
 
     def put_overlaps(self, fp: str, report: dict) -> None:
-        """把重合检测报告写入缓存目录（同指纹，随目录驱逐自动清理）。"""
-        entry = self._index.get(fp)
-        if entry is None:
-            return
-        cache_dir = entry.get("dir", "")
-        if not cache_dir or not os.path.isdir(cache_dir):
-            return
-        try:
-            with open(os.path.join(cache_dir, "overlaps.json"),
-                      "w", encoding="utf-8") as f:
-                json.dump(report, f, ensure_ascii=False)
-        except OSError:
-            pass
+        """把重合检测报告写入缓存目录（同指纹，随目录驱逐自动清理）。
+
+        TD-20（t5）：持锁读路径/写文件——避免驱逐线程刚删目录导致半写。
+        """
+        with self._lock:
+            entry = self._index.get(fp)
+            if entry is None:
+                return
+            cache_dir = entry.get("dir", "")
+            if not cache_dir or not os.path.isdir(cache_dir):
+                return
+            try:
+                with open(os.path.join(cache_dir, "overlaps.json"),
+                          "w", encoding="utf-8") as f:
+                    json.dump(report, f, ensure_ascii=False)
+            except OSError:
+                pass
 
     def get_overlaps(self, fp: str) -> dict | None:
-        """读取同指纹缓存目录里的 overlaps.json；无则 None。"""
-        entry = self._index.get(fp)
-        if entry is None:
-            return None
-        path = os.path.join(entry.get("dir", ""), "overlaps.json")
-        if not os.path.isfile(path):
-            return None
-        try:
-            with open(path, encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return None
+        """读取同指纹缓存目录里的 overlaps.json；无则 None。TD-20（t5）：持锁。"""
+        with self._lock:
+            entry = self._index.get(fp)
+            if entry is None:
+                return None
+            path = os.path.join(entry.get("dir", ""), "overlaps.json")
+            if not os.path.isfile(path):
+                return None
+            try:
+                with open(path, encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                return None
 
     def get_or_build(self, fp: str, data=None) -> dict:
         """命中返回缓存；未命中用构造 seam builder(data) 构建并缓存。
@@ -177,15 +191,18 @@ class PreviewCache:
 
         命中路径 _STL_SESSION 指向缓存目录时，clear-stl 会 rmtree 该目录——此处
         移除索引并删除缓存目录（_drop），调用方对已删目录的 rmtree 是无害空操作。
+        TD-20（t5）：持锁（RLock，_drop 内部不再取锁）。
         """
-        for fp in [fp for fp, e in self._index.items() if e.get("dir") == d]:
-            self._drop(fp)
+        with self._lock:
+            for fp in [fp for fp, e in self._index.items() if e.get("dir") == d]:
+                self._drop(fp)
 
     def evict_lru(self, max_entries: int | None = None) -> None:
-        """驱逐最旧指纹直到 ≤ max_entries（默认构造上限），并删除其缓存目录。"""
-        cap = self._max_entries if max_entries is None else max_entries
-        while len(self._order) > cap:
-            self._drop(self._order[0])
+        """驱逐最旧指纹直到 ≤ max_entries（默认构造上限），并删除其缓存目录。TD-20（t5）：持锁。"""
+        with self._lock:
+            cap = self._max_entries if max_entries is None else max_entries
+            while len(self._order) > cap:
+                self._drop(self._order[0])
 
     # ── 内部 ───────────────────────────────────────────────
     _META_NAME = "meta.json"

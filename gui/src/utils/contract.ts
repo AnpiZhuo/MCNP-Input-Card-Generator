@@ -39,9 +39,10 @@ export const SOURCE_CONTRACT: ContractField[] = [
   { frontend: "adv.sdef_ccc",   backend: "sdef_ccc",   mcnp: "SDEF CCC",        section: "source" },
   { frontend: "adv.sdef_ara",   backend: "sdef_ara",   mcnp: "SDEF ARA",        section: "source" },
   { frontend: "adv.sdef_rate",  backend: "sdef_rate",  mcnp: "SDEF RATE",       section: "source" },
-  // 结构化分布 / raw 原文（adv JSON 字符串 / 原文）
+  // 结构化分布（adv JSON 字符串，v2 双态）
+  // TD-23（t5）：旧 `adv.sdef_raw_text`（"SI/SP 原文"）已退役——解析侧早已停写、
+  // 唯一权威是 adv.sdef_distributions。该行随之删除。
   { frontend: "adv.sdef_distributions", backend: "sdef_distributions", mcnp: "SI/SP/SB/DS", section: "source" },
-  { frontend: "adv.sdef_raw_text",      backend: "sdef_raw_text",      mcnp: "SI/SP 原文",  section: "source" },
   // sdef_eff 后端无字段 → 折叠进 adv.sdef_extra（EFF 记号）
   { frontend: "adv.sdef_extra",         backend: "sdef_extra",         mcnp: "SDEF 附加(EFF=…)", section: "source" },
 ];

@@ -6,6 +6,7 @@ MCNP 生成器 API 服务 — 桥接 React 前端与 Python 后端
 监听: http://localhost:5001
 """
 
+import contextlib
 import json
 import math
 import os
@@ -108,6 +109,40 @@ _PREVIEW_CACHE_LATTICE = PreviewCache(max_entries=2, base_dir=_cache_base("previ
 # 3D 预览生成的 STL 保留在此（不随请求清理），供截面复用（numpy 切平面）。
 # 只在关掉 3D 预览窗口 / 主界面清空时调用 _clear_stl_session() 删除。
 _STL_SESSION = {"dir": "", "cells": {}}  # cells: {number: {"material", "path"}}
+
+# TD-20（t5）：服务端是 ThreadingHTTPServer（每请求一线程），而 _STL_SESSION 是模块级 dict 且
+# 逐请求整体重绑定；preview 路径是"先 _clear_stl_session() 删上一会话目录、再建新会话" ⇒
+# 两个并发 preview-3d 会互删对方刚生成的目录。这里给"会话 + 缓存"操作加一把**可重入深度计数锁**
+# （不用 RLock 是因为同一请求路径会嵌套进入，且需要在最外层退出时才释放）。
+_PREVIEW_LOCK = threading.Lock()
+_PREVIEW_LOCK_DEPTH = 0
+_PREVIEW_LOCK_OWNER = None
+
+
+@contextlib.contextmanager
+def _preview_lock():
+    """请求级重入锁：保护 `_STL_SESSION` 与两处 `PreviewCache` 的组合操作。
+
+    只在"删旧会话 → 建新会话 → 登记缓存"这组不可分割操作外层进入一次即可；
+    嵌套进入按线程身份 + 深度计数放行（同线程重入安全，异线程互斥）。
+    """
+    global _PREVIEW_LOCK_DEPTH, _PREVIEW_LOCK_OWNER
+    me = threading.get_ident()
+    if _PREVIEW_LOCK_OWNER == me:
+        _PREVIEW_LOCK_DEPTH += 1
+        try:
+            yield
+        finally:
+            _PREVIEW_LOCK_DEPTH -= 1
+        return
+    with _PREVIEW_LOCK:
+        _PREVIEW_LOCK_OWNER = me
+        _PREVIEW_LOCK_DEPTH = 1
+        try:
+            yield
+        finally:
+            _PREVIEW_LOCK_DEPTH = 0
+            _PREVIEW_LOCK_OWNER = None
 
 
 def _clear_stl_session() -> None:
@@ -645,11 +680,19 @@ def _cell_trcl_deg(trcl_field, tr_cards) -> float:
 
 
 def _scan_lattice_z(surf_text: str, info: dict, sub_by_u: dict, lattice,
-                    _seen: set | None = None) -> tuple:
+                    _seen: set | None = None, surfaces: dict | None = None) -> tuple:
     """扫描格阵引用的 universe 栅元 PZ 约束 → (z_lower, z_upper)；无 → (None, None)。
 
     递归进嵌套格阵（全堆芯：根→组件格阵→针 PZ）；并集取全针高度。
+
+    TD-19（t8）：`surfaces` = `lattice._parse_surface_cards(surf_text)` 的**预解析结果**，
+    沿递归透传给 `_cell_pz_bounds`。原先每个 cell 都走一次全量 `_parse_surface_cards`
+    （正则扫整段曲面卡文本），BEAVRS 量级（数百 universe × 数十 cell）下是确定性叠加延迟；
+    `_cell_pz_bounds` 早已为该优化预留 `surfaces` 形参（其 docstring 自述该用途）。
+    不传时（外部调用方）保持旧行为：内部自行解析一次并复用。
     """
+    if surfaces is None:
+        surfaces = lattice._parse_surface_cards(surf_text)
     fg = info.get("fill_grid")
     if fg is None:
         return None, None
@@ -666,13 +709,15 @@ def _scan_lattice_z(surf_text: str, info: dict, sub_by_u: dict, lattice,
                            if c.get("fill_grid") is not None), None)
             if sub_fg is not None:
                 clo, chi = _scan_lattice_z(surf_text, {"fill_grid": sub_fg},
-                                           sub_by_u, lattice, seen)
+                                           sub_by_u, lattice, seen, surfaces)
             else:
                 clo, chi = None, None
         else:
             clo, chi = None, None
             for cell in sub_by_u.get(u, []):
-                c_lo, c_hi = lattice._cell_pz_bounds(cell.get("surface_expr", ""), surf_text)
+                # TD-19（t8）：透传预解析 surfaces（原来未传 → 每 cell 全量解析一次）
+                c_lo, c_hi = lattice._cell_pz_bounds(
+                    cell.get("surface_expr", ""), surf_text, surfaces)
                 # 并集：lo=所有栅元最低 z，hi=最高 z
                 if c_lo is not None:
                     clo = c_lo if clo is None else min(clo, c_lo)
@@ -1317,7 +1362,8 @@ def _adv_from_dict(d: dict) -> AdvancedSettings:
         sdef_ext=d.get("sdef_ext", ""), sdef_sur=d.get("sdef_sur", ""),
         sdef_nrm=d.get("sdef_nrm", ""), sdef_tr=d.get("sdef_tr", ""),
         sdef_ccc=d.get("sdef_ccc", ""), sdef_ara=d.get("sdef_ara", ""),
-        sdef_rate=d.get("sdef_rate", ""), sdef_raw_text=d.get("sdef_raw_text", ""),
+        # TD-23（t5）：不再接 sdef_raw_text（旧僵尸字段已退役；唯一权威 = sdef_distributions）
+        sdef_rate=d.get("sdef_rate", ""),
         sdef_extra=d.get("sdef_extra", ""),
         kcode_nsrc=d.get("kcode_nsrc", ""), kcode_rkk=d.get("kcode_rkk", ""),
         kcode_ikz=d.get("kcode_ikz", ""), kcode_kct=d.get("kcode_kct", ""),
@@ -1349,10 +1395,27 @@ def deck_from_json(data: dict) -> DeckData:
     )
 
 
-def _deck_to_frontend_dict(deck: DeckData) -> dict:
-    """后端 DeckData → 前端 deck JSON（与 /api/parse-inp 的序列化一致）。
+def _deck_to_frontend_dict(deck: DeckData, include_frontend_aliases: bool = False,
+                           include_warnings: bool = False, warnings=None) -> dict:
+    """后端 DeckData → 前端 deck JSON。**单一实现**，三个消费者按需开参数。
 
-    供 /api/text-to-section 复用：把解析出的 deck 转成前端可 patch 的结构。
+    TD-22（t5）——原 docstring 自称"与 /api/parse-inp 的序列化一致"，**该声明已不成立**：
+    两份实现早已分叉（`/api/parse-inp` 多注入 8 个前端顶层中间态键 + `_warnings`）。
+    现改为一份实现 + 两个显式开关，避免"读 docstring 的人把两份当成同一契约改"。
+
+    Args:
+        include_frontend_aliases: True 时额外注入前端顶层中间态键——
+            `sourceMode`（adv.source_mode → 前端词汇）/ `sdefFields` / `kcodeFields` /
+            `ksrcPoints` / `distributions`（adv.sdef_distributions 解析为数组）/
+            `sswFields` / `ssrFields`。`/api/parse-inp` 需要；MCP `/workspace` 不需要
+            （前端权威是 deck.adv，顶层别名是为旧 UI 过渡保留的）。
+        include_warnings: True 时把 warnings 写入 `_warnings`（前端解析提示展示源）。
+        warnings: 与 include_warnings 搭配的解析警告列表。
+
+    Note:
+        默认（两个开关全 False）即 **窄口径**：不含任何前端顶层别名、也不含 `_warnings`——
+        MCP `/workspace`（`deck_to_frontend_dict` 公开别名）与 `/api/text-to-section`
+        （只用 materials/cells/tallies 三个子集）都走这个口径。
     """
     import dataclasses
     def to_dict(obj):
@@ -1378,6 +1441,27 @@ def _deck_to_frontend_dict(deck: DeckData) -> dict:
         cell["impN"] = cell.get("imp_n", "")
         cell["impP"] = cell.get("imp_p", "")
         cell["impE"] = cell.get("imp_e", "")
+    if include_frontend_aliases:
+        # 源项模式：backend 的 adv.source_mode → 顶层 sourceMode（前端词汇）
+        adv = deck_dict.get("adv", {})
+        deck_dict["sourceMode"] = {
+            "distribution": "sdef", "fixed": "fixed",
+            "kcode": "kcode", "surface": "surface",
+        }.get(adv.get("source_mode", ""), "fixed")
+        deck_dict["sdefFields"] = {k: v for k, v in adv.items() if k.startswith("sdef_")}
+        deck_dict["kcodeFields"] = {k: v for k, v in adv.items() if k.startswith("kcode_")}
+        deck_dict["ksrcPoints"] = adv.get("ksrc_points", "")
+        # 结构化分布（v2 JSON 串 → 数组；坏 JSON 降级为 []，与原内联实现一致）
+        try:
+            deck_dict["distributions"] = json.loads(adv.get("sdef_distributions", "[]"))
+        except Exception:
+            deck_dict["distributions"] = []
+        deck_dict["sswFields"] = {"surf": adv.get("ssw_surf", ""), "sym": adv.get("ssw_sym", ""),
+                                  "pty": adv.get("ssw_pty", ""), "cel": adv.get("ssw_cel", "")}
+        deck_dict["ssrFields"] = {"surf": adv.get("ssr_surf", ""), "mode": adv.get("ssr_mode", ""),
+                                  "cel": adv.get("ssr_cel", ""), "pty": adv.get("ssr_pty", ""),
+                                  "col": adv.get("ssr_col", ""), "wgt": adv.get("ssr_wgt", ""),
+                                  "tr": adv.get("ssr_tr", ""), "psc": adv.get("ssr_psc", "")}
     # Tally: backend → frontend 字段名映射
     tally_raw = deck_dict.get("tally", {})
     deck_dict["tallies"] = [{
@@ -1388,6 +1472,8 @@ def _deck_to_frontend_dict(deck: DeckData) -> dict:
         "enableTn": td.get("generate_tn", False),
         "multiplier": td.get("multiplier", ""),
     } for td in tally_raw.get("tallies", [])]
+    if include_warnings:
+        deck_dict["_warnings"] = warnings or []
     return deck_dict
 
 
@@ -1443,7 +1529,6 @@ class MCNPHandler(BaseHTTPRequestHandler):
             "/api/parse-outp": self._handle_parse_outp,
             "/api/parse-keff": self._handle_parse_keff,
             "/api/xsdir-search": self._handle_xsdir_search,
-            "/api/generate-step": self._handle_generate_step,
             "/api/export-step": self._handle_export_step,
             "/api/preview-3d": self._handle_preview_3d,
             "/api/serve-file": self._handle_serve_file,
@@ -1673,7 +1758,13 @@ class MCNPHandler(BaseHTTPRequestHandler):
                         rec["keff"] = sweep.parse_keff(
                             (proc.stdout or "") + "\n" + (proc.stderr or ""))
                     except subprocess.TimeoutExpired:
-                        pass
+                        # TD-26（t5）：原为裸 `pass` —— 超时后 exitCode 保持 None、无日志、
+                        # 无标记，落盘 manifest/TSV 里与"MCNP 无输出"不可区分（都出 n/a）。
+                        # 现在显式标记 + 告警，让"超时 / 崩溃 / 无 keff"三者可归因。
+                        rec["exitCode"] = "timeout"
+                        rec["timedOut"] = True
+                        print(f"[sweep] 组合 {i} 超时（{sweep.SWEEP_PER_RUN_TIMEOUT}s）：{run_dir}",
+                              file=sys.stderr)
                     # 收敛序列（仪表盘小图）：优先读该组合目录里的 mctal
                     # （name= 前缀可能影响 mctal 命名，故两种 glob 都试）
                     try:
@@ -2036,59 +2127,11 @@ class MCNPHandler(BaseHTTPRequestHandler):
             text = data.get("inp", "")
             if not text: raise ValueError("INP 内容为空")
             deck, warnings = parse_inp_text(text)
-            import dataclasses
-            def to_dict(obj):
-                if dataclasses.is_dataclass(obj): return {k: to_dict(v) for k, v in dataclasses.asdict(obj).items()}
-                if isinstance(obj, list): return [to_dict(x) for x in obj]
-                return obj
-            deck_dict = to_dict(deck)
-            # 项9：backend universe_comments → 前端 universeComments（与 DeckContext 类型同步）
-            deck_dict["universeComments"] = deck_dict.pop("universe_comments", {})
-            # 后端用 rows，前端用 nuclides → 加入映射（行含 kind 判别）
-            for m in deck_dict.get("materials", []):
-                if "rows" in m and "nuclides" not in m:
-                    m["nuclides"] = m["rows"]
-            # cells: CellRow 判别联合（raw 行保留 text；cell 行嵌套 CellData，并补 camelCase 字段）
-            for c in deck_dict.get("cells", []):
-                if c.get("kind") == "raw":
-                    continue
-                cell = c.get("cell") or {}
-                cell["num"] = str(cell.get("number", ""))
-                cell["surfaces"] = cell.get("surface_expr", "")
-                cell["impN"] = cell.get("imp_n", "")
-                cell["impP"] = cell.get("imp_p", "")
-                cell["impE"] = cell.get("imp_e", "")
-            # 源项模式：backend 的 adv.source_mode → 顶层 sourceMode
-            adv = deck_dict.get("adv", {})
-            deck_dict["sourceMode"] = {"distribution": "sdef", "fixed": "fixed", "kcode": "kcode", "surface": "surface"}.get(adv.get("source_mode", ""), "fixed")
-            deck_dict["sdefFields"] = {k: v for k, v in adv.items() if k.startswith("sdef_")}
-            deck_dict["kcodeFields"] = {k: v for k, v in adv.items() if k.startswith("kcode_")}
-            deck_dict["ksrcPoints"] = adv.get("ksrc_points", "")
-            deck_dict["sdefRawText"] = adv.get("sdef_raw_text", "")
-            # 结构化分布 + 面源（新）
-            try:
-                deck_dict["distributions"] = json.loads(adv.get("sdef_distributions", "[]"))
-            except Exception:
-                deck_dict["distributions"] = []
-            deck_dict["sswFields"] = {"surf": adv.get("ssw_surf", ""), "sym": adv.get("ssw_sym", ""),
-                                      "pty": adv.get("ssw_pty", ""), "cel": adv.get("ssw_cel", "")}
-            deck_dict["ssrFields"] = {"surf": adv.get("ssr_surf", ""), "mode": adv.get("ssr_mode", ""),
-                                      "cel": adv.get("ssr_cel", ""), "pty": adv.get("ssr_pty", ""),
-                                      "col": adv.get("ssr_col", ""), "wgt": adv.get("ssr_wgt", ""),
-                                      "tr": adv.get("ssr_tr", ""), "psc": adv.get("ssr_psc", "")}
-            # Tally: backend → frontend 字段名映射
-            tally_raw = deck_dict.get("tally", {})
-            raw_tallies = tally_raw.get("tallies", [])
-            deck_dict["tallies"] = [{
-                "type": td.get("type", ""),
-                "number": td.get("number", 0),
-                "particle": " ".join(td.get("particles", [])),
-                "params": td.get("params", ""),
-                "enableEn": td.get("generate_en", False),
-                "enableTn": td.get("generate_tn", False),
-                "multiplier": td.get("multiplier", ""),
-            } for td in raw_tallies]
-            deck_dict["_warnings"] = warnings
+            # TD-22（t5）：改调 _deck_to_frontend_dict 的**宽口径**（含前端顶层别名 + _warnings），
+            # 与原先内联的 ~55 行逐字等价（本次为纯去重，输出不变）。
+            deck_dict = _deck_to_frontend_dict(
+                deck, include_frontend_aliases=True,
+                include_warnings=True, warnings=warnings)
             self._ok({"deck": deck_dict})
         except Exception as e:
             self._err(str(e))
@@ -2593,31 +2636,6 @@ class MCNPHandler(BaseHTTPRequestHandler):
             import traceback
             self._err(str(e) + " | " + traceback.format_exc())
 
-    # ── 生成 STEP（3D 预览用）──
-    def _handle_generate_step(self):
-        try:
-            data = self._read_body()
-            surfaces = data.get("surfaces", "")
-            import tempfile, os, json
-            # Import generate_step
-            step_path = os.path.join(tempfile.gettempdir(), "mcnp_geometry.step")
-            try:
-                _gen = _import_app("generate_step", os.path.dirname(__file__))
-                generate_step = _gen.generate_step
-                step_path = generate_step(surfaces.split("\\n") if surfaces else [])
-            except ImportError:
-                # Fallback: write surfaces as comments in STEP
-                with open(step_path, "w") as f:
-                    f.write('ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(());\n')
-                    f.write('FILE_NAME("mcnp_geometry.step");\n')
-                    f.write('FILE_SCHEMA(("CONFIG_CONTROL_DESIGN"));\nENDSEC;\nDATA;\n')
-                    for line in surfaces.split("\n")[:100]:
-                        f.write(f'# COMMENT: {line}\n')
-                    f.write('ENDSEC;\nEND-ISO-10303-21;\n')
-            self._ok({"step_file": step_path, "message": "STEP 文件已生成"})
-        except Exception as e:
-            self._err(str(e))
-
     # ── 导出 STEP（通过 FreeCAD CSG 生成真实几何）──
     def _handle_export_step(self):
         try:
@@ -2684,25 +2702,29 @@ class MCNPHandler(BaseHTTPRequestHandler):
 
             # 0. 指纹缓存：同 deck 命中免 FreeCAD 子进程（二次打开 ≤1s）
             fp = _PREVIEW_CACHE.fingerprint(surf_text, cell_list, tr_text)
-            cached = _PREVIEW_CACHE.get(fp)
+            # TD-20（t5）：把「查缓存 → 清旧会话 → 建新会话」整组纳入请求级锁，
+            # 防并发 preview-3d 互删对方刚生成的 STL 会话目录。
+            with _preview_lock():
+                cached = _PREVIEW_CACHE.get(fp)
             if cached is not None:
-                prev_dir = _STL_SESSION.get("dir")
-                if prev_dir and prev_dir != cached["dir"]:
-                    _clear_stl_session()  # 清上一会话（与命中缓存目录不同时）
-                # 缓存目录作为本会话 STL 源（供 serve-file/截面复用）
-                _STL_SESSION = {"dir": cached["dir"], "cells": cached["cells"]}
-                # deck 快照（GQ/SQ 解析截面用）：缓存不存 deck，从请求重建
-                # 注意：本处是 preview-3d 缓存命中分支的截面 deck 快照，并非 STEP 导出。
-                # 项14 后与主路径一致 include_void=True（void 也参与截面），避免缓存
-                # 命中/未命中路径截面行为不一致（第一/二次打开 GQ/SQ void 栅元）。
-                try:
-                    surfs_c = parse_surfaces(surf_text)
-                    cells_c = build_cells_data(cell_list, include_void=True)
-                    if surfs_c and cells_c:
-                        _STL_SESSION["deck"] = _deck_snapshot(
-                            surfs_c, cells_c, parse_tr_cards(tr_text))
-                except Exception:
-                    pass
+                with _preview_lock():
+                    prev_dir = _STL_SESSION.get("dir")
+                    if prev_dir and prev_dir != cached["dir"]:
+                        _clear_stl_session()  # 清上一会话（与命中缓存目录不同时）
+                    # 缓存目录作为本会话 STL 源（供 serve-file/截面复用）
+                    _STL_SESSION = {"dir": cached["dir"], "cells": cached["cells"]}
+                    # deck 快照（GQ/SQ 解析截面用）：缓存不存 deck，从请求重建
+                    # 注意：本处是 preview-3d 缓存命中分支的截面 deck 快照，并非 STEP 导出。
+                    # 项14 后与主路径一致 include_void=True（void 也参与截面），避免缓存
+                    # 命中/未命中路径截面行为不一致（第一/二次打开 GQ/SQ void 栅元）。
+                    try:
+                        surfs_c = parse_surfaces(surf_text)
+                        cells_c = build_cells_data(cell_list, include_void=True)
+                        if surfs_c and cells_c:
+                            _STL_SESSION["deck"] = _deck_snapshot(
+                                surfs_c, cells_c, parse_tr_cards(tr_text))
+                    except Exception:
+                        pass
                 stl_files = {}
                 stl_data = {}
                 for num, info in cached["cells"].items():
@@ -2748,32 +2770,35 @@ class MCNPHandler(BaseHTTPRequestHandler):
             result = engine.build_geometry(surfs, cells_data, tr_cards, fmt="stl")
 
             # STL 复制到会话专用目录（engine 析构会删它自己的临时目录，必须复制走）
-            _clear_stl_session()  # 覆盖上一轮预览
             session_dir = tempfile.mkdtemp(prefix="mcnp_stl_session_")
-            _STL_SESSION = {"dir": session_dir, "cells": {},
-                            "deck": _deck_snapshot(surfs, cells_data, tr_cards)}
-            # 会话路径 → base64（先读源文件，engine.cleanup() 之前）
             stl_files = {}
             stl_data = {}
-            for cd in cells_data:
-                num = cd.get("number")
-                if num in result and os.path.isfile(result[num]):
-                    src = result[num]
-                    dst = os.path.join(session_dir, f"cell_{num}.stl")
-                    try:
-                        shutil.copy2(src, dst)
-                        with open(src, "rb") as _f:
-                            stl_data[str(num)] = base64.b64encode(_f.read()).decode()
-                    except OSError:
-                        continue
-                    stl_files[str(num)] = dst
-                    _STL_SESSION["cells"][num] = {
-                        "material": cd.get("material", "0"),
-                        "path": dst,
-                    }
+            # TD-20（t5）：清旧会话 + 建新会话 + 登记缓存 = 不可分割的一组，整体持锁。
+            with _preview_lock():
+                _clear_stl_session()  # 覆盖上一轮预览
+                _STL_SESSION = {"dir": session_dir, "cells": {},
+                                "deck": _deck_snapshot(surfs, cells_data, tr_cards)}
+                # 会话路径 → base64（先读源文件，engine.cleanup() 之前）
+                for cd in cells_data:
+                    num = cd.get("number")
+                    if num in result and os.path.isfile(result[num]):
+                        src = result[num]
+                        dst = os.path.join(session_dir, f"cell_{num}.stl")
+                        try:
+                            shutil.copy2(src, dst)
+                            with open(src, "rb") as _f:
+                                stl_data[str(num)] = base64.b64encode(_f.read()).decode()
+                        except OSError:
+                            continue
+                        stl_files[str(num)] = dst
+                        _STL_SESSION["cells"][num] = {
+                            "material": cd.get("material", "0"),
+                            "path": dst,
+                        }
+                # 存入指纹缓存：会话 STL 拷入缓存自有目录，clear-stl 删除会话目录不影响缓存
+                _PREVIEW_CACHE.put(fp, {"dir": session_dir, "cells": _STL_SESSION["cells"],
+                                        "freecad": freecad_bin})
             engine.cleanup()  # 引擎临时目录可删，会话目录已独立
-            # 存入指纹缓存：会话 STL 拷入缓存自有目录，clear-stl 删除会话目录不影响缓存
-            _PREVIEW_CACHE.put(fp, {"dir": session_dir, "cells": _STL_SESSION["cells"], "freecad": freecad_bin})
             self._ok({"stl_files": stl_files, "stl_data": stl_data, "freecad": freecad_bin,
                       "count": len(stl_data)})
         except Exception as e:
@@ -2816,9 +2841,14 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 self._ok({"slices": [], "message": "请先生成 3D 预览（STL 会话为空）"})
                 return
 
+            # TD-20（t5）：会话快照一次性取走（持锁），后续切面计算不持锁——避免与预览/清空
+            # 请求互相阻塞，也避免"取会话中途被 clear-stl 换掉"。
+            with _preview_lock():
+                session_cells = dict(_STL_SESSION.get("cells") or {})
+                deck = _STL_SESSION.get("deck") or {}
+
             # GQ/SQ 栅元走解析切片（精确轮廓，不依赖 STL 网格分辨率）；
             # deck 快照由 preview-3d 写入会话，缺失时回退 STL 切。
-            deck = _STL_SESSION.get("deck") or {}
             deck_surfs = {}
             for s in deck.get("surfaces", []):
                 try:
@@ -2836,7 +2866,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             slices = []
             for num in cell_nums:
                 num = int(num)
-                info = _STL_SESSION["cells"].get(num)
+                info = session_cells.get(num)
                 if not info:
                     continue
                 material = info.get("material", "0")
@@ -2878,9 +2908,10 @@ class MCNPHandler(BaseHTTPRequestHandler):
             self._err(str(e) + " | " + traceback.format_exc())
 
     def _handle_clear_stl(self):
-        """关 3D 预览窗口 / 主界面清空时调用：删除 STL 会话目录"""
+        """关 3D 预览窗口 / 主界面清空时调用：删除 STL 会话目录。TD-20（t5）：持预览锁。"""
         try:
-            _clear_stl_session()
+            with _preview_lock():
+                _clear_stl_session()
             self._ok({"status": "ok"})
         except Exception as e:
             self._err(str(e))

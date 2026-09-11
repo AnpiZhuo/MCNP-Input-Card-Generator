@@ -164,17 +164,16 @@
 - **根因**：现 `hexCenter` 按「奇数**行**横向错半格」（pointy-top 取向），但格元几何是**顶点+X（flat-top）**——
   画布 CSS 六边形与 3D `buildHexPrismGeometry` 顶点都在 ±X。平顶六边形蜂窝必须按「奇数**列**纵向错半格」排布，
   否则格位间距与格元朝向不匹配 → 用户实测的排布错误（格位错位/视觉破洞）。
-- **权威公式（双端逐位锁死）**：
+- **权威公式（双端逐位锁死）** —— **⚠️ 2026-09-10 更正**：本节原写 `x = i*(pitch*√3/2)`、`y = j*pitch+(i%2)*(pitch/2)`（旧式，**与权威相差 30° 旋转**），已于 **2026-08-25 按 MCNP 交叉验证替换**为下式；权威原文见 `app/lattice.py:604-616`（Python）与 `gui/src/utils/lattice.ts:130-137`（TS），跨语言 L1 以该两处为准：
   ```
-  hexCenter(i, j, pitch):
-      # i = 列（快序，MCNP fill 第一轴）；j = 行；pitch = 中心距（edge-to-edge = 外接半径·√3）
-      # 顶点+X（flat-top）蜂窝：列水平步距 = pitch·√3/2，行垂直步距 = pitch，
-      # 奇数列整体下移 pitch/2（= 与 MCNP LAT=2 基向量 v1=(p·√3/2, p/2), v2=(0,p) 等价的交替形）
-      x = i * (pitch * √3 / 2)
-      y = j * pitch + (i % 2) * (pitch / 2)
+  hexCenter(col, row, pitch):
+      # col = 列（快序，MCNP fill 第一轴）；row = 行；pitch = 中心距（edge-to-edge = 外接半径·√3）
+      # 顶点+X（flat-top）蜂窝；MCNP LAT=2 基向量 a1=(2a,0)、a2=(a,a·√3)（a=apothem，pitch=2a）：
+      #   (col,row) 位于 col·a1 + row·a2  →  列水平步距 = pitch，行垂直步距 = pitch·√3/2，行错半格 pitch/2
+      x = col * pitch + row * (pitch / 2)
+      y = row * pitch * (√3 / 2)
   ```
-  - **自洽性核验**：相邻列 `(0,0)→(1,0)` 距离 = √((p·√3/2)² + (p/2)²) = p ✓；相邻行 `(0,0)→(0,1)` 距离 = p ✓；
-    `(0,0)→(1,-1)` 距离 = p ✓ —— 全部格位边缘共享（真实蜂窝），与顶点+X 格元朝向一致。
+  - **自洽性核验**：相邻 `(0,0)→(1,0)` 距离 = p ✓；相邻 `(0,0)→(0,1)` 距离 = √((p/2)² + (p·√3/2)²) = p ✓ —— 全部格位边缘共享（真实蜂窝），与顶点+X 格元朝向一致。
   - `hex_ring_rows` **保持** `[r+1+min(j,2r-j)]`（总格数 1+3r(r+1)），但语义定义为「沿 +30° 共线方向的环行长」
     （顶点+X 蜂窝中 `i+j=const` 方向格位共线）；`initialHexCells` 的角位 void 标记改用新 `inHexRing` 函数
     （见下 golden），不再按 `i<rowLens[j]` 横向行画布。
@@ -447,7 +446,7 @@
 
 | # | 锁点 | 权威值/公式 | Python 文件 | TS 文件 |
 | :-- | :-- | :-- | :-- | :-- |
-| L1 | hexCenter 顶点+X 蜂窝 | `x=i·p·√3/2, y=j·p+(i%2)·p/2` | `lattice.py hex_center` | `lattice.ts hexCenter/hexGrid` |
+| L1 | hexCenter 顶点+X 蜂窝 | `x=col·pitch+row·pitch/2, y=row·pitch·√3/2`（**2026-08-25 权威**；旧式 `x=i·p·√3/2, y=j·p+(i%2)·p/2` 已废弃 —— 两者相差 30° 旋转） | `lattice.py hex_center`（:604-616） | `lattice.ts hexCenter/hexGrid`（:130-137） |
 | L2 | hexRingRows 环行长（语义=+30° 共线方向） | `[r+1+min(j,2r-j)]`，总和 `1+3r(r+1)` | `lattice.py hex_ring_rows` | `lattice.ts hexRingRows` |
 | L3 | -N:M 范围映射 | `token="-L:R"`，`dims=L+R+1`，`expand_positions` 中心 `((i-(nx-1)/2)·px)` | `lattice.py _range_count`+新 `_dir_counts` | `lattice.ts rangeFromDirCounts/dirCountsFromRange` |
 | L4 | RPP/BOX/RHP/HEX 宏体自动生成卡 | rect→`rpp …`；hex→`rhp V H R1`（项 4 语法） | `validate_lattice_surfaces` 接受 | `lattice.ts autoGenerateSurfaces` 宏体版 |

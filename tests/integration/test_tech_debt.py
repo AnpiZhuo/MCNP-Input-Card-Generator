@@ -1,12 +1,15 @@
 """
-技术债联动测试（P0-5）—— 测试先行，当前代码故意先红。
+技术债联动测试（P0-5）—— **已全部清偿，当前应全绿**（2026-09-10 更正）。
 
 F#1  raw_overrides 8 key 字符化 + 1145 门控 → 见 tests/unit/test_generator_overrides.py
 F#3/F#7  AST 扫描：FunctionDef 内无 import json/re/sys；pymcnp 须模块导入期 fail-fast
 F#4      单源 Dn 分支含扩展字段 vs 普通分支不含、公共字段两分支等价
 F#5/F#6  概率归一化表驱动（unit）+ kitchen-sink 多源全字段在 SDEF 或 SI 各出现一次
 
-这些测试断言的是【重构后应达成】的状态，当前应为 RED（红 = 符合预期，标记技术债存在）。
+⚠️ **历史提示（原文已过时，勿照旧理解）**：本文件初版写"这些测试断言的是【重构后应达成】的状态，
+当前应为 RED（红 = 符合预期）"。**该表述已作废**：F#1~F#7 与 F-A~F-D 均已清偿，各用例现在应当
+**GREEN**。读到"当前应为 RED"之类的旧注释时，一律以**代码现状**为准——
+**红灯就是真红灯，不是"预期红"，不要容忍**（审计 TD-09）。
 """
 import ast
 import sys
@@ -55,7 +58,7 @@ def module_level_pymcnp_import(file_path: Path) -> list[int]:
     return lines
 
 
-# ── F#3：FunctionDef 内 import json/re/sys（当前红）──────
+# ── F#3：FunctionDef 内 import json/re/sys（已清偿 → 应 GREEN）──────
 def test_f3_no_function_level_import_json_in_inp_generator():
     """inp_generator.py 函数内不得 import json（模块级已有）。
 
@@ -85,7 +88,7 @@ def test_f3_no_function_level_import_re_in_inp_generator():
     assert hits == [], f"inp_generator.py 函数内 import re: {hits}"
 
 
-# ── F#7：pymcnp 须在模块导入期 fail-fast（当前红）────────
+# ── F#7：pymcnp 须在模块导入期 fail-fast（已清偿 → 应 GREEN）────────
 def test_f7_pymcnp_imported_at_module_level():
     """inp_generator.py 的 pymcnp 导入必须在模块顶层（导入期 fail-fast）。
 
@@ -104,7 +107,7 @@ def test_f7_pymcnp_function_level_import_absent():
     assert hits == [], f"inp_generator.py 函数内 pymcnp import: {hits}"
 
 
-# ── F#4：单源 Dn 分支 vs 普通分支（当前红）────────────────
+# ── F#4：单源 Dn 分支 vs 普通分支（已清偿 → 应 GREEN）────────────────
 def test_f4_extended_fields_only_in_dn_branch():
     """Dn/扩展分支（247-281）含 6 扩展字段，普通分支（283-301）不含。
 

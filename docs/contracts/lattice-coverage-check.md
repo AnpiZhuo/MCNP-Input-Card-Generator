@@ -1,6 +1,6 @@
 # 格阵覆盖完整性检测（universe 未编辑外部 → 红框预防）
 
-> 状态：**待确认**（用户已选定方向，本文为落地前契约，确认后实现）。
+> 状态：**✅ 已交付（2026-09-04，commit f7fc2ed）** —— 原标"待确认/落地前契约"，2026-09-10 按实现事实更正：端点 `POST /api/validate-universe-coverage` 已入 `docs/contracts/api.yaml:1546`（operationId `validateUniverseCoverage`），前端 `LatticeEditDialog` 涂色侧栏已接覆盖徽标（绿已覆盖 / 橙未覆盖 / empty 无定义 / lattice 嵌套），门禁 pytest 752/0 + vitest 546/0（见 `docs/CHANGELOG.md` 2026-09 行）。
 > 目标：在格阵编辑器（LatticeEditDialog）涂色时，检测当前选中 universe 是否完整覆盖
 > 格元盒，提前提示「只定义内部、未定义外部」造成的红色未定义区。
 

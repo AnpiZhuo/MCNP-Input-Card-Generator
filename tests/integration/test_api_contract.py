@@ -655,3 +655,62 @@ def test_http_source_demo_sample_error(backend_base_url):
     })
     assert resp.get("status") == "error", resp
     assert "D7" in resp.get("error", "")
+
+
+# ── 封闭性状态枚举闸门（TD-08 / t5）────────────────────────
+# 背景：api.yaml 的 checkCellClosure 响应 schema 原先只写 `status: {type: string}`，
+# 6 个状态仅存在于散文里 ⇒ 漂移闸门（handlers ↔ api.yaml 的 AST 双向一致）结构上校验不到。
+# 本用例补上"响应里出现的 status 必须 ∈ enum"这一层（否则把 enum 写进 schema 只是文档装饰）。
+_CLOSURE_STATUS_ENUM = {"closed", "infinite", "semi_infinite", "empty", "voxel", "unresolvable"}
+
+# 几何设计（按 `_freecad_csg_worker.py:1122-1175` 的判定）：
+#   cell 1 = RPP 内盒（有界）→ 期望 closed；cell 2 = 立方体减内盒（延伸到 bound 边界）→ 期望无限类。
+# 需 FreeCAD 才产出 closure_report；无 FreeCAD / 无有效曲面时报告为空 → 仅校验形状并 skip。
+CLOSURE_DECK = {
+    "surfaces": "1 rpp -1 1 -1 1 -1 1",
+    "tr_cards": "",
+    "cells": [
+        {"kind": "cell", "cell": {"number": 1, "material": "1", "density": "-1.0",
+                                  "surface_expr": "-1", "render": True, "fill_grid": ""}},
+        {"kind": "cell", "cell": {"number": 2, "material": "0", "density": "",
+                                  "surface_expr": "1", "render": True, "fill_grid": ""}},
+    ],
+}
+
+
+def test_http_check_cell_closure_status_in_enum(backend_base_url):
+    """TD-08（t5）：封闭性响应里的每个 status 必须在契约枚举内，且 infinite_axes 语义自洽。
+
+    断言（全部为"按给定 bound 下的期望"，不写死跨 bound 的固定期望）：
+      - 每个 closure_report 条目的 status ∈ _CLOSURE_STATUS_ENUM（闸门主体）；
+      - `infinite` ⇒ infinite_axes == ["x","y","z"]（三轴触界）；
+      - `semi_infinite` ⇒ infinite_axes 长度 1~2（恒非空）；
+      - `closed` ⇒ infinite_axes == []；
+      - `empty`/`voxel`/`unresolvable`（aabb is None）⇒ 该键缺失。
+    """
+    resp = _post(backend_base_url, "/api/check-cell-closure", CLOSURE_DECK)
+    assert resp.get("status") == "ok", resp
+    report = resp.get("closure_report") or {}
+    assert isinstance(report, dict), f"closure_report 形状异常: {report!r}"
+
+    if not report:
+        # FreeCAD 不可用 / 未解析到有效曲面 → handler 返回空报告 + message（合法降级分支）
+        assert resp.get("message"), "空 closure_report 必须带 message（说明为何没有判定结果）"
+        pytest.skip("FreeCAD 不可用或无可检测栅元，本机无法校验状态枚举（形状已断言）")
+
+    for cell_num, entry in report.items():
+        st = entry.get("status")
+        assert st in _CLOSURE_STATUS_ENUM, (
+            f"cell {cell_num} status={st!r} 不在契约 enum "
+            f"{sorted(_CLOSURE_STATUS_ENUM)}（api.yaml checkCellClosure 响应 schema 已收紧）")
+        axes = entry.get("infinite_axes")
+        aabb = entry.get("aabb")
+        if st == "infinite":
+            assert axes == ["x", "y", "z"], f"infinite 应三轴触界，实为 {axes!r}"
+        elif st == "semi_infinite":
+            assert axes and 1 <= len(axes) <= 2, f"semi_infinite 的 infinite_axes 应长度 1~2，实为 {axes!r}"
+        elif st == "closed":
+            assert axes == [], f"closed 的 infinite_axes 应为 []，实为 {axes!r}"
+        else:  # empty / voxel / unresolvable：不产 aabb，也不产 infinite_axes
+            assert aabb is None, f"{st} 不应有 aabb，实为 {aabb!r}"
+            assert "infinite_axes" not in entry, f"{st} 不应带 infinite_axes 键"

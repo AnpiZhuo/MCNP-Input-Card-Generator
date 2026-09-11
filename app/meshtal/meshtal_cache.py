@@ -10,6 +10,7 @@ import json
 import os
 import pickle
 import tempfile
+import threading
 
 _MAX_BYTES = 512 * 1024 * 1024
 
@@ -25,6 +26,10 @@ class MeshtalParseCache:
         self._dir = directory or os.path.join(tempfile.gettempdir(), "mcnp_meshtal_cache")
         self._max_bytes = max_bytes
         os.makedirs(self._dir, exist_ok=True)
+        # TD-26（t5）：多 worker 子进程各自 new 一个缓存实例、共享同一磁盘目录；
+        # 进程内多帧并发（worker 取不同 (energy,time)）也会并发 put/evict。
+        # 用进程内 RLock 串行化 put/evict/get 的目录操作（跨进程竞态由 tmp 带 pid + 跳过 *.tmp 缓解）。
+        self._lock = threading.RLock()
 
     def fingerprint(self, path: str, mtime: float) -> str:
         """sha256(path + mtime)，文件被覆盖/重跑自动失效。"""
@@ -82,35 +87,52 @@ class MeshtalParseCache:
             return None
 
     def put(self, fp: str, tally_number: int, entry: dict) -> None:
-        """pickle 落盘，随后按容量驱逐最旧。"""
-        p = self._entry_path(fp, tally_number)
-        tmp = p + ".tmp"
-        with open(tmp, "wb") as f:
-            pickle.dump(entry, f)
-        try:
-            os.replace(tmp, p)
-        except OSError:
-            os.remove(tmp)
-        self.evict()
+        """pickle 落盘，随后按容量驱逐最旧。
+
+        TD-26（t5）：① 全程持锁；② tmp 名带 pid（原为固定 `<p>.tmp`，多进程写同一
+        (path,mtime,tally) 会互相覆盖）；③ `os.replace` 失败分支的 `os.remove` 加
+        `ignore_errors`（tmp 可能已被并发驱逐删除，原实现会抛 FileNotFoundError）。
+        """
+        with self._lock:
+            p = self._entry_path(fp, tally_number)
+            tmp = f"{p}.{os.getpid()}.tmp"
+            with open(tmp, "wb") as f:
+                pickle.dump(entry, f)
+            try:
+                os.replace(tmp, p)
+            except OSError:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            self.evict()
 
     def evict(self) -> None:
-        """超容量逐最旧（按 mtime 升序）。"""
-        entries = []
-        total = 0
-        try:
-            names = os.listdir(self._dir)
-        except OSError:
-            return
-        for name in names:
-            p = os.path.join(self._dir, name)
+        """超容量逐最旧（按 mtime 升序）。
+
+        TD-26（t5）：① 持锁（多 worker 进程共享同一 `%TEMP%/mcnp_meshtal_cache` 目录）；
+        ② **跳过 `*.tmp`**——原实现把正在写入的 tmp 也计入并按 mtime 驱逐，可能删掉
+        另一个进程刚写入的中间文件。
+        """
+        with self._lock:
+            entries = []
+            total = 0
             try:
-                sz = os.path.getsize(p)
-                entries.append((os.path.getmtime(p), p, sz))
-                total += sz
+                names = os.listdir(self._dir)
             except OSError:
-                continue
-        entries.sort(key=lambda x: x[0])
-        while total > self._max_bytes and entries:
+                return
+            for name in names:
+                if name.endswith(".tmp"):
+                    continue  # TD-26：跳过中间文件（写入中，不计容量也不驱逐）
+                p = os.path.join(self._dir, name)
+                try:
+                    sz = os.path.getsize(p)
+                    entries.append((os.path.getmtime(p), p, sz))
+                    total += sz
+                except OSError:
+                    continue
+            entries.sort(key=lambda x: x[0])
+            while total > self._max_bytes and entries:
             _mt, p, sz = entries.pop(0)
             try:
                 os.remove(p)

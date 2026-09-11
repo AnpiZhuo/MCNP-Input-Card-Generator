@@ -347,8 +347,9 @@ def validate_all(
 
     # ----- SDEF / KCODE -----
     if adv and adv.source_mode == "distribution":
-        # 分布源模式：不校验 sources，而是校验分布源文本（v2 结构化 sdef_distributions
-        # 为主；sdef_raw_text 为旧数据兜底）
+        # 分布源模式：不校验 sources，而是校验分布源文本。
+        # TD-23（t5）：唯一判据 = v2 结构化 sdef_distributions（旧 sdef_raw_text 已退役，
+        # 其在新解析路径下恒空，作为判据左项等于恒假、易被误读为"存在第二条来源"）。
         def _dist_json_has_entries(s: str) -> bool:
             if not s or not s.strip():
                 return False
@@ -358,7 +359,7 @@ def validate_all(
                 return isinstance(arr, list) and len(arr) > 0
             except Exception:
                 return False
-        if not adv.sdef_raw_text.strip() and not _dist_json_has_entries(adv.sdef_distributions):
+        if not _dist_json_has_entries(adv.sdef_distributions):
             errors.append("源项：分布源模式下 SI/SP 内容不能为空")
     elif adv and adv.source_mode == "kcode":
         # KCODE 临界源模式

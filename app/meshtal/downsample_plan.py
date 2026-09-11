@@ -52,7 +52,16 @@ def plan_downsample(native, target_res, budget_bytes: int = GPU_BUDGET_BYTES) ->
 
 
 def decide_resolution(native, requested, budget_bytes: int = GPU_BUDGET_BYTES) -> ResolutionDecision:
-    """requested=128 默认 / 256 显式；native 更小保 native；超预算 → popup 素材。"""
+    """requested=128 默认 / 256 显式；native 更小保 native；超预算 → popup 素材。
+
+    ⚠️ TD-25（t8）**未接线（备用，无生产调用者）**：本函数的唯一消费者是
+    `tests/unit/test_meshtal_downsample_plan.py`。生产路径
+    （`_meshtal_worker._mode_texture`）直接 `int(payload.get("resolution", 128))` 取请求值、
+    由 `volume_builder.plan_downsample` 算平均因子，**不经过本函数** ⇒ 契约
+    `docs/contracts/meshtal-visualization.md` §A2.3 描述的"自动 128³ / 256³ 显式 / 超预算弹窗"
+    裁决目前由前端自决，本函数未参与。`MAX_RESOLUTION` 在 `app/` 内同样零消费者。
+    处置：要么按契约把它接进 `_mode_texture`（需前后端同批，属行为变更），要么保留为备用。
+    """
     if requested in (None, 0):
         target = DEFAULT_RESOLUTION
     else:

@@ -1,5 +1,7 @@
 # 后端改动清单 — 引擎缺陷修复 F-A~F-H（M1.4 门禁）
 
+> **计数口径注记（2026-09-10，文档债 TD-33 修复）**：本文各批记录的 `pytest N` / `vitest N` **均为该批当时的快照**，不是当前值；引用时请加"当时"限定。**当前权威值**（2026-09-10 实测）：`gui/test/**` = **75 个测试文件（60 个 `.test.ts` + 15 个 `.test.tsx`）+ 1 个 `__snapshots__/volumeShader.snapshot.test.ts.snap`**（根 47 / `volume/` 23 / `ptrac/` 4 / `source/` 1）；`tests/` = 81 个 `.py`（含 `conftest.py`，unit 34 / parser 26 / integration 12）。
+
 > 施工方：后端 | 分支：`experiment/geouned` | 日期：2026-08-12
 > 契约：`docs/contracts/bugfix-f1-f5.md`（F-A 裁决=方案 C，A 主 B 辅；§0.5 上级裁决微调：范围=F-A~F-E，终态 245 绿/6 红）
 > 基线：app/ 回滚到干净基线后重新施工；动工前 234 通过 / 17 失败（与权威基线一致）。
@@ -1282,7 +1284,7 @@ python -m pytest tests/ -q                                 # 686 passed
 
 ## AA.4 项 5（hex 排列修正，跨语言 L1/L2 锁死）
 
-- `app/lattice.py hex_center` 改权威公式：`x = col·pitch·√3/2, y = row·pitch + (col%2)·pitch/2`（顶点+X flat-top 蜂窝，奇数列纵向错半格）。`hex_ring_rows` 保持 `[r+1+min(j,2r-j)]`。`expand_positions` hex 分支走新 hex_center。
+- `app/lattice.py hex_center` 改权威公式：`x = col·pitch + row·pitch/2, y = row·pitch·√3/2`（顶点+X flat-top 蜂窝）。**⚠️ 版本注记（2026-09-10 更正）**：本批（08-24）当时写的 `x = col·pitch·√3/2, y = row·pitch + (col%2)·pitch/2` 是**旧式、与权威相差 30° 旋转**，已于 **2026-08-25 交叉验证后替换**为上式（golden `hexCenter`/`positions.hex` 同步更新）——**权威以 `app/lattice.py:604-616` 为准**（TS 镜像 `gui/src/utils/lattice.ts:130-137`）。`hex_ring_rows` 保持 `[r+1+min(j,2r-j)]`。`expand_positions` hex 分支走新 hex_center。
 - golden 消费：`hexCenter`/`positions.hex` 段由前端 Wave 2b 写盘（已写盘）。`test_positions_golden_cross_language` 加 stale-hex skip（前端未重算时跳过，写盘后自动生效）。
 - pytest `test_hex_center_flat_top`（pitch=2/√3 权威样例）+ `test_expand_positions_hex_flat_top`（golden positions.hex 新值）+ 既有 `test_hex_center_formula`/`test_expand_positions_hex_ring_order` 期望值同步新公式。
 

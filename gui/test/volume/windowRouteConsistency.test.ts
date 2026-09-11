@@ -20,6 +20,13 @@ const MAIN_RS = readFileSync(join(HERE, "../../src-tauri/src/main.rs"), "utf-8")
 const APP_TSX = readFileSync(join(HERE, "../../src/App.tsx"), "utf-8");
 const WINDOWS_TS = readFileSync(join(HERE, "../../src/utils/windows.ts"), "utf-8");
 
+/**
+ * 已登记的弹出窗口 label（**单一期望清单**）。
+ * main.rs create_or_focus 与 App.tsx WindowRouter 两侧都必须恰好是这一组。
+ * 新增窗口时**必须**把 label 加进本数组，否则「未登记窗口」用例会红（T3 FE-11/FE-12 加固）。
+ */
+const EXPECTED_WINDOW_LABELS: string[] = ["preview3d", "cross_section", "volume", "ptrac", "source-demo"];
+
 /** main.rs 里所有 create_or_focus(&app, "<label>", ...) 的窗口 label */
 function mainRsWindowLabels(src: string): string[] {
   const labels: string[] = [];
@@ -35,6 +42,18 @@ function appRouteLabels(src: string): string[] {
 }
 
 describe("窗口 label ↔ App.tsx 路由一致性（P0 回归）", () => {
+  it("★守卫自检：两处正则都必须真的抽到 label（防「空对空」假绿）", () => {
+    // 背景（T3 FE-12）：本文件靠正则从 main.rs / App.tsx 源码抽 label。若有人把双引号改单引号、
+    // 或把调用拆成多行，两处正则可能同时抽成空数组，而 expect([]).toEqual([]) 会**通过** —— 守卫
+    // 在「全绿」状态下失效却无人报警。故先钉住抽取结果非空且条数正确。
+    const m = mainRsWindowLabels(MAIN_RS);
+    const a = appRouteLabels(APP_TSX);
+    expect(m.length).toBeGreaterThan(0);
+    expect(a.length).toBeGreaterThan(0);
+    expect(m).toHaveLength(EXPECTED_WINDOW_LABELS.length);
+    expect(a).toHaveLength(EXPECTED_WINDOW_LABELS.length);
+  });
+
   it("main.rs create_or_focus 建窗 label 集合 == App.tsx WindowRouter 路由分支 label 集合", () => {
     expect(mainRsWindowLabels(MAIN_RS)).toEqual(appRouteLabels(APP_TSX));
   });
@@ -42,12 +61,24 @@ describe("窗口 label ↔ App.tsx 路由一致性（P0 回归）", () => {
   it("弹出窗口 label 各自与路由分支同值（preview3d/cross_section/volume/ptrac/source-demo，绝无 volume3d）", () => {
     const m = mainRsWindowLabels(MAIN_RS);
     const a = appRouteLabels(APP_TSX);
-    for (const label of ["preview3d", "cross_section", "volume", "ptrac", "source-demo"]) {
+    for (const label of EXPECTED_WINDOW_LABELS) {
       expect(m).toContain(label);
       expect(a).toContain(label);
     }
     // volume 必须是「3D 结果」窗口的 label（而非 volume3d），否则子窗口渲染整个主应用
     expect(m).not.toContain("volume3d");
+  });
+
+  it("★新增第 6 个窗口必须登记：main.rs / App.tsx 出现未登记的 create_or_focus label 即红", () => {
+    // 背景（T3 FE-11）：原先「集合相等」那一问无法约束**未来**新增窗口 —— 新窗口只要
+    // main.rs 与 App.tsx 同步改就会通过，但若漏加进上面的 EXPECTED_WINDOW_LABELS，
+    // 守卫就失去「逐个同值」的独立校验。此用例把「未登记的窗口 label」显式暴露出来：
+    // 新增窗口时必须同时把 label 加进 EXPECTED_WINDOW_LABELS，否则本用例红并打印缺失项。
+    const m = mainRsWindowLabels(MAIN_RS);
+    const a = appRouteLabels(APP_TSX);
+    const registered = new Set<string>(EXPECTED_WINDOW_LABELS);
+    const unregistered = [...new Set([...m, ...a])].filter((l) => !registered.has(l)).sort();
+    expect(unregistered, `发现未登记的窗口 label：${unregistered.join(", ")}（请加进 EXPECTED_WINDOW_LABELS）`).toEqual([]);
   });
 
   it("localStorage 桥 key mcnp_win_volume3d（KEY_VOLUME3D）保持不动，不随窗口 label 更名", () => {

@@ -1,5 +1,4 @@
 // Python backend bridge via Tauri or HTTP
-import type { DeckData } from "./dataCollector";
 import { apiUrl } from "./api";
 
 let pythonProcess: any = null;
@@ -69,27 +68,4 @@ export async function stopPythonBackend(): Promise<void> {
   if (closeUnlisten) { closeUnlisten(); closeUnlisten = null; }
   if (mcpProcess) { try { mcpProcess.kill(); } catch { /* 已退出 */ } mcpProcess = null; }
   if (pythonProcess) { try { pythonProcess.kill(); } catch { /* 已退出 */ } pythonProcess = null; }
-}
-
-export async function generateInp(data: DeckData): Promise<string> {
-  // Try HTTP bridge first (api_server.py on port 5001)
-  try {
-    const r = await fetch(apiUrl("/api/generate"), {
-      method: "POST", headers: {"Content-Type":"application/json"},
-      body: JSON.stringify(data),
-      signal: AbortSignal.timeout(10000),
-    });
-    if (r.ok) { const j = await r.json(); return j.inp || j.text || "No output"; }
-  } catch(e) { console.log("Bridge not available, using mock"); }
-
-  if (pythonProcess) {
-    const { writeFile } = await import("@tauri-apps/api/fs");
-    const tmpPath = await import("@tauri-apps/api/path").then(p => p.appDataDir());
-    const jsonPath = tmpPath + "deck_data.json";
-    await writeFile(jsonPath, JSON.stringify(data));
-    pythonProcess.write(jsonPath + "\n");
-    const { readTextFile } = await import("@tauri-apps/api/fs");
-    return await readTextFile(tmpPath + "output.inp");
-  }
-  return "// Python backend not connected";
 }

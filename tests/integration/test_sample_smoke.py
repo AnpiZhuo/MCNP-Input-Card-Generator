@@ -5,11 +5,12 @@
 管道：parse_inp_text → validate → generate_inp_from_deck
 断言：关键卡出现、R1 成立、结果可二次解析。
 
-【当前状态】
+【当前状态（2026-09-10 更正）】**全部应为 GREEN**。初版写"R1 不动点 RED / validate_deck RED"——
+该表述**已作废**（C 注释头泄漏与 CellRow 判别联合不兼容均已修复）。**红灯就是真红灯**（审计 TD-09）。
 - validate_inp_text（生产文本层校验）在 3 份样例上全过。
 - generate 关键卡出现、可二次解析：GREEN。
-- R1 不动点：RED（C 注释头泄漏，同 test_roundtrip）。
-- validate_deck（DeckData 层）：RED（与 CellRow 判别联合不兼容，直接崩 AttributeError）。
+- R1 不动点：GREEN。
+- validate_deck（DeckData 层）：GREEN。
 """
 import pytest
 
@@ -81,10 +82,10 @@ def test_smoke_parse_populates_sections(name):
         assert req in sections, f"{name} 缺少 {req} section（实际: {sections}）"
 
 
-# ── R1 不动点（RED：头泄漏）──────────────────────────────
+# ── R1 不动点（已清偿 → 应 GREEN）──────────────────────────
 @pytest.mark.parametrize("name", SAMPLES)
 def test_smoke_r1_fixed_point(name):
-    """R1：样例第二代起字节稳定。当前 RED（C 注释头泄漏）。"""
+    """R1：样例第二代起字节稳定。**已清偿 → 应 GREEN**（初版："当前 RED（C 注释头泄漏）"）。"""
     deck, _w = _parse_sample(name)
     g1 = generate_inp_from_deck(deck)
     deck2, _w2 = parse_inp_text(g1)
@@ -92,13 +93,13 @@ def test_smoke_r1_fixed_point(name):
     assert g1 == g2, f"{name} R1 不成立（len {len(g1)} → {len(g2)}，头泄漏）"
 
 
-# ── validate_deck（DeckData 层）RED：CellRow 不兼容 ───────
+# ── validate_deck（DeckData 层）已清偿 → 应 GREEN（初版标"RED：CellRow 不兼容"）───────
 @pytest.mark.parametrize("name", SAMPLES)
 def test_smoke_validate_deck_does_not_crash(name):
     """计划流程 parse → validate_deck → generate。
 
-    当前 RED：validate_deck 直接访问 cell.surface_expr，与 CellRow 判别联合
-    （kind/cell/text 嵌套）不兼容，抛 AttributeError。这是 DeckData 层校验的真实缺陷。
+    **已清偿 → 应 GREEN**（初版写"当前 RED：validate_deck 直接访问 cell.surface_expr，
+    与 CellRow 判别联合不兼容，抛 AttributeError"，已作废）。
     """
     deck, _w = _parse_sample(name)
     try:

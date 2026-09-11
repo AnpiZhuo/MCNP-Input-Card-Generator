@@ -676,7 +676,7 @@ def test_positions_golden_cross_language():
     import math as _m
     for s in samples:
         if not _golden_positions_hex_fresh(s):
-            continue  # 项5 hex 段前端未重算 → skip（写盘后自动生效）
+            assert False, f"golden hex sample {s.get('id', '?')} 未重算——golden 含 hex 段但未产 expected 值，请重算后写盘"
         dims = s["dims"]
         total = _m.prod(dims)
         fg = _fg(s["lat"], dims, ["1"] * total)
@@ -825,8 +825,11 @@ def test_expand_positions_hex_flat_top():
         pytest.skip("golden 无 positions 段")
     import math as _m
     for s in samples:
-        if s.get("lat") != "2" or not _golden_positions_hex_fresh(s):
-            continue  # 非 hex 或前端未重算项5 hex 段 → skip
+        if s.get("lat") != "2":
+            continue  # 本用例只测 hex 段（非 hex 由其他用例覆盖）
+        assert _golden_positions_hex_fresh(s), (
+            f"golden hex sample {s.get('id', '?')} 未重算——hex 期望值缺失/陈旧，禁止静默跳过，请重算后写盘"
+        )
         dims = s["dims"]
         total = _m.prod(dims)
         fg = _fg("2", dims, ["1"] * total)

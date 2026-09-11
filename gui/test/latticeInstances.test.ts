@@ -413,22 +413,61 @@ function expandPositionsRef(s: any): { idx: number; x: number; y: number; z: num
   return out;
 }
 
+/**
+ * golden positions / nested / composeCases 段的具名类型（T3 FE-20 / TD-27）。
+ *
+ * 原先是 `(golden as any).positions as any[]` 这类三连 `any`：段名拼错、结构漂移都无编译期信号。
+ * 下面按注释里记明的实际键名收窄，字段名与 golden JSON 逐字一致（故意不重命名）。
+ */
+interface GoldenPositionsExpected { idx: number; x: number; y: number; z: number }
+interface GoldenPositionsCase {
+  id: string;
+  lat: "1" | "2";
+  dims: number[];
+  extent?: Record<string, number>;
+  trclDeg?: number;
+  expected: GoldenPositionsExpected[];
+}
+interface GoldenNestedLeaf { cellNum: string; x: number; y: number; z: number }
+interface GoldenNested {
+  outerLat: string;
+  innerLat: string;
+  leafCount: number;
+  leaves: GoldenNestedLeaf[];
+}
+interface GoldenComposeCase { id: string; node: unknown }
+
+interface GoldenLatticeView {
+  positions?: GoldenPositionsCase[];
+  nested?: GoldenNested;
+  composeCases?: GoldenComposeCase[];
+}
+
+const GL = golden as unknown as GoldenLatticeView;
+
 describe("跨语言 golden positions/nested/composeCases（backend expand_positions / compose_lattice_tree 双端锁死）", () => {
   // golden 实际键名：positions = 数组（id/lat/dims/extent/trclDeg/expected）；
   // nested = 对象（outerLat/innerLat/outerExtent/innerExtent/universeCells/leafCount/leaves）；
   // composeCases = 数组（TS LatticeComposeNode 输入样例，与 nested 段同源）。
-  // 后端未产出阶段3 golden 时跳过；产出后本用例真正跑起来（消除 skip）。
-  const positions = (golden as any).positions as any[] | undefined;
-  const nested = (golden as any).nested as any;
-  const composeCases = (golden as any).composeCases as any[] | undefined;
+  const positions = GL.positions;
+  const nested = GL.nested;
+  const composeCases = GL.composeCases;
   const hasGolden =
     Array.isArray(positions) && positions.length > 0 &&
     !!nested && Array.isArray(nested.leaves) && nested.leaves.length > 0 &&
     Array.isArray(composeCases) && composeCases.length > 0 && !!composeCases[0].node;
 
-  it.skipIf(!hasGolden)("positions 格位中心 + composeNestedPositions 输出 === nested.leaves（双端逐位锁死）", () => {
+  // 收窄为非空（上一行已硬断言 hasGolden=true，故此处解包安全）
+  const positionsList = positions!;
+  const nestedData = nested!;
+  const casesList = composeCases!;
+
+  // 硬断言：golden 段必须齐备。段名/结构一旦漂移，这里红（禁止静默 skip）。
+  expect(hasGolden).toBe(true);
+
+  it("positions 格位中心 + composeNestedPositions 输出 === nested.leaves（双端逐位锁死）", () => {
     // positions 段：expand_positions 输出，expected 与 rect/hex+TRCL 参考重算逐位一致
-    for (const s of positions!) {
+    for (const s of positionsList) {
       const recomputed = expandPositionsRef(s);
       for (const exp of s.expected) {
         const got = recomputed.find((p) => p.idx === exp.idx)!;
@@ -441,12 +480,12 @@ describe("跨语言 golden positions/nested/composeCases（backend expand_positi
     // nested 段：composeNestedPositions(composeCases[].node) 的 FLAT 叶绝对坐标
     // === nested.leaves（Python tests/unit/test_lattice.py test_nested_golden_cross_language
     // 对同一 golden 数据双端逐位一致，2×2 外 pitch4 内嵌 2×2 pitch2 共 10 叶）
-    expect(nested.leafCount).toBe(10);
-    expect(nested.leaves).toHaveLength(nested.leafCount);
-    const expLeaves = nested.leaves.map((l: any) => `${l.cellNum}@${l.x},${l.y},${l.z}`);
-    for (const cc of composeCases!) {
+    expect(nestedData.leafCount).toBe(10);
+    expect(nestedData.leaves).toHaveLength(nestedData.leafCount);
+    const expLeaves = nestedData.leaves.map((l) => `${l.cellNum}@${l.x},${l.y},${l.z}`);
+    for (const cc of casesList) {
       const { leafInstances } = composeNestedPositions(cc.node as LatticeComposeNode);
-      expect(leafInstances).toHaveLength(nested.leaves.length);
+      expect(leafInstances).toHaveLength(nestedData.leaves.length);
       const got = leafInstances.map((l) => `${l.cellNum}@${l.x},${l.y},${l.z}`);
       expect(got).toHaveLength(expLeaves.length); // 无重复
       expect(new Set(got)).toEqual(new Set(expLeaves)); // 双向一致

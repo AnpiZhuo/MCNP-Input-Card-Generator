@@ -460,15 +460,14 @@ class AdvancedSettings:
     sdef_rate: str = ""    # Source strength / 源强度
     sdef_extra: str = ""   # Extra SDEF fields (preserved verbatim) / SDEF 额外字段（原样保留）
 
-    # 旧格式 SI/SP 对序列化文本（\n---\n 时代遗留）：新解析已停写，仅作旧存档回退读取
-    # （v2 sdef_distributions 是唯一权威存储；生成器在 distributions 为空时才读此字段）
-    sdef_raw_text: str = ""
-
     # 结构化分布 v2 双态（app/generator/distributions.py；SI/SP/SB/DS/SC 唯一权威存储）
     # 格式: [{"id":1,"paramRef":"ERG","editMode":"raw"|"structured","rawText":"…",
     #         "si":{"type":""|"L"…,"values":[…]}|null,"sp":{…}|null,
     #         "sb":{…}|null,"ds":{…}|null,"sc":"…"|null,"auto":bool}]
-    # 无字母 SI → type ""（MCNP 缺省 H），生成时绝不回填 L。非空时优先于 sdef_raw_text。
+    # 无字母 SI → type ""（MCNP 缺省 H），生成时绝不回填 L。
+    # TD-23（t5）：旧 `sdef_raw_text` 字段（"\n---\n" 时代 SI/SP 序列化文本）已退役——
+    # 解析侧早已停写（parsers/core.py 只写本字段），读侧 4 处兼容分支零覆盖，
+    # 旧存档由前端迁移进本字段；删字段即完成退役。
     sdef_distributions: str = ""
 
     # ── SSW/SSR 面源（source_mode 面源时使用）──

@@ -22,7 +22,9 @@
 - **接口**：`DistributionSampler`（新类）——
   - `DistributionSampler(entries: list[dict])`：编译 v2 分布列表（解析 SI/SP/SB 类型、预计算累积概率、缓存内置函数参数）。
   - `sample(eid: int, rng) -> float`：从分布 `eid` 抽一个标量值。
-  - `resolve_ds(eid: int, parent_value: float) -> list[int]`：DS 卡按父变量值查表，返回子分布号列表（T/Q/H/L/S 语义）。
+  - `resolve_ds(eid: int, parent_value: float, parent_si: list | None = None) -> dict`：DS 卡按父变量值查表。**返回判别式 dict**（不是子分布号列表）：`{"distribution": n}`（用子分布 n）/ `{"value": v}`（直接用值 v）/ `{"default": True}`（该分支无匹配，退回默认）。
+    - `parent_si` 可选：H 型需要父变量 SI 的 bin 边界才能插值（不传则 H 退回 default）。
+    - 数据字段统一为 `distributionIds`（见 `_parse_ds` 文档串）：S 型是分布编号列表；H/L/Q/T 型是数据 token（J 列表 / V-S 对 / I-J 对）；`param` 仅在首 token 非数值（`DSn S ERG 3 4` 这类变量名写法）时保留。
 - **接口不变量**：
   - 抽样覆盖 SI `L/H/A/S`（无字母 `""` = H）+ SP `D/C/V`（无字母 `""` = D）+ 内置函数 `-2/-3/-4/-5/-6/-21/-31/-41` + SB 偏倚。
   - SI `S` 递归选子分布；SI `A` 概率密度点线性插值；SP `C` 累积概率二分；SP `V` 仅 CEL 体积源（非 CEL 场景报错）。

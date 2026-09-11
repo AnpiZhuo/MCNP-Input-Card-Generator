@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import type { MaterialData } from "../utils/DeckContext";
 import FloatingDialog from "./FloatingDialog";
 import { apiUrl } from "../utils/api";
+import { closureMeta } from "../utils/cellClosure";
 
 export interface CellData {
   num: string;
@@ -47,21 +48,17 @@ const style: Record<string, React.CSSProperties> = {
 };
 const tarea = { ...style.inp, height: 50, resize: "vertical" as const, fontFamily: "Consolas,monospace" as const, fontSize: 11, paddingTop: 6 };
 
-// 封闭状态 → 展示文本/颜色
-const STATUS_META: Record<string, { label: string; color: string }> = {
-  closed: { label: "封闭 ✓", color: "#2e7d32" },
-  infinite: { label: "外无限（曲面外空间）", color: "#e53935" },
-  semi_infinite: { label: "部分无限（某轴延伸）", color: "#f9a825" },
-  empty: { label: "空/退化几何", color: "var(--text-tertiary)" },
-  voxel: { label: "体素网格（GQ/SQ）", color: "var(--text-tertiary)" },
-  unresolvable: { label: "几何未解析", color: "var(--text-tertiary)" },
-};
-
 export default function CellEditDialog({ cell, onSave, onClose, availableMats, onOpenLattice, surfacesText, trCardsText }: Props) {
   const [data, setData] = useState(cell);
   const [checkBusy, setCheckBusy] = useState(false);
   const [checkResult, setCheckResult] = useState<{ status: string; volume?: number | null; infinite_axes?: string[] } | null>(null);
   const [checkErr, setCheckErr] = useState<string | null>(null);
+
+  // 展示元数据一律取自深模块 cellClosure.closureMeta（**唯一定义**，避免第二份 status→文案/配色 映射）。
+  // 语义（用户裁决，2026-09-10）：「外无限 / 部分无限」= **允许存在、仅提示感叹号**；
+  // **唯有「曲面不封闭」（empty / voxel / unresolvable，即几何不封闭/无法判定）才是禁止**。
+  // 故这里统一用 meta.color + meta.allowed 决定配色与字重（allowed → 常态，blocked → 加重）。
+  const meta = closureMeta(checkResult?.status ?? "");
 
   // 自检当前栅元封闭性（只发这一个栅元）
   const runSelfCheck = async () => {
@@ -163,12 +160,17 @@ export default function CellEditDialog({ cell, onSave, onClose, availableMats, o
       }, checkBusy ? "自检中…" : "🩺 自检此栅元"),
       checkResult || checkErr
         ? React.createElement("span", {
-          style: { fontSize: 11, marginLeft: 10, color: checkErr ? "#e53935" : STATUS_META[checkResult!.status]?.color || "var(--text-tertiary)" },
+          style: {
+            fontSize: 11, marginLeft: 10,
+            color: checkErr ? "#e53935" : meta.color,
+            fontWeight: meta.allowed ? 400 : 700,
+          },
         },
           checkErr
             ? `⚠ ${checkErr}`
-            : `${STATUS_META[checkResult!.status]?.label || "未知"} ${checkResult!.volume != null ? `(${checkResult!.volume.toFixed(1)} mm³)` : ""}${checkResult!.infinite_axes?.length ? ` [延伸至 ${checkResult!.infinite_axes.join("/")} 轴]` : ""}`
+            : `${meta.icon} ${meta.label} ${checkResult && checkResult.volume != null ? `(${checkResult.volume.toFixed(1)} mm³)` : ""}${checkResult?.infinite_axes?.length ? ` [延伸至 ${checkResult.infinite_axes.join("/")} 轴]` : ""}`
         )
+        : null,
         : null,
     ),
     React.createElement("div", { style: style.row },

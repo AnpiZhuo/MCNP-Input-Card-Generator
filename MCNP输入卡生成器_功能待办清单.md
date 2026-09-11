@@ -47,10 +47,11 @@
 - 说明：桌面工具成熟后的标配；需要配套发布源（目前打包是手动拷贝）。
 - 工作量：中。依赖：一个更新服务器/发布源。
 
-### 11. 2D 结果导出增强 ❌（按需）
+### 11. 2D 结果导出增强 ✅（2026-09-04 完成）
 - 做什么：meshtal 体积渲染窗口增加"切面存为 2D 热图 PNG/SVG + 数据 CSV"。
 - 说明：论文/报告需要 2D 图；目前只有 3D 渲染和 OUTP 表格 CSV。
 - 工作量：中。
+- 状态说明：**全部落地（2026-09-04）** —— `gui/src/volume/sliceExport.ts`（`sliceFrame` 单轴切面 2D 热图 / `frameToCsv` 整帧体素 / `sliceToSvg` 矢量 SVG）+ `gui/src/volume/SliceExportPanel.tsx`（轴 + 切片滑块 + canvas 预览 + 导出按钮），接入 `ResultWindow.tsx`；全部浏览器原生（`canvas.toDataURL` / `Blob`），零新依赖。已随 commit **f7fc2ed** 提交（`.git/logs/HEAD:246`「feat(3d): universe 覆盖完整性检测 + 格阵切片导出」）；门禁 vitest 546/0 + tsc EXIT 0。
 
 ---
 

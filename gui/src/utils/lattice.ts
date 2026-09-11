@@ -167,22 +167,6 @@ export function hexGrid(dims: number[], pitch: number): HexCell[] {
 
 /* ── 宇宙调色板 ──────────────────────────────────────────── */
 
-/** 12 色板：u 数值升序分配（dataviz 校验分类色板 8 槽 + 4 扩增色相） */
-export const UNIVERSE_PALETTE_12: string[] = [
-  "#4c9fe8", // 1 blue
-  "#f08c3a", // 2 orange
-  "#1fae8f", // 3 teal
-  "#e0b21e", // 4 yellow
-  "#d95f9b", // 5 magenta
-  "#2e8b3d", // 6 green
-  "#7d6bd8", // 7 violet
-  "#d84040", // 8 red
-  "#35b3cf", // 9 cyan
-  "#9a6a38", // 10 brown
-  "#6a7d9e", // 11 slate
-  "#7a8f2b", // 12 olive
-];
-
 /** 未命中回退灰（u 不在色板） */
 export const UNIVERSE_GRAY = "#9a9a9a";
 
@@ -435,39 +419,6 @@ export function detectFillCycle(subByU: Record<string, CycleCellLike[]>): FillCy
   };
   for (const u of Object.keys(subByU)) dfs(u);
   return { cycle: found, chain };
-}
-
-/** 格阵物理范围估算（阶段2 用单位 pitch≈1；阶段3 由 surface_expr 提供真实格距） */
-export interface LatticeExtent {
-  x: number;
-  y: number;
-  z: number;
-}
-
-export function estimateLatticeExtent(fg: FillGridJson | null): LatticeExtent {
-  if (!fg) return { x: 0, y: 0, z: 0 };
-  if (fg.kind === "translated") return { x: 1, y: 1, z: 1 };
-  const dims = fg.dims;
-  if (!dims.length) return { x: 0, y: 0, z: 0 };
-  if (fg.lat === "2") {
-    const pitch = 1;
-    const cells = hexGrid(dims, pitch);
-    // 外沿取跨度（max-min），不依赖格阵绝对位置（居中/未居中 span 相同）
-    let minX = 0, maxX = 0, minY = 0, maxY = 0;
-    for (const c of cells) {
-      if (c.x < minX) minX = c.x;
-      if (c.x > maxX) maxX = c.x;
-      if (c.y < minY) minY = c.y;
-      if (c.y > maxY) maxY = c.y;
-    }
-    // 顶点+X 蜂窝：格元半宽 = pitch/√3（顶点-顶点宽 2pitch/√3），半高 = pitch/2（flat-flat 高 pitch）
-    return {
-      x: (maxX - minX) + pitch / Math.sqrt(3),
-      y: (maxY - minY) + pitch / 2,
-      z: Math.max(1, dims[2] ?? 1),
-    };
-  }
-  return { x: Math.max(1, dims[0] ?? 1), y: Math.max(1, dims[1] ?? 1), z: Math.max(1, dims[2] ?? 1) };
 }
 
 /**

@@ -912,6 +912,18 @@ def _extent_span(extent: dict | None, axis: str, default: float = 1.0) -> float:
     return default
 
 
+def _hex_pitch(px: float, py: float) -> tuple:
+    """hex（lat=2）格距归一：返回 (p, p)。
+
+    TD-28（t8）：本规则（"格距 = 平面对边距 = x 跨度；原用 py（顶点距）会把格位间距
+    撑大 → 预览格子间有空隙错乱"）此前在 `_lattice_pitch` 与 `expand_positions` 各写一遍，
+    且判据不同源（一个用传入 lat 参数、一个用局部 fg.lat）—— 历史已因两份副本不一致
+    出过 pitch/间距错乱。现收敛为**唯一实现**，两处调用。
+    """
+    p = px if px > 0 else (py if py > 0 else 1.0)
+    return p, p
+
+
 def _lattice_pitch(extent: dict | None, lat: str):
     """extent → 每轴 pitch (px, py, pz)。
 
@@ -921,11 +933,8 @@ def _lattice_pitch(extent: dict | None, lat: str):
     py = _extent_span(extent, "y", 1.0)
     pz = _extent_span(extent, "z", 1.0)
     if str(lat) == "2":
-        # 面法向 0°/60°/120°（对齐 a1）：格距 = 平面对边距 = x 跨度（px）；
-        # 原用 py（顶点距）会把格位间距撑大 → 预览格子间有空隙错乱
-        p = px if px > 0 else (py if py > 0 else 1.0)
-        px = p
-        py = p
+        # 面法向 0°/60°/120°（对齐 a1）→ 见 _hex_pitch 的权威说明
+        px, py = _hex_pitch(px, py)
     return px, py, pz
 
 
@@ -1035,10 +1044,9 @@ def expand_positions(fg: "FillGrid | None", extent: dict | None,
     py = _extent_span(extent, "y", 1.0)
     pz = _extent_span(extent, "z", 1.0)
     if lat == "2":
-        # 格距 = 平面对边距 = x 跨度（面法向 0°/60°/120°，对齐 a1）；原用 py=顶点距会撑大间距
-        hp = px if px > 0 else (py if py > 0 else 1.0)
-        px = hp
-        py = hp
+        # 格距 = 平面对边距 = x 跨度（面法向 0°/60°/120°，对齐 a1）；见 _hex_pitch 权威说明。
+        # TD-28（t8）：改为调用唯一实现（此前与 _lattice_pitch 各写一遍）。
+        px, py = _hex_pitch(px, py)
     # z 原点（z_origin）只由根格阵传送（容器 z 中点）；嵌套格阵 z_origin=0（相对父格位），
     # 避免在父格位绝对 z 上再叠加自身 z 中点（BEAVRS 组件 pin 被推成 z=460 的 bug）。
     theta = math.radians(float(trcl_rotation_deg or 0))
@@ -1241,7 +1249,8 @@ def compose_lattice_tree(outer_fg: "FillGrid | None", sub_by_u: dict,
     }
     outer_num = _find_lattice_cell_num(outer_fg, sub_by_u)
     # 预计算全部 universe 的轴向 stack（一次性），供 _expand_universe 的 axial_cache 命中
-    _parse_surface_cards  # noqa: 保持符号可见（未使用）
+    # TD-25（t8）：删除原此处的裸引用语句 `_parse_surface_cards  # noqa: 保持符号可见（未使用）`
+    # —— 模块级表达式语句（无副作用）纯噪声，且该符号在同函数 :1247 已被真正调用。
     for _u, _cells in (sub_by_u or {}).items():
         state["axial_cache"].setdefault(
             str(_u), _build_axial_segments(str(_u), _cells, state["surf_text"], state["surfaces"]))

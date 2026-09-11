@@ -123,27 +123,84 @@ def test_ds_s_by_index():
 
 
 def test_ds_q_by_value():
-    s = DistributionSampler([{"id": 5, "ds": {"type": "Q", "values": ["0", "2", "10", "3"]}}])
+    # 数据统一落 distributionIds（_parse_ds 产出的形状）——勿再手写 values（该键无人产出）
+    s = DistributionSampler([{"id": 5, "ds": {"type": "Q", "distributionIds": ["0", "2", "10", "3"]}}])
     assert s.resolve_ds(5, -5, None) == {"distribution": 2}
     assert s.resolve_ds(5, 5, None) == {"distribution": 3}
 
 
 def test_ds_l_value():
-    s = DistributionSampler([{"id": 5, "ds": {"type": "L", "values": ["1.5", "2.5"]}}])
+    s = DistributionSampler([{"id": 5, "ds": {"type": "L", "distributionIds": ["1.5", "2.5"]}}])
     assert s.resolve_ds(5, 0, ["0", "1"]) == {"value": 1.5}
     assert s.resolve_ds(5, 1, ["0", "1"]) == {"value": 2.5}
 
 
 def test_ds_h_interpolate():
-    s = DistributionSampler([{"id": 5, "ds": {"type": "H", "values": ["0", "10"]}}])
+    s = DistributionSampler([{"id": 5, "ds": {"type": "H", "distributionIds": ["0", "10"]}}])
     r = s.resolve_ds(5, 0.5, ["0", "1"])
     assert r["value"] == 5.0  # 中点插值
 
 
 def test_ds_t_match():
-    s = DistributionSampler([{"id": 5, "ds": {"type": "T", "values": ["0", "7", "1", "8"]}}])
+    s = DistributionSampler([{"id": 5, "ds": {"type": "T", "distributionIds": ["0", "7", "1", "8"]}}])
     assert s.resolve_ds_t(5, 0) == {"value": 7.0}
     assert s.resolve_ds_t(5, 2) == {"default": True}
+
+
+# ── 真实解析路径回归（TD-03 发布阻断项：走 parse_distribution_lines 而非手写 dict）──
+
+def test_ds_real_parse_path_q_l_h_t():
+    """解析 → 抽样的真实链路：`DSn Q/L/H` 的 J 列表不得被 param 吃掉首项。"""
+    from app.generator.distributions import parse_distribution_lines
+
+    def _ds_of(line: str) -> dict:
+        return parse_distribution_lines([line])[0]["ds"]
+
+    # Q：V1 S1 V2 S2（首 token 是数值 → 不得当 param）
+    ds_q = _ds_of("DS5  Q  0  2  10  3")
+    assert ds_q["param"] == "", "数值首 token 不得被当作 param"
+    assert ds_q["distributionIds"] == ["0", "2", "10", "3"]
+    s_q = DistributionSampler([{"id": 5, "ds": ds_q}])
+    assert s_q.resolve_ds(5, -5, None) == {"distribution": 2}
+    assert s_q.resolve_ds(5, 5, None) == {"distribution": 3}
+
+    # L：J 列表按离散索引取（索引 0 必须取到第一个 J，而非第二个）
+    ds_l = _ds_of("DS5  L  1.5  2.5")
+    assert ds_l["distributionIds"] == ["1.5", "2.5"]
+    s_l = DistributionSampler([{"id": 5, "ds": ds_l}])
+    assert s_l.resolve_ds(5, 0, ["0", "1"]) == {"value": 1.5}
+    assert s_l.resolve_ds(5, 1, ["0", "1"]) == {"value": 2.5}
+
+    # H：连续插值
+    ds_h = _ds_of("DS5  H  0  10")
+    s_h = DistributionSampler([{"id": 5, "ds": ds_h}])
+    assert s_h.resolve_ds(5, 0.5, ["0", "1"])["value"] == 5.0
+
+    # T：I1 J1 … 成对匹配
+    ds_t = _ds_of("DS5  T  0  7  1  8")
+    s_t = DistributionSampler([{"id": 5, "ds": ds_t}])
+    assert s_t.resolve_ds_t(5, 0) == {"value": 7.0}
+    assert s_t.resolve_ds_t(5, 1) == {"value": 8.0}
+
+
+def test_ds_s_real_parse_path_index_not_shifted():
+    """S 卡：`DS1 S 2 3` 索引 0 必须取到分布 2（历史 bug：被 param 吃掉 → 取到 3）。"""
+    from app.generator.distributions import parse_distribution_lines
+
+    ds = parse_distribution_lines(["DS1  S  2  3"])[0]["ds"]
+    assert ds["distributionIds"] == ["2", "3"]
+    s = DistributionSampler([{"id": 1, "ds": ds}])
+    assert s.resolve_ds(1, 0, ["0", "1"]) == {"distribution": 2}
+    assert s.resolve_ds(1, 1, ["0", "1"]) == {"distribution": 3}
+
+
+def test_ds_var_form_keeps_param_and_data():
+    """带变量名的写法（C810_卡片格式详细.md:183 `DS[n] var Dn1…`）：首 token 非数值 → 保留为 param。"""
+    from app.generator.distributions import parse_distribution_lines
+
+    ds = parse_distribution_lines(["DS2  S  ERG  3  4"])[0]["ds"]
+    assert ds["param"] == "ERG"
+    assert ds["distributionIds"] == ["3", "4"]
 
 
 # ── 错误 ───────────────────────────────────────────────────

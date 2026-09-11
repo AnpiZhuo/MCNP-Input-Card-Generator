@@ -122,6 +122,26 @@ def _apply_section_patch(deck, section, data):
     return deck
 
 
+# 非 deck 段键：不进 DeckData，但**必须跨 patch 存活**（否则 patch 一次就蒸发）。
+# 目前 members：universe_comments（U 分组头注释，deck_from_json 会读、_deck_to_sections 会写）；
+# `_` 前缀键（如 `_warnings`）按原样透传（前端消费其展示语义，MCP 不解释）。
+# TD-15（t5）：此前 patch_section 走 `_set_ws_sections(_deck_to_sections(deck))` 整份重写，
+# 未映射键会静默消失；现改为"只改目标段 + 显式保留这些键"。
+_EXTRA_SECTION_KEYS = ("universe_comments",)
+
+
+def _extra_section_keys(sections: dict) -> dict:
+    """从 sections 中取出需跨 patch 保留的非 deck 键（见 `_EXTRA_SECTION_KEYS`）。"""
+    out = {}
+    for k in _EXTRA_SECTION_KEYS:
+        if k in sections:
+            out[k] = sections[k]
+    for k, v in (sections or {}).items():
+        if isinstance(k, str) and k.startswith("_") and k not in out:
+            out[k] = v
+    return out
+
+
 # ── 当前工作区（有状态会话）──────────────
 # 程序前端把所有标签页合成的当前 deck 推到这里；MCP 工具在「不传 inp」时读写它。
 _WORKSPACE = {"revision": 0, "sections": None, "deck_text": ""}
@@ -148,10 +168,8 @@ def _set_ws_sections(sections):
     return _WORKSPACE["revision"]
 
 
-def _ws_state():
-    """给前端/AI 的当前工作区快照：sections + revision + 生成的 INP 文本。"""
-    sec = _ws_sections()
-    return {"revision": _WORKSPACE["revision"], "sections": sec}
+# TD-15（t5）：原 `_ws_state()` 已删除——全仓库零调用者，且 docstring 声称返回"生成的 INP 文本"
+# 而实现只返回 revision+sections（文档与实现不符）。工作区快照由 /workspace GET 直接构造。
 
 
 # ─────────────────────────────── 文档级读写 ───────────────────────────────
@@ -218,7 +236,12 @@ def patch_section(inp: str | None = None, section: str | None = None, data: dict
         return _generate(deck)
     deck = _ws_deck()
     deck = _apply_section_patch(deck, section, data)
-    _set_ws_sections(_deck_to_sections(deck))
+    # TD-15（t5）：先把非 deck 键（universe_comments / `_` 前缀）留存，patch 后再原样放回，
+    # 避免整份重写时静默丢键（`_deck_to_sections` 只回填它认识的段 → 未映射键会蒸发）。
+    kept = _extra_section_keys(_ws_sections())
+    new_sections = _deck_to_sections(deck)
+    new_sections.update(kept)
+    _set_ws_sections(new_sections)
     return _generate(deck)
 
 

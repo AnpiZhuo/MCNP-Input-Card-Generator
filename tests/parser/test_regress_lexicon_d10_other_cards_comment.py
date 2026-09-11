@@ -7,7 +7,7 @@
   → 未设计卡上的 `$ 注释` 在解析时被剥离，round-trip 后不保真（卡功能数据不丢，
     但卡行文本非逐字保真）。影响所有走 other_cards 的未设计卡（含 D-02/D-09 全部）。
 
-触发场景（当前红，修复后转绿为验收基准）：
+触发场景（**2026-09-10 更正：已清偿 → 本文件为验收基准，应全绿**；"当前红"为初版遗留）：
   ① PTRAC $ write particles（_KNOWN_OTHER_CARDS 命中，core.py:1258-1260）；
   ② FILES 22 DUM1 8 $ output files（else 兜底命中，core.py:1282-1291）；
   ③ RAND GEN=2 SEED=12345 $ reproducible（else 兜底命中）。

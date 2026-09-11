@@ -6,7 +6,7 @@
   → 整行静默丢弃，不进 other_cards、不进任何字段。
   仅在「紧跟 SDEF」时被 SDEF 分支（core.py:1003-1028）收集为结构化分布。
 
-触发场景（当前红，修复后转绿为验收基准）：
+触发场景（**2026-09-10 更正：已清偿 → 本文件为验收基准，应全绿**；"当前红"为初版遗留）：
   ① SSR 面源分布：`SSR OLD 3 2 NEW 6 7 12 13 TR D5` 后跟 `SI5 L 4 5`/`SP5 .4 .6`
     （参考 app/docs/源分布卡说明.md 示例 1）；
   ② SDEF 与 SI 之间隔 C 注释行：SDEF 收集循环遇 `C` 即 break → 后续 SI/SP 全丢。
@@ -58,7 +58,8 @@ def _sisp_cards_text(result: dict) -> str:
     """拼出解析结果中所有承载 SI/SP 的位置（other_cards 原样 + 结构化分布 JSON），
     用于断言独立 SI/SP 是否保底保留。"""
     parts = list(result.get("other_cards", []))
-    for key in ("sdef_distributions", "sdef_raw_text"):
+    # TD-23（t5）：旧 sdef_raw_text 已退役（解析侧只写 sdef_distributions），不再参与拼装
+    for key in ("sdef_distributions",):
         raw = result.get(key) or ""
         if raw:
             parts.append(raw)

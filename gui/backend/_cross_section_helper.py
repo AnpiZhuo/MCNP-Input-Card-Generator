@@ -161,7 +161,13 @@ def get_cross_section(data: dict) -> dict:
         if result.get("status") != "ok":
             return {"slices": [], "message": result.get("message", "截面失败")}
         slices = result.get("slices", [])
-        return {"slices": slices, "count": len(slices)}
+        # TD-26（t5）：把 worker 收集到的逐曲面构造失败一起透传（无则省略该键），
+        # 让"截面缺块"能归因到具体曲面而不是消失在裸 except 里。
+        out = {"slices": slices, "count": len(slices)}
+        surface_errors = result.get("surfaceErrors") or []
+        if surface_errors:
+            out["surfaceErrors"] = surface_errors
+        return out
     except subprocess.TimeoutExpired:
         return {"slices": [], "message": "FreeCAD 超时"}
     except json.JSONDecodeError:

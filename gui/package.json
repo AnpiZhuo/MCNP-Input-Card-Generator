@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
     "tauri": "tauri"
   },
   "dependencies": {

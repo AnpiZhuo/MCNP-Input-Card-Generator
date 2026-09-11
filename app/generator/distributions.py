@@ -40,11 +40,19 @@ from typing import Any
 import numpy as np
 
 # ── 卡语法词表（唯一事实；源分布卡说明.md 三/四节 + MCNP5 Manual Vol II p.3-62~64）──
-_SI_LETTERS = ("L", "H", "A", "S", "Q", "T", "F", "V")
+_SI_LETTERS = ("L", "H", "A", "S")  # C810 权威：MCNP 仅支持 H 直方图/L 离散/A 三角/S 对数
 _SP_LETTERS = ("D", "C", "V")
 _DS_LETTERS = ("H", "L", "S", "T", "Q")
 _SB_FN_CODES = ("-21", "-31")
 _KIND_RE = re.compile(r"^(SI|SP|SB|DS|SC)(\d+)")
+
+
+class SourceSamplingError(ValueError):
+    """源/分布语义错误（MCNP 语义错误；调用方捕获后转 error 提示，不静默降级）。
+
+    TD-24（t5）：类定义上移到词表之后——parse 侧（`_parse_si`）也要用它报"非法 SI 类型"，
+    原先定义在文件下半部分（采样小节），语义上不该只属于采样。
+    """
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -58,13 +66,37 @@ def _strip_inline_comment(line: str) -> str:
     return line.strip()
 
 
+_LEGACY_SI_LETTERS = ("V",)  # TD-24（t5）：仅解析容忍、非 C810 合法类型，见 _parse_si
+
+
 def _parse_si(toks: list[str]) -> dict:
-    """SI 行 → {"type", "values"}。无字母 = ""（MCNP 缺省 H）——L-default 修复点。"""
+    """SI 行 → {"type", "values"}。无字母 = ""（MCNP 缺省 H）——L-default 修复点。
+
+    TD-24（t5，两段处置）：
+    1. **合法类型收紧为 H/L/A/S**（`_SI_LETTERS` 已同步收紧，C810 权威）。此前未知首 token
+       会被**当成数值**塞进 values，后续 `_floats` 抛"分布值无法解析为数值"——归因错误
+       （真问题是非法 SI 类型）。现对"纯字母且不在白名单"直接明确报错；`D1/D2` 这类分布
+       引用含数字、非字母-only，不受影响（仍按无字母 SI 处理）。
+    2. **`V` 是必须容忍的例外**：本仓库自己的多源生成器就发 `SI{di}  V  <平坦值>`
+       （`inp_generator._build_multi_sisp_cards`，POS_VEC 分支），若在这里直接 raise，
+       多源 → 生成 → 解析 → 再生成 的往返（R1 不动点 / kitchen-sink R4）会当场崩。
+       故 V **解析通过**（type="V"，保持既有往返语义不变），但语义上不是 C810 合法类型——
+       **抽样侧 `_sample_entry` 仍会对它报"SI 类型 无效"**（`distributions.py` 采样分支），
+       即"越界使用仍会失败"，只是不在解析期连坐。
+       ⚠️ 遗留给 PM 裁决：生成器是否应改发合法类型（如 L）。这属**生成字节变更**，
+       会动 `tests/unit/test_generator_multi_source.py:75` 与 R1/R4 字节断言，需 PM 决策。
+    """
     typ = ""
     vals = toks
     if toks and toks[0].upper() in _SI_LETTERS:
         typ = toks[0].upper()
         vals = toks[1:]
+    elif toks and toks[0].upper() in _LEGACY_SI_LETTERS:
+        typ = toks[0].upper()   # 解析容忍（仓库自身生成物），非合法类型；抽样仍会报错
+        vals = toks[1:]
+    elif toks and re.match(r"^[A-Za-z]{1,3}$", toks[0]):
+        raise SourceSamplingError(
+            f"SI 类型 {toks[0]!r} 非法：MCNP 仅支持 H（直方图）/L（离散）/A（三角）/S（对数）")
     return {"type": typ, "values": vals}
 
 
@@ -94,16 +126,40 @@ def _parse_sb(toks: list[str]) -> dict:
 
 
 def _parse_ds(toks: list[str]) -> dict:
+    """DS 行 → {"type", "param", "distributionIds"}。
+
+    MCNP 形态（app/docs/源分布卡说明.md:171-178，源自 C810 p.3-63）：
+      DSn H J1 ... Jk       （直方图 J 列表）
+      DSn L J1 ... Jk       （离散 J 列表）
+      DSn S S1 ... Sk       （分布编号列表）
+      DSn T                 （匹配模式，无数据；若带数据按 I1 J1 … 对）
+      DSn Q V1 S1 V2 S2 ... （分段区间 → 分布编号）
+
+    **数据统一落在 `distributionIds`**（前端 DsEntry 也是这个字段，避免双字段漂移）：
+      - S：全是分布编号
+      - H/L/Q/T：全是数据 token（J 列表 / V-S 对 / I-J 对）
+
+    `param` 仅在**首 token 非数值**时保留（兼容 DS2 S ERG 3 4 这类带变量名的写法）；
+    首 token 是数值时**不再吞掉它**——历史 bug：`DS1 S 2 3` 曾把 2 当 param、ids 变 ["3"]，
+    取索引 0 得到分布 3（应为 2），使真实导入的 DS 依赖链整体右移一位。
+    """
     ds: dict[str, Any] = {"type": "S", "param": "", "distributionIds": []}
     if toks and toks[0].upper() in _DS_LETTERS:
         ds["type"] = toks[0].upper()
         toks = toks[1:]
-    if ds["type"] == "T":
-        pass  # DS T 无 param/refs
-    elif toks:
+    if toks and not _is_number_tok(toks[0]):
         ds["param"] = toks[0]
-        ds["distributionIds"] = toks[1:]
+        toks = toks[1:]
+    ds["distributionIds"] = toks
     return ds
+
+
+_NUM_TOK_RE = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
+
+
+def _is_number_tok(tok: str) -> bool:
+    """token 是否为纯数值（用于区分 DS 的 param（变量名）与数据起点）。"""
+    return bool(_NUM_TOK_RE.match(str(tok).strip()))
 
 
 def _family_lines_to_structured(raw_lines: list[str], eid: int) -> dict:
@@ -225,7 +281,8 @@ def _format_entry_cards(entry: dict) -> list[str]:
         param = (ds.get("param") or "").strip()
         refs = [str(r) for r in (ds.get("distributionIds") or []) if str(r).strip()]
         if ds_type == "T":
-            lines.append(f"DS{idx}  T")
+            # T 可带 I1 J1 … Ik Jk 匹配对（resolve_ds_t 消费 distributionIds），一并回放
+            lines.append(f"DS{idx}  T" + ("  " + "  ".join(refs) if refs else ""))
         else:
             head = f"DS{idx}  {ds_type}"
             if param:
@@ -341,9 +398,8 @@ def multi_source_probability_count(entries: list[dict]) -> int:
 # 抽样（source-demo-visualization 契约 §1 模块 A：深模块）
 # ────────────────────────────────────────────────────────────────────────────
 
-class SourceSamplingError(ValueError):
-    """源抽样错误（MCNP 语义错误；调用方捕获后转 error 提示，不静默降级）。"""
-
+# TD-24（t5）：`SourceSamplingError` 已上移到文件顶部词表之后（parse 侧 `_parse_si` 也用它），
+# 此处不再重复定义。
 
 # C810 Table 3.4 融合谱常数（b=-1 → D-T，b=-2 → D-D）
 _DT_ENERGY = 14.08
@@ -672,7 +728,7 @@ class DistributionSampler:
         ds_type = (ds.get("type") or "").strip().upper()
         if ds_type == "T":
             return {"default": True}  # T 需独立离散值匹配，source_sampler 用 resolve_ds_t 处理
-        vals = ds.get("values") or []
+        vals = ds.get("distributionIds") or []  # 数据统一落 distributionIds（见 _parse_ds 文档串）
         if ds_type == "Q":
             # Q: V1 S1 V2 S2 ...（V 上界 + S 分布编号）
             pairs = list(zip(vals[0::2], vals[1::2])) if len(vals) >= 2 else []
@@ -710,7 +766,7 @@ class DistributionSampler:
     def resolve_ds_t(self, eid, parent_value) -> dict:
         """DS T 匹配模式（source_sampler 专用）：I1 J1 ... Ik Jk 成对匹配。"""
         ds = self._entry(eid).get("ds") or {}
-        vals = ds.get("values") or []
+        vals = ds.get("distributionIds") or []  # 同 _resolve_ds：数据统一落 distributionIds
         pairs = list(zip(vals[0::2], vals[1::2])) if len(vals) >= 2 else []
         for iv, jv in pairs:
             if abs(float(iv) - float(parent_value)) < 1e-12:

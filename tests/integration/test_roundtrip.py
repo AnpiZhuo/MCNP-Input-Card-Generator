@@ -7,8 +7,10 @@
 - R3 分段：surfaces / other_cards / TR 卡无内容丢失（允许顺序后移）。
 - R4 kitchen-sink deck：每个 dataclass 字段填非平凡值跑 R1+R2。
 
-【当前状态】R1 在现有代码上为 RED —— 根因是生成器 C 注释头泄漏（见本文件底部
-KNOWN_LEAK_FIELDS）。这是 M1.4 全绿前必须由引擎侧修复的阻塞项。
+【当前状态（2026-09-10 更正）】R1 不动点**已成立，全部应为 GREEN**。初版写"R1 在现有代码上为 RED
+（生成器 C 注释头泄漏）"——该表述**已作废**：注释头泄漏已由"banners 单一事实来源 + 解析器精确剥离"
+修复，各 R1 用例现应全绿。**红灯就是真红灯，不是"预期红"**（审计 TD-09）。
+历史根因备忘仍见本文件底部 KNOWN_LEAK_FIELDS。
 """
 from app.generator.inp_generator import generate_inp_from_deck
 from app.generator.parsers import parse_inp_text
@@ -37,7 +39,7 @@ def roundtrip_generations(deck: DeckData) -> tuple[str, DeckData, str]:
 
 # ── R1 不动点 ───────────────────────────────────────────
 def test_r1_fixed_point_minimal_deck():
-    """R1：最小 deck 第二代起字节稳定。当前应为 RED（头泄漏）。"""
+    """R1：最小 deck 第二代起字节稳定。**已清偿 → 应 GREEN**（初版曾写"当前应为 RED（头泄漏）"，已作废）。"""
     from tests.conftest import single_cell_deck
     g1, _d2, g2 = roundtrip_generations(single_cell_deck())
     assert g1 == g2, (
@@ -48,14 +50,14 @@ def test_r1_fixed_point_minimal_deck():
 
 
 def test_r1_fixed_point_kitchen_sink():
-    """R1：kitchen-sink（R4）第二代起字节稳定。当前应为 RED。"""
+    """R1：kitchen-sink（R4）第二代起字节稳定。**已清偿 → 应 GREEN**。"""
     from tests.conftest import kitchen_sink_deck
     g1, _d2, g2 = roundtrip_generations(kitchen_sink_deck.__wrapped__())
     assert g1 == g2, "R1 在 kitchen-sink deck 上不成立（头泄漏导致输出增长）。"
 
 
 def test_r1_fixed_point_sample_prob41c():
-    """R1：vendor 样例 prob41c 第二代起字节稳定。当前应为 RED。"""
+    """R1：vendor 样例 prob41c 第二代起字节稳定。**已清偿 → 应 GREEN**。"""
     text = load_sample("prob41c.inp")
     deck, _w = parse_inp_text(text)
     g1, _d2, g2 = roundtrip_generations(deck)
@@ -63,7 +65,7 @@ def test_r1_fixed_point_sample_prob41c():
 
 
 def test_r1_fixed_point_sample_avr13():
-    """R1：vendor 样例 avr13 第二代起字节稳定。当前应为 RED。"""
+    """R1：vendor 样例 avr13 第二代起字节稳定。**已清偿 → 应 GREEN**。"""
     text = load_sample("avr13.inp")
     deck, _w = parse_inp_text(text)
     g1, _d2, g2 = roundtrip_generations(deck)
@@ -165,7 +167,7 @@ def test_r2_material_rows_and_mt_survive():
 
 
 def test_r2_material_options_survive():
-    """材料 options（nlib= 等）应逐字段保留。当前 RED：options 被并入 raw 行丢失。"""
+    """材料 options（nlib= 等）应逐字段保留。**已清偿 → 应 GREEN**（初版："当前 RED：options 被并入 raw 行丢失"）。"""
     from tests.conftest import kitchen_sink_deck
     deck = kitchen_sink_deck.__wrapped__()
     g1, deck2, _g2 = roundtrip_generations(deck)
@@ -250,8 +252,8 @@ def test_r2_tally_single_particle_survive():
 def test_r2_tally_multi_particle_parse_supported():
     """多粒子计数卡（生成输出 F4:N,P）应可解析回 TallyDefinition。
 
-    当前 RED：parse_f_tally 只认单粒子设计符（F4:N），"F4:N,P" 被丢进 other_cards，
-    多粒子计数在 round-trip 后消失。
+    **已清偿 → 应 GREEN**（初版写"当前 RED：parse_f_tally 只认单粒子设计符"，已作废；
+    多粒子正则已修，见 `app/generator/parsers/core.py:825-826`）。
     """
     from tests.conftest import kitchen_sink_deck
     deck = kitchen_sink_deck.__wrapped__()

@@ -255,14 +255,22 @@ def build_manifest(base_file: str, language: str, parameters: list[dict],
 
 
 def build_summary_tsv(parameters: list[dict], records: list[dict]) -> str:
-    """汇总 TSV：index + 各参数 + exit + keff；缺失记 n/a，无结尾换行。"""
+    """汇总 TSV：index + 各参数 + exit + keff；缺失记 n/a，无结尾换行。
+
+    TD-26（t5）：`exitCode == "timeout"`（api_server 在 `subprocess.TimeoutExpired` 时置，
+    另有 `timedOut: True` 标记）原样输出 ``timeout`` 而不是 ``n/a``——否则"超时"与
+    "MCNP 没产生输出"在落盘摘要里不可区分。
+    """
     header = ["index"] + [p["name"] for p in parameters] + ["exit", "keff"]
     lines = ["\t".join(header)]
     for rec in records:
         row = [str(rec.get("index", ""))]
         for p in parameters:
             row.append(str(rec.get("parameters", {}).get(p["name"], "n/a")))
-        row.append("n/a" if rec.get("exitCode") is None else str(rec.get("exitCode")))
+        if rec.get("timedOut") or rec.get("exitCode") == "timeout":
+            row.append("timeout")
+        else:
+            row.append("n/a" if rec.get("exitCode") is None else str(rec.get("exitCode")))
         k = rec.get("keff")
         row.append("n/a" if k is None else f"{k:.6f}")
         lines.append("\t".join(row))

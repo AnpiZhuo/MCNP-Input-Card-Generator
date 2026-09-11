@@ -5,15 +5,15 @@
   - api.yaml 仅 25 端点，无三 meshtal operationId；
   - `_err(self, msg, status=500)`（:546）无 hint 参数（F4 未实现）。
 
-红基线 pin：
-  1. 漂移闸门预置 3 operationId：handlers dict 必须有 /api/meshtal-detect|parse|texture —— RED
-  2. 漂移闸门预置：api.yaml 必须有三 path 且 operationId=meshtalDetect/Parse/Texture —— RED
-  3. F4：_err 签名增可选 hint 参数（缺省 → 对既有 25 端点加性兼容）—— RED
-  4. HTTP meshtal-detect：ok 信封 + files/outputDir —— RED（端点 404）
-  5. HTTP meshtal-parse：响应带 grid_bounds + match（A1.2）—— RED（端点 404）
-  6. HTTP meshtal-parse 坏文件 → 错误响应带友好 hint（F4）—— RED（端点 404）
-  7. HTTP meshtal-texture：标量帧字段（resolution/worldBox/scalarRange/dataBase64）—— RED（端点 404）
-  8. 对照：既有端点错误响应不含 hint 字段（hint 空缺省省略，加性兼容不破坏既有字段）—— GREEN 对照
+红基线 pin（**2026-09-10 更正：以下 1-7 项均已于 v1.7.0 清偿，本文件应全绿；"RED"字样为初版遗留，红灯即真红灯**）：
+  1. 漂移闸门预置 3 operationId：handlers dict 必须有 /api/meshtal-detect|parse|texture —— 已交付
+  2. 漂移闸门预置：api.yaml 必须有三 path 且 operationId=meshtalDetect/Parse/Texture —— 已交付
+  3. F4：_err 签名增可选 hint 参数（缺省 → 对既有端点加性兼容）—— 已交付
+  4. HTTP meshtal-detect：ok 信封 + files/outputDir —— 已交付
+  5. HTTP meshtal-parse：响应带 grid_bounds + match（A1.2）—— 已交付
+  6. HTTP meshtal-parse 坏文件 → 错误响应带友好 hint（F4）—— 已交付
+  7. HTTP meshtal-texture：标量帧字段（resolution/worldBox/scalarRange/dataBase64）—— 已交付
+  8. 对照：既有端点错误响应不含 hint 字段（hint 空缺省省略，加性兼容不破坏既有字段）—— 对照
 
 铁律：本文件【不 import】gui.backend.api_server（模块级 pyvista/FreeCAD 探测）。
 HTTP 往返用子进程跑 api_server.py（照 test_api_contract.py 范式）。

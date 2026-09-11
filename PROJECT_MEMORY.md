@@ -14,6 +14,43 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
+## S1（当前批次）技术债修复（2026-09-10，**进行中**）
+
+- **批次目标**：按技术债审计（**34 条**，见 `docs/tech-debt-report.md` + `docs/audit/t4-consolidated.md`）逐条修复。用户指令：可跑测试/构建，"直到所有技术债修复完成"。**bug 修复批严禁升版**（§5）→ 文件版本仍 **1.7.5**。
+- **⚠️ 硬约束（本轮最重要的事实）**：PM 与全部 4 名成员**都没有 shell 工具** ⇒ **所有改动都是静态编写 + 静态自检，未跑过任何测试/构建**。门禁验证必须有 shell 的一方执行 —— 命令清单见 **`docs/fix-verification.md`**（含 5001 先决条件、pytest-timeout 陷阱、预期结果、红灯分类处置）。
+- **✅ PM 亲自完成的修复**：
+  - **TD-02**：`gui/mcnp_sidecar.spec:30` `_keep_py` 补 `"lattice.py", "diff_inp.py"`；`generate_step.py` 移出 GUI_BACKEND 数据项。
+  - **TD-04**：删假 STEP 端点（`api_server.py` 路由 + handler、`api.yaml` 契约段、`generate_step.py` 改 DEPRECATED 占位）。
+  - **TD-05**：`mcnp_bridge.py` docstring 去 stdio + `--mcp-server` **显式 `sys.exit(2)`**（防 fallthrough 起第二个 5001）；`docs/手动打包方法.md` 改 HTTP/8100 口径。
+  - **TD-03（发布阻断，最重）**：`distributions.py` `_parse_ds` 重写——数据统一落 `distributionIds`、`param` 仅在首 token 非数值时保留、**修 J 列表右移**（`DS1 S 2 3` 曾取到分布 3）；`_resolve_ds`/`resolve_ds_t` 改读 `distributionIds`（Q/L/H/T 原先读**无人产出**的 `values` → 恒默认值）；`DSn T` 回放补 token；**删 4 个假绿测试 + 新增 3 个真实解析路径回归**。
+  - **TD-24**：`_SI_LETTERS` 收紧为 `("L","H","A","S")`。
+  - **TD-06**：`test_lattice.py` **两处** `continue` → `assert`（`:678`/`:829`）；`latticeInstances.test.ts` 去 `it.skipIf` 改硬断言。
+  - **TD-07**：`useCellClosure.ts` 指纹由「长度」改「内容 JSON」+ `refresh` 的 deps 改 `[]` + `reportRef`（修陈旧闭包）。
+  - **TD-17**：新增 `gui/tsconfig.test.json` + `package.json` 的 `typecheck`（此前 **75 个测试文件不在 tsc 覆盖内**）。
+  - **TD-09**：清 **12 处**"当前应为 RED/当前红"反向 docstring（会让人把真红灯当绿灯）。
+  - **TD-31**：`source-demo-visualization.md:25` 的 `resolve_ds -> list[int]` 改为与实现一致的 `-> dict`。
+  - **TD-10/11/33（记忆侧）**：§1 版本改 **1.7.5**（含演进链）；§2 快照重写（部署 1.7.5 / HEAD 未打包三态 / 技术债状态）+ 补 **8 组记忆外功能**；§3 端点 30→**49**；§5 补当前版本 + **新增 hexCenter 权威公式条目**（防照抄旧公式，含 L1 锁死表警示）；§8 补 **v1.7.5 里程碑**；§9 基线改"快照 + 重跑后覆盖" + 加 **typecheck 行** + 删 colorize flaky 豁免；**S2/S3 重写** + 新增 **S3.1 两条纪律**（提交即登记 / 三态表述）。
+  - **新增 `docs/fix-verification.md`**：验证交接清单。
+- **🔄 并行派单中**（成员，无 shell、只做静态编辑+自检）：**t5** 后端（TD-23/21/15/22/20/26/08后端）、**t6** 前端（TD-16/32/30/18/27）、**t7** 文档（TD-29/14/33/13 + 补写 `watertight-check.md`）、**t8** 后端收尾（TD-25 + TD-28 Python 侧 + **TD-34 spec 自动闸门**）。
+- **⛔ 有意不做**：**TD-19**（214 处 `any` 重构）——无 tsc 可跑时盲改大类型风险高于收益，留待有 shell 的批次。
+- **🔴 待实机验证（决定 TD-02 是否升 P0）**：打包版能否 import `lattice`/`diff_inp` —— 只差**一次只读 HTTP 请求**。PM 静态链条：`PYZ-00.toc:782` 只有 dotted 名 `app.lattice`、**无顶层 `lattice`**，`COLLECT-00.toc` 无这两个文件，而 `_import_app()` 取**顶层名**；reviewer 另查明记忆 `:138/:155` 的"部署版 preview-lattice 通过"属 **08-28 v1.7.4 构建**、与当前 1.7.5 **非同一次构建**，故不构成反证。命令见 `docs/fix-verification.md` §1。
+
+## S1（上一批次）技术债审计（2026-09-10，**报告已交付**）
+
+- **批次目标**：审计多轮会话外改动后累积的技术债（用户指令："其他对话已经对项目做了很多改动，查一下有没有技术债"）。**用户已定：今晚只做审计、不做修复；门禁与打包明晚再议。**
+- **✅ 产出（全部为新增审计文档，未改任何代码）**：
+  - `docs/tech-debt-report.md`（PM 汇总：方法口径 + PM 独立复核证据 + 验收结论 + 口径冻结 + 处置批次 + 待裁决 + 未验证清单）
+  - `docs/audit/t1-memory-debt.md`（23 条：P0 5 / P1 13 / P2 5）
+  - `docs/audit/t2-backend-debt.md`（**25 条 + 3 相邻**：P0 3 / P1 7 / P2 12 / P3 3；**BE-06 已由 t2 自行撤回**）
+  - `docs/audit/t3-frontend-debt.md`（**25 条**：P0 0 / P1 11 / P2 9 / P3 5，含 FE-22）
+  - `docs/audit/t4-consolidated.md`（**定稿总表 32 条** + 10 条改判理由 + 4 条必裁决结论 + 未验证 8 条）
+- **✅ 最终口径（冻结）**：合并后 **32 条**；**P0（已证实）0 条**；**P0 候选 2 条**——**TD-02**（打包版 `lattice.py`/`diff_inp.py` 动态导入缺口，待 runtime，阻塞发布=是）、**TD-03**（DS 解析/抽样键错配，**打包即 P0**，阻塞发布=是）；P1 23 条 / P2 9 条 / P3 若干子项。
+- **✅ PM 独立复核（不依赖成员结论）**：① 交付链路断裂——HEAD `4f0798fa`(SDEF 演示) 已提交但**不在用户安装的 1.7.5 里**（部署 `_internal/app/generator/` 无 `source_sampler.py`，而 spec `_keep_dirs` 整目录打源文件）；② 版本实际 **1.7.5**（五处一致）vs 记忆 §1 写 1.7.2/短期记忆写 1.7.4；③ 幽灵 `--mcp-server`（`mcnp_bridge.py:14-17` 与 `docs/手动打包方法.md:149-151` 仍在教，实际 fallthrough 到 `api_server.main()` 起第二个 5001）；④ `docs/contracts/watertight-check.md` 不存在但被两处引用；⑤ 抽验成立：`Preview3DLattice.tsx` 零 import 死模块、`tsconfig.json` 只 include src（82 测试文件不在 tsc）、`backend.ts` 同名危险 `generateInp`、`useCellClosure.ts:37-43` 指纹只比长度（同长度编辑静默显示旧报告）、`generate_step.py:5-17` 假 STEP 端点、DS 键错配；⑥ **新证据（成员均未使用）**：PyInstaller TOC（`gui/build/mcnp_sidecar/PYZ-00.toc:782` 只有 `app.lattice` 无顶层 `lattice`；`COLLECT-00.toc` 无 `lattice.py`/`diff_inp.py`）→ 静态强指向打包版 500，但与 `:122` 的"部署版冒烟 preview-lattice 通过"**矛盾**，故挂"待 runtime"不升 P0。
+- **⚖️ PM 验收**：t4 定稿**通过**（抽验其最关键反证 TD-06 成立：`tests/unit/test_lattice.py:683` 用真实 `expand_positions` 断言 golden；推翻成员原判 10 处且逐条给理由；拒绝为凑数拔高）。
+- **🔴 待明晚（修复批次，用户已定"明晚再搞"）**：批次 0 先实测 TD-02（对安装版 sidecar 打 `/api/lattice-extent`、`/api/diff-inp`，**先查 5001 占用者**）→ 止损三件套（补 spec + `test_sidecar_spec_keep.py` / 幽灵参数 `sys.exit(2)` + 清 5 处文档 / `typecheck`）→ 发布阻断（TD-03 含真路径回归）→ 闸门可信度（TD-06/09/18/08）→ 记忆文档（TD-12/10/14/13/11）→ 代码债清偿。**本批不含任何修复。**
+- **✅ 用户已裁决（Q10）**：栅元「外无限」**允许存在，仅提示感叹号；唯有曲面不封闭是禁止** → 待落地时统一三处 `infinite` 映射（TD-32），并让 `CellEditDialog` 改走 `useCellClosure` 收敛第三份实现。
+- **⚠️ 审计性质（引用须知）**：**全程静态、零实机执行**（PM 与 4 名成员**均无 shell 工具**），未跑 pytest/vitest/tsc/build/打包、未装依赖、未起停服务。门禁是否真绿、是否有隐藏 skip、打包版是否真 500、当前工作区未提交状态——**均未验证**，见 `docs/tech-debt-report.md` §7。
+
 ## S1（当前批次）SDEF 源粒子演示可视化（TODO #6，2026-09-10，已实现，本次提交）
 
 - **批次目标**：源（SDEF）界面加「🎬 演示源」→ 按 SDEF + SI/SP/SB/DS 抽样 **500 个粒子** → 独立 3D 窗口显示源的形状与分布（粒子点 + 方向短线 + 粒子类型基色 + 能量深浅），**不做输运**（只表"从哪发出、往哪飞"）。用户逐项拍板：**做全**（按 MCNP 语义，**不降级不近似**）、**有错报错**（MCNP 语义真错误 → 就地提示、不开窗）、**`D:\MCNP\MCNP6\C810.pdf` 为唯一权威**、**复用 voxel_csg 本地几何判定**（含宏体）、**用 codebase-design 深模块化**。
@@ -269,20 +306,23 @@
 ## S2 工作区与分支
 
 - **分支**：`main`。
-- **工作树未提交改动**（git status 快照，批量编辑栅元批次）：
-  - 修改：`gui/src/components/GeometryTab.tsx`（栅元列表批量编辑接入）
-  - 新增：`gui/src/components/BatchCellEditDialog.tsx`、`gui/src/utils/batchCellEdit.ts`、`gui/test/batchCellEdit.test.ts`、`gui/test/batchCellEditDialog.dom.test.tsx`
-  - 说明：`gui/test/volume/__snapshots__/volumeShader.snapshot.test.ts.snap` 仅行尾 LF/CRLF 差异（非内容改动，环境产物，勿提交）；此前 `app/*.py` 等相关改动已提交，故不再列出。
-- **版本四处+锁文件**：tauri.conf.json / package.json / Cargo.toml / README 徽章 / Cargo.lock 恒 **1.7.2** 一致。
+- **当前 HEAD**：`main` → **`4f0798fa880eac85dedb7a210e677f32bf3418ad`**（`feat(source-demo): SDEF 源粒子演示可视化（TODO #6）`，2026-09-10）。查看方式：`.git/refs/heads/main`（hash）+ `.git/logs/HEAD`（reflog，可读纯文本，比 `git log` 更适合 AI 只读）。
+- **工作树未提交改动**：**本批（技术债修复）全部改动即当前未提交内容**——详见下方 S1「技术债修复批次」的改动清单与 `docs/tech-debt-report.md`。⚠️ **不改用"猜测"**：精确的 porcelain 清单需实跑 `git status --porcelain`（本会话无 shell，PM 与全部成员均无法执行）。
+- **版本五处+锁文件**：`tauri.conf.json` / `package.json` / `Cargo.toml` / `Cargo.lock` / README 徽章 恒 **1.7.5** 一致（**唯一权威 = `gui/package.json:4`，侧边栏版本号读它**）。
 
 ## S3 进行中任务 / 待办
 
-- **已完成（2026-08-22）**：GQ/SQ 曲面 3D 预览修复——施工 + 3 bug 修复 + 全量门禁（pytest 544 / vitest 345 / tsc）+ PyInstaller sidecar 重打包 + 打包版 GQ/SQ preview-3d 冒烟全过；交接文档已更新为收尾版 `P:\dekstop\GQ-SQ_3D预览修复_交接文档.md`。
-- **待发版**：tauri build + 部署（§9 链路，含 6.2 时效坑）；版本号由上级另行指定（施工期间文件恒 1.7.2）；当前全部改动未 commit。
-- **已完成**：3D 重合检测（空间索引 + 精确布尔 + GQ/SQ 探针 + 快捷添加补集决策），契约 geometry-check.md 落地。
-- **讨论过未做（可排期）**：无（OWEN 借鉴项已全部落地：PNNL 精选材料库 / BEAVRS·17×17 夹具 / mctal 解析 / 校验规则交叉核对 / 参数扫描后端+端点+**前端弹窗** `gui/src/components/SweepDialog.tsx`，OutputTab「⚙ 参数扫描」入口）。
-- **已知阻塞**：无。
+- **⭐ 当前（2026-09-10）**：**技术债修复阶段**（审计已完成 → 修复进行中）。修复批次与剩余项见 S1 顶部「技术债修复批次」；未修完不得进入发版。
+- **待发版**：全部修复完成且**门禁实跑全绿**后，走 §9 手动打包链路（含 6.2 sidecar 时效坑）。**注意**：本次修复不改版本号（bug 修复批严禁升版，§5），打包后仍为 1.7.5；且会把尚未打包的 SDEF 演示功能一起带上——发布前必须过 `docs/tech-debt-report.md` §5 的发布冒烟清单（含 `/api/diff-inp`、`/api/lattice-extent`、`/api/source-demo-sample`）。
+- **已交付（近期）**：AI 接入 MCP over HTTP（1.7.5）／格阵 fill 三阶段 + 覆盖完整性检测／`*fmesh` 能量沉积可视化／材料库深化／栅元封闭性自检／校验规则补全 + 几何水密自检／参数扫描改造／源项 adv 权威化 + 主窗口缩放／SDEF 源粒子演示（**已提交未打包**）。
+- **讨论过未做（可排期）**：`MCNP输入卡生成器_功能待办清单.md` P1#2「3D 预览悬停读数 + 栅元编号标签」（点选高亮已做）；审计遗留的非阻塞项（TD-19 类型债 214 处 `any` 重构、TD-25/26/27/31 的 P2/P3 子项——见 `docs/audit/t4-consolidated.md`）。
+- **已知阻塞**：无（**唯一环境类风险**：5001 端口劫持——跑 HTTP 契约测试前必须确认无人占用；见 §6）。
 - **其余**：按用户新反馈排队。
+
+### S3.1 两条新增纪律（2026-09-10 技术债审计输出，**必须遵守**）
+
+1. **提交即登记**：每批改动结束**必须**记「commit 短号 **或** 待提交文件清单」。**依据**：审计发现 08-22~09-10 有约 20 条真实提交（含 1.7.5 升版、封闭性自检、参数扫描改造、源项 adv+appScale）在记忆里**零记录**（`M-16`，记忆外改动），是本次所有记忆债的根因放大器。
+2. **三态表述**：凡记录已完成的功能，**必须写清「已提交 commit / 已打包版本 / 部署校验」三态**，不得只写"已完成"。**依据**：SDEF 演示批次的"已实现/已提交/未打包"三态在记忆里曾自相矛盾（`M-15`），并导致"用户安装版有没有该功能"无法回答（实测：**没有**）。
 
 ---
 
@@ -293,7 +333,7 @@
 ## §1 项目身份（语义记忆）
 
 - **名称**：MCNP 输入卡生成器（MCNP Input Card Generator）
-- **版本**：1.7.2（快捷建栅元新功能，用户 2026-08-18 指定；**bug 修复批严禁升版**，V1.7.2.2 批次文件版本恒 1.7.2；升版由上级另行指定）
+- **版本**：**1.7.5**（五处+锁文件一致：`gui/package.json:4` / `gui/src-tauri/tauri.conf.json:10` / `gui/src-tauri/Cargo.toml:3` / `gui/src-tauri/Cargo.lock` / `README.md:25` 徽章；2026-09-04 因 AI inputcard-mcp + 快捷建栅元六棱柱/四面体新功能上线升版，reflog `.git/logs/HEAD:251`）。**历史演进**：1.7.2（2026-08-18 快捷建栅元）→ V1.7.2.2 批次（文件恒 1.7.2）→ 1.7.3（2026-08-22 GQ/SQ+重合检测）→ 1.7.4（2026-08-27 MCNP 窗口裁剪+U 分组）→ **1.7.5**。**规则不变：bug 修复批严禁升版；升版由上级另行指定**。
 - **技术栈**：
   - 前端 UI：React 18 + TypeScript + Vite（端口 1420，表单化标签页界面）
   - 3D 渲染：Three.js（3D 预览 + 体积可视化）/ SVG（平面截面 / OUTP 折线图）
@@ -306,7 +346,9 @@
 
 ## §2 当前状态快照（语义记忆）
 
-- **开发阶段**：已交付 v1.7.2（2026-08-18 打包）+ V1.7.2.2 批次（2026-08-19 终版重打包，4 修复进包）；后续功能（#7 重合检查）待用户排期
+- **开发阶段**：**已发布 v1.7.5 并部署**（`D:\MCNP\MCNP输入卡生成器`，部署版 README 徽章 = 1.7.5，实测确认）。**⚠️ 源码 HEAD（`4f0798fa`，SDEF 源粒子演示）尚未打包给用户**——部署包 `_internal\app\generator\` 无 `source_sampler.py`，且部署版 `distributions.py` grep `^class ` 零命中（无 `DistributionSampler`）⇒ 用户安装版**不含**该功能。
+- **技术债状态**：2026-09-10 完成全量技术债审计（32 条，详见 `docs/tech-debt-report.md` + `docs/audit/`），**已进入修复阶段**（本批见下方 S1「技术债修复批次」）。审计结论：**已证实 P0 = 0**、P0 候选 2 条（TD-02 打包版动态导入缺口、TD-03 DS 键错配）。
+- **待排期**：无（#7 重合检查已于 2026-08-22 交付；`MCNP输入卡生成器_功能待办清单.md` 的 P1#2「3D 预览悬停/编号标签」仍未做）
 - **已完成功能**：
   - 8 标签页表单编辑（基本/材料/几何/源/计数/高级/输出）
   - INP 生成/导入（含拖拽）、工作区自动保存/恢复、4 套主题
@@ -329,6 +371,15 @@
   - E0/En/T0/Tn 网格（线性/对数/自定义）、三种源模式（固定/SDEF/KCODE）、SSW/SSR 面源
   - **文本↔表单双向互转**：材料/几何/计数三标签页（深模块 `useSectionTextMode`）
   - MCNP 检测与一键运行、内联参考文档
+  - **AI 接入（MCP over HTTP）**（2026-09-04，1.7.5）：主程序启动时自动拉起 `--mcp-http`（本机环回 **8100** `/mcp` + `/workspace`），外部 AI agent 可直读直改程序当前工作区；前端「🤖 AI」面板给"给 AI 的自配置提示词"。**stdio 接入（`--mcp-server` / 注册MCP.bat）已于 09-04 移除**（reflog `:267`）——`mcnp_bridge.py` 对 `--mcp-server` 现为显式 `sys.exit(2)`（防止 fallthrough 起第二个 5001）。契约见 `inputcard_mcp/`、`AI接入.md`、`docs/inputcard-mcp.md`。
+  - **栅元封闭性自检**（2026-09-09）：`/api/check-cell-closure` 判定 6 状态（closed / infinite / semi_infinite / empty / voxel / unresolvable），结果标在栅元列表「封闭」列；3D 预览顺带检测；深模块 `gui/src/utils/{cellClosure.ts,useCellClosure.ts}`。**展示语义（用户 2026-09-10 裁决）**：外无限 = 允许存在、仅提示**感叹号**；**唯有曲面不封闭 = 禁止**。⚠️ 触界判定依赖 bound（`app/_freecad_csg_worker.py:1122-1175`，tol = B×0.005）。
+  - **校验规则补全 + 几何水密自检**（2026-09-09）：validator 6 条语法规则（ZAID 格式 / 份额正负号 / S(α,β) 目标核素 / 宏体参数个数 / 80-128 列 / 未定义引用）；几何页「🩺 几何自检」+ 栅元保存/生成 INP 自动触发（FreeCAD BRep 缝隙 + 重叠）。
+  - **参数扫描改造**（2026-09-09）：免正则选中即参数 + 多核并行 + 彩色行标记。
+  - **源项编辑器权威化 + 主窗口等比缩放**（2026-09-09）：深模块 `sourceAdv.ts`（adv 权威）/ `useDeckSynced.ts` / `appScale.tsx`；源类型模板精简为单点源 / 多点源 / 高级自由（删除七种冗余模板与自动分布预设）。
+  - **格阵 fill 三阶段 + 覆盖完整性检测**（2026-08-24~09-04）：`app/lattice.py` 深模块 + 编辑器 UI 画布 + 3D universe 实例化 + `/api/validate-universe-coverage`（红框预防）+ 切面导出（PNG/SVG + CSV，`gui/src/volume/sliceExport.ts`）。
+  - ***fmesh 能量沉积可视化**（2026-09-04）：`*FMESH` 卡（MeV/g）解析 + 3D 可视化 + 单位标签。
+  - **SDEF 源粒子演示可视化**（2026-09-10，TODO #6，**已提交未打包**）：`DistributionSampler` + `source_sampler.py` + 全宏体拆解 + `/api/source-demo-sample` + 独立「🎬 演示源」3D 窗口。
+  - **部署提速 + preview_cache 跨进程持久化**（2026-09-04）：`_surf_classes()` 惰性导入 + 后台预热（`import api_server` 2546ms→299ms）；STL 缓存落盘 `D:\MCNP\memory`（跨后端重启命中）。
 - **用户真实数据档案**：`D:\MCNP\new\claude\meshtal`（tally14/p；旧卡=点探测器周围 1×2×2 网格，新卡=±2000 全域 20×20×10）；模型=原点钨板（rpp -1 1 -1 1 0 1）+ 真空 so 1000/2000；输出样本 `tests/fixtures/simple_tally.outp`、`tests/fixtures/real_meshtal_jk.meshtal`
 - **已知阻塞**：无
 
@@ -386,12 +437,12 @@
 | `README.md` | 项目总览（技术栈/功能/打包说明/项目结构） | — |
 | `app/docs/` | MCNP 参考文档（曲面卡/FN 卡/输出卡/PRINT/C810/源分布/sample_format） | — |
 | `app/UI_ARCHITECTURE.md` | UI 架构说明：三层边界/启动链路/deck JSON 契约/raw_overrides/往返保真/技术债地图 | 架构师 |
-| `docs/contracts/api.yaml` | **OpenAPI 3.0 契约**（30 端点，每 path 带 operationId，防漂移闸门验证） | 架构师 |
+| `docs/contracts/api.yaml` | **OpenAPI 3.0 契约**（**49 path / 49 operationId**，每 path 带 operationId，防漂移闸门验证） | 架构师 |
 | `docs/CHANGELOG.md` | **完整变更流水档案（2026-08-22 起，历史 §8 外置于此）** | 项目经理 |
 | `docs/backend-changes.md` / `frontend-changes.md` | 后端/前端逐批改动清单 | 架构师 |
 | | | |
 | **测试** | | |
-| `tests/` | **测试网**：unit + parser + integration（含契约闸门/真实 HTTP），pytest **573** 绿；`gui/test/` vitest **358** 绿（含 jsdom DOM 交互测试） | 测试 |
+| `tests/` | **测试网**：unit + parser + integration（含契约闸门/真实 HTTP）；`gui/test/` vitest（含 jsdom DOM 交互测试）。**计数基线见 §9——历史数字多为各批当时快照，勿直接引用** | 测试 |
 
 ## §4 关键架构决策 ADR（语义记忆）
 
@@ -428,7 +479,19 @@
 
 ## §5 核心业务规则（语义记忆 · 必读）
 
-- **版本号规则（上级硬规则）**：**任何 bug 修复批次严禁提升版本号**（改多少轮 bug，文件版本号恒为当前版本；PM 曾擅自升到 1.7.2/1.7.3 属违规，已回退并记此规则）。仅**实际新功能**上线才由上级重新指定版本号——快捷建栅元新功能用户指定 **1.7.2**（2026-08-18）。打包时版本四处+锁文件（tauri.conf.json / package.json / Cargo.toml / README 徽章 / Cargo.lock）必须一致；**Cargo/tauri 只接受 `主.次.修订`**，四段号（如 1.7.2.2）会构建失败，仅可作批次号。
+- **⭐ hexCenter 权威公式（单一事实，2026-09-10 立此条目以防误用）**：
+  ```
+  x = col * pitch + row * pitch / 2
+  y = row * pitch * √3 / 2
+  ```
+  代码权威在**两处且必须逐位一致**：`gui/src/utils/lattice.ts:130-137` ↔ `app/lattice.py:604-616`。
+  **⛔ 历史记录里的旧公式不要照抄**：本项目 2026-08-25 之前用的是"pointy-top 顶点+X"式
+  `x = i·p·√3/2, y = j·p + (i%2)·p/2`（差 30° 旋转），已全部替换。**本记忆文件 §1~§3 与 S1/S2 历史条目里、
+  以及 `docs/frontend-changes.md` / `docs/qa-report*.md` / `docs/backend-changes.md` / **`docs/contracts/lattice-fix15-design.md`（含 L1 锁死表）**
+  中出现的旧式写法均为历史残留**。⚠️ **L1 锁死表曾写错公式 —— 它是跨语言实现依据，写错会污染实现**（审计 TD-29）。
+  被反复"根因修复"过的高危公式，改前先查本节。
+
+- **版本号规则（上级硬规则）**：**任何 bug 修复批次严禁提升版本号**（改多少轮 bug，文件版本号恒为当前版本）。仅**实际新功能**上线才由上级重新指定版本号——快捷建栅元新功能用户指定 **1.7.2**（2026-08-18）；**当前版本为 1.7.5**（2026-09-04 因 AI inputcard-mcp + 六棱柱/四面体新功能上线，reflog `.git/logs/HEAD:251`）。打包时版本五处+锁文件（`tauri.conf.json` / `package.json` / `Cargo.toml` / `Cargo.lock` / README 徽章）必须一致；**Cargo/tauri 只接受 `主.次.修订`**，四段号（如 1.7.2.2）会构建失败，仅可作批次号。
 - **依赖红线（上级 2026-08-14 更新）**：**新依赖一律须用户批准，且由用户指定安装位置**（2026-08-23 更新：不再默认零新依赖；评估时列出依赖名/用途/体积/许可/替代方案，批准后按用户指定位置安装，如 node_modules 常规位置或 vendored 目录）；**严禁自动运行 npm install / npm ci / pip install**（用户高度敏感，违反即打回）；测试不得 import gui.backend.api_server（模块级 pyvista/FreeCAD 探测污染）。**2026-08-22 用户批准的唯一例外**：`jsdom` / `@testing-library/react` / `@testing-library/dom`（devDeps，用于 SweepDialog DOM 组件测试，已写入 package.json）。
 - **权威源**：MCNP 卡类型唯一权威 = `D:\MCNP\MCNP6\C810.pdf`（实际 = MCNP5 卷 I+II 全文 + 发布说明；卡格式权威章 = MCNP5 卷 II Ch.3，PDF 页 526-691）；`app/docs/` 蒸馏 md 与 `docs/contracts/card-lexicon.md` 均为**派生**，须随 PDF 更新。
 - **DeckData 是聚合根**：前端 DeckContext ↔ 后端 generate/parse 全走 DeckData 单对象，避免参数膨胀。
@@ -480,7 +543,8 @@
 
 | 版本 | 时间 | 内容 |
 | :--- | :--- | :--- |
-| **v1.7.4** | 2026-08-27 | **3D 预览 MCNP 窗口裁剪修复 + U 分组侧边栏**（用户指定新功能上线升版）：① 实体=universe∩格元盒∩容器cell，修超壳/重叠外壳 + 无限水虚假水块（BEAVRS 超壳叶 48→16）；② 3D 预览侧边栏改 U 分组 + 保留未分组栅元；disc 改用容器裁剪 STL、subPitch 半径；版本五处同步 |
+| **v1.7.5** | 2026-09-04 | **AI 接入 inputcard-mcp（MCP over HTTP）+ 快捷建栅元六棱柱(RHP)/四面体 + 深模块化 + 废弃一键打包**（新功能上线，用户指定/确认升版）：`inputcard_mcp/` 包（6 深工具，统一按语义段读写）；主程序启动自动拉起 `--mcp-http`（本机 8100 `/mcp` + `/workspace`，含「当前工作区」会话 + 前端 AI 面板）；**移除 stdio 旧接入**（`--mcp-server`/注册MCP.bat 删除）；快捷建栅元扩到 HEX/TET + IMP 改数值默认 0；抽出深模块 `useQuickAddOverlap`；删除 `release.bat`/`release.ps1`（一键打包废弃，仅手动）；新增 `AI接入.md`。门禁 vitest 554/0 + tsc EXIT 0。reflog: `.git/logs/HEAD:250-251` |
+| **v1.7.4** | 2026-08-27 | **3D 预览 MCNP 窗口裁剪修复 + U 分组侧边栏**（用户指定新功能上线升版）：① 实体=universe∩格元盒∩容器cell，修超壳/重叠外壳 + 无限水虚假水块（BEAVRS 超壳叶 48→16）；② 3D 预览侧边栏改 U 分组 + 保留未分组栅元；disc 改用容器裁剪 STL、subPitch 半径；版本五处同步。**18-28 追加**：disc STL 键错配修复（燃料 pin 方块→真实圆柱）+ z 居中（燃料棒/围板位置）|
 | **v1.7.4（材料库深化，沿用版本待上级指定）** | 2026-08-30 | **材料库深化**（新功能）：用户可编辑持久材料库（custom/override、`D:\MCNP\material\material_library.json`、D盘回落 `%APPDATA%`）、导入导出 JSON·CSV（冲突三选 + 内容一致自动跳过）、xsdir 反向索引 + 组成自洽校验、📚 材料库管理面板、MT卡/其他随预设贯通；修复：编辑弹窗 `backdrop-filter` 裁剪（`createPortal`）、编辑保存后列表不刷新（去 useMemo）、材料库内编辑隐藏预设区、生成 INP 的 MODE+NPS 卡移数据卡段末尾；README 与 exe 同级放入；spec `_keep_py` 加 `material_library.py`。门禁 pytest **737/0** + vitest 534/535（flaky 隔离绿）+ tsc/build 过 |
 | **GQ/SQ 预览修复 + 渲染增强 + OWEN 四项 + 参数扫描前端**（未 commit/发版，文件恒 1.7.2） | 2026-08-22 | 纯 numpy MC 去 vtk + TR + 解析切片 + 切线平面法 + BEAVRS/17×17 夹具 + mctal 解析 + 校验规则交叉核对（validator +3 规则）+ 参数扫描（sweep 模块 + 2 端点 + SweepDialog 前端 + DOM 交互测试）；门禁 pytest **573/0** / vitest **358/0** / tsc EXIT 0；打包冒烟通过；待 tauri build/部署 |
 | **V1.7.2.2 批次**（文件恒 1.7.2） | 2026-08-19 | 4 修复进包：源卡文本模式漏生成 / SDEF 表单模式漏生成 + sdef_extra 往返 / IMP 归一化 / OUTP 解析+绘图+CSV（含 F1/F2/F5 泛化）；终版重打包部署，冒烟全过 |
@@ -518,12 +582,12 @@
 
 | 门禁 | 命令/位置 | 基线 |
 | :--- | :--- | :--- |
-| pytest | `tests/`（unit + parser + integration，含契约漂移闸门 test_api_contract.py 与真实 HTTP） | **573/0**（2026-08-22 起累计：voxel_csg / analytic_slice / owen 夹具 / mctal / validator 规则 / sweep） |
-| vitest | `gui/test/`（含 quickCell 20 / volume 57 / volumeShader snapshot / sweepDialog DOM 6 等） | **358/0** |
-| tsc | `gui/` 下 tsc 类型检查 | EXIT 0 |
-| 漂移闸门 | handlers dict ↔ docs/contracts/api.yaml 双向一致 | 30 端点 |
+| pytest | `tests/`（unit + parser + integration，含契约漂移闸门 test_api_contract.py 与真实 HTTP） | **⚠️ 下表数字为 2026-08~09 各批**当时快照**，不可直接当基线**：573/0(08-22) → 609 → 632 → 650 → 674 → 686 → 703 → 737 → 741 → **765（09-09 最新记录）**。**重跑后请覆盖本行** |
+| vitest | `gui/test/`（**75 个测试文件** = 60 `.test.ts` + 15 `.test.tsx`，另 1 `.snap`；含 jsdom DOM 交互） | 同上为快照：358/0(08-22) → 407 → 466 → 512 → 527 → 546 → 554 → **587+4（09-09 最新记录）**。**重跑后请覆盖本行** |
+| tsc | `gui/` 下 `npm run typecheck`（= `tsc --noEmit && tsc -p tsconfig.test.json --noEmit`） | EXIT 0。**2026-09-10 扩容**：此前只查 `src/`，75 个测试文件不在类型检查内（审计 TD-17） |
+| 漂移闸门 | handlers dict ↔ docs/contracts/api.yaml 双向一致 | **49 端点** |
 
-**已知 flaky**：colorize 128³ 计时用例负载偶发 >50ms，隔离单跑即绿（非回归）。
+**已知 flaky（2026-09-10 已修）**：colorize 128³ 计时用例负载偶发 >50ms —— 该断言属"单样本墙钟阈值"反模式，已改为多次取中位数 + 宽松上限（或移出默认门禁）。**不再以"隔离单跑即绿"作为放行理由**（审计 TD-18）。
 
 ### 版本发布纪律
 

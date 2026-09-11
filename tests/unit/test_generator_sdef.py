@@ -101,9 +101,17 @@ def test_distribution_sdef_fields():
         assert tok in text
 
 
-def test_distribution_sdef_raw_text_si_sp_prefix():
+def test_distribution_sdef_si_sp_prefix_from_distributions():
+    """TD-23（t5）：原用例名为 `..._raw_text_si_sp_prefix`，用已退役的 adv.sdef_raw_text
+    走生成器旧兜底分支（假活）。现改走唯一权威入口 sdef_distributions（v2 结构化 JSON），
+    断言 SI1/SP1 前缀生成。"""
     adv = AdvancedSettings(
-        sdef_raw_text=json.dumps([{"id": 1, "si": "0 1", "sp": "0.5 0.5"}]),
+        sdef_distributions=json.dumps([{
+            "id": 1, "editMode": "structured",
+            "si": {"type": "", "values": ["0", "1"]},
+            "sp": {"type": "D", "values": ["0.5", "0.5"], "fnCode": "", "fnParams": []},
+            "sb": None, "ds": None, "sc": None,
+        }]),
     )
     lines = _generate_distribution_sdef(adv)
     assert any(l.startswith("SI1") for l in lines)

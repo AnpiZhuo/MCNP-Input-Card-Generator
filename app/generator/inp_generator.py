@@ -419,11 +419,9 @@ SDEF_FIELD_SPECS = (
 )
 
 
-def _src_field(src: SourceData, spec) -> tuple:
-    """spec.special=="pos" → (pos_x,pos_y,pos_z)；else getattr(src, source_attr)"""
-    if spec[4] == "pos":
-        return (src.pos_x, src.pos_y, src.pos_z)
-    return getattr(src, spec[1])
+# TD-25（t5/t8）：原 `_src_field(src, spec)` 已删除——全仓库（含测试）零调用者，
+# 属 SDEF_FIELD_SPECS 表驱动改造后遗留的死符号。取值改由 `_collect_source_values`
+# 直接按 `spec` 读 src 字段（见其 docstring）。
 
 
 def _adv_field(adv: AdvancedSettings, spec) -> tuple:
@@ -469,31 +467,17 @@ def _generate_distribution_sdef(adv: AdvancedSettings) -> list[str]:
 
     lines = ["  ".join(parts)]
 
-    # 结构化分布优先（新），旧 sdef_raw_text 兜底（兼容旧数据）
+    # SI/SP 唯一权威 = adv.sdef_distributions（v2 结构化 JSON）。
+    # TD-23（t5）：旧 `sdef_raw_text` 兜底分支已退役——该字段在新解析路径下恒为 ""
+    # （parsers/core.py 只写 sdef_distributions），唯一"活"来源是前端旧存档迁移，
+    # 且旧存档已由前端迁移为 sdef_distributions；保留该分支只会让"生成失败"静默丢卡
+    # （原 `except (json.JSONDecodeError, TypeError): pass` 什么都不输出也不告警）。
     if (adv.sdef_distributions or "").strip():
         dist_lines = _generate_structured_distributions(adv.sdef_distributions)
         lines.extend(dist_lines)
         # 注释重发（根因 #5）：D1 键控链存在（SP 卡为 D1 引用）时发 multi_source_comment_banner。
         # 保守触发：≥2 条结构化分布且存在 D1 引用 SP 卡才发，单分布/无键控链不发（样例输出不变）。
         lines.extend(_multi_source_comment_reemit(adv.sdef_distributions))
-    elif adv.sdef_raw_text:
-        # 反序列化 SI/SP 对，自动加回 SI{n}/SP{n} 前缀
-        try:
-            pairs = json.loads(adv.sdef_raw_text)
-            for pair in pairs:
-                idx = pair.get("id") or pairs.index(pair) + 1
-                si = (pair.get("si") or "").strip()
-                sp = (pair.get("sp") or "").strip()
-                if si:
-                    if not re.match(r'^SI\d+', si, re.IGNORECASE):
-                        si = f"SI{idx}  {si}"
-                    lines.append(si)
-                if sp:
-                    if not re.match(r'^SP\d+', sp, re.IGNORECASE):
-                        sp = f"SP{idx}  {sp}"
-                    lines.append(sp)
-        except (json.JSONDecodeError, TypeError):
-            pass
 
     return lines
 
@@ -1333,7 +1317,9 @@ def generate_inp_from_deck(deck: DeckData, raw_overrides: dict = None) -> str:
 
     # sdef 分派（distribution/kcode/surface/fixed 四分支，封进闭包）
     def _sdef_dispatch():
-        _has_dist = bool(adv.sdef_raw_text) or bool(_dist_json_nonempty(adv.sdef_distributions))
+        # TD-23（t5）：唯一分布判据 = sdef_distributions（旧 sdef_raw_text 已退役，
+        # 该字段在新解析路径下恒空，含它会让"分布源"误判为无分布而走错分支）。
+        _has_dist = bool(_dist_json_nonempty(adv.sdef_distributions))
         if adv.source_mode in ("distribution", "sdef"):
             if _has_dist:
                 return _generate_distribution_sdef(adv)

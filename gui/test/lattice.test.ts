@@ -16,7 +16,6 @@ import {
   compressRaw,
   detectFillCycle,
   dirCountsFromRange,
-  estimateLatticeExtent,
   getUniverseColor,
   hexCenter,
   hexGrid,
@@ -41,9 +40,62 @@ import {
   serializeFillGrid,
   UNIVERSE_GRAY,
   universeColorByRank,
-  UNIVERSE_PALETTE_12,
 } from "../src/utils/lattice";
 import golden from "../src/utils/__golden__/latticeGolden.json";
+
+/**
+ * golden 数据集具名类型（T3 FE-20 / TD-27）。
+ *
+ * 原先各段以 `golden.xxx as any[]` 消费 —— 段名/字段名拼错、结构漂移都**不会被编译期发现**，
+ * 只能等运行时遍历 `undefined`（空数组）静默通过。这里把本文件用到的各段写成具名类型，
+ * 于是「改 golden 结构忘了改断言」会在 `tsc -p tsconfig.test.json` 直接报错。
+ *
+ * 注：这些是**消费侧最小视图**（只覆盖本文件真正读到的字段），不追求与后端 schema 一一对应。
+ * 字段名一律 snake_case 或与 JSON 逐字一致（如 `sub_by_u`、`deckCells`），**故意不重命名**：
+ * 名字打错即编译报错，正是本类型的价值所在。
+ */
+interface GoldenRectGrid {
+  dims: number[];
+  queries: { i: number; j: number; k: number; expectedIdx: number }[];
+}
+interface GoldenHexRingRow { rings: number; rows: number[]; total: number }
+interface GoldenHexCenter { col: number; row: number; pitch: number; x: number; y: number }
+interface GoldenDirCount { neg: number; pos: number; range: string; dims: number }
+interface GoldenMacrobody {
+  lat: "1" | "2";
+  params: { L?: number; W?: number; H?: number; cx?: number; cy?: number; cz?: number; side?: number };
+  expectedSurface: string;
+  expr: string;
+}
+interface GoldenRhpMacro { input: { C: [number, number, number]; R: number; H: number }; expectedCard: string }
+interface GoldenCollectFillUniverses { deckCells: { u?: string; fill_grid?: string }[]; expected: string[] }
+interface GoldenCompressRaw { tokens: string[]; expected: string }
+interface GoldenCycle {
+  sub_by_u: Record<string, { cellNum?: number; material?: string; fill?: string; fill_grid?: string | null }[]>;
+  expected: { cycle: boolean; chain: string[] };
+}
+interface GoldenValidate {
+  id: string; lat: "1" | "2"; surfaceExpr: string;
+  expectedOk: boolean; expectedMsg: string; surfacesText?: string;
+}
+
+/** 本文件用到的 golden 各段的合并视图（接入点见下方 `const G`） */
+interface GoldenView {
+  rectGrid: GoldenRectGrid;
+  hexRingRows: GoldenHexRingRow[];
+  hexCenter: GoldenHexCenter[];
+  dirCounts: GoldenDirCount[];
+  macrobody: GoldenMacrobody[];
+  rhpMacro: GoldenRhpMacro[];
+  collectFillUniverses: GoldenCollectFillUniverses[];
+  compressRaw: GoldenCompressRaw[];
+  cycle: GoldenCycle[];
+  validate: GoldenValidate[];
+}
+
+/** 单一接入点：把 resolveJsonModule 推断出的 JSON 收窄为具名视图（替代原先散落的 `as any[]`） */
+const G = golden as unknown as GoldenView;
+
 
 /** parse_fill_entries nR 展开（TS 测试镜像，验证 compressRaw 生产侧与后端消费侧等价） */
 function expandRawTokens(tokens: string[]): string[] {
@@ -98,7 +150,7 @@ describe("parseFillGrid / serializeFillGrid（镜像 Python to_json/from_json）
 });
 
 describe("rectGrid（行主序 i 最快）", () => {
-  const g = golden.rectGrid;
+  const g = G.rectGrid;
   it("count = dims 乘积", () => {
     expect(rectGrid(g.dims).count).toBe(2 * 3 * 4);
   });
@@ -119,7 +171,7 @@ describe("rectGrid（行主序 i 最快）", () => {
 
 describe("hexRingRows（蜂窝环行长，项5 L2 语义=+30° 共线方向）", () => {
   it("golden 行模式与总和一致", () => {
-    for (const c of golden.hexRingRows) {
+    for (const c of G.hexRingRows) {
       const rows = hexRingRows(c.rings);
       expect(rows).toEqual(c.rows);
       expect(rows.reduce((a, b) => a + b, 0)).toBe(c.total);
@@ -130,7 +182,7 @@ describe("hexRingRows（蜂窝环行长，项5 L2 语义=+30° 共线方向）",
 
 describe("hexCenter（项5 权威公式：顶点+X flat-top，x=i·p·√3/2, y=j·p+(i%2)·p/2）", () => {
   it("golden 坐标一致", () => {
-    for (const c of golden.hexCenter) {
+    for (const c of G.hexCenter) {
       const p = hexCenter(c.col, c.row, c.pitch);
       expect(p.x).toBeCloseTo(c.x, 9);
       expect(p.y).toBeCloseTo(c.y, 9);
@@ -224,23 +276,6 @@ describe("宇宙调色板", () => {
   });
 });
 
-describe("estimateLatticeExtent", () => {
-  it("矩形按 dims（单位 pitch）", () => {
-    const fg = parseFillGrid(serializeFillGrid({ lat: "1", kind: "lattice", range: ["0:16", "0:16", "0:0"], dims: [17, 17, 1], cells: [], raw: "" }))!;
-    expect(estimateLatticeExtent(fg)).toEqual({ x: 17, y: 17, z: 1 });
-  });
-  it("六棱柱取蜂窝外沿（项5 新公式 + 格元半宽/半高余量）", () => {
-    const fg = parseFillGrid(serializeFillGrid({ lat: "2", kind: "lattice", range: ["0:2", "0:2", "0:0"], dims: [3, 3, 1], cells: [], raw: "" }))!;
-    const e = estimateLatticeExtent(fg);
-    // MCNP LAT=2：maxX=3（(2,2)）、maxY=√3（(*,2)）；x+=半宽 pitch/√3、y+=半高 pitch/2
-    expect(e.x).toBeCloseTo(3 + 1 / Math.sqrt(3), 9);
-    expect(e.y).toBeCloseTo(Math.sqrt(3) + 0.5, 9);
-  });
-  it("null / translated 兜底", () => {
-    expect(estimateLatticeExtent(null)).toEqual({ x: 0, y: 0, z: 0 });
-  });
-});
-
 describe("初始格位 + 尺寸保持", () => {
   it("initialRectCells 行主序填 defaultU", () => {
     const cells = initialRectCells(2, 2, 1, "3");
@@ -272,7 +307,7 @@ describe("初始格位 + 尺寸保持", () => {
 
 describe("方向块数 → -N:M（项2 跨语言 L3）", () => {
   it("golden dirCounts 段一致（range 正向 + 反派生 + dims）", () => {
-    for (const c of golden.dirCounts as any[]) {
+    for (const c of G.dirCounts) {
       expect(rangeFromDirCounts(c.neg, c.pos)).toBe(c.range);
       const back = dirCountsFromRange(c.range);
       expect(back.neg).toBe(c.neg);
@@ -292,7 +327,7 @@ describe("方向块数 → -N:M（项2 跨语言 L3）", () => {
 describe("autoGenMacrobody（项3 宏体自动生成，跨语言 L4）", () => {
   it("golden macrobody 段一致（编号 maxSurfaceNumber+1 顺延）", () => {
     const baseSurf = "1 px -5\n2 px 5\n3 py -5\n4 py 5\n5 pz 0";
-    for (const c of golden.macrobody as any[]) {
+    for (const c of G.macrobody) {
       const params = c.lat === "2" ? { hex: c.params } : { rect: c.params };
       const r = autoGenMacrobody(c.lat, params, baseSurf);
       expect(r.card).toBe(c.expectedSurface);
@@ -323,7 +358,7 @@ describe("autoGenerateSurfaces（旧 6 平面 / 6P 路径保留为「手动」�
 
 describe("RHP 宏体参数（项4 权威模式 B，跨语言 L4）", () => {
   it("golden rhpMacro 段：rhpFromCenterRadiusHeight + rhpCard", () => {
-    for (const c of golden.rhpMacro as any[]) {
+    for (const c of G.rhpMacro) {
       const p = rhpFromCenterRadiusHeight(c.input.C, c.input.R, c.input.H);
       expect(rhpCard(p)).toBe(c.expectedCard);
     }
@@ -369,7 +404,7 @@ describe("项16：宏体尺寸随格阵（OWEN 模式：包住 fill 平行四边
 
 describe("collectFillUniverses（项7 调色板来源合并）", () => {
   it("golden 段一致（17×17 合并 → [0,1,2,3,10] / 空 deck / 脏 JSON）", () => {
-    for (const c of golden.collectFillUniverses as any[]) {
+    for (const c of G.collectFillUniverses) {
       expect(collectFillUniverses(c.deckCells)).toEqual(c.expected);
     }
   });
@@ -381,7 +416,7 @@ describe("collectFillUniverses（项7 调色板来源合并）", () => {
 
 describe("compressRaw（项12 nR 压缩，跨语言 L8）", () => {
   it("golden compressRaw 段一致（runs → u nR；幂等不动点）", () => {
-    for (const c of golden.compressRaw as any[]) {
+    for (const c of G.compressRaw) {
       expect(compressRaw(c.tokens)).toBe(c.expected);
     }
   });
@@ -395,7 +430,7 @@ describe("compressRaw（项12 nR 压缩，跨语言 L8）", () => {
 
 describe("detectFillCycle（项13 循环嵌套检测，跨语言 L6）", () => {
   it("golden cycle 段一致（cycle_a_b_a / no_cycle_tree）", () => {
-    for (const c of golden.cycle as any[]) {
+    for (const c of G.cycle) {
       expect(detectFillCycle(c.sub_by_u)).toEqual(c.expected);
     }
   });
@@ -434,7 +469,7 @@ describe("latticeMismatchMessage（QA 建议3 提示）", () => {
 
 describe("跨语言 golden validate 段（backend 权威规则，TS 结构 + 非法字符判定）", () => {
   it("数组非空、结构完整", () => {
-    const v = golden.validate as any[];
+    const v = G.validate;
     expect(v.length).toBeGreaterThan(0);
     for (const s of v) {
       expect(["1", "2"]).toContain(s.lat);
@@ -445,15 +480,15 @@ describe("跨语言 golden validate 段（backend 权威规则，TS 结构 + 非
     }
   });
   it("surfaceExpr 含 # / : / 括号 → expectedOk 必为 false", () => {
-    for (const s of golden.validate as any[]) {
+    for (const s of G.validate) {
       if (/[#:()]/.test(s.surfaceExpr)) {
         expect(s.expectedOk).toBe(false);
       }
     }
   });
   it("宏体样例 expectedOk=true（lat1_rpp_macro / lat2_rhp_macro）", () => {
-    const rpp = (golden.validate as any[]).find((s) => s.id === "lat1_rpp_macro");
-    const rhp = (golden.validate as any[]).find((s) => s.id === "lat2_rhp_macro");
+    const rpp = G.validate.find((s) => s.id === "lat1_rpp_macro");
+    const rhp = G.validate.find((s) => s.id === "lat2_rhp_macro");
     expect(rpp.expectedOk).toBe(true);
     expect(rhp.expectedOk).toBe(true);
   });

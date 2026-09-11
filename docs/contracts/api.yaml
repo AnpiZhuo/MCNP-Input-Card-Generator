@@ -140,7 +140,8 @@ paths:
       description: |
         入参 data.get("inp")。返回 deck（含前端字段映射：nuclides、num、
         impN/impP/impE、sourceMode、sdefFields、kcodeFields、ksrcPoints、
-        sdefRawText、distributions、sswFields、ssrFields、tallies、_warnings）。
+        distributions、sswFields、ssrFields、tallies、_warnings）。
+        TD-23（t5）：顶层 sdefRawText 已随僵尸字段退役一并删除（前端权威为 adv.sdef_distributions）。
         解析时残留 [E0DBG] 调试 print（api_server.py:609-610，技术债，见 UI_ARCHITECTURE.md §7.2）。
       requestBody:
         required: true
@@ -179,7 +180,6 @@ paths:
                           sdefFields: { type: object, additionalProperties: { type: string } }
                           kcodeFields: { type: object, additionalProperties: { type: string } }
                           ksrcPoints: { type: string }
-                          sdefRawText: { type: string }
                           sswFields: { $ref: '#/components/schemas/SswFields' }
                           ssrFields: { $ref: '#/components/schemas/SsrFields' }
                           _warnings: { type: array, items: { type: string } }
@@ -653,38 +653,6 @@ paths:
                           properties:
                             zaid: { type: string }
                       error: { type: string, description: 异常分支出现 }
-
-  /api/generate-step:
-    post:
-      operationId: generateStep
-      tags: [geometry]
-      summary: 由曲面文本生成 STEP（3D 预览用，generate_step 备用通道）
-      description: 入参 data.get("surfaces")（api_server.py:927-949）。
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                surfaces: { type: string }
-      responses:
-        '200':
-          description: 生成成功（_ok({"step_file","message"})）
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - { $ref: '#/components/schemas/OkEnvelope' }
-                  - type: object
-                    properties:
-                      step_file: { type: string }
-                      message: { type: string, const: 'STEP 文件已生成' }
-        '500':
-          description: 生成异常
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   /api/export-step:
     post:
@@ -1481,7 +1449,14 @@ paths:
                         additionalProperties:
                           type: object
                           properties:
-                            status: { type: string }
+                            status:
+                              type: string
+                              enum: [closed, infinite, semi_infinite, empty, voxel, unresolvable]
+                              description: |
+                                TD-08（t5）：此前只有散文里列举这 6 个状态、schema 里是裸 string，
+                                漂移闸门结构上校验不到。现钉成 enum，并由
+                                tests/integration/test_api_contract.py 的 HTTP 用例断言
+                                "响应里出现的 status ∈ enum"。
                             volume: { type: number, nullable: true }
                             aabb:
                               type: object
@@ -1493,7 +1468,17 @@ paths:
                                 ymax: { type: number }
                                 zmin: { type: number }
                                 zmax: { type: number }
-                            infinite_axes: { type: array, nullable: true }
+                            infinite_axes:
+                              type: array
+                              nullable: true
+                              items: { type: string, enum: [x, y, z] }
+                              description: |
+                                TD-08（t5）：语义钉死——`infinite` ⇒ ["x","y","z"]；
+                                `semi_infinite` ⇒ 长度 1~2（恒非空）；`closed` ⇒ []；
+                                `aabb is None` 的三种（empty/voxel/unresolvable）⇒ 该键缺失。
+                                判定按 cell AABB 是否触及包围盒轴面（容差 = 包围盒 0.005 倍，
+                                `_freecad_csg_worker.py:1160`）⇒ 同一 cell 在不同 bound 下
+                                可能由 closed 变 semi_infinite，断言须按给定 bound 写期望。
                       message: { type: string }
 
   /api/validate-lattice-surfaces:
@@ -2204,7 +2189,7 @@ components:
     DistEntry:
       type: object
       description: |
-        结构化 SI/SP/SB/DS 分布（adv.sdef_distributions，非空时优先于 sdef_raw_text）。
+        结构化 SI/SP/SB/DS/SC 分布（adv.sdef_distributions；TD-23 后为**唯一**权威存储）。
         v2 双态（app/generator/distributions.py）：editMode=raw → rawText 逐字直通（导入文件的
         直接形态）；editMode=structured/缺省 → 结构化字段规范重建（新建默认）。无字母 SI 记
         type=''（MCNP 缺省 H 直方图），生成时不回填 L。
@@ -2213,7 +2198,7 @@ components:
         paramRef: { type: string, description: 引用的 SDEF 变量（ERG/POS/PAR…） }
         editMode: { type: string, enum: [raw, structured], description: 权威侧；缺省=structured }
         rawText: { type: string, description: 原文卡行（\n 分隔；editMode=raw 时发射逐字直通） }
-        si: { type: object, nullable: true, properties: { type: { type: string, enum: ['', L, H, A, S, Q, T, F] }, values: { type: array, items: { type: string } } } }
+        si: { type: object, nullable: true, properties: { type: { type: string, enum: ['', L, H, A, S], description: 'TD-24（t5）：C810 仅 H/L/A/S，未知首 token 由生成器明确报错' }, values: { type: array, items: { type: string } } } }
         sp: { type: object, nullable: true, properties: { type: { type: string, enum: [D, C, V, ''] }, values: { type: array, items: { type: string } }, fnCode: { type: string }, fnParams: { type: array, items: { type: string } } } }
         sb: { type: object, nullable: true }
         ds: { type: object, nullable: true }
@@ -2241,8 +2226,9 @@ components:
       type: object
       description: |
         app/models.py:297 AdvancedSettings 的前端形态（adv section）。
-        other_cards 为原始文本；sdef_raw_text 为旧数据回退路径（新解析已停写，仅读兼容）；
-        sdef_distributions v2 双态 JSON 非空时优先（editMode raw/structured，见 DistEntry）。
+        other_cards 为原始文本；sdef_distributions 为 SI/SP/SB/DS/SC 唯一权威存储
+        （v2 双态 JSON，editMode raw/structured，见 DistEntry）。
+        TD-23（t5）：旧 `sdef_raw_text` 字段已退役并从本 schema 删除（解析侧早已停写）。
       properties:
         other_cards: { type: string, description: 用户手动其他 MCNP 卡（原样输出） }
         source_mode: { type: string, enum: [fixed, distribution, kcode, surface] }
@@ -2286,8 +2272,7 @@ components:
         sdef_ara: { type: string }
         sdef_rate: { type: string }
         sdef_extra: { type: string, description: SDEF 额外参数（原样保留） }
-        sdef_raw_text: { type: string, description: SI/SP 序列化文本（回退路径） }
-        sdef_distributions: { type: string, description: 结构化 SI/SP/SB/DS JSON 串 }
+        sdef_distributions: { type: string, description: 结构化 SI/SP/SB/DS/SC JSON 串（唯一权威；TD-23 后旧 sdef_raw_text 已删除） }
         kcode_nsrc: { type: string }
         kcode_rkk: { type: string }
         kcode_ikz: { type: string }
