@@ -53,6 +53,43 @@ function box3ToAabb(b: THREE.Box3): AABB {
   return { min: [b.min.x, b.min.y, b.min.z], max: [b.max.x, b.max.y, b.max.z] };
 }
 
+/**
+ * 圆形点精灵贴图（模块级单例，跨 renderer 复用、不 dispose —— 一张 64² 纹理可忽略）。
+ *
+ * 为什么需要：`THREE.Points` 默认渲染**轴对齐方块**、且永远面向摄像头（点精灵的固有行为），
+ * 用户实测观感是"一张张蓝色方块"。给它加一张圆形 alpha 贴图 + `alphaTest` 即渲成**圆点**：
+ * 零新依赖、零性能代价，且**保住屏幕空间可见性**（区别于 `InstancedMesh` 小球 —— 后者是
+ * 真实世界尺寸，在"外壳优先"取景下只有几像素，反而更难看见）。
+ * jsdom 等无 canvas 环境返回 null ⇒ 静默降级为原来的方块，不抛错。
+ */
+let dotTexture: THREE.Texture | null = null;
+
+function getDotTexture(): THREE.Texture | null {
+  if (dotTexture) return dotTexture;
+  try {
+    const S = 64;
+    const cv = document.createElement("canvas");
+    cv.width = S;
+    cv.height = S;
+    const ctx = cv.getContext("2d");
+    if (!ctx) return null;
+    const r = S / 2;
+    // 实心圆 + 外缘柔化（0.72 半径前全不透明、之后渐隐到 0）→ alphaTest 裁出抗锯齿圆边
+    const g = ctx.createRadialGradient(r, r, 0, r, r, r);
+    g.addColorStop(0, "rgba(255,255,255,1)");
+    g.addColorStop(0.72, "rgba(255,255,255,1)");
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(r, r, r, 0, Math.PI * 2);
+    ctx.fill();
+    dotTexture = new THREE.CanvasTexture(cv);
+    return dotTexture;
+  } catch {
+    return null;
+  }
+}
+
 export function createSourceDemoRenderer(
   canvas: HTMLCanvasElement,
   opts: SourceDemoRendererOptions,
@@ -198,6 +235,12 @@ export function createSourceDemoRenderer(
       vertexColors: true, size: 6, sizeAttenuation: true,
       transparent: particleOpacity < 1, opacity: particleOpacity, depthTest: true,
     });
+    // 圆点贴图：把默认的轴对齐方块渲成圆点（详见 getDotTexture 注释）
+    const dot = getDotTexture();
+    if (dot) {
+      ptsMat.map = dot;
+      ptsMat.alphaTest = 0.5; // 硬裁剪圆边，避免半透明点之间相互排序出错
+    }
     particlePoints = new THREE.Points(ptsGeo, ptsMat);
     scene.add(particlePoints);
 
