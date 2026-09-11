@@ -1286,3 +1286,28 @@ ormalizeImportedMaterials（核素行 zaid 剥后缀，raw 行原样，rows/nucl
 - `MaterialLibraryPanel.tsx`（新）：「📚材料库」管理面板——内置/我的材料/已修改三区、搜索、编辑（`MaterialEditDialog` 传 `hidePreset` + footer「保存」直接写库）、删除/「恢复原始」、ZAID 明细逐条标 ✓/✗（`validate-zaid`）、导入（dry_run 预览 + 冲突三选）/导出（JSON/CSV）。
 - `MaterialTab.tsx`：加「📚 材料库」按钮 + 渲染 `MaterialLibraryPanel`。
 - 测试：`gui/test/materialLibrary.test.ts`（新，7 用例：normalize/merge/builtinToEntries/materialToEntry）。
+
+---
+
+## 技术债修复批次 · 前端（2026-09-10，TD-23/TD-28 收尾 + 验证批次）
+
+> 完整流水见 `docs/CHANGELOG.md`；门禁实测见 `docs/fix-verification.md` §7。本节只记前端改动。
+> **门禁（实跑）**：`tsc --noEmit` EXIT 0 ｜ `tsc -p tsconfig.test.json --noEmit` EXIT 0 ｜ vitest **78 files / 625 tests passed / 0 skip** ｜ `vite build` EXIT 0。
+
+**TD-23（僵尸字段导致的迁移静默失效）**
+- `gui/src/utils/sourceAdv.ts`：原 `if (!adv.sdef_raw_text && old.sdefRawText) adv.sdef_raw_text = old.sdefRawText;` —— 后端 `sdef_raw_text` 字段已退役（TD-23），该行**写进一个不存在的字段 = no-op** ⇒ **旧存档的 SI/SP 分布静默丢失**。改为：把旧 `sdefRawText` 的 SI/SP/SB/DS/SC 原文行**解析成 v2 分布**迁进 `adv.sdef_distributions`（仅当**无**权威结构时兜底；旧 `distributions` 优先，不互相覆盖）。
+- `gui/src/utils/distDual.ts`：新增 `parseDistributionLines(text): DistEntry[]` —— 镜像后端 `app/generator/distributions.py:parse_distribution_lines` 的**分组语义**（按行首卡号 `SI1/SP1…` 分组、组间按 id 首次出现顺序、每条 `rawText` 只含自己的原文行、`editMode="raw"`、`paramRef` 留空、非分布卡行如 `SDEF ERG=D1` 自然跳过）。
+- `gui/test/sourceAdv.test.ts`：改写原断言（不再断言已退役的 `sdef_raw_text`）+ **新增 3 例 TD-23 迁移回归**（原文→分布、已有 `distributions` 时不覆盖、无分布卡行时不塞 `"[]"`）。
+
+**TD-28 / hexCenter 旧公式文案（代码侧 2 处）**
+- `gui/src/utils/lattice.ts:123-131`：`hexCenter` docstring 原文写 `x = i·(pitch·√3/2)、y = j·pitch + (i%2)·(pitch/2)`，**与下方实现及 `app/lattice.py:604-616` 相反**（该式是旧式，与权威相差 30° 旋转）。已按实现改写为权威 `x = col·pitch + row·pitch/2、y = row·pitch·√3/2` 并留更正注。
+- `gui/test/lattice.test.ts:183`：describe 名同步改为 `x=col·p+row·p/2, y=row·p·√3/2`。
+- 注：`docs/frontend-changes.md` 的两处（§本文 `:13`、`:1236`）**本就已标"2026-09-10 文档更正"并写明权威公式**，无需再改（原审计记录的"`:208` 有旧公式"经实测**不成立**）。
+
+**顺带修正（本轮发现，非审计项）**
+- `gui/src/utils/distDual.ts`：`structuredToRawLines` 的 `DS T` 分支**丢失 refs**（后端 `_format_entry_cards` 是带回放 `I1 J1 … Ik Jk` 的，TS 侧原先只发 `DSn T`）→ 已补回放。
+
+**验证批次连带修复（tsc 首次启用抓出）**
+- `gui/src/components/CellEditDialog.tsx:174`：**多余的三元分支 `: null,`**（TS1135 语法错误）⇒ **该文件无法编译**。已删（第 161–173 行本就是完整三元）。
+- **类型定义放宽 3 处**（行为等价，代码处处 `|| ""` 兜底）：`CellEditDialog.CellData.fill_grid`、`DeckContext.CellData.fill_grid` 改**可选**；`CycleCellLike.fill_grid` 加 `| null`（`parseFillGrid` 本就对 null 容错）。连带 `LatticeEditDialog.tsx:75` 补 `|| ""`。
+- **测试文件类型错误 35 处全部清偿**（TD-17 盲区首次暴露）：`fill_grid` 缺失/`si.type` 字面量收窄/mock fetch 类型/`sourceMode` 等**已退役字段**残留/`loadDeck` 载荷缺字段/`node:*` 缺类型。**新依赖（用户已批准）**：`@types/node@^22.20.2`（devDependency）。

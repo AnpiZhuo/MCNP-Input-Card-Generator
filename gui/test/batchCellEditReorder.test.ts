@@ -4,6 +4,10 @@ import {
   type LocalCellRow,
 } from "../src/utils/batchCellEdit";
 
+/** 取「栅元行」的 cell（断言用例里已按 kind === "cell" 过滤，这里让 TS 也认）。 */
+const cellOf = (r: LocalCellRow): { num: string; mat: string; impN: string } =>
+  (r as { kind: "cell"; cell: { num: string; mat: string; impN: string } }).cell;
+
 /**
  * T1 回归（勾选存数组下标 → 拖拽重排/删除后下标移位静默改错栅元）。
  *
@@ -43,9 +47,9 @@ describe("批量编辑勾选存栅元 num（T1：重排后仍改对栅元）", (
     // 应用批量编辑（材料 → 5）
     const out = applyBatchEditToRows(rows, sel, { mat: "5" });
     // 断言：改到的是原勾选栅元 1 与 3，栅元 2 不受影响
-    expect(out.find(r => r.kind === "cell" && r.cell.num === "1")!.cell.mat).toBe("5");
-    expect(out.find(r => r.kind === "cell" && r.cell.num === "3")!.cell.mat).toBe("5");
-    expect(out.find(r => r.kind === "cell" && r.cell.num === "2")!.cell.mat).toBe("1");
+    expect(cellOf(out.find(r => r.kind === "cell" && r.cell.num === "1")!).mat).toBe("5");
+    expect(cellOf(out.find(r => r.kind === "cell" && r.cell.num === "3")!).mat).toBe("5");
+    expect(cellOf(out.find(r => r.kind === "cell" && r.cell.num === "2")!).mat).toBe("1");
   });
 
   it("重排后按 num 解析勾选集仍返回原勾选栅元（selectedCellsFromNums）", () => {
@@ -70,8 +74,8 @@ describe("批量编辑勾选存栅元 num（T1：重排后仍改对栅元）", (
     const sel = toggleCellNum(toggleCellNum([], "1"), "2");
     rows = moveRow(rows, 2, 0); // [cell3, cell1, cell2]
     const out = applyBatchEditToRows(rows, sel, { impN: "7" });
-    expect(out.find(r => r.kind === "cell" && r.cell.num === "1")!.cell.impN).toBe("7");
-    expect(out.find(r => r.kind === "cell" && r.cell.num === "2")!.cell.impN).toBe("7");
-    expect(out.find(r => r.kind === "cell" && r.cell.num === "3")!.cell.impN).toBe("");
+    expect(cellOf(out.find(r => r.kind === "cell" && r.cell.num === "1")!).impN).toBe("7");
+    expect(cellOf(out.find(r => r.kind === "cell" && r.cell.num === "2")!).impN).toBe("7");
+    expect(cellOf(out.find(r => r.kind === "cell" && r.cell.num === "3")!).impN).toBe("");
   });
 });

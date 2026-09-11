@@ -33,10 +33,7 @@ function seedDeck(loadDeck: (d: DeckData) => void) {
     ],
     materials: [{ number: 5, comment: "测试材料", density: "5.0", nuclides: [], options: "", mt_card: "" }],
     sources: [], tallies: [], tally: {}, grids: {}, adv: {},
-    sourceMode: "fixed", sdefFields: {}, sdefRawText: "", sourceTemplate: "free", distributions: [],
-    sswFields: { surf: "", sym: "", pty: "", cel: "" },
-    ssrFields: { surf: "", mode: "", cel: "", pty: "", col: "", wgt: "", tr: "", psc: "" },
-    kcodeFields: {}, ksrcPoints: "", rawOverrides: {}, textMode: {},
+    sourceTemplate: "free", rawOverrides: {}, textMode: {},
   });
 }
 
@@ -57,7 +54,7 @@ function renderTab() {
   return utils;
 }
 
-let fetchMock: ReturnType<typeof vi.fn>;
+let fetchMock: any;
 
 beforeEach(() => {
   localStorage.clear();
@@ -67,7 +64,7 @@ beforeEach(() => {
     if (u.includes("/api/check-freecad")) return { json: async () => ({ status: "ok", found: true }) };
     return { json: async () => ({ status: "error", message: "未 mock: " + u }) };
   });
-  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 });
 
 afterEach(() => {

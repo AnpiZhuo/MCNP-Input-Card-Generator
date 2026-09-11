@@ -72,7 +72,7 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
   /* ── 编辑已有格阵时从 fill_grid 预填 ── */
   const init = useMemo(() => {
     if (!initialCell) return null;
-    const fg = parseFillGrid(initialCell.fill_grid);
+    const fg = parseFillGrid(initialCell.fill_grid || "");
     if (!fg) return null;
     return { fg, surfaceExpr: initialCell.surfaces, latticeU: initialCell.u };
   }, [initialCell]);

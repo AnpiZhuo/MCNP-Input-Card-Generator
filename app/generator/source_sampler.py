@@ -432,10 +432,14 @@ def _summarize(particles: list) -> dict:
     xs = [p["x"] for p in particles]
     ys = [p["y"] for p in particles]
     zs = [p["z"] for p in particles]
-    e_min = min(energies) if energies else 0.0
-    e_max = max(energies) if energies else 1.0
-    if e_max <= e_min:
-        e_min, e_max = 0.0, 1.0
+    if energies:
+        e_min, e_max = min(energies), max(energies)
+    else:
+        # 无有效能量（全部 ≤0 或缺字段）→ 中性零区间。
+        # 注意：不能用 (0.0, 1.0) —— 前端以 min==max 判定「无能量」
+        # （SourceDemoWindow.tsx:166），且单能 δ 分布（如 SDEF ERG=14）本就该
+        # 返回 [14,14]，旧实现把 e_max<=e_min 一律改成 [0,1]，等于**丢弃真实能量**。
+        e_min = e_max = 0.0
     return {
         "status": "ok",
         "particles": particles,

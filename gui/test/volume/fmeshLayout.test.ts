@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { FMESH_ROW_LAYOUT } from "../../src/volume/fmeshState";
+import { FMESH_ROW_LAYOUT, type FmeshRow } from "../../src/volume/fmeshState";
 
 /**
  * FMeshForm 字段控件布局（2026-08-15 PM 指令：去掉简单/高级模式切换，改为按 MCNP 卡结构 9 行分组）。
@@ -43,8 +43,8 @@ describe("FMESH_ROW_LAYOUT（9 行分组，按 MCNP 卡结构）", () => {
     for (const pair of [
       ["imesh", "iints"], ["jmesh", "jints"], ["kmesh", "kints"],
       ["emesh", "emints"], ["tmesh", "tmints"],
-    ]) {
-      const row = FMESH_ROW_LAYOUT.find((r) => r.includes(pair[0]));
+    ] as const) {
+      const row = FMESH_ROW_LAYOUT.find((r) => r.includes(pair[0] as keyof FmeshRow));
       expect(row).toContain(pair[1]);
     }
   });

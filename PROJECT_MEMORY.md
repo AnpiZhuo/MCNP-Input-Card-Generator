@@ -14,7 +14,43 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
-## S1（当前批次）技术债修复（2026-09-10，**进行中**）
+## S1（当前批次）技术债修复（2026-09-10，**代码 100% + 验证 100%，全绿**）
+
+> **⚠️ 阅读须知**：本区下方「🔴 待实机验证」条目已**作废**——2026-09-10 接手方**有 shell**，已按 `docs/fix-verification.md` 跑完全部门禁，见紧随其后的「验证批次」区。
+
+### S1.0 验证批次（2026-09-10 接手，全部门禁已跑）
+
+- **执行者能力**：**有 shell**（PowerShell + Python 3.13.14 + node v24.18.0）。上一轮"全员无 shell"的限制已解除。
+- **先决条件**：5001 端口**空闲** ✅；`pytest-timeout` **未装** → 全程**不用 `--timeout`**，改用外层超时；`npm.ps1` 被执行策略拦 → 改用 `npm.cmd`/`npx.cmd`。
+- **门禁结果（全绿）**：
+  | 门禁 | 结果 |
+  | :--- | :--- |
+  | `python -m pytest tests -q` | **875 passed / 0 failed / 0 skipped**（先决：`skipped=0` 证明审计最担心的"隐藏 skip"**不存在**） |
+  | `tsc --noEmit`（src） | **EXIT 0** |
+  | `tsc -p tsconfig.test.json --noEmit` | **EXIT 0**（首次启用时暴露 **35 处**测试类型错误，已全部清偿） |
+  | `npx vitest run` | **78 files / 625 tests passed / 0 skip** |
+  | `npx vite build` | **EXIT 0** |
+- **🔴 跑门禁抓出 5 个"静态审计看不见"的真缺陷（全部已修）**：
+  1. **`app/meshtal/meshtal_cache.py:136` `IndentationError`** —— TD-26 加锁改动把 `while` 循环体丢了缩进 ⇒ **全量 pytest 在收集阶段就中断、一条测试都没跑**（`1 error during collection`）。这是本轮最严重的一处：它让"全绿"变成假象。已修；`compileall app gui tests inputcard_mcp` 退出码 0 确认是**孤例**。
+  2. **`gui/src/components/CellEditDialog.tsx:174` 多余的三元分支 `: null,`** —— TS1135 语法错误，**该文件无法编译**（首次启用 `tsconfig.test.json`/tsc 才暴露）。已删。
+  3. **`app/generator/source_sampler.py:_summarize` 丢弃真实能量** —— `if e_max <= e_min: e_min, e_max = 0.0, 1.0` 使**单能 δ 分布**（如 `SDEF ERG=14`，所有粒子能量恒 14.0）把 `[14,14]` 改成假的 `[0,1]`；前端 `SourceDemoWindow.tsx:166` 以 `min===max` 判「无能量」，故语义上就该返回 `[14,14]`。已改为：有有效能量即 `min/max`，无则 `[0,0]`。
+  4. **`tests/unit/test_sidecar_spec_keep.py:_parse_hidden` 解析不可靠** —— `re.findall(r'"([^"]+)"', spec_text)` 在**同一份 spec** 上实测返回 74 项且**静默丢失** `models.py`/`meshtal`/`generator`/`docs`（逐引号配对扫描返回 76 对且四者俱全；`[^"]+` 与 `\x22([^\x22]+)\x22` 两种写法均复现）。已改为**显式配对扫描**（ASCII 双引号位置逐对切片）。
+  5. **`gui/mcnp_sidecar.spec` `_keep_py` 误列 `_cross_section_helper.py`** —— 该文件在 `gui/backend/` 而非 `app/`，spec 里本就另有一段从 `GUI_BACKEND` 取它；`_keep_py` 里的那一条是无用项，会让 TD-34 闸门报"spec 与源码漂移"。已删该条并加注释指路。
+- **TD-34 闸门（`test_sidecar_spec_keep.py`，6 例，从未执行过）**：已执行，**全绿**；其中 2 例就是被上述第 4/5 条修好后转绿的。
+- **✅ 用户裁决（接手时就 5 个悬置决策逐条拍板）**：
+  1. **水密性骨架** → **删骨架 + 改两处文档引用**（不实现）。已执行：`app/freecad_preview.py` 删除 `check_watertight` / `outside_cell_num` / `gap_volume` / `gap_fraction` / `roi_volume` / `fused_volume` / `gap_unresolved_cells`（参数、docstring、payload 键、结果读回全删）；代码侧 grep **零残留**；`docs/contracts/watertight-check.md` → **改名 `cell-closure-check.md`**（内容对齐"唯一链路=栅元封闭性判定"）；修正 `MCNP输入卡生成器_功能待办清单.md:8` 与 `docs/contracts/validator-crosscheck.md` 两处不符表述。
+  2. **hexCenter 旧公式 2 处** → 已改：`gui/src/utils/lattice.ts:123-128` docstring（原文写 `x=i·(pitch·√3/2)` 与实现相反，已按实现改写并留更正注）、`gui/test/lattice.test.ts:183` describe 名。
+  3. **`docs/frontend-changes.md:208` 归属更正** → **核实为原审计记录有误**（该处实测**无**旧公式；真实两处在 `:13`/`:1236`，且**本就已标"文档更正"**）⇒ 无需改动，结论记此。
+  4. **SI 类型 `V`（C810 非法）** → 本轮**未改生成字节**：`inp_generator.py:664` 对 POS_VEC 发 `SI{di} V` 的问题**仍按上轮保守处理**（解析容忍 + 抽样报错），记为 **TD-35（P2，待打包前处理）**。理由：改生成字节会冲击 R1 不动点/字节断言，收益低于回归风险。
+  5. **是否先提交** → **先提交再验证**（已执行）。
+- **⚠️ 新依赖（已获用户批准）**：`@types/node@^22.20.2`（**devDependency**，不影响运行时与打包体积）。用途：4 个测试文件 `import ... from "node:fs"/"node:url"/"node:path"/"node:crypto"` 的类型（TD-17 盲区的一部分，10 处错误）。
+- **🟡 本轮顺带修正的"过严类型"（3 处，均为可选性放宽，行为等价）**：`CellEditDialog.CellData.fill_grid`、`DeckContext.CellData.fill_grid` 改**可选**（代码处处 `|| ""` 兜底）；`CycleCellLike.fill_grid` 加 `| null`（`parseFillGrid` 本就对 null 容错）。连带 `LatticeEditDialog.tsx:75` 补 `|| ""`。
+- **🟡 本轮前端代码改动（TD-23 / TD-28 收尾）**：
+  - `gui/src/utils/sourceAdv.ts`：**TD-23 死代码修复**——原 `adv.sdef_raw_text = old.sdefRawText` 写入已退役字段（no-op，导致旧存档 SI/SP 静默丢失），改为用新增的 `distDual.parseDistributionLines` 把旧 `sdefRawText` 的 SI/SP/SB/DS/SC 原文**解析成 v2 分布**迁进 `adv.sdef_distributions`（仅当无权威结构时兜底）。`gui/test/sourceAdv.test.ts` 断言同步 + **新增 3 例迁移回归**。
+  - `gui/src/utils/distDual.ts`：新增 `parseDistributionLines(text): DistEntry[]`（镜像后端 `parse_distribution_lines` 的分组语义）；顺带**修 `structuredToRawLines` 的 `DS T` 丢失 refs** 缺陷（后端 `_format_entry_cards` 是带回放的，TS 侧原先只发 `DSn T`）。
+- **🔴 TD-02 仍未定论（需重打包后冒烟）**：`fix-verification.md` §1 的"对安装版打只读请求"验证的是**当前已部署的 1.7.5（不含本批修复）**，只能证明旧包有没有该问题。TD-02/TD-03 是否真修好，**必须重打包后**按 §4 冒烟（含 `/api/diff-inp`、`/api/lattice-extent`、`/api/source-demo-sample`）。
+- **⛔ 仍有意不做**：**TD-19**（214 处 `any` 重构）——现在**有 tsc 可跑了**，风险已降低，可列入下一批。
+
 
 - **批次目标**：按技术债审计（**34 条**，见 `docs/tech-debt-report.md` + `docs/audit/t4-consolidated.md`）逐条修复。用户指令：可跑测试/构建，"直到所有技术债修复完成"。**bug 修复批严禁升版**（§5）→ 文件版本仍 **1.7.5**。
 - **⚠️ 硬约束（本轮最重要的事实）**：PM 与全部 4 名成员**都没有 shell 工具** ⇒ **所有改动都是静态编写 + 静态自检，未跑过任何测试/构建**。门禁验证必须有 shell 的一方执行 —— 命令清单见 **`docs/fix-verification.md`**（含 5001 先决条件、pytest-timeout 陷阱、预期结果、红灯分类处置）。

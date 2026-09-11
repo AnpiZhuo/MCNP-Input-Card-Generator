@@ -30,10 +30,7 @@ function seedDeck(loadDeck: (d: DeckData) => void) {
     ],
     materials: [],
     sources: [], tallies: [], tally: {}, grids: {}, adv: {},
-    sourceMode: "fixed", sdefFields: {}, sdefRawText: "", sourceTemplate: "free", distributions: [],
-    sswFields: { surf: "", sym: "", pty: "", cel: "" },
-    ssrFields: { surf: "", mode: "", cel: "", pty: "", col: "", wgt: "", tr: "", psc: "" },
-    kcodeFields: {}, ksrcPoints: "", rawOverrides: {}, textMode: {},
+    sourceTemplate: "free", rawOverrides: {}, textMode: {},
     universeComments: {},
   });
 }

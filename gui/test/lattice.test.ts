@@ -7,6 +7,7 @@
  * 项4 rhpMacro + 项7 collectFillUniverses + 项12 compressRaw + 项13 cycle。
  */
 import { describe, expect, it } from "vitest";
+import type { AutoGenParams } from "../src/utils/lattice";
 import {
   autoGenMacrobody,
   autoGenerateSurfaces,
@@ -180,7 +181,7 @@ describe("hexRingRows（蜂窝环行长，项5 L2 语义=+30° 共线方向）",
   });
 });
 
-describe("hexCenter（项5 权威公式：顶点+X flat-top，x=i·p·√3/2, y=j·p+(i%2)·p/2）", () => {
+describe("hexCenter（项5 权威公式：顶点+X flat-top，x=col·p+row·p/2, y=row·p·√3/2）", () => {
   it("golden 坐标一致", () => {
     for (const c of G.hexCenter) {
       const p = hexCenter(c.col, c.row, c.pitch);
@@ -328,7 +329,9 @@ describe("autoGenMacrobody（项3 宏体自动生成，跨语言 L4）", () => {
   it("golden macrobody 段一致（编号 maxSurfaceNumber+1 顺延）", () => {
     const baseSurf = "1 px -5\n2 px 5\n3 py -5\n4 py 5\n5 pz 0";
     for (const c of G.macrobody) {
-      const params = c.lat === "2" ? { hex: c.params } : { rect: c.params };
+      const params = c.lat === "2"
+        ? { hex: c.params as NonNullable<AutoGenParams["hex"]> }
+        : { rect: c.params as NonNullable<AutoGenParams["rect"]> };
       const r = autoGenMacrobody(c.lat, params, baseSurf);
       expect(r.card).toBe(c.expectedSurface);
       expect(r.surfaceExpr).toBe(c.expr);
@@ -489,7 +492,7 @@ describe("跨语言 golden validate 段（backend 权威规则，TS 结构 + 非
   it("宏体样例 expectedOk=true（lat1_rpp_macro / lat2_rhp_macro）", () => {
     const rpp = G.validate.find((s) => s.id === "lat1_rpp_macro");
     const rhp = G.validate.find((s) => s.id === "lat2_rhp_macro");
-    expect(rpp.expectedOk).toBe(true);
-    expect(rhp.expectedOk).toBe(true);
+    expect(rpp!.expectedOk).toBe(true);
+    expect(rhp!.expectedOk).toBe(true);
   });
 });

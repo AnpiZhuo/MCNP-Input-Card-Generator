@@ -23,7 +23,8 @@ export interface CellData {
   tmp: string;
   otherParams: string;
   render: boolean;
-  fill_grid: string;
+  /** 格阵数据（JSON 字符串）；仅含 fill 格阵的栅元才有 —— 处处以 `|| ""` 兜底，故可选 */
+  fill_grid?: string;
   comment: string;
 }
 
@@ -170,7 +171,6 @@ export default function CellEditDialog({ cell, onSave, onClose, availableMats, o
             ? `⚠ ${checkErr}`
             : `${meta.icon} ${meta.label} ${checkResult && checkResult.volume != null ? `(${checkResult.volume.toFixed(1)} mm³)` : ""}${checkResult?.infinite_axes?.length ? ` [延伸至 ${checkResult.infinite_axes.join("/")} 轴]` : ""}`
         )
-        : null,
         : null,
     ),
     React.createElement("div", { style: style.row },

@@ -48,7 +48,7 @@ describe("groupByUniverse", () => {
     const ug = groups[0];
     expect(ug.count).toBe(3);
     expect(ug.indices).toEqual([0, 1, 2]);
-    expect(ug.rows.map((r) => r.cell.num)).toEqual(["1", "2", "3"]);
+    expect(ug.rows.map((r) => (r as { kind: "cell"; cell: { num: string } }).cell.num)).toEqual(["1", "2", "3"]);
   });
 
   it("全部有效 u → 无「未分组」组（兜底组不空渲染）", () => {

@@ -34,11 +34,15 @@
 - 续行缩进 / 密度符号提示：项目是表单生成 + 结构化模型，天然不产生此类问题；文本模式
   往返路径若有需要再补行级检查。
 
-## 几何水密自检（2026-09-09 新增，独立于 OWEN 语法规则）
+## 栅元封闭性自检（2026-09-09 新增，独立于 OWEN 语法规则）
 
-见 `docs/contracts/watertight-check.md` 设计约定。规则语法级校验只拦「写错」，
-水密自检拦「几何没盖严」（MCNP lost-particle 源头）——外部栅元 ROI 内做
-FreeCAD BRep 缝隙 + 重叠检测，三入口：几何页「几何自检」按钮 / 栅元保存 / 生成 INP。
+见 `docs/contracts/cell-closure-check.md` 设计约定。规则语法级校验只拦「写错」，
+封闭性自检拦「几何没盖严」（MCNP lost-particle 源头）——以 FreeCAD BRep 逐栅元判定
+六态（closed/infinite/semi_infinite/empty/voxel/unresolvable），三入口：几何页「3D 预览」后
+自动取报告 / 栅元「🩺 自检此栅元」按钮 / 栅元列表「封闭」列。
+
+> 2026-09-10 更正：本节原写「外部栅元 ROI 内做 FreeCAD BRep 缝隙 + 重叠检测」，
+> 该能力**从未实现**（仅接口骨架），已按用户裁决删除骨架并改正本节表述。
 
 ## 纪律
 

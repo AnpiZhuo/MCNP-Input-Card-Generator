@@ -5,7 +5,8 @@
 - 说明：目前校验以"生成时"为主，深度规则不足；这些规则能提前拦下大部分 MCNP fatal，比跑起来报错强。
 - 来源：OWEN src/language/rules.ts（27KB）+ src/validation/validator.ts。
 - 工作量：中。注意：允许搬运代码，owen为开源软件，只需要在readme中注明即可，新依赖需要向用户说明后等待批准。
-- 状态说明：全部落地。语法规则 6 条齐（ZAID 格式 / 份额正负号 / S(α,β) 目标核素 / 宏体参数个数 / 80/128 列 / 未定义引用，`app/generator/validator.py`，19 单测）。**几何水密自检**（2026-09-09 新增）：几何页「🩺 几何自检」按钮 + 栅元保存/生成 INP 自动触发；FreeCAD BRep ROI 缝隙 + 重叠检测，外部栅元「外」列标记（UI-only，不参与生成）；见 `docs/contracts/watertight-check.md`。
+- 状态说明：全部落地。语法规则 6 条齐（ZAID 格式 / 份额正负号 / S(α,β) 目标核素 / 宏体参数个数 / 80/128 列 / 未定义引用，`app/generator/validator.py`，19 单测）。**栅元封闭性自检**（2026-09-09 新增）：FreeCAD BRep 逐栅元判定六态（closed/infinite/semi_infinite/empty/voxel/unresolvable），栅元列表「封闭」列 + 栅元「🩺 自检此栅元」按钮 + 3D 预览后自动取报告（UI-only，不参与生成）；见 `docs/contracts/cell-closure-check.md`。
+  > 2026-09-10 更正：原文此处写的「几何水密自检 / FreeCAD BRep ROI 缝隙 + 重叠检测 / 外部栅元「外」列标记」**从未实现**（仅接口骨架），已按用户裁决删除骨架并改正。
 
 ## P1 · 中期（新功能级，建议配合升版一起做）
 

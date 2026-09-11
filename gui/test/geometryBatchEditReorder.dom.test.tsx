@@ -25,10 +25,7 @@ function seedDeck(loadDeck: (d: DeckData) => void) {
     ],
     materials: [{ number: 5, comment: "测试材料", density: "5.0", nuclides: [], options: "", mt_card: "" }],
     sources: [], tallies: [], tally: {}, grids: {}, adv: {},
-    sourceMode: "fixed", sdefFields: {}, sdefRawText: "", sourceTemplate: "free", distributions: [],
-    sswFields: { surf: "", sym: "", pty: "", cel: "" },
-    ssrFields: { surf: "", mode: "", cel: "", pty: "", col: "", wgt: "", tr: "", psc: "" },
-    kcodeFields: {}, ksrcPoints: "", rawOverrides: {}, textMode: {},
+    sourceTemplate: "free", rawOverrides: {}, textMode: {},
   });
 }
 
@@ -38,7 +35,7 @@ function SeedAndTab({ onLoad }: { onLoad?: (load: (d: DeckData) => void) => void
   return React.createElement(GeometryTab, { pendingCellFromMaterial: undefined });
 }
 
-let fetchMock: ReturnType<typeof vi.fn>;
+let fetchMock: any;
 
 beforeEach(() => {
   // 项 8：分组默认开启（localStorage mcnp_groupbyu_v1 初始 true）——本测试验证批量编辑×拖拽重排，
@@ -50,7 +47,7 @@ beforeEach(() => {
     if (u.includes("/api/check-freecad")) return { json: async () => ({ status: "ok", found: true }) };
     return { json: async () => ({ status: "error", message: "未 mock: " + u }) };
   });
-  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 });
 
 afterEach(() => {

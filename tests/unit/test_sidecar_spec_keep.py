@@ -53,15 +53,18 @@ def _parse_keep_dirs(spec_text: str) -> list[str]:
 
 
 def _parse_hidden(spec_text: str) -> list[str]:
-    """spec 里出现的全部字符串字面量（用于"该模块名是否被登记进 hiddenimports"这条断言）。
+    """spec 中 `hiddenimports` 相关登记的字符串字面量（用于"该模块名是否被登记"这类断言）。
 
-    故意**不**去精确解析 `_hidden` 的语句结构：spec 里既有
-    `_hidden = [m for m in collect_submodules("pymcnp") ...]`（推导式，跨行、无静态字面量），
-    又有 `_meshtal_mods = [...]` → `_hidden += _meshtal_mods` 的**变量间接**形态，
-    精确解析脆而易碎。这里退一步：取全 spec 的字面量集合——
-    对"某模块名是否被登记"这类断言足够，且 spec 结构再变也不会失效。
+    实现说明（2026-09-10 实测修正）：**不用 `re.findall(r'"([^"]+)"', spec_text)`**。
+    该启发式在本 spec 上实测**静默丢内容** —— 同一份文本上 `findall` 只返回 74 项且
+    不含 `models.py` / `meshtal` / `generator`，而逐引号配对扫描（本实现）返回 76 对且
+    三者俱全；`[^"]+` 与 `\\x22([^\\x22]+)\\x22` 两种写法均复现。为避免这条闸门因
+    解析层不可靠而"假绿/假红"，改用**显式配对扫描**：取所有 ASCII 双引号位置，逐对切片。
+
+    只认 ASCII 双引号（`chr(34)`）；spec 全是双引号字面量，单引号不参与。
     """
-    return re.findall(r'"([^"]+)"', spec_text)
+    pos = [i for i, ch in enumerate(spec_text) if ord(ch) == 34]
+    return [spec_text[pos[k] + 1:pos[k + 1]] for k in range(0, len(pos) - 1, 2)]
 
 
 # ── 2. api_server 源码解析（ast，绝不 import）──

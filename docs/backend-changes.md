@@ -1415,3 +1415,26 @@ python -m pytest tests/unit/test_lattice.py -q            # 66 passed
 - `app/generator/inp_generator.py`：`generate_inp_from_deck` 拆 `basic_tail`（MODE/NPS 卡）移数据卡段最末尾，`basic_head`（CTME/ACT/PRINT/NONU）留开头。
 - `docs/contracts/api.yaml`：5 新端点（materialLibrary/save/delete/import/export）+ `MaterialLibraryEntry` schema。
 - `tests/unit/test_material_library.py`（新，23 用例）：路径回落/CRUD 往返/JSON CSV 导入导出/冲突三选 + identical/validate_entry/check_zaids_xsdir 等。
+
+---
+
+## 技术债修复批次 · 后端（2026-09-10，验证批次）
+
+> 完整流水见 `docs/CHANGELOG.md`；门禁实测见 `docs/fix-verification.md` §7。本节只记后端改动。
+> **门禁（实跑）**：`python -m pytest tests -q -rs` = **875 passed / 0 failed / 0 skipped**，EXIT 0。
+> ⚠️ 本节改动**在 TD-02/TD-03 之后**，此前审计期的后端修复（TD-02 spec / TD-03 DS 键错配等）见 `PROJECT_MEMORY.md` S1 区。
+
+**🔴 编译级缺陷（1 处，静态审计完全看不见）**
+- `app/meshtal/meshtal_cache.py:135-141`：TD-26 加锁改动把 `while total > self._max_bytes and entries:` 的**循环体丢了缩进** ⇒ `IndentationError` ⇒ **全量 pytest 在收集阶段就中断**（`1 error during collection`，一条测试都没跑）。已补回缩进。**这是本轮最重要的教训**：它把"全绿"变成假象，只有真的跑一次才能发现。修后 `python -m compileall -q app gui tests inputcard_mcp` EXIT 0，确认是孤例。
+
+**🔴 语义缺陷（1 处，丢弃真实数据）**
+- `app/generator/source_sampler.py:_summarize`：原 `e_min = min(energies) if energies else 0.0` / `e_max = max(energies) if energies else 1.0` / `if e_max <= e_min: e_min, e_max = 0.0, 1.0` —— 对**单能 δ 分布**（如 `SDEF ERG=14`，所有粒子能量恒 14.0）会得到 `e_max == e_min == 14.0`，**正好命中该分支**，把真实范围 `[14,14]` 改成假的 `[0,1]`。
+  - 判据（前端语义）：`gui/src/source/SourceDemoWindow.tsx:166` 以 `energyRange.min === energyRange.max ? "无能量" : ...` 显示 —— 即**单能就该返回 `[14,14]`**。
+  - 已改为：有有效能量即取真实 `min/max`；全无有效能量（全部 ≤0 或缺字段）时返回**中性零区间 `[0,0]`**（而非误导性的 `[0,1]`）。
+
+**用户裁决执行：删除未实现的水密/ROI 骨架**
+- `app/freecad_preview.py`：删除 `check_watertight` / `outside_cell_num` 两个形参（含 `build_geometry` docstring 对应条目）与 worker payload 键；删除 `FreeCADEngine.gap_volume` / `gap_fraction` / `roi_volume` / `fused_volume` / `gap_unresolved_cells` 的初始化与结果读回。理由：这些符号**全仓零调用点、worker 无计算分支**（恒为 `None`/`[]`），文档却宣称"已上线"。**代码侧 grep 零残留**；契约改名 `docs/contracts/watertight-check.md` → **`cell-closure-check.md`**（只描述已实现事实）。
+
+**spec 修正（TD-34 闸门抓出）**
+- `gui/mcnp_sidecar.spec`：`_keep_py` 中**误列 `_cross_section_helper.py`** —— 该文件在 `gui/backend/` 而非 `app/`（spec 第 41-44 行本就另有一段从 `GUI_BACKEND` 取它并投放到 `app`），`_keep_py` 里的那一条是无用项，会让 TD-34 闸门报"spec 与源码漂移"。已删除该条并加注释指路。
+- `tests/unit/test_sidecar_spec_keep.py`：`_parse_hidden` 原用 `re.findall(r'"([^"]+)"', spec_text)` 取"全 spec 字符串字面量"，实测在**同一份文本**上**静默丢内容**（返回 74 项且不含 `models.py`/`meshtal`/`generator`/`docs`；逐引号配对扫描返回 76 对且四者俱全；`[^"]+` 与 `\x22([^\x22]+)\x22` 两种写法均复现）⇒ 改为**显式配对扫描**（ASCII 双引号位置逐对切片），消除闸门的假红/假绿风险。该文件 6 例**首次执行，全绿**。

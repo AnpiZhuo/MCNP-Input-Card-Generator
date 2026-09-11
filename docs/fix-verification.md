@@ -143,7 +143,61 @@ vite build → PyInstaller sidecar → 复制 dist/python → src-tauri/binaries
 
 ## 6. 本次修复的"诚实边界"（请勿高估）
 
-1. **所有改动都未经运行验证** —— 修复者与审计者都没有 shell。
-2. **静态自检的覆盖范围**：改了哪些文件、有没有残留引用、import 是否闭合、api.yaml ↔ handlers 是否同删 —— 这些查过了；**运行时行为、类型错误、测试红绿一律没查**。
-3. **未做的事**（有意留到后续批次，理由已写进报告）：TD-19（214 处 `any` 的类型重构）—— 无 tsc 可跑时盲改大范围类型风险高于收益。
-4. **未访问 `C810.pdf`**：凡是"以 MCNP 权威为准"的语义结论（DS 卡的 `param`/J 起点、SI 字母集），本次只核到"与项目内派生文档 + 代码自述一致"，**没有对 PDF 逐字复核**。TD-03 的 `param` 语义属于这一类 —— 若您手边有 C810.pdf，建议对 `DSn` 卡做一次人工确认（本项目两份派生文档互相矛盾：`app/docs/源分布卡说明.md:175` 写 `DSn S S1…Sk`（无 var），`app/docs/C810_卡片格式详细.md:183` 写 `DS[n] var Dn1…`（有 var））。
+1. ~~**所有改动都未经运行验证** —— 修复者与审计者都没有 shell。~~ → **2026-09-10 已解除**：接手方**有 shell**，本清单**已全部执行**，见 §7。
+2. **静态自检的覆盖范围**：改了哪些文件、有没有残留引用、import 是否闭合、api.yaml ↔ handlers 是否同删 —— 这些查过了；**运行时行为、类型错误、测试红绿一律没查**。→ **已由 §7 补齐。**
+3. **未做的事**（有意留到后续批次，理由已写进报告）：TD-19（214 处 `any` 的类型重构）—— 无 tsc 可跑时盲改大范围类型风险高于收益。→ **条件已变（tsc 可跑），可列入下一批。**
+4. **未访问 `C810.pdf`**：凡是"以 MCNP 权威为准"的语义结论（DS 卡的 `param`/J 起点、SI 字母集），本次只核到"与项目内派生文档 + 代码自述一致"，**没有对 PDF 逐字复核**。TD-03 的 `param` 语义属于这一类 —— 若您手边有 C810.pdf，建议对 `DSn` 卡做一次人工确认（本项目两份派生文档互相矛盾：`app/docs/源分布卡说明.md:175` 写 `DSn S S1…Sk`（无 var），`app/docs/C810_卡片格式详细.md:183` 写 `DS[n] var Dn1…`（有 var））。→ **仍未访问 C810.pdf，此条继续有效。**
+
+---
+
+## 7. 验证执行记录（2026-09-10，接手方**有 shell**）
+
+### 7.1 先决条件（实测）
+
+| 项 | 结果 |
+| :--- | :--- |
+| 5001 端口 | **空闲**（`Get-NetTCPConnection -LocalPort 5001` 无输出）→ 契约测试结果可信 |
+| `pytest-timeout` | **未安装** → 按 §0.2 全程**不加 `--timeout`**，改用外层超时 |
+| `npm.ps1` | **被执行策略拦截**（`UnauthorizedAccess`）→ 改用 `npm.cmd` / `npx.cmd` |
+| 环境 | Python 3.13.14 / pytest 9.1.1 / node v24.18.0 |
+
+### 7.2 门禁结果（全绿）
+
+| 命令 | 结果 |
+| :--- | :--- |
+| `python -m pytest tests -q -rs` | **875 passed / 0 failed / 0 skipped**，EXIT 0 |
+| `npx tsc --noEmit` | **EXIT 0** |
+| `npx tsc -p tsconfig.test.json --noEmit` | **EXIT 0**（首次执行暴露 **35 处**测试类型错误，已全部清偿） |
+| `npx vitest run` | **78 files / 625 tests passed / 0 skip**，EXIT 0 |
+| `npx vite build` | **EXIT 0**（742 modules；仅 chunk>500kB 提示，非错误） |
+
+**关键核对项**：
+- §2 关注的 **`skipped = 0`** —— 审计最担心的"隐藏 skip"**不存在**。
+- §3 关注的 `latticeInstances.test.ts` 跨语言 golden **真跑且绿**（`it.skipIf` 已改硬断言）。
+- §2/§3 关注的 TD-03 **3 条真实解析路径回归全绿**；`test_distributions.py::test_parse_sb_ds` 绿。
+- 上轮"预判会红"的 3 点**全部按期出现且已处置**（`tsconfig.test.json` 类型错误 / `test_sidecar_spec_keep.py` 新建未跑 / `preview3dDeadLog.test.ts` 全树扫描），另**额外抓出 2 个编译级真缺陷**（见 §7.3）。
+
+### 7.3 🔴 跑门禁抓出的 5 个真缺陷（静态审计看不见，全部已修）
+
+| # | 缺陷 | 症状 | 处置 |
+| :--- | :--- | :--- | :--- |
+| 1 | `app/meshtal/meshtal_cache.py:136` **`IndentationError`**（TD-26 加锁时丢了 `while` 体缩进） | **全量 pytest 在收集阶段中断**（`1 error during collection`）⇒ 一条测试都没跑，"全绿"是假象 | 补回缩进；`compileall app gui tests inputcard_mcp` EXIT 0 确认孤例 |
+| 2 | `gui/src/components/CellEditDialog.tsx:174` **多余三元分支 `: null,`**（TS1135） | 该文件**无法编译** | 删多余分支；`tsc --noEmit` EXIT 0 |
+| 3 | `app/generator/source_sampler.py:_summarize` **丢弃真实能量** | 单能 δ 分布（`SDEF ERG=14`，粒子恒 14.0）被 `if e_max <= e_min: = 0.0, 1.0` 改成假 `[0,1]` | 改为有有效能量即 `min/max`、无则 `[0,0]`（前端以 `min===max` 判「无能量」） |
+| 4 | `tests/unit/test_sidecar_spec_keep.py:_parse_hidden` **正则静默丢内容** | 同一 spec 上 `re.findall(r'"([^"]+)"', text)` 返回 74 项且丢 `models.py`/`meshtal`/`generator`/`docs`；逐引号配对扫描返回 76 对且四者俱全 | 改用显式配对扫描（ASCII 双引号位置逐对切片） |
+| 5 | `gui/mcnp_sidecar.spec` `_keep_py` **误列 `_cross_section_helper.py`** | 该文件在 `gui/backend/` 不在 `app/`（spec 另有一段从 GUI_BACKEND 取它）⇒ TD-34 闸门报"spec 与源码漂移" | 删除该条 + 加注释指路 |
+
+> **教训（建议固化进 §6 踩坑）**：**编译级缺陷只有"真的跑一次"才能发现** —— 上述 #1/#2 都是"文件根本跑不起来/编不过"，任何静态审计（哪怕再仔细）都会漏。**"没有 shell 的修复批次"其交付状态必须标注为"未验证"，不能计入完成。**
+
+### 7.4 本轮新增/变更的测试与依赖
+
+- **新增测试**：`sourceAdv.test.ts` 新增 **3 例 TD-23 迁移回归**（旧 `sdefRawText` → `adv.sdef_distributions`）。
+- **新依赖（已获用户批准）**：`@types/node@^22.20.2`（devDependency，不影响运行时/打包体积）—— 供 4 个测试文件的 `node:fs/url/path/crypto` 类型（TD-17 盲区的 10 处错误）。
+- **类型定义放宽 3 处**（行为等价）：`CellEditDialog.CellData.fill_grid` / `DeckContext.CellData.fill_grid` 改可选、`CycleCellLike.fill_grid` 加 `| null`。
+
+### 7.5 仍未验证 / 待办
+
+1. **TD-02 / TD-03 是否真修好 → 必须重打包后冒烟**（§1 的只读请求验证的是**当前已部署的 1.7.5，不含本批修复**）。按 §4 走：`/api/diff-inp`、`/api/lattice-extent`、`/api/source-demo-sample` 均 200，且 `_internal\app\diff_inp.py`、`lattice.py` 都在。
+2. **`C810.pdf` 仍未人工核对**（§6.4 继续有效）—— 尤其 `DSn` 卡的 `param`/J 起点语义。
+3. **TD-35（P2，新增）**：`app/generator/inp_generator.py:664` 对 POS_VEC 仍发 C810 非法的 `SI{di} V`（用户裁决：本批维持保守，留到打包前处理）。
+4. **TD-19**（214 处 `any`）条件已具备（tsc 可跑），可列入下一批。

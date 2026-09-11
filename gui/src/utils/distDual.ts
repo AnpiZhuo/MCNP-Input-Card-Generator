@@ -5,6 +5,9 @@
  * structured→卡行格式 与 原文→structured 解析，供前端形态切换时预览/回填：
  *   - structuredToRaw(entry)  表单 → 原文卡行（规范重建，SC/SI/SP/SB/DS 序）
  *   - rawToStructured(text,id) 原文 → 结构化字段（无字母 SI → type ""，不再回填 L）
+ *   - parseDistributionLines(text) 多条原文 → DistEntry[]（镜像后端
+ *     `app/generator/distributions.py:parse_distribution_lines`，按行首数字 id 分组；
+ *     用于旧存档 sdefRawText 一次性迁移进 adv.sdef_distributions）
  *
  * 与后端一致的硬性约束：
  *   - SI 无字母（""）永不被打成 L；发射时 type="" 不带字母（MCNP 缺省 H）
@@ -114,6 +117,53 @@ export function linesToRaw(lines: string[]): string {
 }
 
 /**
+ * 多条原文（\n 分隔的 SI/SP/SB/DS/SC 行）→ DistEntry[]，**镜像后端**
+ * `app/generator/distributions.py:parse_distribution_lines` 的分组语义：
+ *   - 按行首卡号分组（`SI1`/`SP1`… → 同一 id）；组按 id **首次出现顺序**排列；
+ *   - 每条的 `rawText` 是该条**自己的原文行**（逐字保留，发射以原文为权威）；
+ *   - `editMode="raw"`（导入/原文形态）；其余结构化字段由 `rawToStructured` 派生；
+ *   - `paramRef` 留空（与后端解析产物一致——该字段仅供 UI 手工标注引用变量）；
+ *   - 非分布卡行（如 `SDEF ERG=D1`）按 `KIND_RE` 自然跳过，不进任何条目。
+ *
+ * 用途：旧存档 `deck.sdefRawText` 一次性迁移进 `adv.sdef_distributions`（TD-23/§3.1）。
+ */
+export function parseDistributionLines(text: string): DistEntry[] {
+  const rawLines = String(text ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  // 组内保持原文出现顺序；组间按 id 首次出现顺序（与后端 order 一致）
+  const grouped = new Map<number, string[]>();
+  for (const line of rawLines) {
+    const m = KIND_RE.exec(line.toUpperCase());
+    if (!m) continue;
+    const id = parseInt(m[2], 10);
+    if (!grouped.has(id)) grouped.set(id, []);
+    grouped.get(id)!.push(line);
+  }
+
+  const out: DistEntry[] = [];
+  for (const [id, lines] of grouped) {
+    const rawText = lines.join("\n");
+    const parsed = rawToStructured(rawText, id);
+    out.push({
+      id,
+      paramRef: "",
+      auto: false,
+      editMode: "raw",
+      rawText,
+      si: parsed.si,
+      sp: parsed.sp,
+      sb: parsed.sb,
+      ds: parsed.ds,
+      sc: parsed.sc ?? undefined,
+    });
+  }
+  return out;
+}
+
+/**
  * 表单（structured 字段）→ 规范 MCNP 卡行（SC/SI/SP/SB/DS 序）。
  * 与后端 _format_entry_cards 逐条同构；type "" 的 SI 不打印字母。
  */
@@ -157,7 +207,8 @@ export function structuredToRawLines(entry: DistEntry): string[] {
     const param = clean(entry.ds.param);
     const refs = (entry.ds.distributionIds || []).map(clean).filter(Boolean);
     if (dsType === "T") {
-      lines.push(`DS${idx}  T`);
+      // T 可带 I1 J1 … Ik Jk 匹配对（后端 resolve_ds_t 消费 distributionIds），一并回放
+      lines.push(`DS${idx}  T` + (refs.length ? "  " + refs.join("  ") : ""));
     } else {
       let head = `DS${idx}  ${dsType}`;
       if (param) head += "  " + param;

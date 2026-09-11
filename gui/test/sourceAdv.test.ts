@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import type { DistEntry } from "../src/utils/DeckContext";
 import {
   uiModeFromAdv,
   canonicalSourceMode,
@@ -46,7 +47,7 @@ describe("canonicalSourceMode / vocabForUi（规范词汇）", () => {
 describe("分布 / ksrc JSON 序列化往返", () => {
   it("空分布 → ''（避免 '[]' truthy 误走分布生成）；非空可解析", () => {
     expect(serializeDistributions([])).toBe("");
-    const ds = [{ id: 1, paramRef: "ERG", auto: true, si: { type: "L", values: ["14"] }, sp: { type: "D", values: [], fnCode: "", fnParams: [] }, sb: null, ds: null }];
+    const ds: DistEntry[] = [{ id: 1, paramRef: "ERG", auto: true, si: { type: "L", values: ["14"] }, sp: { type: "D", values: [], fnCode: "", fnParams: [] }, sb: null, ds: null }];
     expect(parseDistributions(serializeDistributions(ds))).toEqual(ds);
     expect(parseDistributions("")).toEqual([]);
     expect(parseDistributions("not-json")).toEqual([]);
@@ -140,11 +141,47 @@ describe("migrateLegacySourceKeys（旧顶层中间态 → adv，幂等且不覆
     expect(out.adv.sdef_erg).toBe("14");
     expect(out.adv.sdef_eff).toBeUndefined();
     expect(readExtraToken(out.adv.sdef_extra, "EFF")).toBe("0.05");
-    expect(out.adv.sdef_raw_text).toBe("SDEF ERG=D1\nSI1 L 14");
     expect(out.adv.sdef_distributions).toContain('"id":1');
     expect(out.sdefFields).toBeUndefined();
     expect(out.distributions).toBeUndefined();
     expect(out.sdefRawText).toBeUndefined();
+  });
+
+  it("TD-23 迁移：旧 sdefRawText 的 SI/SP 原文行 → adv.sdef_distributions（不再写死字段）", () => {
+    const out = migrateLegacySourceKeys({
+      sourceMode: "distribution",
+      sdefRawText: "SDEF ERG=D1\nSI1 L 14\nSP1 1\nSI2 H 0 1",
+    });
+    // 死字段 sdef_raw_text 不得再出现（后端已退役该字段）
+    expect(out.adv.sdef_raw_text).toBeUndefined();
+    const dists = JSON.parse(out.adv.sdef_distributions);
+    // 两条分布、按 id 升序（首次出现顺序），原文逐字保留
+    expect(dists.map((d: any) => d.id)).toEqual([1, 2]);
+    expect(dists[0].editMode).toBe("raw");
+    expect(dists[0].rawText).toBe("SI1 L 14\nSP1 1");
+    expect(dists[1].rawText).toBe("SI2 H 0 1");
+    // 结构化字段同步派生；SDEF 卡本体行不进条目
+    expect(dists[0].si).toEqual({ type: "L", values: ["14"] });
+    expect(dists[1].si).toEqual({ type: "H", values: ["0", "1"] });
+    expect(out.sdefRawText).toBeUndefined();
+  });
+
+  it("TD-23 迁移：已有 distributions 权威时，不覆盖 sdefRawText 的兜底解析", () => {
+    const out = migrateLegacySourceKeys({
+      sourceMode: "distribution",
+      distributions: [{ id: 7, paramRef: "ERG", auto: true, si: { type: "L", values: ["14"] }, sp: null, sb: null, ds: null }],
+      sdefRawText: "SI1 L 99",
+    });
+    const dists = JSON.parse(out.adv.sdef_distributions);
+    expect(dists.map((d: any) => d.id)).toEqual([7]);
+  });
+
+  it("TD-23 迁移：sdefRawText 里没有分布卡行时保持空（不塞 '[]'）", () => {
+    const out = migrateLegacySourceKeys({
+      sourceMode: "distribution",
+      sdefRawText: "SDEF ERG=14 POS=0 0 0",
+    });
+    expect(out.adv.sdef_distributions).toBeUndefined();
   });
 
   it("adv 已有权威值时不被中间态覆盖（如 parse 已产出的 adv）", () => {

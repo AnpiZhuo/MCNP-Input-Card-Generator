@@ -16,7 +16,7 @@ const cells = [
   { num: "1", mat: "1", density: "-1.0" },
   { num: "2", mat: "0", density: "" },
 ];
-const mats = [{ number: 1, comment: "水", density: "1.0" }];
+const mats = [{ number: 1, comment: "水", density: "1.0", nuclides: [], options: "", mt_card: "" }];
 
 describe("BatchCellEditDialog DOM 交互", () => {
   it("显示可添加栅元数量与锁死的曲面提示", () => {

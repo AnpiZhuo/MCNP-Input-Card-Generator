@@ -9,6 +9,7 @@
  * sswFields / ssrFields / distributions / sdefRawText` 顶层副本。
  */
 import type { DistEntry } from "./DeckContext";
+import { parseDistributionLines } from "./distDual";
 
 /* ── 判别量词汇 ── */
 /** 后端/生成器规范 source_mode 值域（app/models.py:438；parse 亦产出 surface） */
@@ -189,9 +190,16 @@ export function migrateLegacySourceKeys(deck: any): any {
       if (sf[SDEF_EFF_KEY] && !readExtraToken(adv.sdef_extra, "EFF")) {
         adv.sdef_extra = setExtraToken(adv.sdef_extra, "EFF", sf[SDEF_EFF_KEY]);
       }
-      if (!adv.sdef_raw_text && old.sdefRawText) adv.sdef_raw_text = old.sdefRawText;
       if (!adv.sdef_distributions && Array.isArray(old.distributions) && old.distributions.length) {
         adv.sdef_distributions = serializeDistributions(old.distributions);
+      }
+      // TD-23：后端 sdef_raw_text 字段已整条退役 —— 旧存档的 sdefRawText 不再有对应
+      // adv 字段可搬，只能把其中的 SI/SP/SB/DS/SC 原文行**解析成 v2 分布**迁进
+      // sdef_distributions（否则旧存档的源分布静默丢失）。仅当上面没有权威结构时兜底，
+      // 避免覆盖旧存档里已有的 distributions。
+      if (!adv.sdef_distributions && typeof old.sdefRawText === "string" && old.sdefRawText.trim()) {
+        const migrated = parseDistributionLines(old.sdefRawText);
+        if (migrated.length) adv.sdef_distributions = serializeDistributions(migrated);
       }
     }
   }

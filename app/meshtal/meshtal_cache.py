@@ -133,12 +133,12 @@ class MeshtalParseCache:
                     continue
             entries.sort(key=lambda x: x[0])
             while total > self._max_bytes and entries:
-            _mt, p, sz = entries.pop(0)
-            try:
-                os.remove(p)
-                total -= sz
-            except OSError:
-                pass
+                _mt, p, sz = entries.pop(0)
+                try:
+                    os.remove(p)
+                    total -= sz
+                except OSError:
+                    pass
 
     def _clear(self) -> None:
         """测试辅助：清空缓存目录。"""

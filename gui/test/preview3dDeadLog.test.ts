@@ -72,7 +72,7 @@ describe("T4：生产调试残留守卫（已扩展为全 gui/src 扫描）", ()
       // 逐行判定并跳过注释行，避免注释/文档里提到 console.log 造成误报
       const line = src
         .split("\n")
-        .find((l) => {
+        .find((l: string) => {
           const t = l.trim();
           if (t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")) return false;
           return /\bconsole\.log\s*\(/.test(l);

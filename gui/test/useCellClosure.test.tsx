@@ -30,7 +30,7 @@ function okReport(cellNum = 1) {
   return { json: async () => ({ status: "ok", closure_report: { [cellNum]: { status: "closed", volume: 1.5 } } }) };
 }
 
-let fetchMock: ReturnType<typeof vi.fn>;
+let fetchMock: any;
 beforeEach(() => {
   fetchMock = vi.fn(async () => okReport());
   (globalThis as unknown as { fetch: unknown }).fetch = fetchMock;

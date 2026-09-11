@@ -23,7 +23,7 @@ _keep_py = [
     "xsdir_db.py", "step_importer.py",
     "outp_parser.py",
     "coverage_check.py",
-    "_cross_section_helper.py",
+    # 注意：_cross_section_helper.py 在 gui/backend/（不在 app/），见下方 GUI_BACKEND 段
     "_freecad_cross_section_worker.py",
     "stl_cross_section.py", "gpu_pref.py",
     "material_library.py",

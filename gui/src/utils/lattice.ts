@@ -123,9 +123,11 @@ export function hexRingCellCount(rings: number): number {
 /**
  * 顶点朝 +X（flat-top）蜂窝格位中心（画布 / LatticePreview3D / latticeInstances 共用，
  * golden 锁死——跨语言 L1，权威公式不可改）：
- *   x = i·(pitch·√3/2)  （列水平步距）
- *   y = j·pitch + (i%2)·(pitch/2)  （行垂直步距 pitch，奇数列下移半格）
+ *   x = col·pitch + row·pitch/2   （a1=(2a,0) 水平格矢 + a2 的半格斜移）
+ *   y = row·pitch·√3/2
  * 自洽核验：相邻 (0,0)→(1,0) 距=p、相邻 (0,0)→(0,1) 距=√((p/2)²+(p·√3/2)²)=p。
+ * 2026-09-10 更正：本 docstring 原写 `x=i·(pitch·√3/2)、y=j·pitch+(i%2)·pitch/2`，
+ * 系旧式（与权威相差 30° 旋转），与下方实现及 `app/lattice.py:604-616` 不符，已按实现改写。
  */
 export function hexCenter(col: number, row: number, pitch: number): { x: number; y: number } {
   // MCNP LAT=2（交叉验证自官方库 u233-comp-therm-001-case-6.i，flat-top 基向量
@@ -362,7 +364,8 @@ export interface CycleCellLike {
   cellNum?: number | string;
   material?: string;
   fill?: string;
-  fill_grid?: string;
+  /** 格阵 JSON；后端 parse 产物与旧存档可能给 null（`parseFillGrid` 对其容错） */
+  fill_grid?: string | null;
 }
 
 export interface FillCycleResult {

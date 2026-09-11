@@ -13,7 +13,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import Preview3D from "../src/components/Preview3D";
 import { DeckProvider } from "../src/utils/DeckContext";
 
-let fetchMock: ReturnType<typeof vi.fn>;
+let fetchMock: any;
 beforeEach(() => {
   fetchMock = vi.fn(async () => ({ json: async () => ({ status: "ok", stl_data: {}, count: 0 }) }));
   vi.stubGlobal("fetch", fetchMock);
