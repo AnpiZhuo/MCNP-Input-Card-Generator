@@ -32,6 +32,22 @@
 
 **视觉复验（本项目首次具备"看图判读"能力）**：修前"外壳完全不可见" → 修后**热室立方体 + 内部空腔 + 盖板圆盘 + 观察孔圆柱全部可见、多材料配色正常**；500 粒子 x∈[-7.480,7.413]⊂[-7.5,7.5]、y∈[-9.973,9.930]⊂[-10,10]、z∈[50.031,79.893]⊂[50,80]，`allParticlesInsideSourceBox=true`；PTRAC 窗口外壳亦恢复可见。取证链路见 `docs/fix-verification.md` §8.4。
 
+#### 🔁 用户人工验收反馈修复（S1.0d-2，同日）
+
+**用户原话**："我能看到你把粒子的源头做出来了，但粒子源头还是一张张蓝色方块，**无法看到粒子的方向的线条**"。
+
+**两个新 bug（均由上面 S1.0d 的取景改动牵出）**：
+1. **方向线长度是世界空间固定值**：`arrowLen = 粒子跨度对角线 × 0.03` = 39.05 × 0.03 = **1.17**，而取景盒（热室）对角线 ≈ **914** ⇒ 在 ~700px 画面上只占**约 1px**，完全看不见。（修前取景只框粒子盒，1.17 单位 ≈ 27px，所以那时可见 —— **取景修复治好一个病、带出一个病**。）
+2. **「方向线长度」滑杆完全无效**：`setDirectionLength(scale)` 只做 `directionScale = scale; markDirty();`，而 `arrowLen` **仅在 `setParticles` 里用过一次** ⇒ 拖动无任何变化（滑杆范围 0.2~5）。
+
+**修法**（`gui/src/source/SourceDemoRenderer.ts`，+86/−11）：方向线长度改**屏幕空间恒定** —— `len = 2 × 相机到 target 距离 × tan(fov/2) × 0.03 × 滑杆倍率`，由 `controls` 的 change 事件驱动实时重算（长度变化 <0.5% 去抖）；`setDirectionLength` 改为调用重建函数 ⇒ **滑杆生效**；新增 `captureDirectionAnchors()` 缓存"出生点 + 单位方向"。
+
+**复验三连**：全局视图方向线清晰可见（约 25px 星芒）；放大 20 档线长约 40–50px **未爆炸**（若固定世界长度此处应约 470px）；滑杆 100%→500% 线长肉眼明显拉长（约 40px→约 200px）。
+
+**测试盲区**：`gui/test` 下**无任何 `SourceDemoRenderer` 测试**（grep 零命中）⇒ "滑杆无效"长期存活，目前只有端到端视觉验证能覆盖。
+
+**待裁决**：粒子仍是 `THREE.Points` 点精灵（方块）——改小球属视觉设计变更，已问用户。
+
 ### ✅ 源分布 v2 双态（无字母 SI 不回填 L + raw 直通）+ 原文模式值网格化（本会话/上一会话，2026-09-09，工作区未提交）
 
 **目标**：修 q1112 输入卡"程序导入-再生成后 MCNP 结果与原生不一致"根因——无字母 `SI` 行被自动补成 `L`（MCNP 里无字母 SI 默认是 H 直方图）；分布编辑器导入后处于"原文模式(raw)"，行数据一多就整行挤成一个长输入框——改为值拆网格（每格一个值，MCNP 卡 8 数据区形态）。
@@ -151,6 +167,7 @@
 
 | 日期 | 变更类型 | 改动描述 | 涉及 Agent |
 | :--- | :--- | :--- | :--- |
+| **2026-09-11** | 修复/前端 | **源演示方向线不可见 + 「方向线长度」滑杆失效**（S1.0d-2，接上条的用户人工验收反馈）：① 方向线长度是**世界空间固定值**（粒子跨度×0.03 = 1.17），在"外壳优先"取景（盒对角线 ≈914）下只占**约 1px** —— **S1.0d 的取景修复牵出的回归**；② `setDirectionLength` 只改 `directionScale` + `markDirty()`，而 `arrowLen` 仅在 `setParticles` 里用过一次 ⇒ **滑杆完全无效**（范围 0.2~5）。修法：改为**屏幕空间恒定**（`2×相机距离×tan(fov/2)×0.03×倍率`，随相机距离实时重算 + 0.5% 去抖）+ 缓存锚点/单位方向。门禁 tsc 两档 **EXIT 0** / vitest **625/0** / build **EXIT 0**（纯前端，pytest 不受影响）。视觉复验三连：全局可见 / 放大 20 档不爆炸 / 滑杆 1→5 生效。**⚠️ 仍未打包** | 前端 |
 | **2026-09-11** | 修复/后端+前端 | **源演示「看不见栅元」根因二批**（详见 `docs/fix-verification.md` §8 + 本文件「一、批次详情档案」同名节）：`a255a3f` 之外**还有第三个真 bug**。根因链——① `api_server.py:1439-1443` 补 camelCase 别名时**漏 `mat`** ⇒ ② `SourceTab.demoCellsForBackend()` 把 snake_case `deck.cells` **强断言**成 camelCase `LocalCellRow` ⇒ `material=""` ⇒ ③ `getMatColor("")` 返回 `"transparent"` ⇒ ④ `buildCellMaterial` 判为**真空 M0**（`opacity: 0`）⇒ 13 个外壳全不可见；⑤ 取景误用体积窗口的 `computeFramingBox`（`VOLUME_FRAMING_RATIO=0.25`，源区/热室 ≈0.057）⇒ 外壳被挤出视野。修 **5 文件**（含 `PtracRenderer.ts` 同类缺陷；`computeFramingBox` 本身未改）。门禁 pytest **875/0/0** + vitest **625/0** + tsc 两档 **0** + build **0**。用户真实卡 Practice3 实测：外壳完整可见、500 粒子全落源区。**⚠️ 未提交 / 未打包** | 后端+前端 |
 | **2026-09-10** | 新增/后端+前端 | **SDEF 源粒子演示可视化（TODO #6）**：后端三深模块——`app/generator/distributions.py` 增 `DistributionSampler`/`SourceSamplingError`（SI H/L/A/S、SP D/C、内置函数 -2~-6/-21/-31/-41、SB、DS H/L/S/T/Q）、新增 `app/generator/source_sampler.py`（位置四路 + 方向/能量/权重/粒子类型编排，500 粒子、不做输运）、`app/voxel_csg.py` 补全宏体拆解（BOX/RCC/RHP/HEX/TRC/REC/ELL/WED/ARB）；端点 `POST /api/source-demo-sample`（`api.yaml:1602`）；前端 `gui/src/source/{SourceDemoRenderer.ts,SourceDemoWindow.tsx}` + `SourceTab`「🎬 演示源」+ 独立窗口路由 + `main.rs open_source_demo_window`；契约 `docs/contracts/source-demo-visualization.md`。门禁：后端新单测 **49 passed** + 回归零退化、tsc EXIT 0。**⚠️ 未打包**（用户安装版 1.7.5 不含，见审计 M-18/TD-01）。commit `4f0798fa`（`.git/logs/HEAD:281`） | 后端+前端 |
 | **2026-09-09** | 新增/后端+前端 | **校验规则补全 + 几何水密/封闭性自检**：`app/generator/validator.py` 补 6 条语法规则（ZAID 格式 / 份额正负号 / S(α,β) 目标核素 / 宏体参数个数 / 80·128 列 / 未定义引用，19 单测）；新增**栅元封闭性判定**端点 `POST /api/check-cell-closure`（`api.yaml:1448`）+ worker Step 3.6 六态判定（closed/infinite/semi_infinite/empty/voxel/unresolvable，触界容差 `tol=B*0.005`）+ 前端深模块 `gui/src/utils/{cellClosure.ts,useCellClosure.ts}` 与栅元列表「封闭」列、`CellEditDialog`「🩺 自检此栅元」；契约 `docs/contracts/cell-closure-check.md`（当时名 `watertight-check.md`，**2026-09-10 补写**；同日因未实现的 ROI 水密链路被裁决删除而改名）。commits `06461320`/`a2600b38`/`e9f7eded`/`1ed519df`（`.git/logs/HEAD:277-280`） | 后端+前端 |

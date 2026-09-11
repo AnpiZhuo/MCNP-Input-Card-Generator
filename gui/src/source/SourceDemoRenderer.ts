@@ -134,6 +134,12 @@ export function createSourceDemoRenderer(
   let particleOpacity = 1;
   let directionScale = 1;
   let alignedOffset: Vec3 | null = null;
+  /** 方向线的出生点（世界坐标，已含 offset 平移）——缩放时按屏幕空间重算长度用 */
+  let dirAnchors: Float32Array | null = null;
+  /** 方向线的**单位**方向（与 dirAnchors 一一对应） */
+  let dirDirs: Float32Array | null = null;
+  /** 上次实际写入的方向线长度（去抖：变化 <0.5% 不重建几何） */
+  let lastArrowLen = 0;
 
   function clearParticles(): void {
     if (particlePoints) {
@@ -148,6 +154,9 @@ export function createSourceDemoRenderer(
       (directionLines.material as THREE.Material).dispose();
       directionLines = null;
     }
+    dirAnchors = null;
+    dirDirs = null;
+    lastArrowLen = 0;
   }
 
   function setParticles(particles: SourceParticle[], energyRange: { min: number; max: number }): void {
@@ -165,11 +174,9 @@ export function createSourceDemoRenderer(
     }
     const hasPoints = list.length > 0 && Number.isFinite(min[0]);
 
-    // 方向线长度 = 粒子跨度对角线的 3%（× directionScale）
-    const span = hasPoints
-      ? Math.sqrt((max[0] - min[0]) ** 2 + (max[1] - min[1]) ** 2 + (max[2] - min[2]) ** 2)
-      : 1;
-    const arrowLen = Math.max(span * 0.03, 1e-6) * directionScale;
+    // 方向线长度**不在此处决定**：旧实现用"粒子跨度对角线的 3%"（世界空间固定值），
+    // 在"外壳优先"取景下（热室对角线 ≈914）只占屏幕约 1px 完全看不见，放大 34 倍后
+    // 又会长到糊屏。改为屏幕空间恒定长度，见下方 updateDirectionLines()。
 
     // 点云
     const posArr = new Float32Array(list.length * 3);
@@ -194,7 +201,7 @@ export function createSourceDemoRenderer(
     particlePoints = new THREE.Points(ptsGeo, ptsMat);
     scene.add(particlePoints);
 
-    // 方向线（出生点 → 沿方向 arrowLen）
+    // 方向线（出生点 → 沿方向；长度先按**单位向量**占位，稍后 updateDirectionLines 定型）
     const dirPos = new Float32Array(list.length * 6);
     const dirCol = new Float32Array(list.length * 6);
     list.forEach((p, i) => {
@@ -203,9 +210,9 @@ export function createSourceDemoRenderer(
       dirPos[base] = p.x;
       dirPos[base + 1] = p.y;
       dirPos[base + 2] = p.z;
-      dirPos[base + 3] = p.x + nx * arrowLen;
-      dirPos[base + 4] = p.y + ny * arrowLen;
-      dirPos[base + 5] = p.z + nz * arrowLen;
+      dirPos[base + 3] = p.x + (nx || 0);
+      dirPos[base + 4] = p.y + (ny || 0);
+      dirPos[base + 5] = p.z + (nz || 0);
       const e01 = normalizeEnergy01(Number(p.energy ?? 0), energyRange);
       const c = new THREE.Color(trackShade(trackColor(p.particle || "other"), e01));
       dirCol[base] = c.r; dirCol[base + 1] = c.g; dirCol[base + 2] = c.b;
@@ -263,6 +270,68 @@ export function createSourceDemoRenderer(
       controls.update();
       alignedOffset = offset;
     }
+    // 几何已定型（含 offset 平移）→ 记下锚点与单位方向，再按当前相机距离定屏幕空间长度
+    captureDirectionAnchors();
+    updateDirectionLines(true);
+    markDirty();
+  }
+
+  /** 记下方向线的出生点与**单位**方向（供缩放时按屏幕空间重算长度） */
+  function captureDirectionAnchors(): void {
+    if (!directionLines) return;
+    const attr = directionLines.geometry.getAttribute("position") as THREE.BufferAttribute;
+    const arr = attr.array as Float32Array;
+    const n = arr.length / 6;
+    dirAnchors = new Float32Array(n * 3);
+    dirDirs = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const b = i * 6;
+      const a = i * 3;
+      dirAnchors[a] = arr[b];
+      dirAnchors[a + 1] = arr[b + 1];
+      dirAnchors[a + 2] = arr[b + 2];
+      const vx = arr[b + 3] - arr[b];
+      const vy = arr[b + 4] - arr[b + 1];
+      const vz = arr[b + 5] - arr[b + 2];
+      const L = Math.hypot(vx, vy, vz) || 1;
+      dirDirs[a] = vx / L;
+      dirDirs[a + 1] = vy / L;
+      dirDirs[a + 2] = vz / L;
+    }
+  }
+
+  /**
+   * 方向线长度 = **当前视野高度的 3% × 滑杆倍率**（屏幕空间恒定），随相机距离实时重算。
+   *
+   * 为什么不用"粒子跨度的 3%"（旧实现）：那是**世界空间固定值** —— 在"外壳优先"取景下
+   * （实测 Practice3：粒子跨度≈39 → arrowLen 1.17，而取景盒对角线≈914）只占屏幕约 **1px**，
+   * 用户完全看不到方向线；若改用"取景盒比例"又会在放大 34 倍后长到糊屏。
+   * 屏幕空间恒定则任何缩放级别都清晰可见。
+   * （2026-09-11 用户实测："无法看到粒子的方向的线条"。）
+   */
+  function updateDirectionLines(force = false): void {
+    if (!directionLines || !dirAnchors || !dirDirs) return;
+    const camDist = camera.position.distanceTo(controls.target);
+    const viewH = 2 * Math.max(camDist, 1e-6) * Math.tan((camera.fov * Math.PI) / 360);
+    const len = Math.max(viewH * 0.03 * directionScale, 1e-9);
+    // 去抖：OrbitControls 拖动时 change 触发很频繁，长度变化 <0.5% 就不重建
+    if (!force && lastArrowLen > 0 && Math.abs(len - lastArrowLen) <= lastArrowLen * 0.005) return;
+    lastArrowLen = len;
+    const attr = directionLines.geometry.getAttribute("position") as THREE.BufferAttribute;
+    const arr = attr.array as Float32Array;
+    const n = dirAnchors.length / 3;
+    for (let i = 0; i < n; i++) {
+      const a = i * 3;
+      const b = i * 6;
+      arr[b] = dirAnchors[a];
+      arr[b + 1] = dirAnchors[a + 1];
+      arr[b + 2] = dirAnchors[a + 2];
+      arr[b + 3] = dirAnchors[a] + dirDirs[a] * len;
+      arr[b + 4] = dirAnchors[a + 1] + dirDirs[a + 1] * len;
+      arr[b + 5] = dirAnchors[a + 2] + dirDirs[a + 2] * len;
+    }
+    attr.needsUpdate = true;
+    directionLines.geometry.computeBoundingSphere();
     markDirty();
   }
 
@@ -274,7 +343,11 @@ export function createSourceDemoRenderer(
     },
   });
   const markDirty = renderLoop.markDirty;
-  controls.addEventListener("change", () => markDirty());
+  controls.addEventListener("change", () => {
+    // 相机距离变了 → 重算方向线长度（屏幕空间恒定；内部有 0.5% 去抖）
+    updateDirectionLines();
+    markDirty();
+  });
 
   function resizeRenderer(): void {
     const r = canvas.getBoundingClientRect();
@@ -332,8 +405,10 @@ export function createSourceDemoRenderer(
       markDirty();
     },
     setDirectionLength(scale: number) {
+      // ⚠️ 旧实现只改 directionScale + markDirty()，而 arrowLen 仅在 setParticles 里用过一次
+      // ⇒ 「方向线长度」滑杆**完全无效**（拖动不产生任何变化）。现按新倍率重建方向线几何。
       directionScale = scale;
-      markDirty();
+      updateDirectionLines(true);
     },
     dispose() {
       ro?.disconnect();

@@ -276,6 +276,36 @@ vite build → PyInstaller sidecar → 复制 dist/python → src-tauri/binaries
 **取证方法**（可复用，全程**零新依赖**）：headless Edge（`--headless=new --remote-debugging-port=9222` + SwiftShader 软件渲染）+ node 24 **内置 `WebSocket`** 直连 CDP 自写驱动（置于仓库外 `D:\MCNP\_agent_probe\`，不污染仓库）；页面加载**前**用 `Page.addScriptToEvaluateOnNewDocument` 注入 fetch 钩子，抓真实请求体与响应。
 > **三个坑（本次实测踩到，已固化进 `PROJECT_MEMORY` §6）**：① `alert()` 在 headless 里**永久冻结渲染进程**（导入成功必弹）⇒ 必须在**同一 CDP 会话内**自动接受；② 导航到**含相同 hash 的同一 URL 不会重新加载文档** ⇒ 假"重载"，须用 `Page.reload`；③ PowerShell 调原生程序时**空字符串参数被丢弃** ⇒ 位置参数错位（曾误在仓库根生成垃圾截图文件，已删）。
 
-### 8.5 三态表述
+### 8.5 用户人工验收反馈修复（S1.0d-2，同日）
+
+**用户人工验收原话**："我能看到你把粒子的源头做出来了，但粒子源头还是一张张蓝色方块，**无法看到粒子的方向的线条**"。
+
+**查出两个新 bug（均由 §8.2 的取景改动牵出）**：
+
+| # | 问题 | 量化 |
+| :-- | :--- | :--- |
+| 1 | 方向线长度是**世界空间固定值** ⇒ 被"外壳优先"取景缩没 | `arrowLen = 粒子跨度对角线 × 0.03` = 39.05 × 0.03 = **1.17**；取景盒（热室）对角线 ≈ **914** ⇒ 在 ~700px 画面上仅 **约 1px**（修前取景只框粒子盒，1.17 ≈ 27px，故那时可见 —— **取景修复牵出的回归**） |
+| 2 | **「方向线长度」滑杆完全无效** | `setDirectionLength(scale)` 只做 `directionScale = scale; markDirty();`，而 `arrowLen` **仅在 `setParticles` 里用过一次** ⇒ 拖动不产生任何变化（滑杆范围 0.2~5） |
+
+**修法**（`gui/src/source/SourceDemoRenderer.ts`，+86/−11）：方向线长度改为**屏幕空间恒定** ——
+`len = 2 × 相机到 target 距离 × tan(fov/2) × 0.03 × 滑杆倍率`，由 `controls` 的 change 事件驱动实时重算（长度变化 <0.5% 去抖，避免拖动时频繁重建几何）；`setDirectionLength` 改为调用重建函数 ⇒ **滑杆真正生效**。新增 `captureDirectionAnchors()` 缓存"出生点 + 单位方向"，缩放时只重算终点。
+
+**复验（截图三连，同一窗口）**：
+
+| 场景 | 结果 |
+| :--- | :--- |
+| 全局视图（滑杆 100%） | **方向线清晰可见**（放射状星芒，约 25px），不再被取景缩没 |
+| 放大 20 档 | 线长约 40–50px，**未爆炸**（若仍是世界空间固定长度，此处应约 470px）⇒ 屏幕空间恒定成立 |
+| 滑杆 100% → 500% | 线长肉眼明显拉长（约 40px → 约 200px）⇒ **滑杆确认生效** |
+
+**门禁**：tsc 两档 **EXIT 0**、vitest **78 files / 625/0**、vite build **EXIT 0**、compileall **EXIT 0**。本批**纯前端**（仅 `SourceDemoRenderer.ts`）⇒ 上节 pytest 875/0/0 不受影响，未重跑。
+
+**测试盲区（教训）**：`gui/test` 下**没有任何 `SourceDemoRenderer` 的测试**（grep `SourceDemoRenderer|setDirectionLength|arrowLen` **零命中**）⇒ "滑杆无效"能长期存活。该渲染器目前**只有端到端视觉验证能覆盖**。
+
+**仍未处理（待用户裁决）**：粒子仍是 `THREE.Points` **点精灵（方块）**、永远面向摄像头。交接文档 §2.4#1 判定"改小球属**视觉设计变更**，动手前先问用户"——本次已问，等裁决。
+
+> **取证操作再踩一坑**（补进 `PROJECT_MEMORY` §6 第 ③ 条）：除"空字符串参数被丢弃"外，**用 `-` 当占位符也会生成名为 `-` 的文件**（本次在仓库根误生成 86KB 截图，已删）。驱动已改为 `outPng !== '-'` 才截图。
+
+### 8.6 三态表述
 
 **已改源码 ✅ / 未提交 ❌ / 未打包 ❌** —— 部署版仍不含 `a255a3f` 与本批修复。
