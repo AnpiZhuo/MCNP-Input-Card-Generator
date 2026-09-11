@@ -1441,6 +1441,11 @@ def _deck_to_frontend_dict(deck: DeckData, include_frontend_aliases: bool = Fals
         cell["impN"] = cell.get("imp_n", "")
         cell["impP"] = cell.get("imp_p", "")
         cell["impE"] = cell.get("imp_e", "")
+        # ⚠️ mat 曾漏补：cellBridge.localToDeckCells 读的正是 num/mat/surfaces/(impN|impP|impE)，
+        # 独缺 mat ⇒ 前端拿到 material="" ⇒ getMatColor("") 返回 "transparent" ⇒
+        # buildCellMaterial 判为 M0 真空（opacity 0）⇒ 几何外壳整体不可见
+        # （2026-09-11 实测：演示源 13 个外壳栅元全透明 invisible）。
+        cell["mat"] = cell.get("material", "")
     if include_frontend_aliases:
         # 源项模式：backend 的 adv.source_mode → 顶层 sourceMode（前端词汇）
         adv = deck_dict.get("adv", {})

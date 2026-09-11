@@ -221,3 +221,61 @@ vite build → PyInstaller sidecar → 复制 dist/python → src-tauri/binaries
 2. **`C810.pdf` 仍未人工核对**（§6.4 继续有效）—— 尤其 `DSn` 卡的 `param`/J 起点语义。
 3. ~~**TD-35（P2）**：`app/generator/inp_generator.py:664` 对 POS_VEC 仍发 C810 非法的 `SI{di} V`~~ → **已修（2026-09-10，用户裁决"本批修"）**：改为一律发合法 `L`；解析侧保留 `V` 容忍以兼容**旧输入卡**。全量 pytest **875 passed**（R1 不动点 / R4 kitchen-sink 字节断言**未回归**），仅 `test_generator_multi_source.py:75` 一处旧断言随修。
 4. **TD-19**（214 处 `any`）条件已具备（tsc 可跑），可列入下一批。
+
+---
+
+## 8. 源演示「看不见栅元」根因二批（2026-09-11，用户实测 Practice3 热室卡）
+
+> **背景**：`a255a3f`（S1.0c）修完"cells 未传几何 + CEL AST 未转换"后，交接文档判定为"待用户终验"。
+> **2026-09-11 用用户提供的真实卡 `Practice3 (3).TXT`（热室屏蔽模型：14 栅元 / 6 材料 / SDEF 位置用 D2·D3·D4 分布给出）实跑浏览器端，现象依旧**：
+> 演示源窗口只有一坨蓝色方块点精灵，「显示几何外壳」已勾选也**完全看不到栅元轮廓** ⇒ **存在第三个真 bug**（上一轮未发现）。
+
+### 8.1 根因链（5 步；前 4 步实测确证，第 5 步为代码推断）
+
+| # | 位置 | 问题 |
+| :-- | :--- | :--- |
+| 1 | `gui/backend/api_server.py:1439-1443` | 给 cell 补 camelCase 前端别名时补了 `num`/`surfaces`/`impN`/`impP`/`impE`，**唯独漏 `mat`** |
+| 2 | `gui/src/components/SourceTab.tsx:126-138` | `demoCellsForBackend()` 把 `deck.cells`（DeckContext 的 **snake_case** `CellData`）**强断言**成 cellBridge 的 `LocalCellRow`（camelCase）⇒ `localToDeckCells` 读 `c.cell.mat` 得 `undefined` ⇒ `material=""`。`num`/`surfaces` 因后端恰好补了同名别名而侥幸可用，**掩盖了这个类型谎言** |
+| 3 | `gui/src/utils/materialColors.ts:11-14` | `getMatColor("")`：`parseInt("")` 为 NaN，而 `!NaN` 为真 ⇒ 返回 **`"transparent"`** |
+| 4 | `gui/src/three/cellMaterial.ts:35-39` | `buildCellMaterial` 以 `color === "transparent"` 判定**真空 M0** ⇒ `{opacity: 0}` ⇒ **13 个外壳全部全透明** |
+| 5 | `gui/src/source/SourceDemoRenderer.ts:243` + `gui/src/volume/alignWorld.ts:104-115` | 取景复用了 `computeFramingBox` 的 `VOLUME_FRAMING_RATIO = 0.25` 规则：粒子盒最大边 30 ÷ 并集最大边 528 ≈ **0.057 < 0.25** ⇒ **只按粒子盒取景**。该规则是为**体积窗口**设计的（网格层 ≪ 模型时聚焦网格层），而"**源在屏蔽体内部**"恰是演示源的常态 ⇒ 即便外壳不透明也会落在视野外 |
+
+### 8.2 处置（5 文件）
+
+| 文件 | 改动 |
+| :--- | :--- |
+| `gui/backend/api_server.py` | 补 `cell["mat"] = cell.get("material", "")` |
+| `gui/src/components/SourceTab.tsx` | `demoCellsForBackend()` 改为直接读 deck 的 snake_case 字段（**删掉 `as LocalCellRow[]` 类型谎言**）；顺带过滤 `kind:"raw"` 条件行（旧实现会造出 `number=0` 的幽灵栅元） |
+| `gui/src/utils/materialColors.ts` | `getMatColor` 区分「材料号缺失/非法 → 中性灰 `#888888`」与「M0 真空 → `transparent`」 |
+| `gui/src/source/SourceDemoRenderer.ts` | ① 外壳颜色按**栅元号**匹配（原实现恒用 `cellViews[0]` ⇒ 多材料全同色）；② 取景改 `unionBoxes`（外壳优先），不再复用 `computeFramingBox` |
+| `gui/src/ptrac/PtracRenderer.ts` | **同类缺陷同批修**：`PtracRenderer.ts:253` 同样误用 `computeFramingBox` ⇒ 径迹落在屏蔽体内时外壳被挤出视野；改为一律用 `union`（径迹为空时 `boxes` 只含外壳，天然退化为"只框外壳"） |
+
+> `computeFramingBox` / `VOLUME_FRAMING_RATIO` **本身未改动** ⇒ 体积窗口语义与其 3 个测试文件（`framingBox` / `cameraSceneAlign` / `volumeLayer`）原样保留、全绿。
+
+### 8.3 门禁（改后实跑，全绿）
+
+| 命令 | 结果 |
+| :--- | :--- |
+| `python -m pytest tests -q -rs` | **875 passed / 0 failed / 0 skipped**，EXIT 0 |
+| `tsc --noEmit` / `tsc -p tsconfig.test.json --noEmit` | 两档 **EXIT 0** |
+| `vitest run` | **78 files / 625 tests passed / 0 skip**，EXIT 0 |
+| `vite build` | **EXIT 0** |
+| `compileall app gui tests` | **EXIT 0** |
+
+**先决条件**：跑 pytest 前先停掉占用 5001 的源码版后端（契约测试需端口空闲，§0.1 / `PROJECT_MEMORY` §6 坑 1），跑完重启为**新代码**。
+
+### 8.4 浏览器端视觉复验（2026-09-11，本项目首次具备"看图判读"能力）
+
+| 项 | 修前 | 修后 |
+| :--- | :--- | :--- |
+| 演示源窗口几何外壳 | **完全不可见**（一坨蓝色方块） | **完整可见**：热室立方体 + 内部空腔 + 盖板圆盘 + 观察孔圆柱，多材料配色正常 |
+| SourceTab 请求体 `material` | 14/14 全为 `""` | `"1"/"2"/"2"/"3"/"4"`（且 14/14 带非空 `surface_expr`） |
+| 500 粒子空间分布 | — | x∈[-7.480, 7.413]⊂[-7.5, 7.5]、y∈[-9.973, 9.930]⊂[-10, 10]、z∈[50.031, 79.893]⊂[50, 80]；`allParticlesInsideSourceBox = true`；跨度 14.89×19.90×29.86 ≈ 源区 15×20×30 |
+| PTRAC 3D 径迹窗口 | （同源缺陷） | **外壳可见**（样本径迹 (101.7, 94.66, 143.87) 落在热室内，正是旧规则失效的场景） |
+
+**取证方法**（可复用，全程**零新依赖**）：headless Edge（`--headless=new --remote-debugging-port=9222` + SwiftShader 软件渲染）+ node 24 **内置 `WebSocket`** 直连 CDP 自写驱动（置于仓库外 `D:\MCNP\_agent_probe\`，不污染仓库）；页面加载**前**用 `Page.addScriptToEvaluateOnNewDocument` 注入 fetch 钩子，抓真实请求体与响应。
+> **三个坑（本次实测踩到，已固化进 `PROJECT_MEMORY` §6）**：① `alert()` 在 headless 里**永久冻结渲染进程**（导入成功必弹）⇒ 必须在**同一 CDP 会话内**自动接受；② 导航到**含相同 hash 的同一 URL 不会重新加载文档** ⇒ 假"重载"，须用 `Page.reload`；③ PowerShell 调原生程序时**空字符串参数被丢弃** ⇒ 位置参数错位（曾误在仓库根生成垃圾截图文件，已删）。
+
+### 8.5 三态表述
+
+**已改源码 ✅ / 未提交 ❌ / 未打包 ❌** —— 部署版仍不含 `a255a3f` 与本批修复。

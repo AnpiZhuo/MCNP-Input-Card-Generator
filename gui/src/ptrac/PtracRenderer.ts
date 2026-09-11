@@ -15,7 +15,7 @@ import { computeCameraParams, type CameraParams } from "../three/cameraParams";
 import { createRenderLoop } from "../three/renderGate";
 import { buildCellMaterial, DEFAULT_SHELL_OPACITY } from "../three/cellMaterial";
 import {
-  unionBoxes, boxCenter, boxSize, translateToCenter, computeFramingBox, applyOffsetToBox,
+  unionBoxes, boxCenter, boxSize, translateToCenter, applyOffsetToBox,
   type AABB, type Vec3, type Translatable,
 } from "../volume/alignWorld";
 import { trackColor, trackShade, normalizeEnergy01, energyRangeOfTracks, particleGroup } from "./trackColors";
@@ -249,8 +249,12 @@ export function createPtracRenderer(canvas: HTMLCanvasElement, opts: PtracRender
     ];
     for (const pm of pointMeshes) geos.push(pm.mesh.geometry);
     const offset = translateToCenter(geos, union);
-    // A2.1 同款自动取景：外壳≫径迹时以径迹为主；相机用 offset 后的场景坐标
-    const framing = computeFramingBox(shellBox, worldBox ?? shellBox!);
+    // ⚠️ 不沿用 computeFramingBox：那条 VOLUME_FRAMING_RATIO(=0.25) 规则是为体积窗口设计的
+    // （网格层远小于模型时聚焦网格层）。径迹落在屏蔽体内部是常态，套用后会把几何外壳
+    // 挤出视野（2026-09-11 实测 Practice3 热室卡：源区 15×20×30 / 热室 500×500×528，
+    // ratio≈0.057 < 0.25 ⇒ 只框径迹盒 ⇒ 外壳不可见）。与演示源同口径：一律按并集取景
+    // （外壳优先）。径迹为空时 boxes 只含外壳，union 自然退化为"只框外壳"（见上方 241 行早退）。
+    const framing = union;
     const sceneBox = applyOffsetToBox(framing, offset);
     const cp: CameraParams = computeCameraParams(boxCenter(sceneBox), boxSize(sceneBox));
     camera.near = cp.near;

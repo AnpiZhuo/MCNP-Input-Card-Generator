@@ -89,10 +89,29 @@
 6. **门禁**：pytest **875/0/0**、vitest **78 files / 625/0**、tsc 两档 EXIT 0、vite build EXIT 0（改后重跑）。
 7. **未做**：① 用户浏览器**终验**（唯一"改了但没确认"的东西）；② **重新打包部署**（部署版不含 `a255a3f`）；③ 点源场景方向线长度趋近 0（`arrowLen` 依赖粒子跨度，点源跨度=0）——**未处理**。
 
+### 🔧 S1.0d 源演示修复二批（2026-09-11，用户实测 Practice3 热室卡；**已改源码，未提交/未打包**）
+
+**⚠️ S1.0c 判定的"待用户终验" —— 一验即翻车：还有第三个真 bug。** 用户提供真实卡 `Practice3 (3).TXT`（热室屏蔽模型：14 栅元 / 6 材料 / SDEF 位置由 **D2·D3·D4 分布**给出），实跑浏览器端后演示源**仍是一坨蓝色方块、看不到任何栅元轮廓**。
+
+**根因链（5 步；前 4 步实测确证，第 5 步代码推断）**：
+
+1. `gui/backend/api_server.py:1439-1443` —— 给 cell 补 camelCase 前端别名时补了 `num`/`surfaces`/`impN`/`impP`/`impE`，**漏 `mat`**。
+2. `SourceTab.demoCellsForBackend()` 把 `deck.cells`（DeckContext 的 **snake_case** `CellData`）**强断言**成 cellBridge 的 camelCase `LocalCellRow` ⇒ `c.cell.mat` 恒 `undefined` ⇒ **`material=""`**。（`num`/`surfaces` 靠后端恰好补了同名别名而侥幸可用 —— **别名越全，类型谎言藏得越深**。）
+3. `getMatColor("")` 因 `!parseInt("")` 为真 ⇒ 返回 **`"transparent"`**。
+4. `buildCellMaterial` 把 `"transparent"` 判为**真空 M0** ⇒ `opacity: 0` ⇒ **13 个外壳全不可见**。
+5. `SourceDemoRenderer.ts:243` 误用 `computeFramingBox`（`VOLUME_FRAMING_RATIO=0.25`）：源区/热室 ≈ **0.057 < 0.25** ⇒ **只框粒子盒** ⇒ 外壳被挤出视野。该规则本为**体积窗口**设计，而"源在屏蔽体内部"恰是演示源的常态。
+
+**处置（5 文件）**：后台补 `mat`；`SourceTab` 改**直读 snake_case**（删类型谎言 + 过滤 `kind:"raw"` 条件行）；`getMatColor` 区分「空/非法 → 中性灰」与「M0 → transparent」；`SourceDemoRenderer` 外壳**按栅元号配色**（原恒用 `cellViews[0]` ⇒ 多材料全同色）+ 取景改 `unionBoxes`；`PtracRenderer.ts:253` **同类缺陷同批修**。**`computeFramingBox` 本身未改** ⇒ 体积窗口语义与其 3 个测试文件原样保留。
+
+**门禁（改后实跑全绿）**：pytest **875/0/0**、vitest **78 files / 625/0**、tsc 两档 **EXIT 0**、vite build **EXIT 0**、compileall **EXIT 0**。
+> 先决条件：跑 pytest 前须停掉占用 5001 的源码版后端（§6 坑 1），跑完重启为新代码。
+
+**视觉复验**（**本项目首次具备"看图判读"能力**）：修前"外壳完全不可见" → 修后**热室立方体 + 内部空腔 + 盖板圆盘 + 观察孔圆柱全部可见、多材料配色正常**；500 粒子 x∈[-7.480,7.413]⊂[-7.5,7.5]、y∈[-9.973,9.930]⊂[-10,10]、z∈[50.031,79.893]⊂[50,80]，`allParticlesInsideSourceBox=true`，跨度 14.89×19.90×29.86 ≈ 源区 15×20×30；PTRAC 窗口外壳亦恢复可见。取证链路（headless Edge + node 24 内置 `WebSocket` 直连 CDP，**零新依赖**、脚本置于仓库外）见 `docs/fix-verification.md` §8.4。
+
 ### 🧹 待办（本轮**未做**，明确记录，勿当作已做）
 
 1. **M-10**：`app/UI_ARCHITECTURE.md` 仍陈旧（`25 端点` 实际 **49**、`pytest 251 绿` 实际 **875**，共 3 处）→ 审计处置①要求"整体重锚定或标为历史快照"。
-2. **TD-19**（P1）：214 处 `any` 重构 + **单一 `CellData` 定义**（现状实证：`DeckContext.CellData` snake_case `imp_n` vs `CellEditDialog.CellData` camelCase `impN` **两套并存**）。上一轮"无 tsc 可跑"的搁置理由**已消失**，可排期。
+2. **TD-19**（P1）：214 处 `any` 重构 + **单一 `CellData` 定义**（现状实证：`DeckContext.CellData` snake_case `imp_n` vs `CellEditDialog.CellData` camelCase `impN` **两套并存**）。上一轮"无 tsc 可跑"的搁置理由**已消失**，可排期。**⚠️ 2026-09-11 升级为高优先**：S1.0d 的"看不见栅元"根因正是这条缝的产物（`deck.cells` 是 snake_case、`cellBridge.LocalCellRow` 是 camelCase，中间靠后端补 camelCase 别名 + `as` 断言糊住，**别名漏了 `mat` 就整条链路静默失效**）。
 3. **TD-35 残项**：`gui/src/utils/distDual.ts:19` 的 `SI_LETTERS` 仍含 `V`/`Q`/`T`/`F`，与后端 `_SI_LETTERS = (L,H,A,S)` 不一致。
 4. **C810.pdf 仍未逐字核对**（`DSn` 卡 `param`/J 起点语义；项目内两份派生文档互相矛盾）。
 
@@ -150,7 +169,7 @@
 
 ## S3 进行中任务 / 待办
 
-- **⭐ 当前（2026-09-10）**：**技术债批次已全链路闭环**（审计 → 修复 → 实跑验证 → 打包部署 → 冒烟）。**无进行中任务**，等用户新指令。
+- **⭐ 当前（2026-09-11）**：**S1.0d 源演示修复二批 —— 已改源码 5 文件 + 门禁全绿 + 视觉复验通过**；三态 = **已改 / 未提交 / 未打包**。上一轮 `a255a3f`（S1.0c）判定"待用户终验"，用真实卡实测**翻车**（还有第三个真 bug：`material` 全空 → 外壳全透明 + 取景挤出视野，见 S1.0d）。
 - **本轮明确未做（按优先级，详见 S1「🧹 待办」）**：
   1. **M-10**：`app/UI_ARCHITECTURE.md` 重锚（3 处陈旧计数）。**成本最低，建议先做**。
   2. **TD-19**（P1）：214 处 `any` 重构 + 统一 `CellData`（现 snake_case/camelCase 两套并存）。搁置理由已消失（tsc 现 EXIT 0）。
@@ -377,6 +396,10 @@
 - **契约文档**：docs/contracts/api.yaml 覆盖全部端点；漂移闸门 `tests/integration/test_api_contract.py` AST 断言 handlers ↔ api.yaml 双向一致（含真实 HTTP）。
 - **Cargo.toml 版本隐患**：v1.6.4 曾漏改（停在 1.6.3）；Tauri 以 tauri.conf.json 为权威不影响出包，但**版本四处+锁文件**必须一致。
 - **打包注意（详见 §9）**：Tauri build 需要 `RUSTUP_HOME/CARGO_HOME` 指向 D:\rust；sidecar 用 PyInstaller（spec：`gui/mcnp_sidecar.spec`，产物名 "python"）；**6.2 时效校验**（tauri 增量编译不刷新 target/release 的 sidecar，必须手动核对 mtime/覆盖）；后端窗口关闭时经 Rust `close_window` 命令一起退出。
+- **❗「后端返回对」≠「前端拿到对」——跨层缝上的字段丢失（2026-09-11 实证，源演示"看不见栅元"根因）**：后端 `parse-inp` 的 `material` 完全正确（`"1"/"2"/"3"`），但前端经 `SourceTab.demoCellsForBackend()` → `localToDeckCells` 后 `material` 恒为 `""`。**两个成因叠加**：① `api_server.py:1439-1443` 给 cell 补 camelCase 前端别名（`num`/`surfaces`/`impN`/`impP`/`impE`）时**漏了 `mat`**；② `SourceTab` 把 **snake_case** 的 `deck.cells` **强断言**成 camelCase 的 `LocalCellRow`（`as` 类型谎言）—— 而它"看起来能用"恰恰是因为后端补了 `num`/`surfaces` 同名别名，**别名补得越全，类型谎言藏得越深**。⇒ **纪律：跨 snake_case/camelCase 边界禁止 `as` 断言**，要么显式走 `deckToLocalCells`、要么直读本侧字段名。**pytest（后端对）+ vitest（渲染器对）都覆盖不到这条缝**，只有端到端实跑能暴露。
+- **❗`!n` 这类"值域重载"会把「缺失」与「特定值」混为一谈（2026-09-11 实证）**：`getMatColor` 原实现 `const n = parseInt(mat); if (!n) return "transparent";` 本意是"M0 = 真空"，但 `parseInt("")` 是 NaN、`!NaN` 为真 ⇒ **空材料号也被当成真空**，下游 `buildCellMaterial` 直接给 `opacity: 0` ⇒ 整个几何不可见。⇒ **纪律：判"特定值"用 `n === 0`，"缺失/非法"单独一条分支**（本次改为返回中性灰 `#888888`）。凡"0 是合法值"的场合，`!x` / `x || 默认` 都要警惕。
+- **❗跨模块复用"为别的场景调过的取景/布局启发式"会静默失效（2026-09-11 实证）**：`computeFramingBox` 的 `VOLUME_FRAMING_RATIO=0.25` 是**为体积窗口**设计的（网格层 ≪ 模型时聚焦网格层），被 `SourceDemoRenderer`/`PtracRenderer` 复用后，遇到"源/径迹在屏蔽体内部"（**演示源与径迹窗口的常态**，实测 ratio≈0.057）就把几何外壳挤出视野，且**不报任何错**。⇒ **纪律：复用带阈值/启发式的几何工具前，先问"这条启发式对**本**场景语义是否成立"**；本次两处调用点改为 `unionBoxes`（外壳优先），**共用函数本身与其 3 个测试文件保持不动**。
+- **headless Edge + CDP 端到端取证三坑（2026-09-11 实测，本项目首次具备"看图判读"能力）**：① **`alert()` 在 headless 里永久冻结渲染进程**（本程序"导入成功"必弹 `alert`）⇒ CDP `Runtime.evaluate` 永不返回、看起来像"页面卡死"；必须在**同一 CDP 会话内**监听 `Page.javascriptDialogOpening` 并 `Page.handleJavaScriptDialog({accept:true})`。② **导航到"含相同 hash 的同一 URL"不会重新加载文档** ⇒ 是假"重载"（两次截图 sha256 完全相同，一度被误判为"渲染确定性"）⇒ 真重载须用 `Page.reload`；要在加载**前**注入钩子须用 `Page.addScriptToEvaluateOnNewDocument`。③ **PowerShell 调原生程序时空字符串参数会被丢弃** ⇒ 位置参数错位（`run ... "" 8000` 把等待时长当成输出文件名，**在仓库根生成了垃圾截图 `3000`/`8000`**，已删）⇒ 占位参数用 `-` 而非 `""`。**另**：headless SwiftShader 下主界面 `Page.captureScreenshot` 会超时、子窗口正常 ⇒ 只在子窗口截图。
 
 ## §7 技术争议与决议（语义记忆）
 

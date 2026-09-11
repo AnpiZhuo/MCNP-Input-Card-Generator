@@ -15,6 +15,23 @@
 
 ## 一、批次详情档案（原 PROJECT_MEMORY.md 顶部修复横幅，含独有验收细节）
 
+### 🔧 源演示「看不见栅元」根因二批（2026-09-11，用户实测 Practice3 热室卡；**已改源码，未提交/未打包**）
+
+**背景**：`a255a3f`（S1.0c）修完"cells 未传几何 + CEL AST 未转换"后判定"待用户终验"。**用用户真实卡 `Practice3 (3).TXT`（热室屏蔽：14 栅元 / 6 材料 / SDEF 位置由 D2·D3·D4 分布给出）实跑浏览器端，现象依旧**——演示源仍是一坨蓝色方块、「显示几何外壳」勾选也看不到任何栅元 ⇒ **上一轮漏了第三个真 bug**。
+
+**根因链（5 步）**：
+1. `gui/backend/api_server.py:1439-1443` —— 补 camelCase 前端别名时补了 `num`/`surfaces`/`impN`/`impP`/`impE`，**漏 `mat`**。
+2. `gui/src/components/SourceTab.tsx:126-138` —— `demoCellsForBackend()` 把 `deck.cells`（DeckContext **snake_case** `CellData`）**强断言**成 cellBridge `LocalCellRow`（camelCase）⇒ 读 `c.cell.mat` 得 `undefined` ⇒ **`material=""`**（`num`/`surfaces` 因后端恰好补了同名别名而侥幸可用，掩盖了类型谎言）。
+3. `gui/src/utils/materialColors.ts:11-14` —— `getMatColor("")`：`!parseInt("")` 为真 ⇒ 返回 **`"transparent"`**。
+4. `gui/src/three/cellMaterial.ts:35-39` —— `buildCellMaterial` 以 `color==="transparent"` 判**真空 M0** ⇒ `opacity: 0` ⇒ **13 个外壳全透明**。
+5. `SourceDemoRenderer.ts:243` 误用 `computeFramingBox`（`VOLUME_FRAMING_RATIO=0.25`）：源区/热室 ≈ 0.057 < 0.25 ⇒ **只框粒子盒** ⇒ 外壳被挤出视野（该规则本为体积窗口设计）。
+
+**处置（5 文件）**：后台补 `mat`；`SourceTab` 改直读 snake_case（删类型谎言 + 过滤 raw 条件行）；`getMatColor` 区分「空/非法→灰」与「M0→透明」；`SourceDemoRenderer` 外壳**按栅元号配色**（原恒用 `cellViews[0]`）+ 取景改 `unionBoxes`；`PtracRenderer.ts:253` **同类缺陷同批修**（径迹窗口同样误用 `computeFramingBox`）。`computeFramingBox` 本身**未改** ⇒ 体积窗口语义与其 3 个测试文件原样保留。
+
+**门禁（改后实跑全绿）**：pytest **875/0/0**、tsc 两档 **EXIT 0**、vitest **78 files / 625/0**、vite build **EXIT 0**、compileall **EXIT 0**。
+
+**视觉复验（本项目首次具备"看图判读"能力）**：修前"外壳完全不可见" → 修后**热室立方体 + 内部空腔 + 盖板圆盘 + 观察孔圆柱全部可见、多材料配色正常**；500 粒子 x∈[-7.480,7.413]⊂[-7.5,7.5]、y∈[-9.973,9.930]⊂[-10,10]、z∈[50.031,79.893]⊂[50,80]，`allParticlesInsideSourceBox=true`；PTRAC 窗口外壳亦恢复可见。取证链路见 `docs/fix-verification.md` §8.4。
+
 ### ✅ 源分布 v2 双态（无字母 SI 不回填 L + raw 直通）+ 原文模式值网格化（本会话/上一会话，2026-09-09，工作区未提交）
 
 **目标**：修 q1112 输入卡"程序导入-再生成后 MCNP 结果与原生不一致"根因——无字母 `SI` 行被自动补成 `L`（MCNP 里无字母 SI 默认是 H 直方图）；分布编辑器导入后处于"原文模式(raw)"，行数据一多就整行挤成一个长输入框——改为值拆网格（每格一个值，MCNP 卡 8 数据区形态）。
@@ -134,6 +151,7 @@
 
 | 日期 | 变更类型 | 改动描述 | 涉及 Agent |
 | :--- | :--- | :--- | :--- |
+| **2026-09-11** | 修复/后端+前端 | **源演示「看不见栅元」根因二批**（详见 `docs/fix-verification.md` §8 + 本文件「一、批次详情档案」同名节）：`a255a3f` 之外**还有第三个真 bug**。根因链——① `api_server.py:1439-1443` 补 camelCase 别名时**漏 `mat`** ⇒ ② `SourceTab.demoCellsForBackend()` 把 snake_case `deck.cells` **强断言**成 camelCase `LocalCellRow` ⇒ `material=""` ⇒ ③ `getMatColor("")` 返回 `"transparent"` ⇒ ④ `buildCellMaterial` 判为**真空 M0**（`opacity: 0`）⇒ 13 个外壳全不可见；⑤ 取景误用体积窗口的 `computeFramingBox`（`VOLUME_FRAMING_RATIO=0.25`，源区/热室 ≈0.057）⇒ 外壳被挤出视野。修 **5 文件**（含 `PtracRenderer.ts` 同类缺陷；`computeFramingBox` 本身未改）。门禁 pytest **875/0/0** + vitest **625/0** + tsc 两档 **0** + build **0**。用户真实卡 Practice3 实测：外壳完整可见、500 粒子全落源区。**⚠️ 未提交 / 未打包** | 后端+前端 |
 | **2026-09-10** | 新增/后端+前端 | **SDEF 源粒子演示可视化（TODO #6）**：后端三深模块——`app/generator/distributions.py` 增 `DistributionSampler`/`SourceSamplingError`（SI H/L/A/S、SP D/C、内置函数 -2~-6/-21/-31/-41、SB、DS H/L/S/T/Q）、新增 `app/generator/source_sampler.py`（位置四路 + 方向/能量/权重/粒子类型编排，500 粒子、不做输运）、`app/voxel_csg.py` 补全宏体拆解（BOX/RCC/RHP/HEX/TRC/REC/ELL/WED/ARB）；端点 `POST /api/source-demo-sample`（`api.yaml:1602`）；前端 `gui/src/source/{SourceDemoRenderer.ts,SourceDemoWindow.tsx}` + `SourceTab`「🎬 演示源」+ 独立窗口路由 + `main.rs open_source_demo_window`；契约 `docs/contracts/source-demo-visualization.md`。门禁：后端新单测 **49 passed** + 回归零退化、tsc EXIT 0。**⚠️ 未打包**（用户安装版 1.7.5 不含，见审计 M-18/TD-01）。commit `4f0798fa`（`.git/logs/HEAD:281`） | 后端+前端 |
 | **2026-09-09** | 新增/后端+前端 | **校验规则补全 + 几何水密/封闭性自检**：`app/generator/validator.py` 补 6 条语法规则（ZAID 格式 / 份额正负号 / S(α,β) 目标核素 / 宏体参数个数 / 80·128 列 / 未定义引用，19 单测）；新增**栅元封闭性判定**端点 `POST /api/check-cell-closure`（`api.yaml:1448`）+ worker Step 3.6 六态判定（closed/infinite/semi_infinite/empty/voxel/unresolvable，触界容差 `tol=B*0.005`）+ 前端深模块 `gui/src/utils/{cellClosure.ts,useCellClosure.ts}` 与栅元列表「封闭」列、`CellEditDialog`「🩺 自检此栅元」；契约 `docs/contracts/cell-closure-check.md`（当时名 `watertight-check.md`，**2026-09-10 补写**；同日因未实现的 ROI 水密链路被裁决删除而改名）。commits `06461320`/`a2600b38`/`e9f7eded`/`1ed519df`（`.git/logs/HEAD:277-280`） | 后端+前端 |
 | **2026-09-09** | 重构/后端+前端 | **参数扫描改造 + 待办清单维护**：参数扫描改为「免正则·选中即参数」+ 多核并行 + 彩色行标记；同一 commit 夹带此前未提交改动（提交消息自述 `misc prior uncommitted work`）。另更新 `MCNP输入卡生成器_功能待办清单.md`（移除已完成项、统一编号、登记 SDEF 源演示为 P2#6）。commits `db5b1868`（清单）/ `08e5acef`（扫描改造，`.git/logs/HEAD:274-275`）。**⚠️ 分布 v2 双态是否随之入库需 `git show 08e5acef` 核实（本会话无 shell，存疑）** | 前端+后端 |

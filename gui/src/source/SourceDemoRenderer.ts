@@ -17,7 +17,7 @@ import { computeCameraParams, type CameraParams } from "../three/cameraParams";
 import { createRenderLoop } from "../three/renderGate";
 import { buildCellMaterial, DEFAULT_SHELL_OPACITY } from "../three/cellMaterial";
 import {
-  unionBoxes, boxCenter, boxSize, translateToCenter, computeFramingBox, applyOffsetToBox,
+  unionBoxes, boxCenter, boxSize, translateToCenter, applyOffsetToBox,
   type AABB, type Vec3, type Translatable,
 } from "../volume/alignWorld";
 import { trackColor, trackShade, normalizeEnergy01, type ParticleKey } from "../ptrac/trackColors";
@@ -104,7 +104,12 @@ export function createSourceDemoRenderer(
         const buf = new Uint8Array(raw.length);
         for (let i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i) & 0xff;
         const geo = loader.parse(buf.buffer as ArrayBuffer);
-        const cv = (opts.cellViews || [])[0] || { color: "#888888" };
+        // 按栅元号取色（stlData 的 key 就是栅元号）；取不到才回退首个栅元。
+        // 旧实现恒用 cellViews[0] ⇒ 所有外壳同色（多材料模型看不出栅元区分）。
+        const cv =
+          (opts.cellViews || []).find((v) => String(v.num) === String(key)) ||
+          (opts.cellViews || [])[0] ||
+          { color: "#888888" };
         const spec = shellSpecFor(cv.color);
         const mat = new THREE.MeshStandardMaterial({
           color: spec.color, roughness: 0.3, metalness: 0,
@@ -240,7 +245,12 @@ export function createSourceDemoRenderer(
       boxes.push(worldBox);
       const union = unionBoxes(boxes);
       const offset = translateToCenter(geoList, union);
-      const framing = computeFramingBox(shellBox, worldBox);
+      // ⚠️ 演示源**不复用** computeFramingBox：那条 VOLUME_FRAMING_RATIO(=0.25) 规则是为
+      // 体积窗口设计的（网格层远小于模型时聚焦网格层），搬到演示源上会把外壳挤出视野——
+      // 而"源在屏蔽体内部"恰是演示源的常态。2026-09-11 实测本卡：源区 15×20×30 在热室
+      // 500×500×528 内，ratio≈0.057 < 0.25 ⇒ 只框粒子盒 ⇒ 外壳在视野外。
+      // 演示源一律按并集取景（外壳优先），粒子再靠 OrbitControls 自己放大。
+      const framing = shellBox ? unionBoxes([shellBox, worldBox]) : worldBox;
       const sceneBox = applyOffsetToBox(framing, offset);
       const cp: CameraParams = computeCameraParams(boxCenter(sceneBox), boxSize(sceneBox));
       camera.near = cp.near;

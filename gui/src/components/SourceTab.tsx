@@ -4,9 +4,8 @@ import DistributionEditor from "./DistributionEditor";
 import SswSsrForm from "./SswSsrForm";
 import DocViewer from "./DocViewer";
 import { useDeck } from "../utils/DeckContext";
-import type { DistEntry, SourceItem } from "../utils/DeckContext";
+import type { DistEntry, SourceItem, CellRow } from "../utils/DeckContext";
 import { sourceDemoSample } from "../utils/api";
-import { localToDeckCells, type LocalCellRow } from "../utils/cellBridge";
 import { openSourceDemo } from "../utils/windows";
 import { SOURCE_TEMPLATES, fieldsForTemplate, SDEF_FIELD_META } from "../utils/sourceTemplates";
 import {
@@ -119,23 +118,30 @@ export default function SourceTab() {
    * cell:{...}}`），而 `/api/source-demo-sample` 的 `_prepare_source_geometry` 与
    * `/api/preview-3d` 的 `build_cells_data` 都读**扁平** `{number, material, surface_expr, ...}`
    * （source-demo 的 `surface_expr` 是 CEL/SUR 抽样判定几何的唯一来源；preview-3d 用它建外壳 STL）。
-   * 此前这里只传了 `{num, mat, comment}`（`SourceTab.tsx:132`）且原样传 `deck.cells`，
-   * 两者都会让 `expr` 为空 → 全部栅元被跳过 → **外壳 STL 空 + 粒子全堆原点**（"一坨"）。
-   * 修法与 `Preview3D.tsx:679-681` 同口径。
+   *
+   * ⛔ 这里**直接读 deck 的 snake_case 字段**，不得再走 `localToDeckCells`：
+   * 后者吃的是 cellBridge 的 camelCase 契约（`num`/`mat`/`surfaces`），而 `deck.cells` 装的是
+   * DeckContext 的 **snake_case** `CellData`——`as LocalCellRow[]` 是类型谎言。
+   * 2026-09-11 实测：`c.cell.num`/`c.cell.surfaces` 因后端补了同名 camelCase 别名而侥幸可用，
+   * 但别名里**没有 `mat`** ⇒ `material` 恒为 `""` ⇒ `getMatColor("")` 返回 "transparent"
+   * ⇒ 被 `buildCellMaterial` 当真空（opacity 0）⇒ 13 个外壳全部不可见（用户报的"没有栅元"）。
    */
   const demoCellsForBackend = () =>
-    localToDeckCells(((deck.cells || []) as LocalCellRow[])).map((r: any) => {
-      const c = r?.kind === "cell" ? r.cell : r;
-      return {
-        number: parseInt(c?.number) || 0,
-        material: c?.material ?? "",
-        density: c?.density ?? "",
-        surface_expr: c?.surface_expr ?? "",
-        imp_n: c?.imp_n ?? "", imp_p: c?.imp_p ?? "", imp_e: c?.imp_e ?? "",
-        u: c?.u ?? "", fill: c?.fill ?? "", lat: c?.lat ?? "",
-        trcl: c?.trcl ?? "", render: c?.render !== false, fill_grid: c?.fill_grid ?? "",
-      };
-    });
+    ((deck.cells || []) as CellRow[])
+      // raw 行是 #ifdef/#else 条件行、不是栅元；旧实现会把它们变成 number=0 的幽灵栅元
+      .filter((r) => r?.kind === "cell")
+      .map((r: any) => {
+        const c = r.cell || {};
+        return {
+          number: parseInt(c?.number) || 0,
+          material: c?.material ?? "",
+          density: c?.density ?? "",
+          surface_expr: c?.surface_expr ?? "",
+          imp_n: c?.imp_n ?? "", imp_p: c?.imp_p ?? "", imp_e: c?.imp_e ?? "",
+          u: c?.u ?? "", fill: c?.fill ?? "", lat: c?.lat ?? "",
+          trcl: c?.trcl ?? "", render: c?.render !== false, fill_grid: c?.fill_grid ?? "",
+        };
+      });
 
   const handleDemoSource = async () => {
     setDemoError("");
