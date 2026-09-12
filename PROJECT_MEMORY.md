@@ -1,6 +1,6 @@
 # 项目记忆文档（AI 速查手册）
 
-> 最后更新时间：2026-09-10（**SDEF 源粒子演示可视化（TODO #6）落地**，已实现待提交：后端三深模块（`DistributionSampler` 分布抽样 / `source_sampler` 源编排 / `voxel_csg` 全宏体拆解）+ 端点 `/api/source-demo-sample` + 独立「🎬 演示源」3D 窗口；按 C810.pdf 权威语义**做全不降级**、有错就地报；门禁后端新单测 **49 passed** + tsc EXIT 0）。此前（2026-09-04，**后端拉起提速 + preview_cache 跨进程持久化**，已提交 commit 0a266cd；此前未提交 3D 功能已一并提交 f7fc2ed）。此前（2026-08-28，**v1.7.4**：3D 预览 MCNP 窗口裁剪修复 + U 分组侧边栏，**追加两项 Bug 修复——① disc STL 键错配（d8b6747，BEAVRS 燃料 pin 方块→真实圆柱）；② z 居中（5fafd1d，燃料棒/围板整体上移 230→位置正确，用户已复验确认），均仅重打包 sidecar 部署**；门禁后端 test_lattice(81)+test_api_contract(17) 绿 / 前端 vitest 527/527 / tsc EXIT 0）。此前（2026-08-27）：v1.7.4 上线（MCNP 窗口裁剪 + U 分组侧边栏，已打包部署 `D:\MCNP\MCNP输入卡生成器`；门禁后端 **85/85**（test_lattice+test_api_contract）/ 前端 vitest **527/527** / tsc EXIT 0）。此前（2026-08-24）：Wave 2a 后端 15 项修复**全绿**：pytest **703/0/0**（基线 686 + 新增 17）——项 2/4/5/9/13/15 + 项 14 剩余 + api.yaml cycle 契约 + R1 五夹具/kitchen_sink R4 不回退 + 契约闸门含 cycle HTTP 用例；详见 docs/backend-changes.md §AA。前端 Wave 2b 并行进行中，golden 已写盘全部可断言无 skip）。此前：格阵 fill 三阶段**最终复验全绿**：pytest **674/0** / vitest **466/0 无 skip** / tsc EXIT 0 / 契约闸门 15/15 / 空 STL 修复生效，用户指定 E2E 17/17 PASS，**建议放行统一提交**，详见 docs/qa-report-final.md —— **按人脑模型重组**（原「顶部横幅 + §8 流水混装」整理为「短期记忆 / 长期记忆」两区，完整流水外置 `docs/CHANGELOG.md`）。同日完成 **GQ/SQ 3D 预览修复 + 渲染后续增强 + OWEN 四项 + 参数扫描前端**：全部门禁绿（pytest **573/0** / vitest **358/0** / tsc EXIT 0）+ PyInstaller sidecar 重打包 + 打包版冒烟通过。
+> 最后更新时间：2026-09-12（**STEP 导入 500 热修**：`/api/import-step` 手写 `CellRow` 字段映射 ⇒ 每次导入必 HTTP 500；已收敛到单一序列化 seam + 补回归测试 + **仅重打包 sidecar 部署（未升版）**，详见下方 S4）。此前（2026-09-10，**SDEF 源粒子演示可视化（TODO #6）落地**，已实现待提交：后端三深模块（`DistributionSampler` 分布抽样 / `source_sampler` 源编排 / `voxel_csg` 全宏体拆解）+ 端点 `/api/source-demo-sample` + 独立「🎬 演示源」3D 窗口；按 C810.pdf 权威语义**做全不降级**、有错就地报；门禁后端新单测 **49 passed** + tsc EXIT 0）。此前（2026-09-04，**后端拉起提速 + preview_cache 跨进程持久化**，已提交 commit 0a266cd；此前未提交 3D 功能已一并提交 f7fc2ed）。此前（2026-08-28，**v1.7.4**：3D 预览 MCNP 窗口裁剪修复 + U 分组侧边栏，**追加两项 Bug 修复——① disc STL 键错配（d8b6747，BEAVRS 燃料 pin 方块→真实圆柱）；② z 居中（5fafd1d，燃料棒/围板整体上移 230→位置正确，用户已复验确认），均仅重打包 sidecar 部署**；门禁后端 test_lattice(81)+test_api_contract(17) 绿 / 前端 vitest 527/527 / tsc EXIT 0）。此前（2026-08-27）：v1.7.4 上线（MCNP 窗口裁剪 + U 分组侧边栏，已打包部署 `D:\MCNP\MCNP输入卡生成器`；门禁后端 **85/85**（test_lattice+test_api_contract）/ 前端 vitest **527/527** / tsc EXIT 0）。此前（2026-08-24）：Wave 2a 后端 15 项修复**全绿**：pytest **703/0/0**（基线 686 + 新增 17）——项 2/4/5/9/13/15 + 项 14 剩余 + api.yaml cycle 契约 + R1 五夹具/kitchen_sink R4 不回退 + 契约闸门含 cycle HTTP 用例；详见 docs/backend-changes.md §AA。前端 Wave 2b 并行进行中，golden 已写盘全部可断言无 skip）。此前：格阵 fill 三阶段**最终复验全绿**：pytest **674/0** / vitest **466/0 无 skip** / tsc EXIT 0 / 契约闸门 15/15 / 空 STL 修复生效，用户指定 E2E 17/17 PASS，**建议放行统一提交**，详见 docs/qa-report-final.md —— **按人脑模型重组**（原「顶部横幅 + §8 流水混装」整理为「短期记忆 / 长期记忆」两区，完整流水外置 `docs/CHANGELOG.md`）。同日完成 **GQ/SQ 3D 预览修复 + 渲染后续增强 + OWEN 四项 + 参数扫描前端**：全部门禁绿（pytest **573/0** / vitest **358/0** / tsc EXIT 0）+ PyInstaller sidecar 重打包 + 打包版冒烟通过。
 >
 > **人脑模型组织说明**：
 > - **◉ 短期记忆（工作记忆）**：只放"现在正在处理的事"——当前批次 / 工作区 / 待办。**容量小、变化快、随批次刷新**（人脑工作记忆约 7±2 项）。
@@ -14,7 +14,93 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
-## S1（当前批次）v1.7.6 发布批次（2026-09-10 ~ 09-11，**全链路闭环，已交付用户**）
+## S4（当前批次）STEP 导入 500 热修（2026-09-12，**仅重打包 sidecar 部署，未升版**）
+
+> **用户报告**：「我导入 step 功能怎么炸了？」——部署版点「📥 导入 STEP」→ 后端 **HTTP 500**，前端弹出 `'CellRow' object has no attribute 'number'`。
+
+### 根因（一个字段名过期，整条链路 100% 挂）
+
+`gui/backend/api_server.py:_handle_import_step` 里**手写**了 deck 平铺序列化：
+
+```python
+[{"number": c.number, "material": str(c.material), ...} for c in (deck.cells or [])]
+```
+
+而 `deck.cells` 自 `f8f7fe6` 起已是 **`CellRow` 判别联合**（`kind` + 嵌套 `cell`），**没有** `number/material/density/surface_expr` 字段 ⇒ 每次 STEP 导入必然 `AttributeError`。2026-08 删掉 McCAD 兜底分支后只剩这一条路径，缺陷 100% 暴露；**该端点当时零测试覆盖**，所以静态审计与全量 pytest 都没抓到（pytest 908 passed 全绿也照样漏）。
+
+### 修法（收敛到唯一序列化 seam）
+
+- `app/step_importer.py` 新增 **`flat_cell_json(row)`**：吃 `CellRow` / `CellData` / 平铺 dict，出 `docs/contracts/api.yaml` 契约的平铺 5 字段（`number/material/density/surface_expr/comment`）；`kind=="raw"` 的 `#ifdef` 条件行 `{kind:"raw", text}` 原样透传，不丢行。
+- **`geometry_deck_response()`** 内部统一走它；handler 只传 `deck.cells`，**不再手写字段映射**（同类漂移无处可藏）。
+- 顺带修 `app/step_importer.py` 的 `from freecad_locator import ...`：补 `except ImportError → app.freecad_locator` 双导入（其余 app 模块都有，唯独它没有 ⇒ `import app.step_importer` 直接炸，测试无法在包路径下导入）。
+
+### 回归测试（先红后绿，已实证）
+
+`tests/unit/test_step_import_deck_response.py`（**8 例**）：CellRow 序列化不再炸 / 契约字段集恰好 5 键 / void 空密度 / raw 行透传保序 / 平铺 CellData+dict 兼容 / 空与 `cell=None` 不炸。
+**红能力实证**：把 `geometry_deck_response` 临时回退成 `cells_list or []` → 该文件 **2 failed**（`'CellRow' object is not subscriptable`）；恢复 → **8 passed**。
+
+### 端到端实证（HTTP 500 → 200）
+
+自建反馈回路 `_loop_step_import.py`（仓库根，可复用）：FreeCAD 造 10×10×10 box STEP → 走前端同款 payload（`file.text()` → `data` 字段）POST `/api/import-step`。
+
+| 目标 | 修前 | 修后 |
+| :--- | :--- | :--- |
+| 源码后端（dev） | HTTP 500 `'CellRow' object has no attribute 'number'` | **200** · cells=4 / surfaces 16 行 |
+| **部署版 sidecar**（改前实测） | HTTP 500 同款 traceback（`api_server.py:2640`） | **200** · cells=4（1 实体 + 自动 void + Graveyard_in + Graveyard） |
+
+### 附带修：GEOUNED 定位只在 FreeCAD 解释器里问得到
+
+`app/step_importer_geouned.py` 的 `_resolve_geouned_path()` 原来只在**后端解释器**里 `find_spec("geouned")` —— 但 geouned 是装给 **FreeCAD 的 Python** 的（requirements.txt），开发机因此恒报「缺少 geouned 包: 」（路径还是空的）。现改为候选链：`GEOUNED_PATH` → 冻结 `_MEIPASS/vendor` → 后端解释器 → **FreeCAD 解释器子进程探测**（进程内缓存一次），且每个候选都经 **`_is_geouned_dir()`** 验证（须有 `geouned/__init__.py` + `geouned/GEOUNED/__init__.py`）——本机 FreeCAD site-packages 里那个**只含空 `GEOReverse` 的残缺 namespace 包会被正确拒掉**（旧代码只判 `isdir` 会当可用，worker 起来才炸 ImportError）。失败信息也改成可操作版（含 `GEOUNED_PATH` 用法）。**开发环境跑 STEP 导入需 `GEOUNED_PATH=D:\MCNP\GEOUNED`**。
+
+### S4.1 续：GQ 栅元"奇形怪状/消失"+ 体积误差 4.6% → 0.3%（2026-09-12 同日，用户真实文件驱动）
+
+**用户实测文件** `P:\dekstop\mcnp_export.step`（本程序导出的 STEP 再导入，18 栅元）。现象：**一部分栅元奇形怪状**。
+
+**判据（可复用）**：GEOUNED 在 `csg.mcnp` 里给每个实体栅元写了 **`Vol=`**（从 STEP 算的真实体积）→ 拿它当尺子量我们 3D 预览产出的 STL 体积，误差一眼可见。修复前：7 号 **+22%**、8 号 **完全没有 STL**、9 号 **−24%**；其余栅元吻合（它们走 OCC 精确路径）。
+
+**根因（三层，全在 `app/voxel_csg.py`）**：
+1. `cell_aabb` 对**裸平面引用**（MCNP 正侧，如 `112`=PZ400 正侧）返回 None ⇒ 薄片丢下界。
+2. `_aabb_intersect` **只比数值不看 `axes` 标志位** ⇒ `CZ` 无界轴占位 `(0,0)` 把 `-PZ405` 的 `z≤405` 压成 `z∈[0,0]` ⇒ 紧盒退化 ⇒ `_clip_aabb_to_bound` 兜底**整个 ±846 盒** ⇒ 体素 13.2 mm，而 8 号只有 **5 mm 厚** ⇒ 网格为空/糊块。
+3. 细化盒顺序错（先取交后补 margin）⇒ 命中盒 z 只剩一个粗扫层时，margin 把盒子撑到 120 mm ⇒ 9 号厚度只剩 3.8 mm。
+
+**修法**：① 新增 `_surface_positive_aabb`（轴对齐平面正侧=半空间，球/柱/锥仍 None）；② `_aabb_intersect`/`_aabb_union` 认标志位、无界轴统一 `±1e300` 哨兵；③ 细化盒 =「(命中盒 + 粗扫余量) ∩ 解析紧盒」（两者都是保守超集，取交才安全）。
+
+**体积精修（−4.6% → −0.3%）**：二值 marching cubes 的顶点落在内外采样点**中点** ⇒ 曲面整体内缩半个体素，薄片受害最重且误差随分辨率**振荡**（res64→256：−4.7/+4.0/+0.5/−1.1%）。新增 `eval_cell_scalar`（min/max 组合的 CSG 标量场）+ `project_vertices_to_surface`（1~2 步牛顿沿梯度贴回真实曲面）：**MC 只负责拓扑，位置由标量场修正**。代价 +0.02 s/栅元（1M 三角的 graveyard +0.31 s）。
+
+| 栅元 | GEOUNED Vol | 修前 | 修后（生产 res） |
+| :--- | ---: | ---: | ---: |
+| 7 | 78087.4 | 95425（+22%） | **77870.9（−0.28%）** |
+| 8 | 38704.4 | 无 STL | **38573.0（−0.34%）** |
+| 9 | 156514.1 | 119314（−24%） | **156176.9（−0.22%）** |
+
+全模型 18 栅元（体素路径压力测试）全部 **≤0.6%**。视觉对照 `_cmp_cells.png`（前/后）、`_grid_after.png`（1–14 号逐个）：修复前 7 号是锯齿糊块、8 号空白、9 号带洞薄片；修复后均为干净圆盘。
+
+**顺手关掉的坑**：`PreviewCache.GEOMETRY_CACHE_VERSION`（几何算法进指纹）——同一 deck 改算法后会命中**旧 STL**，用户"看不到修复"（本次实测踩到，手动清了 `D:\MCNP\memory\preview_cache`）；bump 到 2 后自动失效。
+
+**未修（记录在案）**：① `classify_gq` 把这两个**抛物线柱面**误判成"半径 3.0 的椭圆柱"（特征值 ~1.7e-21 应视作 0），影响交叉截面路径；② void 15/16 仍不产 STL（改动前后一致，非回归）；③ 二值 MC 的剩余偏差由投影压到 <0.35%。
+
+### 重打包/部署记录（两轮，均未升版）
+
+**第 1 轮（15:30，sidecar-only）** —— 只改了 Python，前端没动：
+
+- **备份**：`D:\MCNP\_backup_1.7.6_20260912_152729`（2304 files）。
+- **PyInstaller**：`cd gui && python -m PyInstaller mcnp_sidecar.spec --noconfirm --distpath dist_sidecar --workpath build_sidecar`（**146 s**；产物 `python.exe` 28623682 B + `_internal` 2294 files，含 `vendor\geouned`）。
+- **暂存/部署**：`dist_sidecar\python\{python.exe,_internal}` → `gui\src-tauri\binaries\`（exe 名仍带 target triple）→ `D:\MCNP\MCNP输入卡生成器\{python.exe,_internal}`（robocopy `/MIR`；部署目录多出的 6 个 `app\__pycache__\*.cpython-311.pyc` 是 FreeCAD py3.11 旧字节码缓存，被 `/MIR` 清掉，无影响）。
+- **冒烟**：`/api/import-step` 200；`/api/xsdir-check`/`mcnp-detect`/`diff-inp` 均 ok。
+
+**第 2 轮（16:32，完整链路：前端 + sidecar + tauri）** —— 本轮改了 TSX（导入即关窗），必须重出 Tauri exe：
+
+1. **前端** `node .\node_modules\vite\bin\vite.js build` → `dist/assets/index-BIZ-a7qZ.js`（旧 `index-D8_xgTqs.js`）；构建后 grep 到新标记「STEP 转换中」确认入包。
+2. **sidecar** PyInstaller **92 s**；日志明示 `Building because app\voxel_csg.py changed`；产物 `python.exe` **28631092 B**。
+3. **暂存**：`dist_sidecar\python\_internal` → `binaries\_internal`；exe 同时写 `binaries\python-x86_64-pc-windows-msvc.exe` **与** `src-tauri\python-x86_64-pc-windows-msvc.exe`（后者是 `externalBin` 真正读取的位置）。
+4. **tauri build**：`$env:RUSTUP_HOME='D:\rust\rustup'; $env:CARGO_HOME='D:\rust\cargo'; node .\node_modules\@tauri-apps\cli\tauri.js build` → `Finished release profile in 30.54s`；`beforeBuildCommand` 里的 `npm run build` 由 tauri 自行拉起，**不受 PowerShell 执行策略影响**。
+5. **⚠️ 6.2 坑第 6 次命中**：`target\release\python.exe` 已是新版（28631092），但 `target\release\_internal` **仍是旧的**（逐文件哈希比对差 10 项：`app\voxel_csg.py`/`step_importer*.py`/`preview_cache.py`/`base_library.zip`…）—— Tauri 只拷 `externalBin` 的 exe，不拷 `_internal`。**判据升级：逐文件 MD5 比对 `target\release\_internal` 与 `dist_sidecar\python\_internal`**，比"查有没有本批新增模块"更硬（本批全是改文件、没有新增模块）。按手册强制覆盖后一致。
+6. **部署**：`target\release\MCNP 输入卡生成器.exe`（6622208 B）+ `python.exe`（28631092 B）+ `_internal`（2294 files）→ `D:\MCNP\MCNP输入卡生成器`；三处 MD5 逐一比对一致。改前快照 `D:\MCNP\_backup_1.7.6_20260912_162912`（2304 files）。
+7. **冒烟（`_smoke_deployed.py`，部署版实机）**：5001 **2 s** 就绪；`/api/import-step` **200**（18 栅元，6.4 s）；**`/api/preview-3d` 16 个 STL（8 号在列）且最大体积误差 0.36%**；`xsdir-check`/`mcnp-detect`/`diff-inp` 全 ok。**故意不清 `preview_cache`** ⇒ 缓存版本号（`GEOMETRY_CACHE_VERSION=2`）生效，旧网格未再被命中。
+
+**教训固化（已入 §6）**：① 只改 Python 可以只重打 sidecar；**改了 TSX 就必须 `vite build` + `tauri build`**（前端 bundle 内嵌在 Tauri exe 里）；② 6.2 校验改用**逐文件哈希比对**；③ 部署前必须停掉 `MCNP 输入卡生成器.exe` 及其 sidecar，否则文件占用且 5001 会与 dev 后端互相劫持。
+
+## S1（上一批次）v1.7.6 发布批次（2026-09-10 ~ 09-11，**全链路闭环，已交付用户**）
 
 > **一句话**：技术债审计（34 条）→ 修复 → 实跑验证（抓出 **5 个静态审计看不见的编译级缺陷**）→ 打包部署；随后按**用户真实卡**（Practice3 热室）逐轮验收，又修出**源演示 4 连 bug** + 方向线/滑杆 + 粒子圆点化 + **一键运行多核 tasks** → **v1.7.6 升版打包部署 + 冒烟通过**。
 > **版本**：**1.7.6**（2026-09-11 用户指定）。**完整逐条流水**：`docs/CHANGELOG.md`（「一、批次详情档案」含各子批全文）+ `docs/fix-verification.md` §7/§8 + `docs/backend-changes.md` + `docs/frontend-changes.md`。
@@ -170,6 +256,7 @@
   > ⚠️ **纪律：提交即登记**（S3.1）。此后每批必须记 commit 短号或待提交清单，精确清单实跑 `git status --porcelain`。
 - **版本六处**：`tauri.conf.json` / `package.json` / **`package-lock.json`** / `Cargo.toml` / `Cargo.lock` / README 徽章 恒 **1.7.6** 一致（**唯一权威 = `gui/package.json:4`；侧边栏经 `import pkg from "../../package.json"` 读它 ⇒ 升版后必须重新 `vite build`**，否则界面仍显示旧版本）。
 - **部署产物**：`D:\MCNP\MCNP输入卡生成器`（**2026-09-11 重打包 v1.7.6**，含 S1 全量）。旧包备份 `D:\MCNP\_backup_1.7.5_20260912_114743`（223.1 MB / 2303 files）。
+  - **2026-09-12 两轮热修覆盖**：15:30 sidecar-only（STEP 导入 500）→ **16:32 完整链路**（前端「导入即关窗」+ GQ 薄栅元修复，`vite build` + PyInstaller + `tauri build`）。部署版现为 `MCNP 输入卡生成器.exe` 6622208 B / `python.exe` 28631092 B / `_internal` 2294 files，**版本号仍 1.7.6**；改前快照 `D:\MCNP\_backup_1.7.6_20260912_162912`（2304 files）。冒烟最大体积误差 **0.36%**。
 - **2026-09-11 本批提交**（按主题拆分）：`48c51ed` 源演示修复二批（material + 取景）／`857aed1` 方向线不可见 + 长度滑杆失效／`b1f0043` 粒子圆点化 + SI/SP 权威语义定案／`21d93d0` 一键运行多核 tasks + 排他卡提示／`d20726c` 升版 1.7.6 + 打包部署。
 
 ## S3 进行中任务 / 待办
@@ -406,6 +493,9 @@
 - **❗跨模块复用"为别的场景调过的取景/布局启发式"会静默失效（2026-09-11 实证）**：`computeFramingBox` 的 `VOLUME_FRAMING_RATIO=0.25` 是**为体积窗口**设计的（网格层 ≪ 模型时聚焦网格层），被 `SourceDemoRenderer`/`PtracRenderer` 复用后，遇到"源/径迹在屏蔽体内部"（**演示源与径迹窗口的常态**，实测 ratio≈0.057）就把几何外壳挤出视野，且**不报任何错**。⇒ **纪律：复用带阈值/启发式的几何工具前，先问"这条启发式对**本**场景语义是否成立"**；本次两处调用点改为 `unionBoxes`（外壳优先），**共用函数本身与其 3 个测试文件保持不动**。
 - **headless Edge + CDP 端到端取证三坑（2026-09-11 实测，本项目首次具备"看图判读"能力）**：① **`alert()` 在 headless 里永久冻结渲染进程**（本程序"导入成功"必弹 `alert`）⇒ CDP `Runtime.evaluate` 永不返回、看起来像"页面卡死"；必须在**同一 CDP 会话内**监听 `Page.javascriptDialogOpening` 并 `Page.handleJavaScriptDialog({accept:true})`。② **导航到"含相同 hash 的同一 URL"不会重新加载文档** ⇒ 是假"重载"（两次截图 sha256 完全相同，一度被误判为"渲染确定性"）⇒ 真重载须用 `Page.reload`；要在加载**前**注入钩子须用 `Page.addScriptToEvaluateOnNewDocument`。③ **PowerShell 调原生程序时空字符串参数会被丢弃** ⇒ 位置参数错位（`run ... "" 8000` 把等待时长当成输出文件名，**在仓库根生成了垃圾截图 `3000`/`8000`**，已删）⇒ 占位参数用 `-` 而非 `""`。**另**：headless SwiftShader 下主界面 `Page.captureScreenshot` 会超时、子窗口正常 ⇒ 只在子窗口截图。
 - **MCNP 多核（`tasks N`）知识（2026-09-11 实测 + C810 页 875 定案）**：① 语法 = 命令行**末尾** `tasks N`（**无等号**）；② **只在 OpenMP 构建上生效**（判据：输出出现 `comment.  threading will be used …`；非线程版**静默忽略** —— 不报错、也不加速）；③ **`tasks` 取物理核数**，不是逻辑核数 —— 本机 8 物理核/16 逻辑核：`tasks 8` 8.36s 最优，`tasks 16` 反而 **15.06s**（烧 205s CPU，大半自旋）；④ **`DBCN(2,3,4)` / `SSW` / `SSR` / `PTRAC` 与 `tasks > 1` 不兼容（FATAL error）** ⇒ 程序必须扫卡拦截（见 S1.0e，`app/mcnp_tasks.py`）；⑤ 判据：**`CPU时间 / 墙钟 ≈ N`** 即 N 个核在跑。**本机 MCNP 路径 = `D:\MCNP\MCNP6\MCNP_CODE\bin\mcnp6.exe`**（下划线、少一层），与用户 bat 里写的 `D:\MCNP6\MCNP6\MCNP CODE\…`（带空格）**不是同一路径**。
+- **❗deck.cells 是「改过型的判别联合」，任何手写字段映射都会静默过期（2026-09-12 实证，用户报"导入 STEP 炸了"）**：`/api/import-step` 里手写 `c.number/c.material/c.surface_expr`，而 `deck.cells` 自 `f8f7fe6` 起是 `CellRow`（`kind` + 嵌套 `cell`）⇒ 每次导入必 `AttributeError` → HTTP 500。**该端点当时零测试覆盖**，且 2026-08 删掉 McCAD 兜底分支后 100% 暴露却一直没人踩到（全量 pytest 908 passed 也照样漏）。修法＝把序列化收敛到 `app/step_importer.flat_cell_json` 一处（handler 只传 `deck.cells`）+ `tests/unit/test_step_import_deck_response.py`（先证红后转绿）。⇒ **纪律：类型改造（dataclass → 判别联合 / 改名）后必须 grep 该字段的全部字面读取点**，跨模块手写映射一律改走单一序列化函数。
+- **geouned 的安装位置只能在 FreeCAD 的 Python 里问（2026-09-12 实证）**：`_resolve_geouned_path()` 原来在**后端解释器**里 `find_spec("geouned")` ⇒ 开发机恒报「缺少 geouned 包: 」（路径为空，用户看不出该做什么）。现为候选链（`GEOUNED_PATH` → 冻结 `_MEIPASS/vendor` → 后端解释器 → **FreeCAD 解释器子进程探测**）+ **`_is_geouned_dir()` 验证**（须有 `geouned/__init__.py` + `geouned/GEOUNED/__init__.py`）。**本机 FreeCAD site-packages 里那个只含空 `GEOReverse`、没有 `__init__.py` 的残缺 namespace 包证明：光判 `isdir` 会把残缺安装当可用**，worker 起来才炸 `ImportError: cannot import name 'CadToCsg'`。开发环境跑 STEP 导入须 `set GEOUNED_PATH=D:\MCNP\GEOUNED`。
+- **❗发布链路的三个"必中坑"（2026-09-12 两轮热修实证）**：① **改了 TSX 就必须重出 Tauri exe** —— 前端 bundle 内嵌在 `MCNP 输入卡生成器.exe` 里，只重打 sidecar 用户**看不到前端修复**（本轮「导入即关窗」只有重跑 `vite build` + `tauri build` 才生效）；只改 Python 才可以 sidecar-only。② **6.2 时效校验升级为逐文件哈希比对**：`target\release\python.exe` 可能已是新版而 `_internal` 仍是旧的（Tauri 只拷 `externalBin` 的 exe，**不拷 `_internal`**）—— 本批用 `Get-FileHash` + `Compare-Object` 比出 **10 项差异**（`app\voxel_csg.py`/`step_importer*.py`/`preview_cache.py`/`base_library.zip`…）；"查有没有本批新增模块"的旧判据在**全是改文件**时查不出来。③ **部署前必须停掉 `MCNP 输入卡生成器.exe` 与其 sidecar**：否则文件被占用，且残留旧 sidecar 会与新起的 dev 后端**互相劫持 5001**（本轮实测：预览请求落到旧代码，数字看起来像"没修好"，白排查一轮）。
 - **`C810.pdf` 已可直读（2026-09-11 打通，重要能力）**：本机 **PyMuPDF（`fitz`）已安装** ⇒ **零新依赖**即可提取这份 1001 页权威手册的文本，卡格式语义不必再靠 `app/docs/` 派生 md 猜（§4 待办 5 的 `DSn` 语义亦可照此核对）。范例脚本在仓库外：`D:\MCNP\_agent_probe\{pdf_index.py,pdf_extract.py,pdf_tasks.py}`。**已提取定案**：SI/SP（页 746-747）、tasks（页 520/875）。
 
 ## §7 技术争议与决议（语义记忆）

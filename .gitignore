@@ -8,6 +8,8 @@ build/
 dist/
 build_onedir/
 dist_onedir/
+build_sidecar/
+dist_sidecar/
 
 # AgentTeams 内部工具数据（不提交）
 .agent-teams/
