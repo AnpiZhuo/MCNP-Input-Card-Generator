@@ -14,233 +14,107 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
-## S1（当前批次）技术债修复 + 验证 + 打包部署（2026-09-10，**全链路闭环，已交付用户**）
+## S1（当前批次）v1.7.6 发布批次（2026-09-10 ~ 09-11，**全链路闭环，已交付用户**）
 
-> **一句话**：审计（34 条）→ 修复 → **有 shell 接手实跑验证** → 修掉 5 个静态审计看不见的真缺陷 → **重打包部署 + 冒烟回归** → 用户手上的 1.7.5 已更新为含全部修复的新包。
-> **版本**：**恒 1.7.5 不升版**（bug 修复批，§5 红线）。**完整逐条流水**：`docs/CHANGELOG.md` + `docs/backend-changes.md` + `docs/frontend-changes.md` + `docs/fix-verification.md` §7。
+> **一句话**：技术债审计（34 条）→ 修复 → 实跑验证（抓出 **5 个静态审计看不见的编译级缺陷**）→ 打包部署；随后按**用户真实卡**（Practice3 热室）逐轮验收，又修出**源演示 4 连 bug** + 方向线/滑杆 + 粒子圆点化 + **一键运行多核 tasks** → **v1.7.6 升版打包部署 + 冒烟通过**。
+> **版本**：**1.7.6**（2026-09-11 用户指定）。**完整逐条流水**：`docs/CHANGELOG.md`（「一、批次详情档案」含各子批全文）+ `docs/fix-verification.md` §7/§8 + `docs/backend-changes.md` + `docs/frontend-changes.md`。
 
-### 门禁（实跑全绿，2026-09-10）
+### 📊 门禁（2026-09-11 实跑全绿）
 
 | 门禁 | 结果 |
 | :--- | :--- |
-| `python -m pytest tests -q -rs` | **875 passed / 0 failed / 0 skipped**（`skipped=0` ⇒ 审计最担心的"隐藏 skip"**不存在**） |
-| `tsc --noEmit`（src） | **EXIT 0** |
-| `tsc -p tsconfig.test.json --noEmit` | **EXIT 0**（首次启用暴露 **35 处**测试类型错误，已全清 —— TD-17 盲区关闭） |
-| `npx vitest run` | **78 files / 625 tests passed / 0 skip** |
-| `npx vite build` | **EXIT 0** |
+| `python -m pytest tests -q -rs` | **900 passed / 0 failed / 0 skipped**（875 基线 + 25 例 `test_mcnp_tasks.py`；`skipped=0` ⇒ "隐藏 skip"不存在） |
+| `tsc --noEmit` / `tsc -p tsconfig.test.json --noEmit` | 两档 **EXIT 0**（后者首次启用时曾暴露 35 处测试类型错误，已全清 —— TD-17 盲区关闭） |
+| `vitest run` | **78 files / 625 tests passed / 0 skip** |
+| `vite build` | **EXIT 0** |
+| spec 一致性闸门 `test_sidecar_spec_keep.py` | **绿**（`_keep_py` ↔ `_import_app` 双向；该闸门此前**从未执行过**，2026-09-10 首次跑通） |
 
-- **先决条件（实测）**：5001 空闲 ✅；`pytest-timeout` **未装**（故全程不用 `--timeout`）；`npm.ps1` 被执行策略拦 → 用 `npm.cmd`/`npx.cmd` 或 `node .\node_modules\...`。
-- **执行者能力**：**有 shell**（PowerShell + Python 3.13.14 + node v24.18.0 + cargo 1.97.1）—— 上一轮"全员无 shell"限制已解除。
+**先决条件（实测）**：跑 pytest 前**须停 5001**（契约测试要端口空闲，§6 坑 1）；`pytest-timeout` **未装**（勿加 `--timeout` —— 否则 pytest 以 `unknown option` 直接退出，看似"全红"其实根本没跑）；`npm.ps1` 被执行策略拦 ⇒ 用 `npx.cmd` 或 `node .\node_modules\...`。**执行者能力**：**有 shell**（PowerShell + Python 3.13.14 + node v24.18.0 + cargo 1.97.1）。
 
-### 📦 发布批次（用户授权，手动 8 步链路走完）
+### 📦 v1.7.6 发布（2026-09-11，8 步手动链路；一键打包已废弃）
 
-- 链路：vite build → PyInstaller sidecar（EXIT 0）→ 复制 binaries → tauri build（EXIT 0，Rust 31s）→ **6.2 时效校验** → 部署 `D:\MCNP\MCNP输入卡生成器` → 冒烟。
-- **⚠️ 6.2 坑本次必中**（再次验证手册"此坑每次必中"）：`tauri build` 后 `target\release\python.exe` 仍是 **10/9 旧版（28561279 B）**，新 sidecar 是 11/9（28614639 B）；`target\release\_internal\app\` **无 `lattice.py`/`diff_inp.py`**。⇒ 按手册**强制覆盖** exe + `_internal` 后才部署。**不校验 = "版本号新、后端旧"。**
-- **TD-02 生效证据**：新 sidecar `_internal\app\` 内 **`lattice.py` + `diff_inp.py` 均在位**（旧包两者皆缺）；`preview_cache.py`、`vendor\geouned` 在位；`_internal` 113 条目。
-- **部署前安全措施**：旧 1.7.5 主 exe/sidecar 已备份至 `D:\MCNP\_backup_1.7.5_<时间戳>`；部署目录内无用户自建内容，用户数据在 `D:\MCNP\material`（不受覆盖影响）。
-- **✅ 冒烟回归（新包实测 vs 旧包对照）**：
-  | 端点 | 旧包 1.7.5 | 新包 |
-  | :--- | :--- | :--- |
-  | `/api/diff-inp` | **500**（`No module named 'diff_inp'`） | **200** ✅ |
-  | `/api/source-demo-sample` | **404**（未含） | **200**（500 粒子，energy 14.0）✅ **SDEF 演示首次真正交付** |
-  | `lattice-extent` / `preview-lattice` / `validate-lattice-surfaces` / `check-cell-closure` | 200 | 200 ✅ |
-  | `/api/xsdir-check` | — | 200（xsdir 7925 条）✅ |
-- **结论：TD-02 修复已生效到用户手上**（旧包 `/api/diff-inp` 是坏的，**这是审计漏判的第 1 条"现在就坏"**）。
+- 链路：**升版六处** → vite build → PyInstaller（~160 s）→ 替换 binaries → tauri build（33 s）→ **6.2 时效校验** → 备份旧包 → 部署 → 冒烟。
+- **⚠️ 6.2 坑第 5 次命中**：`target\release\python.exe` 仍是 09/10 的 **28561279 B** 旧版且**缺 `mcnp_tasks.py`** ⇒ 强制覆盖为 **28615181 B**。**最优判据（本批固化）：直接查 `target\release\_internal\app\` 有没有本批新增模块** —— 比对比 mtime/字节数更硬。
+- **冒烟（部署版 vs 旧包）**：`/api/xsdir-check` 200（loaded）、`/api/diff-inp` **200**（旧包 **500**，`No module named 'diff_inp'`）、`/api/lattice-extent` 200、`/api/source-demo-sample` **200**（旧包 **404**）；5001 **3 s** 就绪 + MCP 8100 LISTENING。
+- **升版六处**：`gui/package.json:4` / **`gui/package-lock.json`（顶层 + `packages[""]`；本批发现手册原先漏列）** / `tauri.conf.json:10` / `Cargo.toml:3` / `Cargo.lock`（`mcnp-ui`）/ `README.md:25` 徽章 ⇒ 全 **1.7.6**。⚠️ `Sidebar.tsx:2` 直接 `import pkg from "../../package.json"` ⇒ **版本号构建期进 bundle**，升版后**必须重新 `vite build`**。
+- **备份**：`D:\MCNP\_backup_1.7.5_20260912_114743`（223.1 MB / 2303 files）；部署目录 `D:\MCNP\MCNP输入卡生成器`（`_internal` 2294 files）。用户数据在 `D:\MCNP\material`，不受覆盖影响。
 
-### 🔴 跑门禁抓出的 5 个真缺陷（静态审计看不见，全部已修）
+### 🔴 本批次抓出的真缺陷（静态审计/单测都看不见，全部已修）
 
 | # | 缺陷 | 症状 |
-| :--- | :--- | :--- |
-| 1 | `app/meshtal/meshtal_cache.py:136` **`IndentationError`**（TD-26 加锁时丢了 `while` 循环体缩进） | **全量 pytest 在收集阶段中断**、一条测试都没跑（`1 error during collection`）⇒ **"全绿"是假象**。已补缩进；`compileall app gui tests inputcard_mcp` EXIT 0 确认孤例 |
-| 2 | `gui/src/components/CellEditDialog.tsx:174` **多余三元分支 `: null,`**（TS1135） | **该文件无法编译**（首次启用 `tsconfig.test.json` 才暴露）。已删 |
-| 3 | `app/generator/source_sampler.py:_summarize` **丢弃真实能量** | `if e_max <= e_min: = 0.0, 1.0` 使**单能 δ 分布**（`SDEF ERG=14`，粒子恒 14.0）把 `[14,14]` 改成假 `[0,1]`；前端 `SourceDemoWindow.tsx:166` 以 `min===max` 判「无能量」，故应为 `[14,14]`。已改为有有效能量取 `min/max`、无则 `[0,0]` |
-| 4 | `tests/unit/test_sidecar_spec_keep.py:_parse_hidden` **正则静默丢内容** | `re.findall(r'"([^"]+)"', spec_text)` 在同一份 spec 上返回 74 项且**丢** `models.py`/`meshtal`/`generator`/`docs`（逐引号配对扫描返回 76 对且四者俱全；两种正则写法均复现）。改为**显式配对扫描** |
-| 5 | `gui/mcnp_sidecar.spec` `_keep_py` **误列 `_cross_section_helper.py`** | 该文件在 `gui/backend/` 不在 `app/`（spec 另有一段从 `GUI_BACKEND` 取）⇒ TD-34 闸门报"spec 与源码漂移"。已删该条 + 加注释 |
+| :-- | :--- | :--- |
+| 1 | `app/meshtal/meshtal_cache.py:136` **`IndentationError`**（TD-26 加锁丢了 `while` 体缩进） | 全量 pytest **收集阶段中断**，一条测试都没跑 ⇒ "全绿"是假象 |
+| 2 | `gui/src/components/CellEditDialog.tsx:174` 多余三元 `: null,`（TS1135） | 该文件**无法编译**（启用 `tsconfig.test.json` 才暴露） |
+| 3 | `app/generator/source_sampler.py:_summarize` 丢弃单能 δ 分布真实能量 | `[14,14]` 被改成假 `[0,1]` |
+| 4 | `tests/unit/test_sidecar_spec_keep.py:_parse_hidden` 正则**静默丢内容** | 闸门自身假绿（已改显式配对扫描） |
+| 5 | `gui/mcnp_sidecar.spec` `_keep_py` 误列 `_cross_section_helper.py` | TD-34 闸门报"spec 与源码漂移" |
+| 6 | **源演示 4 连 bug**（见下表） | 用户实测"一坨方块、看不到栅元" |
 
-- **TD-34 闸门**（`test_sidecar_spec_keep.py` 6 例，**此前从未执行过**）：已执行，**全绿**；其中 2 例正是被上述 #4/#5 修好后转绿的。
+**用户裁决 5 项已全部落实**（水密骨架删除 + 契约改名 `cell-closure-check.md`、hexCenter 旧公式 2 处、`frontend-changes:208` 核实为**审计记录有误**、SI 类型 `V` 改合法 `L`（TD-35 关闭，R1/R4 字节断言未回归）、先提交再验证）—— 详情见 `docs/CHANGELOG.md`。
+**新依赖**：`@types/node@^22.20.2`（**devDependency**，已获批，不影响运行时与打包体积）。**类型放宽 3 处**（行为等价）：`CellEditDialog`/`DeckContext` 的 `CellData.fill_grid` 改可选、`CycleCellLike.fill_grid` 加 `| null`。**前端另有** TD-23 死代码修复（`sourceAdv.ts` 旧存档 SI/SP 静默丢失）+ `distDual.parseDistributionLines` 见 `frontend-changes.md`。
 
-### ✅ 用户裁决（5 个悬置决策，逐条落实）
+### 🔧 源演示修复链（S1.0c → S1.0d-3，**用户真实卡 Practice3 逐轮驱动**，4 轮全部经**浏览器端视觉复验**）
 
-1. **水密性骨架** → **删骨架 + 改两处文档引用**（不实现）：`app/freecad_preview.py` 删除 `check_watertight`/`outside_cell_num` 形参（含 docstring）与 worker payload 键，删除 `gap_volume`/`gap_fraction`/`roi_volume`/`fused_volume`/`gap_unresolved_cells` 的初始化与读回；代码侧 grep **零残留**。契约 `docs/contracts/watertight-check.md` → **改名 `cell-closure-check.md`**；修正 `MCNP输入卡生成器_功能待办清单.md:8` 与 `docs/contracts/validator-crosscheck.md` 两处不符表述。
-2. **hexCenter 旧公式 2 处** → 已改（`gui/src/utils/lattice.ts` docstring 按实现改写 + `gui/test/lattice.test.ts` describe 名）。
-3. **`docs/frontend-changes.md:208` 归属** → **核实为原审计记录有误**（该处**无**旧公式；真实两处 `:13`/`:1236` 本就已标"文档更正"）⇒ 无需改动。
-4. **SI 类型 `V`（C810 非法）** → 裁决"本批修"，**已修（TD-35 关闭）**：`inp_generator.py:_build_multi_sisp_cards` 对 POS_VEC 原发 `SI{di}  V  <平坦值>`，改为**一律发合法 `L`**（POS_VEC 是位置向量**列表**）；解析侧 `_LEGACY_SI_LETTERS = ("V",)` **保留**（旧输入卡往返不容崩，抽样侧仍报错）。**风险小于预期**：875 passed，**R1 不动点 / R4 kitchen-sink 字节断言未回归**；仅 `test_generator_multi_source.py:75` 一处旧断言随修。
-5. **先提交再验证** → 已执行。
+> 本项目**首次具备"看图判读"能力**：headless Edge（CDP）+ node 24 内置 `WebSocket` 自写驱动，**零新依赖**、脚本置于仓库外。方法学与三个坑（`alert` 冻结渲染进程 / 同 hash 导航不重载 / PowerShell 空串参数被丢弃）见 `docs/fix-verification.md` §8.4 与 §6。
 
-### 🟡 本轮前端代码改动（TD-23 / TD-28 收尾）
+| 轮 | commit | 根因（真 bug） | 修法 |
+| :-- | :--- | :--- | :--- |
+| **c** | `a255a3f` | ① 栅元只传 `{num,mat,comment}` ⇒ **`surface_expr` 丢失**（它是建外壳 STL 与判定 CEL/SUR 几何的**唯一来源**）⇒ 4 张真卡外壳栅元数**全 0**；② `resolve_cell_complements()` 返回 **pymcnp 节点**（`_Paren`/`_Union`）而 `voxel_csg` 只认 list AST ⇒ `TypeError` 被 `except Exception: continue` **静默吞掉** ⇒ 几何全丢；③ 防呆：POS 全空时后端兜底 `(0,0,0)` ⇒ 500 粒子叠原点 | 传扁平 `{number,material,surface_expr,...}`；补 `_geometry_ast_to_json`；`except` 改记录 `geometryErrors`（响应带 `geometryWarnings`，前端黄字）；POS 未配置时前端**红字拦截** |
+| **d** | `48c51ed` | ④ 后端补 camelCase 别名时**漏 `mat`** + `SourceTab` 把 **snake_case** `deck.cells` **强断言**成 camelCase `LocalCellRow` ⇒ `c.cell.mat` 恒 `undefined` ⇒ `material=""` ⇒ `getMatColor("")` 返回 `"transparent"` ⇒ `buildCellMaterial` 判**真空 M0**（`opacity:0`，**13 个外壳全隐形**）；⑤ 取景**误用体积窗口**的 `computeFramingBox`（`VOLUME_FRAMING_RATIO=0.25`，源区/热室≈**0.057**）⇒ **只框粒子、外壳被挤出视野** | 补 `mat`；`SourceTab` **直读 snake_case（删类型谎言）** + 过滤 `kind:"raw"`；`getMatColor` 区分「空/非法→中性灰」与「M0→透明」；取景改 `unionBoxes`（**`PtracRenderer` 同类缺陷同批修**；`computeFramingBox` 本身**不动**，以保体积窗口语义与其 3 个测试） |
+| **d-2** | `857aed1` | ⑥ 方向线长度是**世界空间固定值**（39.05×0.03=**1.17**）⇒ 被"外壳优先"取景（盒对角线 ≈914）缩成 **~1px**；⑦ **「方向线长度」滑杆完全无效**（`setDirectionLength` 只改变量 + `markDirty`，**从不重建几何**） | 改**屏幕空间恒定**（`2×相机距离×tan(fov/2)×3%×倍率`，随相机实时重算 + 0.5% 去抖）；滑杆改为驱动重建 |
+| **d-3** | `b1f0043` | ⑧ 粒子是 `THREE.Points` **轴对齐方块**、永远面向摄像头（用户观感差） | 加 `getDotTexture()`（64² canvas 径向渐变圆 + `alphaTest`）⇒ **圆点**；零新依赖，且**保住屏幕空间可见性**（优于 `InstancedMesh` 小球——后者是真实尺寸，外壳取景下只有几像素） |
 
-- `gui/src/utils/sourceAdv.ts`：**TD-23 死代码修复** —— 原 `adv.sdef_raw_text = old.sdefRawText` 写**已退役字段**（no-op ⇒ 旧存档 SI/SP **静默丢失**），改为把旧 `sdefRawText` 的 SI/SP/SB/DS/SC 原文**解析成 v2 分布**迁进 `adv.sdef_distributions`（仅当无权威结构时兜底）。测试同步 + **新增 3 例迁移回归**。
-- `gui/src/utils/distDual.ts`：新增 `parseDistributionLines(text): DistEntry[]`（镜像后端 `parse_distribution_lines` 分组语义）；顺带**修 `structuredToRawLines` 的 `DS T` 丢失 refs**（后端 `_format_entry_cards` 是带回放的）。
+**视觉复验（修后）**：热室立方体 + 内部空腔 + 盖板圆盘 + 观察孔圆柱**全部可见、多材料配色正常**；500 粒子 x∈[-7.480,7.413]⊂[-7.5,7.5]、y∈[-9.973,9.930]⊂[-10,10]、z∈[50.031,79.893]⊂[50,80]，`allParticlesInsideSourceBox=true`，跨度 14.89×19.90×29.86 ≈ 源区 15×20×30；PTRAC 窗口外壳亦恢复可见。
 
-### ⚠️ 新依赖（已获用户批准）+ 类型放宽
+**S1.0d-2 方向线 + 滑杆（`857aed1`）**：见上表第 3 行。**测试盲区（教训）**：`gui/test` 下**没有任何 `SourceDemoRenderer` 测试**（grep `SourceDemoRenderer|setDirectionLength|arrowLen` **零命中**）⇒ "滑杆无效"能长期存活；该渲染器目前**只有端到端视觉验证能覆盖**。
 
-- **`@types/node@^22.20.2`**（**devDependency**，不影响运行时与打包体积）：供 4 个测试文件的 `node:fs`/`node:url`/`node:path`/`node:crypto` 类型（TD-17 盲区的 10 处错误）。
-- **放宽 3 处过严类型**（行为等价）：`CellEditDialog.CellData.fill_grid`、`DeckContext.CellData.fill_grid` 改**可选**（代码处处 `|| ""` 兜底）；`CycleCellLike.fill_grid` 加 `| null`（`parseFillGrid` 本就容错）。连带 `LatticeEditDialog.tsx` 补 `|| ""`。
+**S1.0d-3 粒子圆点化（`b1f0043`）**：见上表第 4 行（用户裁决"换成圆形贴图点"，改动最小）。
 
-### 🔧 S1.0c 源演示修复（2026-09-11，用户实测报障；**已提交 `a255a3f`，待用户终验 + 待打包**）
-
-用户原话：**"只有一坨蓝色方块，这些蓝色方块永远会面向摄像头，且好像有一部分空间排布，没有原本设计好的栅元之类的"**。查出**两个独立真 bug + 一处防呆缺失**：
-
-1. **栅元完全没传给后端（"没有栅元"的直接原因）**：`gui/src/components/SourceTab.tsx` 把栅元"简化"成 `{num, mat, comment}` 再传，**曲面表达式丢了**；而 `surface_expr` 是**建外壳 STL**（`build_cells_data`）与**判定 CEL/SUR 源几何**（`_prepare_source_geometry`）的唯一来源。→ 改为扁平 `{number, material, surface_expr, ...}`（与 `Preview3D.tsx:679-681` 同口径）。**实测外壳 STL 栅元数：pincell `0→4`、hex_lattice `0→2`、assembly_17x17 `0→12`、avr13 `0→2`（修前 4 张真实卡全 0）**。
-2. **CEL 源永远失败（被 `except` 吞掉的隐藏异常）**：`gui/backend/api_server.py:_prepare_source_geometry` 中 `resolve_cell_complements()` 返回 **pymcnp 节点对象**（`_Paren`/`_Union`），而 `voxel_csg._ast_surf_nums`/`cell_aabb`/`eval_cell_field` **只认 list 形式 AST**（`["surf", n]`）——少了 `_geometry_ast_to_json()`（`app/freecad_preview.py:63`）这一步 ⇒ `TypeError: '_Paren' object is not subscriptable` ⇒ **几何全丢**，且被 `except Exception: continue` 静默吞掉。→ 补 AST 转换 + `except` 改记录原因（新增 `geometryErrors`，随响应返回 `geometryWarnings`，前端黄字提示）。**实测 `CEL=1` 由 error → ok（粒子落在燃料芯块内，x/y 跨度 0.705，芯块半径 0.392）**。
-3. **防呆**：默认 SDEF 的 POS 全空时后端 `_position` 兜底 `return (0.0,0.0,0.0)` ⇒ 500 粒子全叠原点（"一坨"的另一半原因）。前端现在**直接报红字**拦截。
-4. **"方块永远面向摄像头"不是 bug**：`THREE.Points` **点精灵**固有行为（`SourceDemoRenderer.ts:185`），**本批未改**；若要体积感需改 `InstancedMesh` 小球（视觉设计变更，须先问用户）。
-5. **本轮新增"浏览器端验收"能力**：`gui/src/utils/windows.ts` 新增 `openChildWindow()`——非 Tauri 环境降级 `window.open(hash)`（否则浏览器里点「演示源」没反应）。配套做法：后端 `python _run_backend.py`（5001 源码版）+ 前端 `vite build` 后静态托管 `gui/dist`（8080）→ **改完刷新浏览器即可，不必每次打包**。⚠️ 那两个临时脚本**未入仓库**（避免污染），启动命令见交接文档 §2.3。
-6. **门禁**：pytest **875/0/0**、vitest **78 files / 625/0**、tsc 两档 EXIT 0、vite build EXIT 0（改后重跑）。
-7. **未做**：① 用户浏览器**终验**（唯一"改了但没确认"的东西）；② **重新打包部署**（部署版不含 `a255a3f`）；③ 点源场景方向线长度趋近 0（`arrowLen` 依赖粒子跨度，点源跨度=0）——**未处理**。
-
-### 🔧 S1.0d 源演示修复二批（2026-09-11，用户实测 Practice3 热室卡；**已改源码，未提交/未打包**）
-
-**⚠️ S1.0c 判定的"待用户终验" —— 一验即翻车：还有第三个真 bug。** 用户提供真实卡 `Practice3 (3).TXT`（热室屏蔽模型：14 栅元 / 6 材料 / SDEF 位置由 **D2·D3·D4 分布**给出），实跑浏览器端后演示源**仍是一坨蓝色方块、看不到任何栅元轮廓**。
-
-**根因链（5 步；前 4 步实测确证，第 5 步代码推断）**：
-
-1. `gui/backend/api_server.py:1439-1443` —— 给 cell 补 camelCase 前端别名时补了 `num`/`surfaces`/`impN`/`impP`/`impE`，**漏 `mat`**。
-2. `SourceTab.demoCellsForBackend()` 把 `deck.cells`（DeckContext 的 **snake_case** `CellData`）**强断言**成 cellBridge 的 camelCase `LocalCellRow` ⇒ `c.cell.mat` 恒 `undefined` ⇒ **`material=""`**。（`num`/`surfaces` 靠后端恰好补了同名别名而侥幸可用 —— **别名越全，类型谎言藏得越深**。）
-3. `getMatColor("")` 因 `!parseInt("")` 为真 ⇒ 返回 **`"transparent"`**。
-4. `buildCellMaterial` 把 `"transparent"` 判为**真空 M0** ⇒ `opacity: 0` ⇒ **13 个外壳全不可见**。
-5. `SourceDemoRenderer.ts:243` 误用 `computeFramingBox`（`VOLUME_FRAMING_RATIO=0.25`）：源区/热室 ≈ **0.057 < 0.25** ⇒ **只框粒子盒** ⇒ 外壳被挤出视野。该规则本为**体积窗口**设计，而"源在屏蔽体内部"恰是演示源的常态。
-
-**处置（5 文件）**：后台补 `mat`；`SourceTab` 改**直读 snake_case**（删类型谎言 + 过滤 `kind:"raw"` 条件行）；`getMatColor` 区分「空/非法 → 中性灰」与「M0 → transparent」；`SourceDemoRenderer` 外壳**按栅元号配色**（原恒用 `cellViews[0]` ⇒ 多材料全同色）+ 取景改 `unionBoxes`；`PtracRenderer.ts:253` **同类缺陷同批修**。**`computeFramingBox` 本身未改** ⇒ 体积窗口语义与其 3 个测试文件原样保留。
-
-**门禁（改后实跑全绿）**：pytest **875/0/0**、vitest **78 files / 625/0**、tsc 两档 **EXIT 0**、vite build **EXIT 0**、compileall **EXIT 0**。
-> 先决条件：跑 pytest 前须停掉占用 5001 的源码版后端（§6 坑 1），跑完重启为新代码。
-
-**视觉复验**（**本项目首次具备"看图判读"能力**）：修前"外壳完全不可见" → 修后**热室立方体 + 内部空腔 + 盖板圆盘 + 观察孔圆柱全部可见、多材料配色正常**；500 粒子 x∈[-7.480,7.413]⊂[-7.5,7.5]、y∈[-9.973,9.930]⊂[-10,10]、z∈[50.031,79.893]⊂[50,80]，`allParticlesInsideSourceBox=true`，跨度 14.89×19.90×29.86 ≈ 源区 15×20×30；PTRAC 窗口外壳亦恢复可见。取证链路（headless Edge + node 24 内置 `WebSocket` 直连 CDP，**零新依赖**、脚本置于仓库外）见 `docs/fix-verification.md` §8.4。
-
-### 🔧 S1.0d-2 用户人工验收反馈修复（2026-09-11，方向线不可见 + 滑杆失效）
-
-**用户人工验收原话**："我能看到你把粒子的源头做出来了，但粒子源头还是一张张蓝色方块，**无法看到粒子的方向的线条**"。
-
-**查出两个新 bug（都由 S1.0d 的取景改动牵出）**：
-
-1. **方向线长度是世界空间固定值 ⇒ 被"外壳优先"取景缩没**：`arrowLen = 粒子跨度对角线 × 0.03`，实测 39.05 × 0.03 = **1.17**，而取景盒（热室）对角线 ≈ **914** ⇒ 在 ~700px 画面上只有**约 1px**。（修前取景只框粒子盒，1.17 单位 ≈ 27px，所以那时看得见 —— **取景修复治好一个病、带出一个病**。）
-2. **「方向线长度」滑杆完全无效**：`setDirectionLength(scale)` 只做 `directionScale = scale; markDirty();`，而 `arrowLen` **仅在 `setParticles` 里用过一次** ⇒ 拖动滑杆不产生任何变化（滑杆范围 0.2~5，本可放大 5 倍）。
-
-**修法（`gui/src/source/SourceDemoRenderer.ts`，+86/−11）**：方向线长度改为**屏幕空间恒定** ——
-`len = 2 × 相机到 target 距离 × tan(fov/2) × 0.03 × 滑杆倍率`，随相机距离实时重算（由 `controls` 的 change 事件驱动，长度变化 <0.5% 去抖，避免拖动时频繁重建几何）；`setDirectionLength` 同步改为调用重建函数 ⇒ **滑杆真正生效**。新增 `captureDirectionAnchors()` 缓存"出生点 + 单位方向"，缩放时只重算终点。
-
-**复验（截图三连）**：
-
-| 场景 | 结果 |
-| :--- | :--- |
-| 全局视图（滑杆 100%） | **方向线清晰可见**（放射状星芒，约 25px），不再被取景缩没 |
-| 放大 20 档 | 线长约 40–50px，**未爆炸**（若仍是世界空间固定长度，此处应约 470px）⇒ 屏幕空间恒定成立 |
-| 滑杆 100% → 500% | 线长肉眼明显拉长（约 40px → 约 200px），面板显示 500% ⇒ **滑杆确认生效** |
-
-**测试盲区（教训）**：`gui/test` 下**没有任何 `SourceDemoRenderer` 的测试**（grep `SourceDemoRenderer|setDirectionLength|arrowLen` **零命中**）⇒ "滑杆无效"能长期存活。该渲染器目前**只有端到端视觉验证能覆盖**。
-
-**仍未处理（待用户裁决）**：粒子仍是 `THREE.Points` **点精灵（方块）**、永远面向摄像头。交接文档 §2.4#1 已判定"改小球属**视觉设计变更**，动手前先问用户" —— **本次已问，等裁决**（若改：`InstancedMesh` + 球几何 × 500 实例，需评估透明排序与性能）。
-
-### 🔧 S1.0d-3 粒子圆点化 + SDEF 能量非正值诊断（2026-09-11）
-
-**用户裁决**："换成圆形贴图点（改动最小）" —— 把 `THREE.Points` 默认的**轴对齐方块**渲成**圆点**。
-
-**改动（`gui/src/source/SourceDemoRenderer.ts`）**：新增模块级单例 `getDotTexture()`（64² canvas 径向渐变圆 + `PointsMaterial.alphaTest = 0.5`）。**零新依赖、零性能代价，且保住屏幕空间可见性**（区别于 `InstancedMesh` 小球：后者是真实世界尺寸，在"外壳优先"取景下只有几像素反而更难看见）。jsdom 等无 canvas 环境返回 null ⇒ 静默降级为方块，不抛错。
-
-**复验**：粒子呈圆点 + 方向线清晰 + 颜色浅蓝→深蓝完整层次（`shots/crop-18-si1-0-2.png`）。
-
-#### ★ 顺带查清两件事（一件是挂了两轮的待办）
-
-**1. `C810.pdf` 首次访问成功**（推进 §4 待办 5）：本机 **PyMuPDF（`fitz`）已安装**，**零新依赖**即可读这份 1001 页权威手册。已提取 SI/SP 权威定义（**PDF 页 746-747 / 印刷页 3-63**）：
-
-- **SI = 分布的自变量值**（S 选项时是分布编号）；**SP = 与之对应的概率**。
-- **H（无字母，默认）**：SI 是**分箱边界**（必须单调递增）；**SP 的首个数值项必须为 0**（强制占位符），其后才是各分箱概率（D）或累积概率（C）。概率无需归一化。
-- **抽样方式**：先按概率选分箱 → **再在分箱内均匀抽样**。
-- A（概率密度点，首尾通常为 0）/ L（离散值，可不单调）/ S（分布编号，可嵌套约 20 层）语义亦已提取。
-
-**2. 用户报"粒子颜色不对"的根因定案**：其卡 `si1 -2 1` + `sp1 0 1` 按 C810 就是**能量在 [-2, 1] MeV 内均匀抽样**（⚠️ **`sp1` 的 `0` 是占位符 —— 定义能量范围的只有 `si1`**）⇒ 约 **2/3 粒子为负能量**。而 `app/generator/source_sampler.py:431` 用 `if p["energy"] and p["energy"] > 0` **只把正值计入 `energyRange`** ⇒ 返回 `[0.0037, 0.9973]`（**失真**）⇒ 前端 `normalizeEnergy01` 把负能量粒子**钳到 0** ⇒ 全部落到 `trackShade` 最浅端 ⇒ **颜色层次塌成一片接近白色**。
+**★ 顺带定案：用户报"粒子颜色不对"** —— 其卡 `si1 -2 1` + `sp1 0 1` 按 C810 **H 直方图**语义就是**能量在 [-2, 1] MeV 内均匀抽样**（⚠️ **`sp1` 的 `0` 是强制占位符 —— 定义能量范围的只有 `si1`**）⇒ 约 **2/3 粒子为负能量**；而 `app/generator/source_sampler.py:431` 用 `if p["energy"] and p["energy"] > 0` **只把正值计入 `energyRange`** ⇒ 返回 `[0.0037, 0.9973]`（**失真**）⇒ 前端 `normalizeEnergy01` 把负能量**钳到 0** ⇒ 全落到 `trackShade` 最浅端 ⇒ **颜色层次塌成一片接近白色**。
 
 **A/B 实证**（按用户要求把 `si1 -2 1` 改成 `si1 0 2`，**只改注入副本，用户原卡 `E:\download\Practice3 (3).TXT` 未动**）：
 
 | 指标 | 原卡 `si1 -2 1` | 变体 `si1 0 2` |
 | :--- | :--- | :--- |
 | 负能量粒子数 | **约 2/3** | **0** |
-| `energyRange` | `[0.0037, 0.9973]`（失真） | `[0.0002, 1.9954]`（**与真实范围一致**） |
+| `energyRange` | `[0.0037, 0.9973]`（失真） | `[0.0002, 1.9954]`（**与真实一致**） |
 | 颜色参数 t 的 10 桶分布 | 2/3 挤在第 0 桶（最浅） | **`[49,48,50,43,55,56,54,45,51,49]` 均匀铺满** |
 | 观感 | 一片接近白色 | **完整浅蓝→深蓝层次** |
 
-⇒ **程序抽样符合 C810，无 bug**。真正的缺口是：**缺少"SDEF 能量分布可能产生非正值"的校验/提示**（"有错就地报"原则），而 `energyRange` 的 `>0` 过滤是**症状补丁**而非根因修复。**待用户裁决**（是否加校验 / 是否改卡）。
+⇒ **程序抽样符合 C810，无 bug**。真正缺口是**缺少"SDEF 能量分布可能产生非正值"的校验/提示**（"有错就地报"原则），而 `energyRange` 的 `>0` 过滤是**症状补丁**。**待用户裁决**（加校验 / 改卡）。
+> **订正一条旧记载**：早前记的"点源场景方向线长度趋近 0（`arrowLen` 依赖粒子跨度）"已随 d-2 的**屏幕空间恒定**改造而不再是问题。
+> 粒子类型侧**无问题**：卡里 `sdef … par=1` ⇒ 粒子类型 1，后端实测返回 `particle:"n"`、面板"中子 500 / 光子 0 / 电子 0"，与卡一致。
 
-> 粒子类型一侧**无问题**：卡里 `sdef … par=1` 即粒子类型 = 1，后端实测返回 `particle:"n"`、面板"中子 500 / 光子 0 / 电子 0"，与卡一致。
+**★ `C810.pdf` 已可直读（本批打通，能力级收获）**：本机 **PyMuPDF（`fitz`）已安装** ⇒ **零新依赖**即可提取这份 1001 页权威手册文本，卡格式语义不必再靠 `app/docs/` 派生 md 猜。**已提取定案**：SI/SP（页 746-747 —— SI = 自变量值、SP = 对应概率；**H 下 SI 是分箱边界、SP 首项必须为 0（占位）**，抽样 = 选分箱后**箱内均匀**；A/L/S 同页）、`tasks`（页 520/875）。**`DSn` 卡的 `param`/J 起点语义仍待核对**（两份派生文档矛盾，§4 待办 5 残余）。脚本在仓库外：`D:\MCNP\_agent_probe\{pdf_index,pdf_extract,pdf_tasks}.py`。
 
-### ⚙️ S1.0e 一键运行 MCNP 支持多核（tasks N）+ 排他卡提示（2026-09-11，**新功能，未升版**）
+### ⚙️ 一键运行 MCNP 支持多核 tasks（S1.0e，`21d93d0`）
 
-**用户实测结论**：`mcnp6.exe i=… o=… tasks 9` 这种写法**真能多核**，但 **`tasks` 不是越大越好**，且**部分卡与 `tasks > 1` 互斥**。
+- **权威依据（C810 页 875）**：`TASKS n` 走 OpenMP 线程（*Invokes OpenMP threading on shared memory systems*）；且 **`DBCN(2,3,4)` / `SSW` / `SSR` / `PTRAC` 与 `tasks > 1` 不兼容（FATAL error）**。
+- **实测：`tasks` 取物理核数而非逻辑核**（Ryzen 7 4800H，8 物理核/16 逻辑核，10M 历史）：
 
-**① 权威依据（C810.pdf 页 875）**
+  | tasks | 1 | 4 | **8** | 9 | 16 |
+  | :-- | :-- | :-- | :-- | :-- | :-- |
+  | 墙钟 | 22.35 s | 8.38 s | **8.36 s** | 8.81 s | **15.06 s** |
+  | CPU/墙钟 | 0.99 | 3.96 | 7.83 | 8.91 | 13.66 |
 
-> **TASKS n** — Invokes OpenMP threading on shared memory systems. n = number of threads to be used.
-> **DBCN(2,3,4), SSW, and PTRAC are incompatible with tasks > 1 (FATAL error).**
+  ⇒ **`tasks 8` 最优；`tasks 16` 因超订反慢 80%**（烧 205 s CPU，大半自旋）。Amdahl 反推：串行 ≈6.35 s、可并行 ≈16 s ⇒ 理论上限 ≈3.5×，实测 2.67×。
+  > ⚠️ 这是**极简铁球模型**（碰撞少、可并行占比低）；真实屏蔽模型收益更好 —— 建议用**自己的卡**调小 NPS 后比墙钟选优。
+  > ⚠️ `tasks` **只在 OpenMP 构建上生效**；判据是输出出现 `comment.  threading will be used …`，非线程版**静默忽略**（不报错也不加速）。
 
-**② 实测（AMD Ryzen 7 4800H，8 物理核 / 16 逻辑核；同一张卡 10M 历史）**
+- **两层防线**：**UI 前置提示**（`TasksIncompatibleHint` 挂在 **PTRAC 启用** 与 **SSW/SSR 面源** 两处 ⇒ **选模式即提示**）+ **后端兜底**（`app/mcnp_tasks.py` 扫卡强制降级并把原因回传 `tasksNote`，经「高级→额外卡片」手写进去也拦得住）。
+- **复用**：抽 `gui/src/utils/detectedCores.ts`（**消除 `SweepDialog` / `PreviewDialog` 里重复的 `DETECTED_CORES`**；`DEFAULT_WORKERS` 保持既有 `min(8,核)` 行为，新增 `SUGGESTED_WORKERS` = ⌈逻辑/2⌉ 物理核估计、`clampWorkers`）。`PreviewDialog` footer 加核数滑杆并把 `tasks` 传给 `/api/run-mcnp`。
+- **新模块必须登记 spec**：`app/mcnp_tasks.py` 已入 `_keep_py`（**不登记即 TD-02 那个"冻结包 import 失败"**），受 `test_sidecar_spec_keep.py` 双向闸门守护；新增 **25 例**单测（跳格展开 / 三种排他卡 / DBCN 第 2·3·4 项 / `28j 0 13j 0` **不误报** / 注释跳过 / 缺省·非法·超限夹取）。
+- **为什么单列 `app/` 模块**：项目纪律禁止 pytest import `gui/backend/api_server`（pyvista/FreeCAD 污染），逻辑必须住 `app/` 才能被测 —— 与 `diff_inp`/`lattice` 同构。
 
-| tasks | 墙钟 | CPU | CPU/墙钟 | 备注 |
-| :-- | :-- | :-- | :-- | :-- |
-| 1 | 22.35s | 22.22s | 0.99 | 单核 |
-| 4 | 8.38s | 33.2s | 3.96 | |
-| **8** | **8.36s** | 65.5s | 7.83 | **最优 = 物理核数** |
-| 9 | 8.81s | 78.48s | 8.91 | 略差于 8 |
-| 16 | **15.06s** | **205.73s** | 13.66 | **超订，最差**（SMT 无吞吐收益 + 大量自旋） |
+**UI 复验（截图三连）**：勾选 PTRAC → 黄框提示现；切「面源 (SSW/SSR)」→ 提示现；生成预览 footer → `CPU [滑杆] 8`（= 实测最优值）。
 
-⇒ **`tasks` 应取物理核数，不是逻辑核数**。Amdahl 反推：串行 ≈6.35s、可并行 ≈16s ⇒ 理论上限 ≈3.5×，实测 2.67×（达上限 76%）。
-> ⚠️ 这是**极简铁球模型**（碰撞少、可并行占比低）；真实屏蔽模型占比更大、收益更好 —— 建议用**自己的卡**调小 NPS 后比墙钟选优。
-> ⚠️ `tasks` 只在 **OpenMP 构建**上生效；判据是输出出现 `comment.  threading will be used …`，非线程版**静默忽略**（不报错也不加速）。
+**发布**：本批是**新功能**，按规则"升版由上级指定"当时未升版；**同日用户指定升版 1.7.6 并打包部署** —— 见上文「📦 v1.7.6 发布」。三态：**已改 ✅ / 已提交 ✅ / 已打包部署 ✅**。
 
-**③ 复用与实现（10 文件）**
 
-| 文件 | 改动 |
-| :-- | :-- |
-| `gui/src/utils/detectedCores.ts`（新） | **抽共享核数模块**（此前 `DETECTED_CORES` 在 SweepDialog 与 PreviewDialog **各复制一份**）：`DETECTED_CORES` 逻辑核（滑杆上限）/ `DEFAULT_WORKERS` = 既有 `min(8,核)`（**不改行为**）/ `SUGGESTED_WORKERS` = ⌈逻辑/2⌉（物理核估计）/ `clampWorkers` |
-| `gui/src/components/SweepDialog.tsx` | 改用共享模块；新增「推荐 N（物理核）」按钮 |
-| `gui/src/components/PreviewDialog.tsx` | `runMcnp` 传 `tasks: workers`；**footer 加核数滑杆**（与扫描面板共享同一 `workers`）；回显 `tasks`/`tasksNote` |
-| `gui/src/components/TasksIncompatibleHint.tsx`（新） | **统一"与 tasks>1 不兼容"提示组件**（避免三处各写一份文案） |
-| `gui/src/ptrac/PtracForm.tsx` | 勾选「启用 PTRAC」→ **就地显示提示** |
-| `gui/src/components/SswSsrForm.tsx` | 「面源 (SSW/SSR)」表单顶部**常显提示**（该表单无启用开关，渲染即代表处在该模式） |
-| `app/mcnp_tasks.py`（新） | `detect_tasks_conflict`（扫 PTRAC/SSW/SSR/DBCN(2,3,4)，正确处理 `nJ` 跳格与 `$`/`C` 注释）+ `resolve_mcnp_tasks` → `(tasks, note)` |
-| `gui/backend/api_server.py` | `_handle_run_mcnp` 经 `_import_app("mcnp_tasks")` 解析；bat 末尾追加 ` tasks N`；响应带 `tasks`/`tasksNote` |
-| `gui/mcnp_sidecar.spec` | `_keep_py` 登记 `mcnp_tasks.py`（**不登记即 TD-02 那个"冻结包 import 失败"**） |
-| `tests/unit/test_mcnp_tasks.py`（新） | **25 例**：跳格展开 / 三种排他卡 / DBCN 第 2·3·4 项 / `28j 0 13j 0` **不误报** / 注释行跳过 / 缺省·非法·超限夹取 |
-
-> **为什么单列 `app/` 模块**：项目纪律禁止 pytest import `gui/backend/api_server`（pyvista/FreeCAD 污染），逻辑必须住 `app/` 才能被测 —— 与 `diff_inp`/`lattice` 同构，受 `test_sidecar_spec_keep.py` 双向闸门守护。
-> **两层防线**：UI 前置提示（选模式时） + 后端扫卡兜底（经「高级→额外卡片」手写进来也拦得住）。
-
-**④ 门禁**：pytest **900 passed**（875 基线 + 25 新增）、vitest **78 files / 625/0**、tsc 两档 **EXIT 0**、vite build **EXIT 0**。
-
-**⑤ UI 复验（截图三连）**：勾选 PTRAC → 黄框提示现；切「面源 (SSW/SSR)」→ 提示现；生成预览 footer → `CPU [滑杆] 8`（= 实测最优值）。
-
-**⑥ 三态**：**已改源码 ✅ / 已提交 ✅ / 已打包部署 ✅**（v1.7.6，见 S1.0f）。
-> ⚠️ 这是**新功能**（非 bug 修复批），按项目规则"**升版由上级指定**" —— 当时未升版；**2026-09-11 用户指定升版 1.7.6 并打包部署，见 S1.0f**。
-
-### 📦 S1.0f v1.7.6 升版 + 打包部署（2026-09-11，**用户指定版本**）
-
-**用户指令**："可以打包了，1.7.6" ⇒ 按 `docs/手动打包方法.md` 的 8 步手动链路执行（一键打包已废弃）。
-
-**升版六处**（本批**发现手册原先漏列第 6 处**）：
-`gui/package.json:4` / **`gui/package-lock.json`（顶层 `version` + `packages[""].version` 两处）** / `gui/src-tauri/tauri.conf.json:10` / `gui/src-tauri/Cargo.toml:3` / `gui/src-tauri/Cargo.lock`（`name="mcnp-ui"`）/ `README.md:25` 徽章 ⇒ 全部 **1.7.6**。
-> ⚠️ `Sidebar.tsx:2` 直接 `import pkg from "../../package.json"` ⇒ **版本号在构建时打进 bundle**，故**升版后必须重新 `vite build`**（本次已做，并在 `dist/assets/index-*.js` 中核到 `1.7.6`）。
-
-**8 步执行结果（全部通过）**：
-
-| 步 | 内容 | 结果 |
-| :-- | :--- | :--- |
-| 1 | 版本提升（六处） | ✅ 六处一致 **1.7.6** |
-| 2 | 门禁 | ✅ pytest **900** / vitest **78 files·625** / tsc 两档 **0** / build **0**（S1.0e 批已跑） |
-| 3 | `vite build` | ✅ `dist/assets/index-D8_xgTqs.js` |
-| 4 | PyInstaller sidecar | ✅ EXIT 0（~160 s）；`_internal\app\{mcnp_tasks,preview_cache,lattice,diff_inp}.py` + `vendor\geouned` **全在位** |
-| 5 | 替换 binaries | ✅ `python-x86_64-pc-windows-msvc.exe` **28615181 B** + 完整 `_internal` |
-| 6 | `tauri build` | ✅ EXIT 0，`Compiling mcnp-ui v1.7.6`，33 s（增量） |
-| **6.2** | **sidecar 时效校验** | ⚠️ **坑再次命中**：`target\release\python.exe` 仍是 **09/10 00:08** 的 **28561279 B** 旧版，且 **`_internal\app\mcnp_tasks.py` 不存在** ⇒ 按手册**强制覆盖**后复核一致（28615181 B，`mcnp_tasks.py` 在位） |
-| 7 | 备份 + 部署 | ✅ 旧包备份 `D:\MCNP\_backup_1.7.5_20260912_114743`（223.1 MB / 2303 files）→ 部署 `D:\MCNP\MCNP输入卡生成器`（徽章 **1.7.6**，`_internal` **2294** 文件） |
-| 8 | 冒烟 | ✅ 5001 **3 s 就绪** + MCP **8100** LISTENING；`xsdir-check` **200**（loaded）、`diff-inp` **200**（旧包 500）、`lattice-extent` **200**、`source-demo-sample` **200**（旧包 404）；随后 8.3 清理（主 exe + 2 个 sidecar 已终止，5001/8100 归零） |
-
-> **6.2 坑的最优判据（本批实测，值得固化）**：不只看 mtime/大小 —— **直接查 `target\release\_internal\app\` 里有没有本批新增的模块**（本次是 `mcnp_tasks.py`）。旧版缺它 ⇒ 一眼看穿"版本号新、后端旧"，比对比字节数更硬。
-
-**三态**：**已改 ✅ / 已提交 ✅ / 已打包部署 ✅（v1.7.6，冒烟通过）**。
 
 ### 🧹 待办（本轮**未做**，明确记录，勿当作已做）
 
-1. **M-10**：`app/UI_ARCHITECTURE.md` 仍陈旧（`25 端点` 实际 **49**、`pytest 251 绿` 实际 **875**，共 3 处）→ 审计处置①要求"整体重锚定或标为历史快照"。
+1. **M-10**：`app/UI_ARCHITECTURE.md` 仍陈旧（`25 端点` 实际 **49**、`pytest 251 绿` 实际 **900**，共 3 处）→ 审计处置①要求"整体重锚定或标为历史快照"。
 2. **TD-19**（P1）：214 处 `any` 重构 + **单一 `CellData` 定义**（现状实证：`DeckContext.CellData` snake_case `imp_n` vs `CellEditDialog.CellData` camelCase `impN` **两套并存**）。上一轮"无 tsc 可跑"的搁置理由**已消失**，可排期。**⚠️ 2026-09-11 升级为高优先**：S1.0d 的"看不见栅元"根因正是这条缝的产物（`deck.cells` 是 snake_case、`cellBridge.LocalCellRow` 是 camelCase，中间靠后端补 camelCase 别名 + `as` 断言糊住，**别名漏了 `mat` 就整条链路静默失效**）。
 3. **TD-35 残项**：`gui/src/utils/distDual.ts:19` 的 `SI_LETTERS` 仍含 `V`/`Q`/`T`/`F`，与后端 `_SI_LETTERS = (L,H,A,S)` 不一致。
 4. **C810.pdf 仍未逐字核对**（`DSn` 卡 `param`/J 起点语义；项目内两份派生文档互相矛盾）。
@@ -295,12 +169,12 @@
   | `198fe37` | TD-35 —— 多源 POS_VEC 改发合法 `SI L`（原发 C810 非法的 `SI V`） |
   > ⚠️ **纪律：提交即登记**（S3.1）。此后每批必须记 commit 短号或待提交清单，精确清单实跑 `git status --porcelain`。
 - **版本六处**：`tauri.conf.json` / `package.json` / **`package-lock.json`** / `Cargo.toml` / `Cargo.lock` / README 徽章 恒 **1.7.6** 一致（**唯一权威 = `gui/package.json:4`；侧边栏经 `import pkg from "../../package.json"` 读它 ⇒ 升版后必须重新 `vite build`**，否则界面仍显示旧版本）。
-- **部署产物**：`D:\MCNP\MCNP输入卡生成器`（**2026-09-11 重打包 v1.7.6**，含 S1.0c ~ S1.0f 全量）。旧包备份 `D:\MCNP\_backup_1.7.5_20260912_114743`（223.1 MB / 2303 files）。
-- **2026-09-11 本批提交**（按主题拆分）：`48c51ed` 源演示修复二批（material + 取景）／`857aed1` 方向线不可见 + 长度滑杆失效／`b1f0043` 粒子圆点化 + SI/SP 权威语义定案／`21d93d0` 一键运行多核 tasks + 排他卡提示／（本批）升版 1.7.6 + 打包部署。
+- **部署产物**：`D:\MCNP\MCNP输入卡生成器`（**2026-09-11 重打包 v1.7.6**，含 S1 全量）。旧包备份 `D:\MCNP\_backup_1.7.5_20260912_114743`（223.1 MB / 2303 files）。
+- **2026-09-11 本批提交**（按主题拆分）：`48c51ed` 源演示修复二批（material + 取景）／`857aed1` 方向线不可见 + 长度滑杆失效／`b1f0043` 粒子圆点化 + SI/SP 权威语义定案／`21d93d0` 一键运行多核 tasks + 排他卡提示／`d20726c` 升版 1.7.6 + 打包部署。
 
 ## S3 进行中任务 / 待办
 
-- **⭐ 当前（2026-09-11）**：**S1.0f —— v1.7.6 已升版并打包部署**（用户指定 1.7.6）。三态 = **已改 / 已提交 / 已打包部署 + 冒烟通过**。本日累计覆盖 S1.0c ~ S1.0f：源演示修复二批（`material` 全失 + 取景挤出外壳）、方向线不可见 + 长度滑杆失效、粒子圆点化（`si1 -2 1` 诊断）、一键运行 MCNP 多核 tasks + PTRAC/SSW/SSR 排他卡提示。
+- **⭐ 当前（2026-09-11）**：**v1.7.6 已升版并打包部署**（用户指定）。三态 = **已改 / 已提交 / 已打包部署 + 冒烟通过**。本批次覆盖：**源演示修复链（4 轮）**、方向线不可见 + 长度滑杆失效、粒子圆点化（附 `si1 -2 1` 诊断）、一键运行 MCNP 多核 tasks + PTRAC/SSW/SSR 排他卡提示。
 - **本轮明确未做（按优先级，详见 S1「🧹 待办」）**：
   1. **M-10**：`app/UI_ARCHITECTURE.md` 重锚（3 处陈旧计数）。**成本最低，建议先做**。
   2. **TD-19**（P1）：214 处 `any` 重构 + 统一 `CellData`（现 snake_case/camelCase 两套并存）。搁置理由已消失（tsc 现 EXIT 0）。
@@ -338,7 +212,7 @@
 
 ## §2 当前状态快照（语义记忆）
 
-- **开发阶段**：**v1.7.6 已打包部署**（2026-09-11，`D:\MCNP\MCNP输入卡生成器`）——含 **S1.0c ~ S1.0f 全量**（源演示修复二批 + 粒子圆点化 + 方向线/长度滑杆修复 + 一键运行多核 tasks）。**部署版冒烟实测**：`/api/xsdir-check` **200**（`loaded=true`）、`/api/diff-inp` **200**（旧包 500）、`/api/lattice-extent` **200**、`/api/source-demo-sample` **200**（旧包 404）；5001 与 MCP 8100 均 LISTENING；`_internal\app\{mcnp_tasks,preview_cache,lattice,diff_inp}.py` 与 `_internal\vendor\geouned` 全部在位。旧包已备份 `D:\MCNP\_backup_1.7.5_20260912_114743`（223.1 MB / 2303 files）。
+- **开发阶段**：**v1.7.6 已打包部署**（2026-09-11，`D:\MCNP\MCNP输入卡生成器`）——含 **S1 全量**（源演示修复链 4 轮 + 粒子圆点化 + 方向线/长度滑杆 + 一键运行多核 tasks）。**部署版冒烟实测**：`/api/xsdir-check` **200**（`loaded=true`）、`/api/diff-inp` **200**（旧包 500）、`/api/lattice-extent` **200**、`/api/source-demo-sample` **200**（旧包 404）；5001 与 MCP 8100 均 LISTENING；`_internal\app\{mcnp_tasks,preview_cache,lattice,diff_inp}.py` 与 `_internal\vendor\geouned` 全部在位。旧包已备份 `D:\MCNP\_backup_1.7.5_20260912_114743`（223.1 MB / 2303 files）。
   > 旧状态（已作废）：v1.7.5（2026-09-10 部署）只含技术债修复全量 + SDEF 源粒子演示，**不含** 09-11 的源演示二批 / 圆点化 / 多核 tasks。
 - **技术债状态**：2026-09-10 完成全量审计（**34 条**，详见 `docs/tech-debt-report.md` + `docs/audit/`，后者被 `.gitignore` 忽略）→ **已完成修复 + 实跑验证 + 打包部署**（见 S1）。审计结论"已证实 P0 = 0"经实机**修正为：至少 1 条实际已坏**（部署版 `/api/diff-inp` 500）。剩余待办见 S1「🧹 待办」（M-10 / TD-19 / TD-35 残项 / C810 核对）。
 - **待排期**：无（#7 重合检查已于 2026-08-22 交付；`MCNP输入卡生成器_功能待办清单.md` 的 P1#2「3D 预览悬停/编号标签」仍未做）
@@ -579,28 +453,32 @@
 3. 替换 binaries                    （把新 sidecar 的 python.exe + _internal 换进 target\release\）
 4. tauri build                      （需 RUSTUP_HOME/CARGO_HOME=D:\rust；node .\node_modules\@tauri-apps\cli\tauri.js build）
 5. ⚠️ 6.2 时效校验（必做）           （tauri 增量编译不刷新 target\release 的 sidecar！
-                                    手动核对 python.exe mtime/体积，覆盖为新 sidecar）
-6. 部署 D:\MCNP\MCNP输入卡生成器     （⚠️ 先杀运行中的旧主程序+sidecar，否则文件锁目录致 _internal 残缺）
-7. 冒烟                             （用 sidecar python.exe 直跑不弹 GUI：xsdir-check / generate 定向卡 / preview-3d 出 STL）
+                                    ★ 最快判据：查 target\release\_internal\app\ 里**有没有本批新增模块**
+                                      —— 2026-09-11 实测缺 mcnp_tasks.py，一眼看穿"版本号新、后端旧"；
+                                      亦可对比 python.exe 的 mtime/体积，不一致就按手册强制覆盖）
+6. 备份 + 部署 D:\MCNP\MCNP输入卡生成器（⚠️ 先杀运行中的旧主程序 + 占 5001 的 sidecar，否则文件锁目录致
+                                      _internal 残缺；部署前把旧包备份到 D:\MCNP\_backup_<版本>_<时间戳>）
+7. 冒烟                             （起部署版 → 5001 探活 → 打端点；⚠️ 先确认 5001 空闲，被占则请求被劫持
+                                      产生假象；收尾杀掉主 exe + 其 sidecar **按路径精确匹配**，勿误杀他处 python）
 ```
 
-**关键坑提醒**：① 6.2 时效坑**每次都命中**，不可跳过；② 部署前杀进程（锁目录）；③ 冒烟改 sidecar 直跑（GUI 窗口被关闭=后端退出，中断请求属正常）；④ 版本四处+锁文件必须一致（Cargo 不接受四段号）。
+**关键坑提醒**：① 6.2 时效坑**每次都命中**，不可跳过；② 部署前杀进程（锁目录）；③ 冒烟前先清 5001（否则劫持出假象）；④ 版本**六处**必须一致（`tauri.conf.json` / `package.json` / **`package-lock.json`** / `Cargo.toml` / `Cargo.lock` / README 徽章；Cargo 不接受四段号）；⑤ **升版后必须重新 `vite build`** —— 侧边栏版本号由 `Sidebar.tsx` 直接 `import package.json`，**构建期打进 bundle**（不从磁盘读）。
 
 ### 测试门禁（发布前必须全绿）
 
 | 门禁 | 命令/位置 | 基线 |
 | :--- | :--- | :--- |
-| pytest | `tests/`（unit + parser + integration，含契约漂移闸门 test_api_contract.py 与真实 HTTP） | **⚠️ 下表数字为 2026-08~09 各批**当时快照**，不可直接当基线**：573/0(08-22) → 609 → 632 → 650 → 674 → 686 → 703 → 737 → 741 → **765（09-09 最新记录）**。**重跑后请覆盖本行** |
-| vitest | `gui/test/`（**75 个测试文件** = 60 `.test.ts` + 15 `.test.tsx`，另 1 `.snap`；含 jsdom DOM 交互） | 同上为快照：358/0(08-22) → 407 → 466 → 512 → 527 → 546 → 554 → **587+4（09-09 最新记录）**。**重跑后请覆盖本行** |
-| tsc | `gui/` 下 `npm run typecheck`（= `tsc --noEmit && tsc -p tsconfig.test.json --noEmit`） | EXIT 0。**2026-09-10 扩容**：此前只查 `src/`，75 个测试文件不在类型检查内（审计 TD-17） |
-| 漂移闸门 | handlers dict ↔ docs/contracts/api.yaml 双向一致 | **49 端点** |
+| pytest | `tests/`（unit + parser + integration，含契约漂移闸门 test_api_contract.py 与真实 HTTP） | **最新实跑（2026-09-11）：900 passed / 0 failed / 0 skipped**。沿革：573(08-22) → … → 765(09-09) → 875(09-10) → **900(09-11，含 +25 例 `test_mcnp_tasks.py`)**。**重跑后请覆盖本行** |
+| vitest | `gui/test/`（**78 个测试文件**；含 jsdom DOM 交互） | **最新实跑（2026-09-10）：78 files / 625 tests passed / 0 skip**。沿革：358(08-22) → … → 587+4(09-09) → **625(09-10)**。**重跑后请覆盖本行** |
+| tsc | `gui/` 下 `npm run typecheck`（= `tsc --noEmit && tsc -p tsconfig.test.json --noEmit`） | 两档 **EXIT 0**。**2026-09-10 扩容**：此前只查 `src/`，测试文件不在类型检查内（审计 TD-17） |
+| 漂移闸门 | handlers dict ↔ `docs/contracts/api.yaml` 双向一致；spec `_keep_py` ↔ `_import_app` 双向一致 | **49 端点**；spec 闸门（`test_sidecar_spec_keep.py`）**绿** |
 
 **已知 flaky（2026-09-10 已修）**：colorize 128³ 计时用例负载偶发 >50ms —— 该断言属"单样本墙钟阈值"反模式，已改为多次取中位数 + 宽松上限（或移出默认门禁）。**不再以"隔离单跑即绿"作为放行理由**（审计 TD-18）。
 
 ### 版本发布纪律
 
 - bug 修复批**严禁升版**；升版仅限新功能且由上级指定。
-- 版本四处+锁文件同步：tauri.conf.json / package.json / Cargo.toml / README 徽章 / Cargo.lock。
-- 侧边栏版本号读 package.json（单一来源，升版不再破）。
+- 版本**六处**同步：`tauri.conf.json` / `package.json` / **`package-lock.json`（顶层 `version` + `packages[""].version`）** / `Cargo.toml` / `Cargo.lock`（`name="mcnp-ui"`）/ README 徽章。
+- 侧边栏版本号来自 `Sidebar.tsx` 直接 `import pkg from "../../package.json"`（单一来源，升版不再破）—— ⚠️ **构建期打进 bundle**，故**升版后必须重新 `vite build`**，否则界面仍显示旧版本。
 
 
