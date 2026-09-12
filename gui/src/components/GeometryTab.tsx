@@ -102,6 +102,8 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   };
   const [show3D, setShow3D] = useState(false);
   const [showStepDlg, setShowStepDlg] = useState(false);
+  // STEP 转换进行中：窗口点导入即关，用工具栏按钮当"还在转"的指示 + 防重复点
+  const [stepBusy, setStepBusy] = useState(false);
   const [quickCellOpen, setQuickCellOpen] = useState(false);
   // 格阵 fill 阶段2：栅格编辑器 + 按 U 分组显示
   const [latticeOpen, setLatticeOpen] = useState(false);
@@ -171,7 +173,10 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   }, [pendingCellFromMaterial]);
 
   const handleStepImport = async (settings: any, file: File) => {
-    if (!fc.require()) { setShowStepDlg(false); return; }
+    // 对话框点「导入」即自行关闭（StepImportDialog.handleImport → onClose），
+    // 这里只管后台转换 + 结果告知：成功 alert、失败 alert 真实原因、错误抛给 catch。
+    if (!fc.require()) return;  // FreeCAD 缺失：require() 自己弹下载框
+    setStepBusy(true);
     try {
       const text = await file.text();
       const r = await fetch(apiUrl("/api/import-step"), {
@@ -182,14 +187,14 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
       if (j.status === "ok" && j.deck) {
         patch({ surfaces: j.deck.surfaces || "", tr_cards: j.deck.tr_cards || "", cells: j.deck.cells || [] });
         alert("✅ STEP 导入成功");
-        setShowStepDlg(false);
         return;
       }
       alert(j.message || "STEP 导入失败");
     } catch {
       alert("STEP 导入需要后端服务");
+    } finally {
+      setStepBusy(false);
     }
-    setShowStepDlg(false);
   };
   const handlePreview3D = async () => {
     if (cells.length === 0 && !cellRawMode) { alert("请先添加栅元"); return; }
@@ -614,7 +619,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
             <option value="default">系统默认</option>
           </select>
           {fc.status === "missing" && <button className="btn btn-ghost btn-xs" onClick={fc.pickPath}>指定 FreeCAD 路径</button>}
-          <button className="btn btn-ghost btn-xs" onClick={() => setShowStepDlg(true)}>📥 导入 STEP</button>
+          <button className="btn btn-ghost btn-xs" onClick={() => setShowStepDlg(true)} disabled={stepBusy}>{stepBusy ? "⏳ STEP 转换中…" : "📥 导入 STEP"}</button>
           <button className="btn btn-primary btn-xs" onClick={handlePreview3D}>🔍 3D 预览</button>
           <button className="btn btn-ghost btn-xs" onClick={handleExportSTEP}>📐 导出 STEP</button>
         </div>

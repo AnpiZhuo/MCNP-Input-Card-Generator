@@ -16,7 +16,10 @@ import os
 import re
 import tempfile
 
-from freecad_locator import bin_dir, save as save_freecad_locator
+try:
+    from freecad_locator import bin_dir, save as save_freecad_locator
+except ImportError:  # 测试/直接 import app 包时 freecad_locator 在 app/ 下
+    from app.freecad_locator import bin_dir, save as save_freecad_locator
 
 
 # ===================================================================
@@ -84,13 +87,62 @@ def _strip_data_cards(text: str) -> str:
     return "\n".join(lines[:cut])
 
 
+def flat_cell_json(row) -> dict:
+    """栅元行 → STEP 导入的平铺 cell JSON（契约见 docs/contracts/api.yaml）。
+
+    入参可以是：
+      - ``CellRow``（deck.cells 的真实类型：kind="cell" 时嵌套 CellData，
+        kind="raw" 时是 #ifdef 之类的原样条件行）
+      - ``CellData``（平铺对象，历史调用方）
+      - 上述两者的 dict 形式
+
+    出参：
+      - 栅元行 → ``{number, material, density, surface_expr, comment}``
+        （平铺 snake_case，前端 cellBridge.deckToLocalCells 认这个格式）
+      - 原样条件行 → ``{kind:"raw", text}`` 原样透传，不丢行。
+
+    历史坑：这里曾经直接读 ``row.number``。deck.cells 改成 CellRow 判别联合
+    后该字段不存在，STEP 导入必然 500（AttributeError）。序列化只此一处。
+    """
+    kind = (row.get("kind", "cell") if isinstance(row, dict)
+            else getattr(row, "kind", "cell"))
+    if kind == "raw":
+        text = (row.get("text", "") if isinstance(row, dict)
+                else getattr(row, "text", ""))
+        return {"kind": "raw", "text": text or ""}
+
+    cell = (row.get("cell") if isinstance(row, dict)
+            else getattr(row, "cell", None))
+    if cell is None:
+        cell = row  # 平铺 CellData / 平铺 dict
+
+    def _f(name: str, default=""):
+        if isinstance(cell, dict):
+            return cell.get(name, default)
+        return getattr(cell, name, default)
+
+    density = _f("density")
+    return {
+        "number": _f("number", ""),
+        "material": str(_f("material")),
+        "density": str(density) if density else "",
+        "surface_expr": _f("surface_expr") or "",
+        "comment": _f("comment") or "",
+    }
+
+
 def geometry_deck_response(surfaces_text: str, tr_cards_text: str,
                            cells_list: list) -> dict:
-    """STEP 导入响应的几何 deck JSON —— surfaces/tr_cards/cells 三件套。"""
+    """STEP 导入响应的几何 deck JSON —— surfaces/tr_cards/cells 三件套。
+
+    cells 统一经 ``flat_cell_json`` 归一化：调用方直接传 ``deck.cells``
+    （CellRow 列表）即可，不要再在 handler 里手写字段映射（漏字段/字段名
+    漂移都曾在这里炸过）。
+    """
     return {
         "surfaces": surfaces_text or "",
         "tr_cards": tr_cards_text or "",
-        "cells": cells_list or [],
+        "cells": [flat_cell_json(c) for c in (cells_list or [])],
     }
 
 

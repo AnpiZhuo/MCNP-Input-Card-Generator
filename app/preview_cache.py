@@ -26,6 +26,13 @@ import threading
 class PreviewCache:
     """deck 指纹缓存：同输入跳过 FreeCAD 子进程。"""
 
+    # 几何算法版本（缓存失效开关）：几何生成算法一改就必须 +1，否则同一 deck
+    # 会命中**旧算法**产出的 STL —— 用户"看不到修复"（2026-09-12 实测：GQ 薄片
+    # 修复后，预览仍吐旧网格，直到手动清 preview_cache）。
+    #   1 = 初版
+    #   2 = AABB 标志位合并 + 裸平面半空间 + 顶点投影（GQ 薄片体积 −4.6% → −0.3%）
+    GEOMETRY_CACHE_VERSION = 2
+
     def __init__(self, base_dir=None, max_entries: int = 3, builder=None):
         """
         Args:
@@ -52,11 +59,13 @@ class PreviewCache:
 
         输入与 handler 收到的 preview-3d 请求一致（surfaces 文本、cells JSON
         列表、tr_cards 文本）。同一 deck 文本/结构 → 同指纹；任一字段变化 → 不同。
+        另含 ``GEOMETRY_CACHE_VERSION``：几何算法升级后旧缓存自动失效。
         extra（可选 dict）并入 canonical json —— 格阵 universe STL 缓存用它携带
         u/cellNum/pitch/height，防不同裁剪参数脏命中。extra 为 None 时行为与旧版
-        完全一致（既有 preview-3d 指纹不变）。
+        一致（除几何版本号外，既有 preview-3d 指纹不变）。
         """
-        payload = {"surfaces": surfaces, "cells": cells, "tr_cards": tr_cards}
+        payload = {"surfaces": surfaces, "cells": cells, "tr_cards": tr_cards,
+                   "geom_ver": self.GEOMETRY_CACHE_VERSION}
         if extra is not None:
             payload["extra"] = extra
         canonical = json.dumps(

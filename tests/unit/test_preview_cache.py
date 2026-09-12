@@ -28,6 +28,17 @@ def _session(d: Path, cells=None) -> dict:
 
 
 # ── fingerprint ─────────────────────────────────────────────
+def test_fingerprint_includes_geometry_version(monkeypatch):
+    """几何算法版本进指纹：升级后旧缓存自动失效（防"改了算法仍命中旧 STL"）。"""
+    cache = PreviewCache()
+    s, cells, tr = "px 0\npy 0", [{"number": 1, "surface_expr": "-1"}], ""
+    a = cache.fingerprint(s, cells, tr)
+    monkeypatch.setattr(PreviewCache, "GEOMETRY_CACHE_VERSION",
+                        PreviewCache.GEOMETRY_CACHE_VERSION + 1)
+    b = cache.fingerprint(s, cells, tr)
+    assert a != b, "几何版本未进指纹 ⇒ 改算法后仍会命中旧 STL"
+
+
 def test_fingerprint_stable():
     """同输入同指纹；改一曲面/一栅元/一 TR 指纹不同；dict 键序无关。"""
     cache = PreviewCache()

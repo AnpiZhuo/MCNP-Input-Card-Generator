@@ -2636,12 +2636,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 return
 
             self._ok({"status": "ok", "deck": geometry_deck_response(
-                deck.surfaces, deck.tr_cards,
-                [{"number": c.number, "material": str(c.material),
-                  "density": str(c.density) if c.density else "",
-                  "surface_expr": c.surface_expr,
-                  "comment": c.comment or ""}
-                 for c in (deck.cells or [])])})
+                deck.surfaces, deck.tr_cards, deck.cells)})
         except StepConversionError as e:
             self._ok({"status": "error", "message": str(e)})
         except Exception as e:

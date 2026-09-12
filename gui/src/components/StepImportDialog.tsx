@@ -44,7 +44,11 @@ export default function StepImportDialog({ onImport, onClose }: Props) {
 
   const handleImport = () => {
     if (!file) { alert("请先选择 STEP 文件"); return; }
+    // 点「导入」立刻自我关闭：转换在后台跑（GEOUNED 小件 3~4 s、真实 CAD 装配体
+    // 分钟级），窗口不该杵在那里等；结果由父级 alert 告知。
+    // 未选文件时上面已 return —— 不关窗，方便用户继续选。
     onImport(settings, file);
+    onClose();
   };
 
   return React.createElement(FloatingDialog, {

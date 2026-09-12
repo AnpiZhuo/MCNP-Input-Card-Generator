@@ -18,6 +18,12 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# 紧盒「无界轴」哨兵：``cell_aabb`` 返回的 (lo, hi, axes) 里，axes[i]==False
+# 表示该轴无界、lo[i]/hi[i] 只是占位值。生产者历史上混用 0（CZ/CY/CX）与
+# ±1e300（平面半空间），故合并/裁剪时必须认标志位、并把结果统一成本哨兵，
+# 由 _clip_aabb_to_bound 裁到 ±B。详见 _aabb_intersect 的坑说明。
+_AABB_UNBOUNDED = 1e300
+
 try:
     from quadric import sq_to_gq, gq_aabb, classify_gq
 except ImportError:  # 测试/直接 import app 包时 quadric 在 app/ 下
@@ -507,19 +513,51 @@ def _surface_negative_aabb(surf_type: str, params: list, transform=None):
     return None
 
 
+def _surface_positive_aabb(surf_type: str, params: list, transform=None):
+    """裸曲面引用（MCNP 正侧）的**有界**范围；只有轴对齐平面是单侧半空间。
+
+    球/柱/锥/一般二次曲面/宏体的正侧是"外面"→ 无界，返回 None。这条不能松：
+    裸球引用若返回球自身 AABB，壳/外部栅元会被裁到球内（实测 288k 三角形，
+    见 test_bare_positive_surface_aabb_is_unbounded）。
+
+    但轴对齐平面的正侧是「x ≥ a」这样的半空间——**一侧有界**，必须给出，
+    否则「GQ 无界面 + 两张 PZ 夹住」的薄栅元拿不到 z 紧盒（2026-09-12 实证：
+    cell 8 紧盒退化成整个 ±B 盒 → 13mm 体素 → 5mm 薄片直接消失）。
+    """
+    if transform is not None:
+        return None
+    t = (surf_type or "").upper()
+    p = [float(v) for v in params]
+    unb = _AABB_UNBOUNDED
+    if t == "PX":
+        return (p[0], -unb, -unb), (unb, unb, unb), (True, False, False)
+    if t == "PY":
+        return (-unb, p[0], -unb), (unb, unb, unb), (False, True, False)
+    if t == "PZ":
+        return (-unb, -unb, p[0]), (unb, unb, unb), (False, False, True)
+    return None
+
+
 def cell_aabb(ast, surfaces_by_num, B, tr_cards=None):
     """递归计算栅元紧盒。返回 (lo3, hi3, axes3) 或 None（无法确定 → 全盒）。
 
     带 TR 的曲面由 surface_aabb 保守回退全盒；调用方负责把 ±1e300
     裁剪到实际 bound 盒。
+
+    ``axes[i] == False`` 表示该轴**无界**，此时 lo[i]/hi[i] 只是占位值
+    （历史上混用 0 与 ±1e300），不得参与数值 max/min —— 见 _aabb_intersect。
     """
     tag = ast[0]
     if tag == "surf":
-        # MCNP 中裸曲面引用 = 曲面的正侧（无界区域，曲面本身是零测度集）。
-        # 不能返回曲面自身 AABB——否则会把「球外/壳」这类无界栅元裁到曲面
-        # 范围内，导致网格只覆盖角部、三角形数量爆炸（实测 288k 三角）。
-        # 返回 None 后由 _aabb_intersect 取有界伙伴的紧盒，或全盒兜底。
-        return None
+        # MCNP 中裸曲面引用 = 曲面的正侧。球/柱/锥/二次曲面的正侧无界 → None
+        # （不能返回曲面自身 AABB——否则会把「球外/壳」这类无界栅元裁到曲面
+        # 范围内，导致网格只覆盖角部、三角形数量爆炸（实测 288k 三角））。
+        # 轴对齐平面的正侧是半空间，一侧有界 → 给出（薄片栅元靠它拿紧盒）。
+        s = surfaces_by_num.get(ast[1])
+        if s is None:
+            return None
+        return _surface_positive_aabb(
+            s["type"], s["params"], _surface_tr(s, tr_cards))
     if tag == "unary":
         if ast[2] in ("neg", "complement"):
             child = ast[1]
@@ -546,15 +584,40 @@ def cell_aabb(ast, surfaces_by_num, B, tr_cards=None):
 
 
 def _aabb_intersect(a, b):
+    """两个紧盒求交；**按 axes 标志位**取边界，占位值不参与比较。
+
+    历史坑（2026-09-12 实证，STEP 导入 GQ 栅元"奇形怪状"/消失的根因）：
+    无界轴上的占位值生产者之间不一致 —— ``surface_aabb("CZ")`` 给 z=(0,0)
+    而 ``_surface_negative_aabb("PZ")`` 给 x/y=(±1e300)。旧实现直接
+    ``max(alo, blo)``/``min(ahi, bhi)``，于是 CZ 的占位 0 把
+    「-PZ405」的 z≤405 压成 z∈[0,0] → ``_clip_aabb_to_bound`` 见 hi<=lo
+    直接兜底整个 ±B 盒 → 体素边长 13mm（B=846 时）→ 5mm 薄栅元网格为空
+    （预览无 STL）、13mm 结构被混叠成胖块。
+    """
     if a is None:
         return b
     if b is None:
         return a
     alo, ahi, ax = a
     blo, bhi, bx = b
-    lo = [max(alo[i], blo[i]) for i in range(3)]
-    hi = [min(ahi[i], bhi[i]) for i in range(3)]
-    bounded = [ax[i] or bx[i] for i in range(3)]
+    lo, hi, bounded = [], [], []
+    for i in range(3):
+        if ax[i] and bx[i]:
+            lo.append(max(alo[i], blo[i]))
+            hi.append(min(ahi[i], bhi[i]))
+            bounded.append(True)
+        elif ax[i]:                      # 只有 a 有界 → 用 a 的边界
+            lo.append(alo[i])
+            hi.append(ahi[i])
+            bounded.append(True)
+        elif bx[i]:                      # 只有 b 有界 → 用 b 的边界
+            lo.append(blo[i])
+            hi.append(bhi[i])
+            bounded.append(True)
+        else:                            # 两侧都无界 → 该轴无界（哨兵 ±1e300）
+            lo.append(-_AABB_UNBOUNDED)
+            hi.append(_AABB_UNBOUNDED)
+            bounded.append(False)
     return tuple(lo), tuple(hi), tuple(bounded)
 
 
@@ -563,10 +626,80 @@ def _aabb_union(a, b):
         return None
     alo, ahi, ax = a
     blo, bhi, bx = b
-    lo = [min(alo[i], blo[i]) for i in range(3)]
-    hi = [max(ahi[i], bhi[i]) for i in range(3)]
-    bounded = [ax[i] and bx[i] for i in range(3)]
+    lo, hi, bounded = [], [], []
+    for i in range(3):
+        if ax[i] and bx[i]:
+            lo.append(min(alo[i], blo[i]))
+            hi.append(max(ahi[i], bhi[i]))
+            bounded.append(True)
+        else:                            # 任一侧无界 → 并集该轴无界
+            lo.append(-_AABB_UNBOUNDED)
+            hi.append(_AABB_UNBOUNDED)
+            bounded.append(False)
     return tuple(lo), tuple(hi), tuple(bounded)
+
+
+def eval_cell_scalar(ast, fns, X, Y, Z):
+    """递归求值栅元 **标量** 场（>=0 = 栅元内），供顶点投影用。
+
+    与 ``eval_cell_field`` 的布尔语义逐点一致（intersect=AND / union=OR /
+    neg=NOT），只是用 min/max 组合代替按位运算，从而拿到"离边界多远"的标量，
+    零等值面即栅元边界 —— 标准 CSG 标量表示。
+    """
+    tag = ast[0]
+    if tag == "intersect":
+        return np.minimum(eval_cell_scalar(ast[1], fns, X, Y, Z),
+                          eval_cell_scalar(ast[2], fns, X, Y, Z))
+    if tag == "union":
+        return np.maximum(eval_cell_scalar(ast[1], fns, X, Y, Z),
+                          eval_cell_scalar(ast[2], fns, X, Y, Z))
+    if tag == "unary":
+        s = eval_cell_scalar(ast[1], fns, X, Y, Z)
+        return -s if ast[2] in ("neg", "complement") else s
+    if tag == "surf":
+        return fns[ast[1]](X, Y, Z)
+    raise ValueError(f"未知 AST 节点: {tag}")
+
+
+def project_vertices_to_surface(vertices, ast, fns, spacing, iters: int = 2):
+    """把 marching cubes 顶点牛顿投影到真实 CSG 零等值面。
+
+    二值 marching cubes 只保证拓扑正确：顶点落在"最后一个内部采样点与第一个
+    外部采样点"的中点 ⇒ 曲面整体内缩最多半个体素。薄栅元受害最重 —— 5mm 厚、
+    z 向体素 0.23mm 时体积偏小 ~4.6%（2026-09-12 实测 cell 7/8/9）。
+    这里用标量场做 1~2 步牛顿（沿梯度走 s/|∇s|），把顶点贴回真实曲面：
+    平面误差直接归零，二次曲面误差降到曲率量级。
+
+    顶点是焊接后的唯一集合，逐点确定性函数 ⇒ 共享顶点仍共享，拓扑/水密性不变。
+    """
+    v = np.array(vertices, dtype=float)
+    if v.size == 0:
+        return v
+    h = max(float(spacing) * 1e-3, 1e-9)
+    lim = 0.5 * float(spacing)          # 限步：防 min/max 折角处跳面
+    for _ in range(max(0, int(iters))):
+        s = eval_cell_scalar(ast, fns, v[:, 0], v[:, 1], v[:, 2])
+        g = np.empty_like(v)
+        for k in range(3):
+            d = np.zeros(3)
+            d[k] = h
+            gp = eval_cell_scalar(ast, fns, v[:, 0] + d[0], v[:, 1] + d[1],
+                                  v[:, 2] + d[2])
+            gm = eval_cell_scalar(ast, fns, v[:, 0] - d[0], v[:, 1] - d[1],
+                                  v[:, 2] - d[2])
+            g[:, k] = (gp - gm) / (2.0 * h)
+        gn = np.einsum("ij,ij->i", g, g)
+        good = gn > 1e-300
+        if not good.any():
+            break
+        step = np.zeros_like(v)
+        step[good] = (s[good] / gn[good])[:, None] * g[good]
+        n = np.linalg.norm(step, axis=1)
+        big = n > lim
+        if big.any():
+            step[big] *= (lim / n[big])[:, None]
+        v = v - step
+    return v
 
 
 def eval_cell_field(ast, fns, X, Y, Z):
@@ -1137,21 +1270,39 @@ def mesh_cell_polydata(ast, surfaces_by_num, tr_cards, B, res: int = None):
     else:
         lo = np.array([xs0[idx[:, 0].min()], ys0[idx[:, 1].min()], zs0[idx[:, 2].min()]])
         hi = np.array([xs0[idx[:, 0].max()], ys0[idx[:, 1].max()], zs0[idx[:, 2].max()]])
-    span = (hi - lo).max()
-    if span < 1e-12:
-        span = max(hi.max() - lo.min(),
-                   (scan_hi - scan_lo).max() / (coarse - 1), 1e-9)
-    # 扫描间距以「实际扫描盒」为准（首次全盒 [-B,B]，兜底为 cell_aabb
-    # 紧盒）：真实曲面可能距最近内部粗点整整一格，margin 必须 ≥ 一格
-    # （×1.1 留余量）。用全局 2B/(coarse-1) 会让 B=500 时兜底路径 margin
-    # 达 35cm，把细化盒撑成 75cm、小栅元只剩 ~2 格分辨率（实测椭球被
-    # 网格化成 ~1.2 半径的球）。
-    margin = max(
-        span * 0.05,
-        (scan_hi - scan_lo).max() / (coarse - 1) * 1.1,
-    ) + 1e-9
-    lo = np.clip(lo - margin, -B, B)
-    hi = np.clip(hi + margin, -B, B)
+
+    # ── 细化盒 = (命中盒 + 粗扫余量) ∩ 解析紧盒 ──
+    # 顺序很重要：命中盒只保证「不漏」，粗扫间距那一格必须补上（真曲面可能
+    # 距最近内部粗点整整一格）；补完之后盒子仍是保守超集，此时再与解析紧盒
+    # （cell_aabb，同为保守超集）取交才是安全的收紧。
+    # 反例（2026-09-12 实测 cell 9）：先取交再补 margin 时，命中盒 z 退化成
+    # 一个粗扫层(409.2) → 取交看不出变化 → margin 又把 z 撑成 ±60mm →
+    # 分辨率全花在空处 → 5mm 薄片厚度只剩 3.8mm、体积 −24%。
+    coarse_step = (scan_hi - scan_lo).max() / (coarse - 1)
+    span_hit = (hi - lo).max()
+    if span_hit < 1e-12:
+        span_hit = max(hi.max() - lo.min(), coarse_step, 1e-9)
+    margin_hit = max(span_hit * 0.05, coarse_step * 1.1) + 1e-9
+    lo = lo - margin_hit
+    hi = hi + margin_hit
+
+    tightened = False
+    a_lo, a_hi = _clip_aabb_to_bound(
+        cell_aabb(ast, surfaces_by_num, B, tr_cards), B)
+    cand_lo = np.maximum(lo, a_lo)
+    cand_hi = np.minimum(hi, a_hi)
+    if np.all(cand_hi > cand_lo):
+        tightened = bool(np.any(cand_lo > lo) or np.any(cand_hi < hi))
+        lo, hi = cand_lo, cand_hi
+
+    if tightened:
+        # 解析盒已收紧：只需 5% 余量，防解析边界与真实曲面恰好重合被裁掉。
+        span = (hi - lo).max()
+        extra = span * 0.05 + 1e-9
+        lo = lo - extra
+        hi = hi + extra
+    lo = np.clip(lo, -B, B)
+    hi = np.clip(hi, -B, B)
 
     # 第二遍：紧盒子内细化（无 TR 时 cell span 小用 64，大 cell 自动加密）
     if res is None:
@@ -1182,4 +1333,19 @@ def mesh_cell_polydata(ast, surfaces_by_num, tr_cards, B, res: int = None):
                 & (y >= ys[0]) & (y <= ys[-1])
                 & (z >= zs[0]) & (z <= zs[-1]))
 
-    return marching_cubes(region, xp, yp, zp, inside_fn=inside_clipped)
+    vertices, triangles = marching_cubes(region, xp, yp, zp,
+                                         inside_fn=inside_clipped)
+    # 顶点贴回真实曲面（修二值 MC 的半体素内缩；拓扑/焊接在 MC 内已完成，
+    # 这里只挪位置）。被紧盒裁剪的栅元例外：贴面会让裁剪面顶点乱跑 ——
+    # 只贴"没有落在紧盒边界上"的顶点。
+    if len(vertices):
+        move = ~(
+            np.isclose(vertices[:, 0], xs[0]) | np.isclose(vertices[:, 0], xs[-1])
+            | np.isclose(vertices[:, 1], ys[0]) | np.isclose(vertices[:, 1], ys[-1])
+            | np.isclose(vertices[:, 2], zs[0]) | np.isclose(vertices[:, 2], zs[-1])
+        )
+        if move.any():
+            spacing = min(abs(dx), abs(dy), abs(dz))
+            vertices[move] = project_vertices_to_surface(
+                vertices[move], ast, fns, spacing)
+    return vertices, triangles

@@ -16,12 +16,19 @@ import subprocess
 from typing import Optional
 
 
+# geouned 定位缓存（进程内；探测含一次 FreeCAD 解释器子进程，故只做一次）
+_geouned_cache: str = ""
+_geouned_probed: bool = False
+
+
 def _resolve_geouned_path() -> str:
-    """返回 geouned 包所在父目录（加到 sys.path 后即可 import geouned）。"""
-    # 打包环境：geouned 在 _internal/vendor/geouned，父目录即 vendor
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return os.path.join(sys._MEIPASS, "vendor")
-    # 开发环境：找已安装的 geouned 包（find_spec 不触发 import，无需 FreeCAD）
+    """后端解释器里能找到的 geouned 包父目录（找不到返回 ""）。
+
+    注意：geouned 是装给 **FreeCAD 的 Python** 用的（见 requirements.txt），
+    后端解释器里 find_spec 找不到它是常态；真正权威的探测是
+    ``GeoUnedConverter._probe_freecad_geouned``。本函数只是候选之一
+    （开发机上把 geouned pip 装进后端环境时命中）。
+    """
     try:
         import importlib.util
         spec = importlib.util.find_spec("geouned")
@@ -30,8 +37,42 @@ def _resolve_geouned_path() -> str:
             return os.path.dirname(pkg_dir)
     except Exception:
         pass
-    # 兜底：环境变量 GEOUNED_PATH（无则返回空，调用方会报"GEOUNED 不可用"）
-    return os.environ.get("GEOUNED_PATH", "")
+    return ""
+
+
+def _is_geouned_dir(path: str) -> bool:
+    """path（geouned 包的父目录）下是否有**可用**的 geouned 包。
+
+    只认完整包：``geouned/__init__.py`` + ``geouned/GEOUNED/__init__.py``
+    （``from geouned import CadToCsg`` 靠这两层）。机器上出现过只有
+    GEOReverse 的残缺 namespace 包（无 __init__.py），光判 isdir 会误判为可用，
+    worker 起来后才炸 ImportError。
+    """
+    if not path:
+        return False
+    base = os.path.join(path, "geouned")
+    return (os.path.isfile(os.path.join(base, "__init__.py"))
+            and os.path.isfile(os.path.join(base, "GEOUNED", "__init__.py")))
+
+
+def _probe_geouned_in(python_exe: str) -> str:
+    """问某个解释器 geouned 装在哪，返回包父目录（问不到返回 ""）。
+
+    worker 是在 FreeCAD 的 python.exe 里跑的，所以必须问**那个**解释器。
+    """
+    code = ("import importlib.util, os;"
+            "s = importlib.util.find_spec('geouned');"
+            "print(os.path.dirname(list(s.submodule_search_locations)[0])"
+            " if s and s.submodule_search_locations else '')")
+    try:
+        proc = subprocess.run([python_exe, "-c", code],
+                              capture_output=True, text=True, timeout=60)
+    except Exception:
+        return ""
+    out = (proc.stdout or "").strip()
+    if proc.returncode != 0 or not out:
+        return ""
+    return out.splitlines()[-1].strip()
 
 
 def _map_app_settings_to_geouned(app_settings: dict) -> dict:
@@ -73,8 +114,12 @@ class GeoUnedConverter:
         if not os.path.isfile(self._WORKER_SCRIPT):
             return f"缺少 geouned worker 脚本: {self._WORKER_SCRIPT}"
         geouned_path = self._resolve_geouned_path()
-        if not os.path.isdir(os.path.join(geouned_path, "geouned")):
-            return f"缺少 geouned 包: {geouned_path}"
+        if not _is_geouned_dir(geouned_path):
+            return (f"未检测到可用的 geouned 包（已在 FreeCAD 解释器 "
+                    f"{python_exe} 与后端解释器里查找）。请把 geouned 装到 "
+                    f"FreeCAD 的 Python 里，或设置环境变量 GEOUNED_PATH 指向 "
+                    f"geouned 的父目录（该目录下应有 geouned/GEOUNED/__init__.py）"
+                    f"后重启后端。")
         return None
 
     def is_available(self) -> bool:
@@ -164,7 +209,35 @@ class GeoUnedConverter:
         self._freecad_bin = StepImporter.detect_freecad()
         return self._freecad_bin
 
+    def _geouned_candidates(self):
+        """geouned 包父目录的候选（按优先级，含未验证的）。"""
+        yield os.environ.get("GEOUNED_PATH", "")
+        # 打包环境：geouned 在 _internal/vendor/geouned，父目录即 vendor
+        if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+            yield os.path.join(sys._MEIPASS, "vendor")
+        yield _resolve_geouned_path()          # 后端解释器（pip 装进后端环境时）
+        yield self._probe_freecad_geouned()    # FreeCAD 解释器（正规安装位置）
+
+    def _probe_freecad_geouned(self) -> str:
+        """问 FreeCAD 的 python.exe geouned 装在哪（worker 用的就是它）。"""
+        freecad_bin = self._get_freecad_bin()
+        if not freecad_bin:
+            return ""
+        python_exe = self._find_python_exe(freecad_bin)
+        if not python_exe:
+            return ""
+        return _probe_geouned_in(python_exe)
+
     def _resolve_geouned_path(self) -> str:
+        """第一个**验证可用**的 geouned 包父目录（含探测缓存）。"""
         if self._geouned_path:
             return self._geouned_path
-        return _resolve_geouned_path()
+        global _geouned_cache, _geouned_probed
+        if _geouned_probed:
+            return _geouned_cache
+        for cand in self._geouned_candidates():
+            if _is_geouned_dir(cand):
+                _geouned_cache = cand
+                break
+        _geouned_probed = True
+        return _geouned_cache
