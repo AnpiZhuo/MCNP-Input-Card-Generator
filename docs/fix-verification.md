@@ -357,8 +357,8 @@ vite build → PyInstaller sidecar → 复制 dist/python → src-tauri/binaries
 
 **UI 复验（截图三连）**：勾选 PTRAC → 黄框提示现（`shots/21-ptrac-on.png`）；切「面源 (SSW/SSR)」→ 提示现（`22-ssw-hint.png`）；生成预览 footer → `CPU [滑杆] 8` = 实测最优值（`23-generate-footer.png`）。
 
-> ⚠️ **这是新功能，未升版**（项目规则"升版由上级指定"），版本仍 **1.7.5**。
+> ⚠️ **这是新功能**：按规则当时未升版；**2026-09-11 用户指定升版 1.7.6，并已完成打包部署** —— 部署版冒烟 `/api/diff-inp` **200**（旧包 500）、`/api/source-demo-sample` **200**（旧包 404）、`/api/xsdir-check` 200，5001 + MCP 8100 均 LISTENING。详见 `PROJECT_MEMORY` S1.0f。
 
 ### 8.8 三态表述
 
-**已改源码 ✅ / 未提交 ❌ / 未打包 ❌** —— 部署版仍不含 `a255a3f` 与本批修复。
+**已改源码 ✅ / 已提交 ✅ / 已打包部署 ✅（v1.7.6，冒烟通过）** —— 部署版 `D:\MCNP\MCNP输入卡生成器` 已含 `a255a3f` 起至本批的全部修复与新功能；旧包备份 `D:\MCNP\_backup_1.7.5_20260912_114743`。
