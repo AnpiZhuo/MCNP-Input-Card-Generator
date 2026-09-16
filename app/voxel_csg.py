@@ -25,9 +25,15 @@ logger = logging.getLogger(__name__)
 _AABB_UNBOUNDED = 1e300
 
 try:
-    from quadric import sq_to_gq, gq_aabb, classify_gq
+    from quadric import (sq_to_gq, gq_aabb, classify_gq, cone_field_fn,
+                         plane_field_fn, torus_field_fn, torus_aabb,
+                         ellipsoid_field_fn, point_surface_field_fn,
+                         arb_face_indices, rec_params, rhp_params, box_params)
 except ImportError:  # 测试/直接 import app 包时 quadric 在 app/ 下
-    from app.quadric import sq_to_gq, gq_aabb, classify_gq
+    from app.quadric import (sq_to_gq, gq_aabb, classify_gq, cone_field_fn,
+                             plane_field_fn, torus_field_fn, torus_aabb,
+                             ellipsoid_field_fn, point_surface_field_fn,
+                             arb_face_indices, rec_params, rhp_params, box_params)
 
 try:
     from mc import marching_cubes
@@ -124,9 +130,14 @@ def _polyhedron_field(verts, faces):
     每面法向朝外（体心定向：面心 − 体心）；f = max_i dot(n_i, P − p_i)。
     f<0 ⇔ 所有面半空间内侧（凸多面体内部）。BOX/RHP/HEX/WED/ARB 本质是
     多面体，统一经此求值，避免各宏体写特殊坐标判定。
+
+    ⚠ 体心只取**面表引用到的**角点平均：ARB 的未用角点是零三元组 (0,0,0)，
+    若一起平均，离原点远的多面体会被 (0,0,0) 拖到体外 → 面法向翻号 →
+    整块几何判反（实测远原点四棱锥 4000/4000 点判错、体积 55 vs 64000）。
     """
     arr = np.asarray(verts, dtype=float)
-    center = arr.mean(axis=0)
+    used = sorted({i for f in faces for i in f})
+    center = arr[used].mean(axis=0) if used else arr.mean(axis=0)
     planes = []
     for f in faces:
         pts = arr[f]
@@ -197,11 +208,9 @@ def surface_fn(surf_type: str, params: list, transform=None):
         a, b, c, dd = p[0], p[1], p[2], p[3]
         return wrap(lambda x, y, z: a * x + b * y + c * z - dd)
     if t == "P_1":
-        x1, y1, z1, x2, y2, z2, x3, y3, z3 = p
-        ax, ay, az = x2 - x1, y2 - y1, z2 - z1
-        bx, by, bz = x3 - x1, y3 - y1, z3 - z1
-        nx, ny, nz = ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx
-        return wrap(lambda x, y, z: nx * (x - x1) + ny * (y - y1) + nz * (z - z1))
+        # C810 §3-17 感度规则（原点负 / D=0→C>0 / …）由 quadric.plane_from_points 统一实现：
+        # 旧实现直接 edge1×edge2 定号 → 感度随点序翻转（实测一半点序 4000/4000 判反）
+        return wrap(plane_field_fn(p))
 
     if t == "SO":
         r = p[0]
@@ -238,22 +247,13 @@ def surface_fn(surf_type: str, params: list, transform=None):
         x0, y0, r = p[0], p[1], p[2]
         return wrap(lambda x, y, z: (x - x0) ** 2 + (y - y0) ** 2 - r * r)
 
-    if t in ("KX", "KY", "KZ"):
-        v0, t2, sgn = p[0], p[1], p[2]
-        s = 1.0 if sgn >= 0 else -1.0
-        if t == "KX":
-            return wrap(lambda x, y, z: (t2 * (x - v0) ** 2 - (y * y + z * z)) * s)
-        if t == "KY":
-            return wrap(lambda x, y, z: (t2 * (y - v0) ** 2 - (x * x + z * z)) * s)
-        return wrap(lambda x, y, z: (t2 * (z - v0) ** 2 - (x * x + y * y)) * s)
-    if t in ("K/X", "K/Y", "K/Z"):
-        x0, y0, z0, t2, sgn = p[0], p[1], p[2], p[3], p[4]
-        s = 1.0 if sgn >= 0 else -1.0
-        if t == "K/X":
-            return wrap(lambda x, y, z: (t2 * (x - x0) ** 2 - ((y - y0) ** 2 + (z - z0) ** 2)) * s)
-        if t == "K/Y":
-            return wrap(lambda x, y, z: (t2 * (y - y0) ** 2 - ((x - x0) ** 2 + (z - z0) ** 2)) * s)
-        return wrap(lambda x, y, z: (t2 * (z - z0) ** 2 - ((x - x0) ** 2 + (y - y0) ** 2)) * s)
+    if t in ("KX", "KY", "KZ", "K/X", "K/Y", "K/Z"):
+        # 顶点/轴/半开角/叶片语义统一由 quadric.cone_field_fn 决定（单一真源）：
+        #   双叶锥（省略 ±1）：f = r² − t²u²，正侧 = 双叶之外；
+        #   单叶锥（±1 = 朝 ±轴 的叶）：f = r − t·sheet·u，负侧 = 该叶内部。
+        # 旧实现写成 (t2·u² − r²)·s 且 s 只当整体反号用：+1 时正侧成了"双叶内部"、
+        # 且完全忽略叶片选择 → 锥形栅元内外颠倒（2026-09-16 修）。
+        return wrap(cone_field_fn(t, p))
 
     if t == "GQ":
         a, b, c, d, e, f, g, h, j, k = p
@@ -311,6 +311,7 @@ def surface_fn(surf_type: str, params: list, transform=None):
         return wrap(_trc)
 
     if t == "REC":
+        p = rec_params(p)   # 10 项（第 10 项=短轴半径，方向 H×V1）→ 12 项（C810 3-19）
         vx, vy, vz, hx, hy, hz, v1x, v1y, v1z, v2x, v2y, v2z = p
         h2 = hx * hx + hy * hy + hz * hz
         v1l2 = v1x * v1x + v1y * v1y + v1z * v1z
@@ -330,20 +331,40 @@ def surface_fn(surf_type: str, params: list, transform=None):
         return wrap(_rec)
 
     if t == "ELL":
-        v1x, v1y, v1z, v2x, v2y, v2z, rm = p
+        # C810 3-20：Rm>0 焦点形（f = d1+d2−Rm）；Rm<0 中心+长轴矢量形。
+        # 旧实现写死 (d1+d2) <= 2·Rm（半长轴当成 Rm，实际应 Rm/2）且 Rm<0 恒判正侧。
+        ell = ellipsoid_field_fn(p)
 
         def _ell(x, y, z):
-            d1 = np.sqrt((x - v1x) ** 2 + (y - v1y) ** 2 + (z - v1z) ** 2)
-            d2 = np.sqrt((x - v2x) ** 2 + (y - v2y) ** 2 + (z - v2z) ** 2)
-            inside = (d1 + d2) <= 2.0 * rm
-            return np.where(inside, -1.0, 1.0)
+            return np.where(ell(x, y, z) < 0, -1.0, 1.0)
         return wrap(_ell)
 
     if t == "BOX":
+        p, infinite = box_params(p)   # 9 项 = 某维无限（C810 3-19）
         v = np.asarray(p[0:3], dtype=float)
         a1 = np.asarray(p[3:6], dtype=float)
         a2 = np.asarray(p[6:9], dtype=float)
         a3 = np.asarray(p[9:12], dtype=float)
+        if infinite:
+            # 沿 A1×A2 无限：只有 4 个侧面（⊥A1、⊥A2 四张平面）参与判定。
+            # 外法向取 ±Â1/±Â2（BOX 要求三边两两正交），与 _polyhedron_field 同口径：
+            # 场 = max_i dot(n_i, P − p_i)，内部全为负。
+            n1 = float(np.linalg.norm(a1))
+            n2 = float(np.linalg.norm(a2))
+            if n1 < 1e-300 or n2 < 1e-300:
+                raise ValueError("BOX 前两边向量退化，无法确定无限方向")
+            a1u = a1 / n1
+            a2u = a2 / n2
+            planes = [(-a1u, v), (a1u, v + a1), (-a2u, v), (a2u, v + a2)]
+
+            def _box_inf(x, y, z):
+                X = np.stack(np.broadcast_arrays(x, y, z), axis=-1)
+                out = None
+                for nrm, p0 in planes:
+                    d = X @ nrm - float(nrm @ np.asarray(p0, float))
+                    out = d if out is None else np.maximum(out, d)
+                return out
+            return wrap(_box_inf)
         pts = [v, v + a1, v + a1 + a2, v + a2,
                v + a3, v + a1 + a3, v + a1 + a2 + a3, v + a2 + a3]
         faces = [[0, 1, 2, 3], [4, 7, 6, 5],
@@ -363,15 +384,12 @@ def surface_fn(surf_type: str, params: list, transform=None):
         return wrap(_polyhedron_field(pts, faces))
 
     if t in ("RHP", "HEX"):
+        p = rhp_params(p)   # 9/12 项（s/t 由 60° 旋转推出）→ 15 项（C810 3-19）
         v = np.asarray(p[0:3], dtype=float)
         h = np.asarray(p[3:6], dtype=float)
         r1 = np.asarray(p[6:9], dtype=float)
-        hn = float(np.linalg.norm(h))
-        if hn < 1e-15:
-            raise ValueError("RHP/HEX 高度向量退化")
-        k = h / hn
-        r2 = np.asarray(p[9:12], dtype=float) if len(p) >= 12 else _rot60(r1, k)
-        r3 = np.asarray(p[12:15], dtype=float) if len(p) >= 15 else _rot60(r2, k)
+        r2 = np.asarray(p[9:12], dtype=float)
+        r3 = np.asarray(p[12:15], dtype=float)
         base = [v + r1, v + r2, v + r3, v - r1, v - r2, v - r3]
         top = [q + h for q in base]
         pts = base + top
@@ -383,21 +401,20 @@ def surface_fn(surf_type: str, params: list, transform=None):
 
     if t == "ARB":
         coords = p[:24]
-        face_defs = p[24:30]
         pts = [np.asarray(coords[i * 3:i * 3 + 3], dtype=float) for i in range(8)]
-        faces = []
-        for fd in face_defs:
-            fd_int = int(abs(fd))
-            vi = []
-            for _ in range(4):
-                if fd_int == 0:
-                    break
-                vi.append((fd_int % 10) - 1)
-                fd_int //= 10
-            vi.reverse()  # MCNP 编码 MSD 在前，取出的 LSD 在后，需反转
-            if len(vi) >= 3:
-                faces.append(vi)
+        # C810 3-21：面码第 4 位为 0 则忽略该点（旧实现 digit-1 把 0 变成索引 −1 → 取第 8 角点）
+        faces = arb_face_indices(p[24:30])
+        if not faces:
+            raise ValueError("ARB 无有效面定义")
         return wrap(_polyhedron_field(pts, faces))
+
+    if t in ("TX", "TY", "TZ"):
+        # C810 §3-14：s²/B² + (r−A)²/C² = 1（A 主半径、B 轴向次半径、C 径向次半径），正侧=外
+        return wrap(torus_field_fn(t, p))
+
+    if t in ("X", "Y", "Z"):
+        # C810 §3-15：1 对坐标 = 平面，2 对 = 柱面/单叶锥，3 对 = 回转二次曲面
+        return wrap(point_surface_field_fn(t, p))
 
     raise ValueError(f"体素 CSG 暂不支持曲面类型: {t}")
 
@@ -472,6 +489,10 @@ def surface_aabb(surf_type: str, params: list, transform=None):
     if t == "SPH":
         vx, vy, vz, r = p[0], p[1], p[2], p[3]
         return (vx - r, vy - r, vz - r), (vx + r, vy + r, vz + r), (True, True, True)
+    if t in ("TX", "TY", "TZ"):
+        # 环面恒有界：径向 A±C、轴向 ±B（C810 §3-14；B 轴向、C 径向，不可混）
+        lo, hi = torus_aabb(t, p)
+        return tuple(lo), tuple(hi), (True, True, True)
     if t in ("GQ", "SQ"):
         if t == "SQ":
             p = sq_to_gq(p)
@@ -480,7 +501,7 @@ def surface_aabb(surf_type: str, params: list, transform=None):
             lo, hi, axes = aabb
             return lo, hi, axes
         return None
-    return None  # 平面 P/P_1、锥 K*、其余宏体 → 无界/不支持
+    return None  # 平面 P/P_1、锥 K*、点定义 X/Y/Z、其余宏体 → 无界/不支持
 
 
 def _surface_negative_aabb(surf_type: str, params: list, transform=None):
@@ -504,12 +525,33 @@ def _surface_negative_aabb(surf_type: str, params: list, transform=None):
             return (-1e300, -1e300, -1e300), (1e300, p[0], 1e300), (False, True, False)
         return (-1e300, -1e300, -1e300), (1e300, 1e300, p[0]), (False, False, True)
     if t in ("SO", "SX", "SY", "SZ", "S", "CX", "CY", "CZ",
-             "C/X", "C/Y", "C/Z", "RPP", "SPH"):
+             "C/X", "C/Y", "C/Z", "RPP", "SPH", "TX", "TY", "TZ"):
         return surface_aabb(t, p, None)
     if t in ("GQ", "SQ"):
         if t == "SQ":
             p = sq_to_gq(p)
-        return surface_aabb("GQ", p, None)
+        box = surface_aabb("GQ", p, None)
+        # ⚠ 二次型整体乘 −1 时"负侧"是无界外侧（如 GQ -1 -1 -1 … 4 的 f<0 = 球外）。
+        # surface_aabb 给的是**曲面自身**的有界盒（符号无关），直接当负侧盒会裁掉几何
+        # （实测 172800/40³ 点越界）。故用场值定号：盒心 f<0 → 负侧确在盒内，反之无界。
+        if box is None:
+            return None
+        f = surface_fn("GQ", p)
+        lo, hi, axes = box
+        c = tuple((lo[i] + hi[i]) / 2.0 for i in range(3))
+        if float(np.asarray(f(*c)).ravel()[0]) >= 0:
+            return None
+        # 盒外探针（安全网）：沿每个"有界轴"再往外挪 2 倍盒长，若负侧仍延伸过去 → 盒不可信
+        for i in range(3):
+            if not axes[i] or not np.isfinite(lo[i]) or not np.isfinite(hi[i]):
+                continue
+            span = max(hi[i] - lo[i], 1e-9) * 2.0
+            for s in (1.0, -1.0):
+                q = list(c)
+                q[i] = c[i] + s * span
+                if float(np.asarray(f(*q)).ravel()[0]) < 0:
+                    return None
+        return box
     return None
 
 

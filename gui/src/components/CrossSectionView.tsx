@@ -22,11 +22,14 @@ interface Props {
   onPlaneChange?: (plane: { A: number; B: number; C: number; D: number }) => void;
   /** 独立窗口模式：由宿主传入栅元注释（{number, comment}），替代 useDeck() */
   cellComments?: { number: number; comment?: string }[];
+  /** 材料页材料表（{number, comment}）：材料图例注释的**权威来源**；缺省回退 useDeck() */
+  materials?: { number: number; comment?: string }[];
 }
 
 /* ---- 色板（按材料号取模） ---- */
 import { getMatColor as matColor } from "../utils/materialColors";
 import { MaterialLegend, CellList } from "./MaterialPanel";
+import { materialLegendEntries } from "../utils/materialLegend";
 
 /* ---- 叉积 ---- */
 function cross(a: number[], b: number[]): number[] {
@@ -80,7 +83,7 @@ function makeProjector(base: { u: number[]; v: number[]; ox: number; oy: number;
 }
 
 /* ---- 主组件（SVG 渲染） ---- */
-export default function CrossSectionView({ slices, plane, onClose, onPlaneChange, cellComments }: Props) {
+export default function CrossSectionView({ slices, plane, onClose, onPlaneChange, cellComments, materials }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const groupRef = useRef<SVGGElement>(null);
   // 主/子窗口等比缩放时，悬停标签定位用「真实像素」坐标而容器走缩放后坐标系，需除以 scale。
@@ -286,9 +289,12 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
           flexShrink: 0, padding: "12px 14px", gap: 4, overflow: "auto",
         } as React.CSSProperties,
       },
-        /* 材料颜色对照（与 3D 预览同一共享组件，带注释） */
+        /* 材料颜色对照（与 3D 预览同一共享组件）：注释**只**取材料页，栅元注释留在栅元列表 */
         React.createElement(MaterialLegend, {
-          entries: cellData.map(cd => ({ mat: cd.material, comment: cd.comment })),
+          entries: materialLegendEntries(
+            cellData.map(cd => cd.material),
+            materials ?? (deck as any)?.materials,
+          ),
         }),
         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, margin: "8px 0 4px" } as React.CSSProperties },
           React.createElement("span", { style: { fontSize: 11, color: "var(--text-secondary)", flex: 1 } }, "📏 步进"),

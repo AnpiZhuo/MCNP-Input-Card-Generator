@@ -71,11 +71,21 @@ function parseDs(toks: string[]): DsEntry {
     out.type = rest[0].toUpperCase() as DsEntry["type"];
     rest = rest.slice(1);
   }
-  if (out.type !== "T" && rest.length) {
+  // C810 3-66 的 DS 卡 Form 没有「变量名」字段（`DSn option J1 ... Jk`），数据**从首 token 起**：
+  //   DS1 S 2 3   ⇒ ids ["2","3"]（旧实现无条件吃掉首 token 当 param ⇒ ids 只剩 ["3"]，丢数据）
+  // 仅当首 token **不是数值**时才当 param 保留（历史文件里出现过 `DS2 S ERG 3 4` 这种写法，
+  // 后端 `_parse_ds` 同口径容忍、抽样侧不消费 param），保证前后端解析结果一致。
+  if (out.type !== "T" && rest.length && !isNumericToken(rest[0])) {
     out.param = rest[0];
-    out.distributionIds = rest.slice(1);
+    rest = rest.slice(1);
   }
+  out.distributionIds = rest;
   return out;
+}
+
+/** token 是否纯数值（用于区分 DS 的 param（变量名）与数据起点，与后端 `_is_number_tok` 同口径）。 */
+function isNumericToken(tok: string): boolean {
+  return /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(clean(tok));
 }
 
 const KIND_RE = /^(SI|SP|SB|DS|SC)(\d+)/;

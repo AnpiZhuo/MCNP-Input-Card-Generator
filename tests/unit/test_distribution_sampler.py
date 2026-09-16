@@ -88,6 +88,86 @@ def test_si_s_recursive():
     assert set(vals) == {100.0, 200.0}
 
 
+def test_si_s_d_prefix_distribution_numbers():
+    """C810 3-64：`Each distribution number on the SI card can be prefixed with a D`。
+
+    旧实现 `int(float("D2"))` → ValueError（被兜底成"源抽样失败: could not convert…"）。
+    """
+    s = DistributionSampler([
+        {"id": 1, "si": {"type": "S", "values": ["D2", "3"]},
+         "sp": {"type": "D", "values": ["1", "1"]}},
+        {"id": 2, "si": {"type": "L", "values": ["100"]}},
+        {"id": 3, "si": {"type": "L", "values": ["200"]}},
+    ])
+    rng = _rng()
+    vals = {s.sample(1, rng) for _ in range(400)}
+    assert vals == {100.0, 200.0}
+
+
+def test_si_s_zero_uses_variable_default():
+    """C810 3-64：`If a distribution number is zero, the default value for the variable is used`。"""
+    s = DistributionSampler([
+        {"id": 1, "si": {"type": "S", "values": ["0"]}, "sp": {"type": "D", "values": ["1"]}},
+    ])
+    assert s.sample(1, _rng(), var="ERG") == 14.0     # Table 3.3 默认能量
+    assert s.sample(1, _rng(), var="RAD") == 0.0
+
+
+def test_si_s_bad_distribution_number_reports_semantic_error():
+    """分布号不是数字/不是 D+数字 → 必须报 SourceSamplingError（可读），不能漏成 ValueError。"""
+    s = DistributionSampler([
+        {"id": 1, "si": {"type": "S", "values": ["X2"]}, "sp": {"type": "D", "values": ["1"]}},
+    ])
+    with pytest.raises(SourceSamplingError, match="分布号"):
+        s.sample(1, _rng())
+
+
+# ── SP V 仅 CEL（C810 3-64：V−for cell distributions only）──
+
+def test_sp_v_requires_cel_source():
+    entry = {"id": 1, "si": {"type": "L", "values": ["1", "2"]},
+             "sp": {"type": "V", "values": ["1", "2"]}}
+    with pytest.raises(SourceSamplingError, match="只能用于 CEL"):
+        DistributionSampler([entry]).sample(1, _rng(), var="ERG")
+
+
+def test_sp_v_allowed_for_cel_source():
+    entry = {"id": 1, "si": {"type": "L", "values": ["1", "2"]},
+             "sp": {"type": "V", "values": ["1", "1"]}}
+    s = DistributionSampler([entry])
+    rng = random.Random(1)   # 每个用例独立种子，避免跨用例共享 Random 顺序
+    vals = {s.sample(1, rng, var="CEL", cel=True) for _ in range(200)}
+    assert vals == {1.0, 2.0}
+
+
+# ── 内置函数在「SI 单值」下的对称默认（C810 3-66 特殊默认 3/4/5）──
+
+def test_builtin_single_si_ext_is_symmetric():
+    """C810 3-66 规则 5：`If SI x and SP −21 or SP −31 are present for EXT, the SI is
+    treated as if it were SI −x x` —— 必须保留负半轴。"""
+    entry = {"id": 1, "si": {"type": "", "values": ["5"]},
+             "sp": {"type": "", "values": [], "fnCode": "-31", "fnParams": ["1.5"]}}
+    s = DistributionSampler([entry])
+    rng = _rng(3)
+    vals = [s.sample(1, rng, var="EXT") for _ in range(4000)]
+    assert min(vals) < 0.0, "EXT 的 SI 单值必须按对称区间 [−5,5] 抽样"
+    assert max(vals) <= 5.0
+    # 对照：RAD 同写法是 [0, x]（规则 4），不得出现负值
+    rng = _rng(3)
+    rad = [s.sample(1, rng, var="RAD") for _ in range(2000)]
+    assert min(rad) >= 0.0 and max(rad) <= 5.0
+
+
+def test_builtin_single_si_dir_is_symmetric_for_31():
+    """C810 3-66 规则 3/5：DIR 上 `SI x` + SP −31 ⇒ [−x, x]（±cos）。"""
+    entry = {"id": 1, "si": {"type": "", "values": ["1"]},
+             "sp": {"type": "", "values": [], "fnCode": "-31", "fnParams": ["1.5"]}}
+    s = DistributionSampler([entry])
+    rng = _rng(5)
+    vals = [s.sample(1, rng, var="DIR") for _ in range(2000)]
+    assert min(vals) < 0.0 and max(vals) <= 1.0
+
+
 # ── 内置函数 ───────────────────────────────────────────────
 
 @pytest.mark.parametrize("fn,params,lo,hi", [
@@ -104,6 +184,45 @@ def test_builtin_range(fn, params, lo, hi):
     rng = _rng()
     vals = [s.sample(1, rng) for _ in range(1000)]
     assert all(lo <= v <= hi for v in vals)
+
+
+def test_builtin_21_default_a_depends_on_variable():
+    """C810 3-66：`SP −21` 不给 a 时按变量取默认值 —— DIR=1；RAD=2（有 AXS 或 JSU≠0 → 1）；EXT=0。
+
+    旧实现 `_need(params, 1, 1)` 把「不给 a」当错误 ⇒ `SP1 −21` 直接报错，
+    而 C810 明确说这种写法有默认值（特殊默认 2/3 还依赖它）。
+    """
+    entry = {"id": 1, "si": {"type": "", "values": ["0", "1"]},
+             "sp": {"type": "", "values": [], "fnCode": "-21", "fnParams": []}}
+    s = DistributionSampler([entry])
+    # DIR a=1 ⇒ p(μ)=c·μ（均值 2/3）；取 6000 样本比对解析均值
+    rng = random.Random(11)
+    vals = [s.sample(1, rng, var="DIR") for _ in range(6000)]
+    assert all(0.0 <= v <= 1.0 for v in vals)
+    assert abs(sum(vals) / len(vals) - 2.0 / 3.0) < 0.02
+    # EXT a=0 ⇒ 区间内均匀（均值 1/2）
+    rng = random.Random(12)
+    vals = [s.sample(1, rng, var="EXT") for _ in range(4000)]
+    assert abs(sum(vals) / len(vals) - 0.5) < 0.03
+    # RAD a=2 ⇒ p∝r²（区间 [0,1] 上均值 3/4）；axs=True ⇒ a=1 ⇒ 均值 2/3
+    # （区间仍由 SI 的两项 [0,1] 决定，a 只改密度形状）
+    rng = random.Random(13)
+    vals = [s.sample(1, rng, var="RAD", axs=False) for _ in range(6000)]
+    assert abs(sum(vals) / len(vals) - 0.75) < 0.02
+    rng = random.Random(14)
+    vals = [s.sample(1, rng, var="RAD", axs=True) for _ in range(6000)]
+    assert abs(sum(vals) / len(vals) - 2.0 / 3.0) < 0.02
+
+
+def test_builtin_31_default_a_is_zero():
+    """C810 3-66：`f = −31` 默认 a = 0 ⇒ 退化为区间内均匀（而不是报错缺参数）。"""
+    entry = {"id": 1, "si": {"type": "", "values": ["-1", "1"]},
+             "sp": {"type": "", "values": [], "fnCode": "-31", "fnParams": []}}
+    s = DistributionSampler([entry])
+    rng = _rng(15)
+    vals = [s.sample(1, rng, var="DIR") for _ in range(4000)]
+    assert all(-1.0 <= v <= 1.0 for v in vals)
+    assert abs(sum(vals) / len(vals)) < 0.03
 
 
 def test_builtin_gaussian_41():

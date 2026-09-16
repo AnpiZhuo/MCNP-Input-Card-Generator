@@ -42,9 +42,23 @@ describe("rawToStructured（原文 → 结构化字段，镜像后端）", () =>
     const p = rawToStructured(
       "SB2  1 2\nDS2  S  ERG  3  4\nSC2  comment here\nSI9  9 9", 2);
     expect(p.sb).toEqual({ type: "D", values: ["1", "2"] });
+    // 首 token 非数值（历史文件里的变量名写法）⇒ 保留为 param，数据从下一项起
     expect(p.ds).toEqual({ type: "S", param: "ERG", distributionIds: ["3", "4"] });
     expect(p.sc).toBe("comment here");
     expect(p.si).toBeNull(); // SI9 不属 id=2
+  });
+
+  it("DS 数据从首 token 起（C810 3-66 无变量名字段）：数值首项不得被 param 吃掉", () => {
+    // 旧实现无条件 param=首项 ⇒ `DS1 S 2 3` 的 ids 变 ["3"]（整体右移、丢一个分布）
+    expect(rawToStructured("DS1  S  2  3", 1).ds)
+      .toEqual({ type: "S", param: "", distributionIds: ["2", "3"] });
+    // L/Q/H/T 同理：数据也必须完整（L 的 type 是 "L"，由首 token 字母决定）
+    expect(rawToStructured("DS5  L  1.5  2.5", 5).ds)
+      .toEqual({ type: "L", param: "", distributionIds: ["1.5", "2.5"] });
+    expect(rawToStructured("DS5  Q  0  2  10  3", 5).ds)
+      .toEqual({ type: "Q", param: "", distributionIds: ["0", "2", "10", "3"] });
+    expect(rawToStructured("DS5  T  0  7  1  8", 5).ds)
+      .toEqual({ type: "T", param: "", distributionIds: ["0", "7", "1", "8"] });
   });
 
   it("$ 内联注释被剥（不进值）", () => {

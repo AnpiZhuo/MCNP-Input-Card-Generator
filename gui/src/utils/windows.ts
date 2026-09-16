@@ -102,6 +102,8 @@ export async function openCrossSection(data: {
   cellNums: number[];
   /** 原始 STL 坐标系模型中心（截面窗口步进时做显示系→原始系平面换算） */
   center?: { x: number; y: number; z: number };
+  /** 材料页材料表（{number, comment}）：材料图例注释来源（与 3D 预览同口径） */
+  materials?: { number: number; comment?: string }[];
 }): Promise<boolean> {
   try {
     localStorage.setItem(KEY_CROSS, JSON.stringify(data));
@@ -201,6 +203,7 @@ export function readCrossSectionData(): {
   cells: { num: string; mat: string; comment?: string }[];
   cellNums?: number[];
   center?: { x: number; y: number; z: number };
+  materials?: { number: number; comment?: string }[];
 } | null {
   try {
     const raw = localStorage.getItem(KEY_CROSS);

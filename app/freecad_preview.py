@@ -77,9 +77,24 @@ def _geometry_ast_to_json(node):
     if isinstance(node, _Paren):
         return _geometry_ast_to_json(node.ast)  # 括号不额外编码
     if isinstance(node, _Digit):
-        return ["surf", int(node.value)]
+        val = str(node.value)
+        if "." in val:
+            # 宏体 facet 引用（如 -1.1 = 宏体 1 的第 1 个小面）：几何引擎尚未支持，
+            # 编码成显式节点让调用方**跳过该栅元并归因**，而不是 int('1.1') 崩掉整次预览。
+            num, _, facet = val.partition(".")
+            return ["facet", int(num), int(facet)]
+        return ["surf", int(val)]
 
     raise ValueError(f"未知 AST 节点: {type(node).__name__}")
+
+
+def ast_has_facet(node) -> bool:
+    """JSON AST 中是否含宏体 facet 引用（``["facet", n, f]``）。"""
+    if isinstance(node, list):
+        if node and node[0] == "facet":
+            return True
+        return any(ast_has_facet(x) for x in node)
+    return False
 
 
 def resolve_cell_complements(ast_node, cells_by_num: dict, stack=None):
@@ -121,6 +136,70 @@ def resolve_cell_complements(ast_node, cells_by_num: dict, stack=None):
     return ast_node
 
 
+def _opt_float(value, default: float = 0.0) -> float:
+    """pymcnp 可选字段（如锥面最后一项 ±1）缺失/None → 默认值。
+
+    注意：真·双叶锥卡（``1 KZ 0 0.25``）pymcnp 直接拒绝解析，见
+    :func:`cone_card_missing_sheet`；本函数兜的是"字段存在但为空"的情形。
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+#: 锥面助记符 → 省略最后一项 ±1 时的参数个数（KX/KY/KZ 顶点 + t²；K/X 等顶点 3 项 + t²）
+_CONE_CARD_ARITY = {"KX": 2, "KY": 2, "KZ": 2, "K/X": 4, "K/Y": 4, "K/Z": 4}
+
+
+def cone_card_missing_sheet(tokens: list, kw_idx: int) -> bool:
+    """锥面卡是否省略了最后一项 ±1（MCNP：省略 = 双叶锥）。
+
+    判定：助记符后面的**数值** token 个数恰好等于「顶点 + t²」参数个数。
+    pymcnp 只认带第三/第五项（±1）的写法 → 双叶锥卡会被 ``from_mcnp`` 抛错，
+    而 ``parse_surfaces`` 对抛错行是静默跳过（曲面缺失 → 引用它的栅元全丢）。
+    故生产解析前补一个 ``0`` 表示双叶（见 ``quadric.cone_frame``：0 → sheet=0）。
+    """
+    try:
+        kw = str(tokens[kw_idx]).upper()
+    except (IndexError, TypeError):
+        return False
+    arity = _CONE_CARD_ARITY.get(kw)
+    if arity is None:
+        return False
+    nums = 0
+    for tok in tokens[kw_idx + 1:]:
+        try:
+            float(tok)
+        except (TypeError, ValueError):
+            continue  # *TRn 之类的非数值 token 不计
+        nums += 1
+    return nums == arity
+
+
+def box_card_missing_vector(tokens: list, kw_idx: int) -> bool:
+    """BOX 卡是否省略了第三个边向量（9 项 = 沿 A1×A2 方向无限，C810 §3-19）。
+
+    pymcnp 直接拒收 9 项 BOX（InpError）→ ``parse_surfaces`` 静默跳过该曲面 →
+    引用它的栅元在预览里整块消失。生产解析前补 ``0 0 0`` 当第三向量，
+    由 ``quadric.box_params`` 识别为"无限棱柱"（两条路径都按无限处理）。
+    """
+    try:
+        kw = str(tokens[kw_idx]).upper()
+    except (IndexError, TypeError):
+        return False
+    if kw != "BOX":
+        return False
+    nums = 0
+    for tok in tokens[kw_idx + 1:]:
+        try:
+            float(tok)
+        except (TypeError, ValueError):
+            continue
+        nums += 1
+    return nums == 9
+
+
 def _pymcnp_surf_to_dict(surf):
     """从 pymcnp 表面对象提取 type/params/transform"""
     info = {"number": int(surf.number)}
@@ -146,12 +225,13 @@ def _pymcnp_surf_to_dict(surf):
     elif kw == "C/Z":  p = [float(surf.x), float(surf.y), float(surf.r)]
 
     # ── 圆锥 ──
-    elif kw == "KX":   p = [float(surf.x), float(surf.t_squared), float(surf.plusminus_1)]
-    elif kw == "KY":   p = [float(surf.y), float(surf.t_squared), float(surf.plusminus_1)]
-    elif kw == "KZ":   p = [float(surf.z), float(surf.t_squared), float(surf.plusminus_1)]
-    elif kw == "K/X":  p = [float(surf.x), float(surf.y), float(surf.z), float(surf.t_squared), float(surf.plusminus_1)]
-    elif kw == "K/Y":  p = [float(surf.x), float(surf.y), float(surf.z), float(surf.t_squared), float(surf.plusminus_1)]
-    elif kw == "K/Z":  p = [float(surf.x), float(surf.y), float(surf.z), float(surf.t_squared), float(surf.plusminus_1)]
+    # 最后一项 ±1 可选（省略 = 双叶锥）→ 缺失时补 0，由 quadric.cone_frame 认双叶
+    elif kw == "KX":   p = [float(surf.x), float(surf.t_squared), _opt_float(surf.plusminus_1)]
+    elif kw == "KY":   p = [float(surf.y), float(surf.t_squared), _opt_float(surf.plusminus_1)]
+    elif kw == "KZ":   p = [float(surf.z), float(surf.t_squared), _opt_float(surf.plusminus_1)]
+    elif kw == "K/X":  p = [float(surf.x), float(surf.y), float(surf.z), float(surf.t_squared), _opt_float(surf.plusminus_1)]
+    elif kw == "K/Y":  p = [float(surf.x), float(surf.y), float(surf.z), float(surf.t_squared), _opt_float(surf.plusminus_1)]
+    elif kw == "K/Z":  p = [float(surf.x), float(surf.y), float(surf.z), float(surf.t_squared), _opt_float(surf.plusminus_1)]
 
     # ── 环面 ──
     elif kw in ("TX", "TY", "TZ"):  p = [float(surf.x), float(surf.y), float(surf.z), float(surf.a), float(surf.b), float(surf.c)]
@@ -171,14 +251,46 @@ def _pymcnp_surf_to_dict(surf):
     elif kw == "RPP":  p = [float(surf.xmin), float(surf.xmax), float(surf.ymin), float(surf.ymax), float(surf.zmin), float(surf.zmax)]
 
     # ── Macrobody ──
+    # 可选尾项统一在这里补齐（C810 §3-19），下游体素/FreeCAD 两条路径都吃满参形式：
+    #   REC 10 项（第 10 项 = 短轴半径，方向 H×V1）→ 12 项
+    #   RHP/HEX 9/12 项（s/t 省略，由 60° 旋转推出）→ 15 项
+    # 旧行为：pymcnp 少项字段为 None → float(None) TypeError → build_geometry 直接
+    # 「曲面序列化失败」→ 整个预览/导出失败。
     elif kw == "SPH":  p = [float(surf.vx), float(surf.vy), float(surf.vz), float(surf.r)]
     elif kw == "RCC":  p = [float(surf.vx), float(surf.vy), float(surf.vz), float(surf.hx), float(surf.hy), float(surf.hz), float(surf.r)]
     elif kw == "TRC":  p = [float(surf.vx), float(surf.vy), float(surf.vz), float(surf.hx), float(surf.hy), float(surf.hz), float(surf.r1), float(surf.r2)]
-    elif kw == "REC":  p = [float(surf.vx), float(surf.vy), float(surf.vz), float(surf.hx), float(surf.hy), float(surf.hz), float(surf.v1x), float(surf.v1y), float(surf.v1z), float(surf.v2x), float(surf.v2y), float(surf.v2z)]
+    elif kw == "REC":
+        from quadric import rec_params          # 延迟导入：本模块顶层保持 stdlib
+        base = [float(surf.vx), float(surf.vy), float(surf.vz),
+                float(surf.hx), float(surf.hy), float(surf.hz),
+                float(surf.v1x), float(surf.v1y), float(surf.v1z)]
+        if getattr(surf, "v2y", None) is None or getattr(surf, "v2z", None) is None:
+            p = rec_params(base + [_opt_float(surf.v2x)])   # 10 项：第 10 项落在 v2x
+        else:
+            p = base + [float(surf.v2x), float(surf.v2y), float(surf.v2z)]
     elif kw == "ELL":  p = [float(surf.v1x), float(surf.v1y), float(surf.v1z), float(surf.v2x), float(surf.v2y), float(surf.v2z), float(surf.rm)]
     elif kw == "WED":  p = [float(surf.vx), float(surf.vy), float(surf.vz), float(surf.v1x), float(surf.v1y), float(surf.v1z), float(surf.v2x), float(surf.v2y), float(surf.v2z), float(surf.v3x), float(surf.v3y), float(surf.v3z)]
-    elif kw == "BOX":  p = [float(surf.vx), float(surf.vy), float(surf.vz), float(surf.a1x), float(surf.a1y), float(surf.a1z), float(surf.a2x), float(surf.a2y), float(surf.a2z), float(surf.a3x), float(surf.a3y), float(surf.a3z)]
-    elif kw in ("RHP", "HEX"):  p = [float(surf.vx), float(surf.vy), float(surf.vz), float(surf.hx), float(surf.hy), float(surf.hz), float(surf.r1), float(surf.r2), float(surf.r3), float(surf.s1), float(surf.s2), float(surf.s3), float(surf.t1), float(surf.t2), float(surf.t3)]
+    elif kw == "BOX":
+        # 9 项（省略 A3）= 沿 A1×A2 无限（C810 3-19）；pymcnp 拒收这种卡，
+        # 由 parse_surfaces 在文本层补 "0 0 0" 后再进来，这里只兜字段缺失
+        p = [float(surf.vx), float(surf.vy), float(surf.vz),
+             float(surf.a1x), float(surf.a1y), float(surf.a1z),
+             float(surf.a2x), float(surf.a2y), float(surf.a2z),
+             _opt_float(getattr(surf, "a3x", None)),
+             _opt_float(getattr(surf, "a3y", None)),
+             _opt_float(getattr(surf, "a3z", None))]
+    elif kw in ("RHP", "HEX"):
+        from quadric import rhp_params         # 延迟导入：本模块顶层保持 stdlib
+        base = [float(surf.vx), float(surf.vy), float(surf.vz),
+                float(surf.hx), float(surf.hy), float(surf.hz),
+                float(surf.r1), float(surf.r2), float(surf.r3)]
+        extra = []
+        for f in ("s1", "s2", "s3", "t1", "t2", "t3"):
+            v = getattr(surf, f, None)
+            if v is None:      # 尾项是"连续省略"：到 None 就停，不能补零（补零会当成已给 s/t）
+                break
+            extra.append(float(v))
+        p = rhp_params(base + extra)
     elif kw == "ARB":  p = [float(surf.ax), float(surf.ay), float(surf.az), float(surf.bx), float(surf.by), float(surf.bz), float(surf.cx), float(surf.cy), float(surf.cz), float(surf.dx), float(surf.dy), float(surf.dz), float(surf.ex), float(surf.ey), float(surf.ez), float(surf.fx), float(surf.fy), float(surf.fz), float(surf.gx), float(surf.gy), float(surf.gz), float(surf.hx), float(surf.hy), float(surf.hz), float(surf.n1), float(surf.n2), float(surf.n3), float(surf.n4), float(surf.n5), float(surf.n6)]
 
     # ── GQ / SQ ──
@@ -227,7 +339,10 @@ def _surface_extent_values(surf_type: str, params: list) -> list:
     if surf_type in ("K/X", "K/Y", "K/Z"):
         return p[:3]          # 顶点，跳过 t²/sgn
     if surf_type in ("TX", "TY", "TZ"):
-        return p[:5]          # 中心 + 主/次半径，跳过第三半径占位
+        # C810 §3-14：径向范围 = |A| + |C|（A 主半径、C **径向**次半径）、轴向 = |B|。
+        # 旧实现 p[:5] 只取 A/B 并把 C 当"占位"跳过 → 大 C 环面 bound 少算 → 被裁。
+        x0, y0, z0, A, Bb, C = (float(v) for v in p[:6])
+        return [x0, y0, z0, abs(A) + abs(C), abs(Bb)]
     if surf_type == "P_0":
         return [p[3]] if len(p) >= 4 else p   # 跳过法向 A/B/C
     if surf_type == "ARB":
@@ -373,6 +488,8 @@ class FreeCADEngine:
         self.zero_volume = []
         # 栅元封闭性检测结果（build_geometry(check_closure=True) 时填充）
         self.closure_report = {}
+        # 因能力限制被跳过的栅元（如宏体 facet 引用）：[{number, reason}]
+        self.skipped_cells = []
 
     def build_geometry(self, pymcnp_surfaces: list, cells_data: list,
                        tr_cards: dict, bound: float = 500,
@@ -414,11 +531,20 @@ class FreeCADEngine:
 
         # 2. 序列化 Geometry AST
         cell_dicts = []
+        self.skipped_cells = []
         for c in cells_data:
             try:
                 ast_json = _geometry_ast_to_json(c["ast"].ast)
             except (ValueError, AttributeError) as e:
                 raise RuntimeError(f"栅元 {c['number']} AST 序列化失败: {e}")
+            if ast_has_facet(ast_json):
+                # 宏体 facet 引用（1.1 之类）几何引擎未支持：跳过该栅元并归因，
+                # 不让一个栅元拖垮整次预览（旧行为：int('1.1') ValueError → 整次 500）
+                self.skipped_cells.append({
+                    "number": c["number"],
+                    "reason": "宏体 facet 引用（如 1.1）暂不支持预览",
+                })
+                continue
             cell_dicts.append({
                 "number": c["number"],
                 "material": str(c.get("material", "0")),

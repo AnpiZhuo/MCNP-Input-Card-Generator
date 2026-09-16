@@ -67,30 +67,39 @@ export function fieldsForTemplate(id: SourceTemplateType): SdefFieldMeta[] {
   return SDEF_FIELD_META.filter(f => t.fields.includes(f.key));
 }
 
-/** 内置函数选择器选项（源分布卡说明.md Table 3.4） */
+/**
+ * 内置函数选择器选项。
+ * 依据：C810.pdf Table 3.4（3-65/3-66 页）；措辞与 `app/docs/源分布卡说明.md` §三 保持一致。
+ * ⚠ 易错点（已按 C810 原文写进 hint）：
+ *   −4 的 a **不是半高宽**（FWHM = a·(ln 2)^½），a<0 表示温度且 b 必须为负；
+ *   −21 的 a 默认值**随变量变**（DIR=1；RAD=2，但定义了 AXS 或 JSU≠0 时为 1；EXT=0）；
+ *   −41 的 a **就是**半高宽（a=(8 ln 2)^½·σ）。
+ */
 export interface BuiltinFn { code: string; name: string; desc: string; params: { name: string; hint: string }[] }
 export const BUILTIN_FNS: BuiltinFn[] = [
-  { code: "-2", name: "Maxwell 裂变谱", desc: "p(E)=C·E^½·exp(−E/a)", params: [{ name: "a", hint: "默认 1.2895" }] },
-  { code: "-3", name: "Watt 裂变谱", desc: "p(E)=C·exp(−E/a)·sinh(√(bE))", params: [{ name: "a", hint: "默认 0.965" }, { name: "b", hint: "默认 2.29" }] },
-  { code: "-4", name: "高斯聚变谱", desc: "p(E)=C·exp[−((E−b)/a)²]，b=-1=DT", params: [{ name: "a", hint: "宽度" }, { name: "b", hint: "-1=DT" }] },
-  { code: "-5", name: "蒸发谱", desc: "p(E)=C·E·exp(−E/a)", params: [{ name: "a", hint: "默认 1.2895" }] },
-  { code: "-6", name: "Muir 速度高斯", desc: "速度空间高斯", params: [{ name: "a", hint: "" }, { name: "b", hint: "" }] },
-  { code: "-21", name: "幂律", desc: "p(x)=c|x|^a（DIR/RAD/EXT）", params: [{ name: "a", hint: "幂指数" }] },
-  { code: "-31", name: "指数偏倚", desc: "p(μ)=c·e^(aμ)（DIR/EXT）", params: [{ name: "a", hint: "指数" }] },
-  { code: "-41", name: "高斯分布", desc: "半高宽 a、均值 b（TME/X/Y/Z）", params: [{ name: "a", hint: "半高宽" }, { name: "b", hint: "均值" }] },
+  { code: "-2", name: "Maxwell 裂变谱", desc: "p(E)=C·E^½·exp(−E/a)，a 为温度", params: [{ name: "a", hint: "默认 1.2895 MeV" }] },
+  { code: "-3", name: "Watt 裂变谱", desc: "p(E)=C·exp(−E/a)·sinh(bE)^½", params: [{ name: "a", hint: "默认 0.965" }, { name: "b", hint: "默认 2.29" }] },
+  { code: "-4", name: "高斯聚变谱", desc: "p(E)=C·exp[−((E−b)/a)²]，a 不是半高宽（FWHM=a(ln2)^½）", params: [{ name: "a", hint: "宽度 MeV；a<0=温度则 b 也须为负（默认 −0.01）" }, { name: "b", hint: "均值 MeV；−1=DT、−2=DD（默认 −1）" }] },
+  { code: "-5", name: "蒸发谱", desc: "p(E)=C·E·exp(−E/a)", params: [{ name: "a", hint: "默认 1.2895 MeV" }] },
+  { code: "-6", name: "Muir 速度高斯", desc: "p(E)=C·exp[−((E^½−b^½)/a)²]，a 为 MeV^½ 宽度、b 为平均速度对应能量", params: [{ name: "a", hint: "默认 −0.01（a<0 表示温度）" }, { name: "b", hint: "−1=DT、−2=DD（默认 −1）" }] },
+  { code: "-21", name: "幂律", desc: "p(x)=c|x|^a（DIR/RAD/EXT；a 默认随变量：DIR=1、RAD=2（有 AXS 或 JSU≠0 时 1）、EXT=0）", params: [{ name: "a", hint: "幂指数（不给则用变量默认）" }] },
+  { code: "-31", name: "指数偏倚", desc: "p(μ)=c·e^(aμ)（DIR/EXT；a 默认 0；也是 SB 卡唯一可用的两个函数之一）", params: [{ name: "a", hint: "默认 0" }] },
+  { code: "-41", name: "高斯分布", desc: "p(t)=c·exp[−(1.6651092(t−b)/a)²]（TME/X/Y/Z；a 就是半高宽 a=(8ln2)^½σ）", params: [{ name: "a", hint: "半高宽（时间 shakes / 位置 cm）" }, { name: "b", hint: "均值" }] },
 ];
 
 export function builtinFn(code: string): BuiltinFn | undefined {
   return BUILTIN_FNS.find(f => f.code === code);
 }
 
-/** SI 类型选项（"" = 省略：MCNP 缺省为 H 直方图——不得自动回填 L） */
+/** SI 类型选项（"" = 省略：MCNP 缺省为 H 直方图——不得自动回填 L）
+ *  字母含义取 C810 3-63 原文：H = 直方图分箱边界；L = 离散源变量值；
+ *  A = **概率密度定义点**（密度在点间线性插值）；S = 分布号。 */
 export const SI_TYPES = [
-  { v: "", n: "直方图(省略)", d: "SI 无字母（MCNP 缺省 H：分箱边界，如 SI1 0 14）" },
-  { v: "L", n: "离散列表", d: "SI L v1 v2 ...（栅元号/谱线能量等离散值）" },
-  { v: "H", n: "直方图", d: "SI H E1 E2 ...（分箱边界，单调递增）" },
-  { v: "A", n: "概率密度点", d: "SI A v1 v2 ...（单调递增密度点）" },
-  { v: "S", n: "分布编号", d: "SI S n1 n2 ...（先选分布再取样）" },
+  { v: "", n: "直方图(省略)", d: "SI 无字母（MCNP 缺省 H：分箱边界，如 SI1 0 14；H 下 SP 首个数值项必须为 0）" },
+  { v: "L", n: "离散列表", d: "SI L v1 v2 ...（栅元号/谱线能量等离散值，不需要单调递增）" },
+  { v: "H", n: "直方图", d: "SI H E1 E2 ...（分箱边界，必须单调递增；箱内均匀取样）" },
+  { v: "A", n: "概率密度定义点", d: "SI A v1 v2 ...（必须单调递增；SP 给对应密度值，点间线性插值，首尾通常为 0）" },
+  { v: "S", n: "分布编号(可嵌套)", d: "SI S n1 n2 ...（先选分布再取样；分布号可带 D 前缀；号 0 = 该变量用默认值；嵌套约 20 层）" },
 ];
 
 /** SP 类型选项（""/D = 省略：MCNP 缺省 D 分箱概率；生成时 D 不带字母发射） */

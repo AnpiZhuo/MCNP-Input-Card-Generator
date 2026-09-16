@@ -223,8 +223,11 @@ def test_empty_cell_returns_empty_mesh():
 
 
 def test_unsupported_surface_type_raises():
-    """不支持的曲面类型 → 明确 ValueError（调用方回退/告警）。"""
-    surfaces = {1: {"type": "TZ", "number": 1,
+    """不支持的曲面类型 → 明确 ValueError（调用方回退/告警）。
+
+    注：TZ 环面与 X/Y/Z 点定义回转面 2026-09-16 起已支持，故这里改用未知助记符。
+    """
+    surfaces = {1: {"type": "ZZZ", "number": 1,
                     "params": [0, 0, 0, 1, 2, 3], "transform": None}}
     with pytest.raises(ValueError):
         voxel_csg.mesh_cell_polydata(_neg(1), surfaces, {}, B=3.0, res=16)

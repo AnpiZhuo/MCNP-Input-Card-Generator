@@ -117,3 +117,22 @@ def test_worker_has_no_vtk_import_anywhere():
             if node.module and (node.module == "vtk" or node.module.startswith("vtk.")):
                 hits.append((node.lineno, f"from {node.module} import ..."))
     assert hits == [], f"_freecad_csg_worker.py 仍含 vtk import: {hits}"
+
+
+def test_worker_tr_surface_builds_in_local_box_then_transforms():
+    """TRn 曲面：必须在**局部放大盒**里造半空间 → 变换 → 再与世界盒取交。
+
+    2026-09-16 修：旧行为 `T(盒 − 实体)` 把"已裁剪"结果整体平移/旋转，既不是原曲面也不是原盒
+    —— 实测 `K/Z` 带 `TR2 5 0 0` 的 STL 包围盒 x[-500,10]（正确应为 x[0,10]），
+    而圆柱当年靠 `_make_primitive` 特例绕开了，锥/球/宏体全中。
+    修法统一为 `B_loc = √3·B + |平移|` 的局部盒 + 变换 + `common(世界盒)`，
+    因此 `_make_primitive` 特例已删除。
+
+    Worker 需要 FreeCAD，无法在 pytest 里跑运行期；此用例做源码级锁（同文件既有范式）。
+    """
+    src = WORKER.read_text(encoding="utf-8")
+    assert "B_loc = math.sqrt(3.0) * B" in src, "TR 局部盒放大公式缺失（TR 曲面会裁剪错）"
+    assert "shape = shape.common(bound_box)" in src, "TR 曲面变换后必须与世界盒取交"
+    assert "def _make_primitive" not in src, "旧的原语特例实现应已删除（统一走局部盒方案）"
+    assert "prim = _make_primitive" not in src, "旧的原语特例调用点应已删除"
+    assert "引用了 TR" in src, "引用缺失 TR 卡时必须留告警（不能静默按未变换处理）"

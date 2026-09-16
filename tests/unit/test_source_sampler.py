@@ -153,6 +153,24 @@ def _geom():
     }
 
 
+def _plane_geom():
+    """PX 5 平面源几何（C810 3-58 平面源：POS 在面上，位置 = POS + RAD·面内方向）。"""
+    return {
+        "cells": {},
+        "surfaces": {5: {"type": "PX", "params": [5.0], "field": None,
+                         "rotate": None, "origin": (0.0, 0.0, 0.0)}},
+    }
+
+
+def _sphere_geom():
+    """球面 S 0 0 0 10（法线 = 径向向外）。"""
+    return {
+        "cells": {},
+        "surfaces": {6: {"type": "S", "params": [0.0, 0.0, 0.0, 10.0], "field": None,
+                         "rotate": None, "origin": (0.0, 0.0, 0.0)}},
+    }
+
+
 def test_cel_uniform():
     r = _ok(sample_source({"sdef_cel": "1", "sdef_erg": "14"}, [], geometry=_geom(),
                           n_particles=300, seed=1))
@@ -166,6 +184,100 @@ def test_surface_sphere():
     for p in r["particles"]:
         d = math.sqrt(p["x"] ** 2 + p["y"] ** 2 + p["z"] ** 2)
         assert abs(d - 2.0) < 1e-6
+
+
+# ── 面源语义（C810 3-58 / Table 3.3）──────────────────────
+
+def test_plane_source_position_on_pos_rad_circle():
+    """平面源：位置必须**在 POS 所在的面上**、且落在 POS+RAD 的圆内（面内均匀 a=1）。
+
+    旧实现：PX 直接 `y,z ~ U(-1000,1000)` —— RAD/POS 全被忽略（实测 y≈-680）。
+    """
+    r = _ok(sample_source(
+        {"sdef_sur": "5", "sdef_pos_x": "5", "sdef_pos_y": "0", "sdef_pos_z": "0",
+         "sdef_rad": "D1", "sdef_erg": "14"},
+        [{"id": 1, "si": {"type": "", "values": ["0", "3"]},
+          "sp": {"type": "", "values": [], "fnCode": "-21", "fnParams": ["1"]}}],
+        geometry=_plane_geom(), n_particles=800, seed=11))
+    rs = []
+    for p in r["particles"]:
+        assert abs(p["x"] - 5.0) < 1e-9, "平面源位置必须落在 x=5 面上"
+        rs.append(math.hypot(p["y"], p["z"]))
+    assert max(rs) <= 3.0 + 1e-9, "面内半径不得超过 RAD"
+    # 面内均匀（a=1）：P(r>1.5) = (9-2.25)/9 = 0.75
+    frac = sum(1 for v in rs if v > 1.5) / len(rs)
+    assert 0.68 < frac < 0.82
+
+
+def test_plane_source_direction_around_surface_normal():
+    """面源方向：VEC 缺省 = 面法线（PX → ±X），且 DIR 缺省 = 余弦分布 p(μ)=2μ（全朝外）。
+
+    旧实现：轴回落 `(0,0,1)` 且忽略 NRM ⇒ 方向在 ±X 上双向、且与 NRM 无关（实测逐位相同）。
+    """
+    for nrm, sign in (("", 1.0), ("-1", -1.0)):
+        r = _ok(sample_source(
+            {"sdef_sur": "5", "sdef_pos_x": "5", "sdef_pos_y": "0", "sdef_pos_z": "0",
+             "sdef_rad": "1", "sdef_nrm": nrm, "sdef_erg": "14"},
+            [], geometry=_plane_geom(), n_particles=400, seed=3))
+        dx = [p["dx"] for p in r["particles"]]
+        assert all(sign * v > 0 for v in dx), "余弦分布必须全在半空间（NRM 定符号）"
+        # 余弦分布 p(μ)=2μ ⇒ <μ>=2/3
+        assert abs(sum(dx) / len(dx) - sign * 2.0 / 3.0) < 0.06
+
+
+def test_sphere_source_direction_outward_by_default():
+    """球面源 DIR 缺省 = 余弦分布绕**外法线**（C810 3-58）⇒ 方向·径向 ≥ 0。"""
+    r = _ok(sample_source(
+        {"sdef_sur": "6", "sdef_pos_x": "10", "sdef_pos_y": "0", "sdef_pos_z": "0",
+         "sdef_erg": "14"}, [], geometry=_sphere_geom(), n_particles=400, seed=5))
+    for p in r["particles"]:
+        m = math.sqrt(p["x"] ** 2 + p["y"] ** 2 + p["z"] ** 2)
+        cos = (p["x"] * p["dx"] + p["y"] * p["dy"] + p["z"] * p["dz"]) / m
+        assert cos >= 0.0, "默认余弦分布不得朝球心飞"
+
+
+def test_surface_source_cylinder_reports_semantics():
+    """柱面源：C810 3-58「Cylindrical surface sources must be specified as degenerate
+    volume sources」⇒ 明确报错并给出可操作提示（不得静默乱撒）。"""
+    geo = {"cells": {}, "surfaces": {7: {"type": "CX", "params": [0.0, 0.0, 3.0],
+                                         "field": None, "rotate": None,
+                                         "origin": (0.0, 0.0, 0.0)}}}
+    r = sample_source({"sdef_sur": "7", "sdef_erg": "14"}, [], geometry=geo,
+                      n_particles=10, seed=1)
+    assert r["status"] == "error"
+    assert "退化体源" in r["error"]
+
+
+def test_sdef_tr_transforms_position_and_direction():
+    """SDEF TR=n（C810 Table 3.3：源变换）：抽出的位置与方向都要按 TR 卡变换。
+
+    旧实现完全不读 `sdef_tr` ⇒ 源位置/方向留在未变换的坐标系里。
+    """
+    geom = _plane_geom()
+    geom["trCards"] = {"2": {"translate": [0.0, 0.0, 100.0],
+                             "rotate": [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]}}
+    r = _ok(sample_source(
+        {"sdef_sur": "5", "sdef_pos_x": "5", "sdef_pos_y": "0", "sdef_pos_z": "0",
+         "sdef_rad": "1", "sdef_tr": "2", "sdef_erg": "14"},
+        [], geometry=geom, n_particles=50, seed=1))
+    for p in r["particles"]:
+        # Rᵀ·(5,y,z) + (0,0,100) = (y, 5, z) + (0,0,100)（R = [[0,1,0],[-1,0,0],[0,0,1]]）
+        assert abs(p["x"]) <= 1.0 + 1e-9 and abs(p["y"] - 5.0) < 1e-9, "位置必须经 TR 旋转+平移"
+        assert p["z"] > 99.0
+        # 方向也要转（PX 面法线 +X → 世界 +Y）
+        assert p["dy"] > 0.0, "方向必须经 TR 旋转（旧实现完全忽略 TR）"
+
+
+def test_surface_source_ext_single_si_symmetric():
+    """C810 3-66 规则 5：EXT 的 `SI x` + `SP −31` ⇒ 等价 `SI −x x`（负半轴必须保留）。"""
+    r = _ok(sample_source(
+        {"sdef_pos_x": "0", "sdef_pos_y": "0", "sdef_pos_z": "0", "sdef_axs": "0 0 1",
+         "sdef_rad": "3", "sdef_ext": "D2", "sdef_erg": "14"},
+        [{"id": 2, "si": {"type": "", "values": ["5"]},
+          "sp": {"type": "", "values": [], "fnCode": "-31", "fnParams": ["0"]}}],
+        n_particles=1500, seed=9))
+    zs = [p["z"] for p in r["particles"]]
+    assert max(zs) <= 5.0 and min(zs) < 0.0, "对称区间才会有负 z（旧实现恒 0≤z≤5）"
 
 
 # ── 错误 ───────────────────────────────────────────────────

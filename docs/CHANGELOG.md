@@ -6,14 +6,80 @@
 >
 > **详细设计变更**：后端见 `docs/backend-changes.md`、前端见 `docs/frontend-changes.md`、代码历史见 `git log`。
 >
-> **门禁基线沿革**：pytest 343 → 465 → 512 → 528 → 573 → 587 → 632 → 673 → 703 → 737 → 741 → 752 → 765 → 875（2026-09-10 实跑）→ **900（最新，2026-09-11 实跑：`python -m pytest tests -q` = 900 passed / 0 failed / 0 skipped；含 +25 例 `test_mcnp_tasks.py`）**；vitest 118 → 327 → 358 → 412 → 449 → 466 → 476 → 512 → 546 → 554 → 587+4 → **625（最新，2026-09-10 实跑：78 files / 625 tests passed / 0 skip）**。
-> **计数口径（2026-09-10 补）**：上列与总表各行的 pytest/vitest 计数**均为该批当时快照**；当前权威值 = 上列两个"最新"数字，对应 `tests/` 81 个 `.py`（含 conftest）、`gui/test/**` 78 个测试文件。**2026-09-10 起该口径已从"静态抄录"升级为"实跑结果"**（见下条）。
+> **门禁基线沿革**：pytest 343 → 465 → 512 → 528 → 573 → 587 → 632 → 673 → 703 → 737 → 741 → 752 → 765 → 875（2026-09-10 实跑）→ 900（2026-09-11 实跑：`python -m pytest tests -q` = 900 passed / 0 failed / 0 skipped；含 +25 例 `test_mcnp_tasks.py`）→ **982 passed / 1 failed（最新，2026-09-17 实跑：`python -m pytest tests/ -q`；唯一失败 `test_meshtal_worker.py::test_worker_spawn_dev_mode_bad_tally_error` 为 **既有 GBK 解码环境问题**，`git stash` 复核与本批无关）**；vitest 118 → 327 → 358 → 412 → 449 → 466 → 476 → 512 → 546 → 554 → 587+4 → 625（2026-09-10 实跑）→ **644（最新，2026-09-17 实跑：82 files / 644 tests passed / 0 skip）**。
+> **计数口径（2026-09-10 补）**：上列与总表各行的 pytest/vitest 计数**均为该批当时快照**；当前权威值 = 上列两个"最新"数字（2026-09-17：pytest **982/1**、vitest **644**）。**2026-09-10 起该口径已从"静态抄录"升级为"实跑结果"**（见下条）。
 > **验证批次（2026-09-10，接手方**有 shell**）**：按 `docs/fix-verification.md` **实跑全部门禁，全绿** —— pytest 875/0/0、`tsc --noEmit` EXIT 0、`tsc -p tsconfig.test.json --noEmit` EXIT 0、vitest 625/0、`vite build` EXIT 0。**先决条件实测**：5001 空闲；`pytest-timeout` **未装**（故全程不用 `--timeout`）；`npm.ps1` 被执行策略拦截（改用 `npm.cmd`/`npx.cmd`）。**新依赖（已获用户批准）**：`@types/node@^22.20.2`（devDependency）。**跑门禁抓出 5 个静态审计看不见的真缺陷**（详见 `docs/fix-verification.md` §7 与 `PROJECT_MEMORY.md` S1.0）：`meshtal_cache.py:136` 缩进错误致全量 pytest **收集阶段中断**、`CellEditDialog.tsx:174` 多余三元分支致该文件**无法编译**、`source_sampler._summarize` **丢弃单能 δ 分布真实能量**、`test_sidecar_spec_keep._parse_hidden` 正则**静默丢内容**、spec `_keep_py` **误列 `_cross_section_helper.py`**。
 > **补档说明（2026-09-10，文档债 TD-13）**：原补档批次无 shell，无法 `git log`；总表 2026-08-27 ~ 09-10 六批条目**依 `.git/logs/HEAD`（reflog，纯文本可读）补写**。**该限制已于同日解除**（验证批次有 shell），此后门禁计数一律以实跑为准。
 
 ---
 
 ## 一、批次详情档案（原 PROJECT_MEMORY.md 顶部修复横幅，含独有验收细节）
+
+### 🔧 打包坑 6.2（tauri build 不刷新 sidecar）根治（2026-09-17，工作区未提交）
+
+**背景**：用户问「之前那个 6.2 坑，改了吗？」——**没改**（当时用户说"先别打包"，我没碰打包链路）。这次连"坑是否客观存在"一起补上实验证据。
+
+**带标记对照实验（决定性）**：给 `target\release\python.exe` 追加标记 + 把 `binaries\` 源 mtime 更新到更新 → 跑 `node @tauri-apps/cli tauri.js build`（`Compiling mcnp-ui v1.7.6` / `Finished release profile in 22.72s`）→
+- `target\release\python.exe` **仍是 09/12 16:31 的 28,631,092 B**（标记还在！）
+- `binaries\python-x86_64-pc-windows-msvc.exe` 是 09/17 的 **32,487,958 B**
+- `_internal`：两侧都是 7867 文件 / 214,579,036 B（**会被刷新**）
+
+⇒ 精确结论：**`tauri build` 会刷新 `_internal\`，但不会刷新 `python.exe`** —— 这正是"版本号新、后端旧"的机理（sidecar 的 onedir 两件套里只换了一半）。
+
+**根治（不是再写一遍手工 6.2）**：新增 `gui/scripts/sync-sidecar.mjs`
+- `compareTrees(src, dst)`：递归比对相对路径集合 + 字节数，给出 missing/extra/sizeDiff；
+- 默认模式：陈旧 → 从 `binaries\` **镜像**（删旧 sidecar + `_internal` 后整树复制）→ **复核一致**才退出 0；
+- `--check`：只查不改，不一致退出 1（供 CI/人工）；
+- 无 `target/release` 或缺少源 → **跳过**（首次打包不该被拦）。
+
+**接线（两道）**：`gui/package.json` 新增 `sync-sidecar` / `check-sidecar` / **`build:app` = `vite build && sync-sidecar && tauri build`**；`gui/src-tauri/tauri.conf.json` 的 `beforeBuildCommand` 改为 `npm run build && npm run sync-sidecar` ⇒ **即使手敲 `tauri build` 也会在构建前同步**。
+
+**测试**：`gui/test/syncSidecar.test.ts`（5 例，真实临时目录）钉住「一致 / 缺文件 / 多文件 / 大小不符」四种形态。
+
+**手册同步**：`docs/手动打包方法.md` 步骤 6.2 改写为「已自动化 + 实测证据 + `npm run build:app`」，总览表与「踩坑清单 #7」同步更新，速查块给出等价命令与手工兜底。
+
+**当前状态**：本机 `target\release` 已由 `sync-sidecar` 复核一致（`python.exe` 32,487,958 B / `_internal` 7867 文件）。
+
+### 🔧 SIn/SPn/SBn/DSn/SCn 文档 + 粒子源演示「按 C810 重核」批（2026-09-16，工作区未提交；**未打包**）
+
+**起因**：用户质疑内置《源分布卡说明》§三「描述不清晰」→ 逐条对 `D:\MCNP\MCNP6\C810.pdf`（印刷页 3-63 ~ 3-67 = `Source Specification` 的 SIn/SPn/SBn/DSn/SCn 段 + Table 3.4）核对，再顺链检查「粒子源演示」是否被同一批错/缺的知识塑造。**方法是机器化核对**：把 C810 里 41 条原文片段拿去在两份派生文档里做子串查询，结果 **41 条全部缺失**（不是"我看不懂"，是"文档里根本没有"）。
+
+**A 批（文档 + 文案，零行为风险）**
+- `app/docs/源分布卡说明.md` + `gui/public/docs/源分布卡说明.md`（前端「📖 源参考」加载后者）**§三 重写**：64/57 行 → **191 行**（两份逐字一致，正文 558 行）。补齐 SIn/SPn/SBn 的 Form·option·Default；H/A/L/S/V 五种 option 的抽样语义；SP/SB 内置函数 6 条约束 + **5 条特殊默认**；Table 3.4 补为 9 行（新增 −7 备用谱）；DSn 的 H/L/S/T/Q 规则（含「不用 SP/SB」「首项不必为 0」「Q 是自变量为内置函数时唯一可用形态」）；SCn 的 `&` 语义。修正 3 处**写错**：`A = 概率密度定义点`（原「概率密度点」，C810 为 "points where a probability density distribution is defined" 且**点间线性插值**）、`−4 的 a 不是半高宽`（FWHM = a·(ln 2)^½）、`−3` 公式与默认值；§七示例 1 的 `SP1 D0 …` → `SP1 D 0 …` + `SB1 D 0 …`（H 分布首项必须是 0 占位）。
+- `app/generator/distributions.py` 词表注释与**用户可见报错文案**：原写「H 直方图/L 离散/A **三角**/S **对数**」——「三角」「对数」在 C810 正文里**不存在**，改为 C810 原文措辞，并加源代码锁测试（`test_si_letter_semantics_source_lock`）。
+- `gui/src/utils/sourceTemplates.ts`：`SI A` 改「概率密度定义点」；−4/−6/−21/−31/−41 的公式、默认值与陷阱（−4 的 a 语义、−21 的 a 随变量变、−41 的 a **就是**半高宽）按 Table 3.4 重写。
+
+**B 批（粒子源演示的行为缺陷，全部先复现后修）**
+| # | 缺陷（实测证据） | 修法 |
+|---|------------------|------|
+| D-1 | **面源方向绕 +Z 而非面法线**：`PX 5` 平面源 `dx∈[-0.984,0.957]`（双向），`NRM=-1` 结果**逐位相同**（`sdef_nrm` 全仓无人读）；球面源方向·外法线 cos∈[-0.992,0.990]、102/200 朝球心飞 | 面源抽样返回**带 NRM 符号的面法线**；`VEC` 缺省 = 面法线；DIR=Dn 与 DIR 缺省都绕它（C810 3-58 + Table 3.3） |
+| D-2 | **平面源位置撒在 ±1000 的面上**：实测 `y=-680.39 z=-321.85`，POS/RAD 全被忽略 | 平面源按 C810 3-58 改为 `POS + RAD·面内方向`（RAD 默认幂律 a=1 → 面内均匀），位置恒在面上 |
+| D-3 | **`SI x` + `SP −21/−31` 的对称默认只对了一半**：`_range` 不分变量一律 `(0,x)` ⇒ EXT 的 `SI1 5 / SP1 −31 1.5` 负半轴整段丢失（0/400 负值） | `_range(si, default, var)` 按变量身份：**DIR/EXT ⇒ [−x,x]**（规则 5）、RAD ⇒ [0,x]（规则 4） |
+| D-4 | **SI S 的 `D` 前缀分布号直接报错**：`int(float("D2"))` → `ValueError`（C810 3-64 明写允许 D 前缀或省略） | 新增 `_dist_ref()`；分布号 0 → 该变量默认值（Table 3.3）；解析失败转 `SourceSamplingError` 带可读信息 |
+| D-5 | **`SP V` 只声明不校验**（契约写「非 CEL 报错」而实现当 D 处理） | `_check_sp_v()`：非 CEL 源用 SP/SB V 直接报错（C810 3-64 "for cell distributions only"） |
+| D-6 | **`SP −21/−31` 不给参数 a 时被判为错误**（`_need(params,1,1)`），而 C810 3-66 明确「默认随变量」 | a 缺省 = `DIR 1 / RAD 2（有 AXS 或 JSU≠0 时 1）/ EXT 0`；−31 缺省 a=0 |
+| D-7 | **`SDEF TR=n` 完全未消费**（位置/方向都留在未变换坐标系） | 新增 `_sdef_trn()` + 位置/方向变换；`_to_world/_to_world_dir` 约定改为 **Rᵀ·p + o**，与 `_freecad_csg_worker.apply_trn`（FreeCAD 矩阵按列组装 ⇒ 实际转置作用）逐位一致 |
+| D-8 | 前端 `distDual.parseDs` 对非 T 类型**无条件**把首 token 当 param ⇒ `DS1 L 1.5 2.5` 在前端表单里丢一个值（与后端 `_parse_ds` 口径不一致） | 改为「首 token 非数值才当 param」（与后端同口径），并补 Q/T/L 三类回归 |
+
+**带外发现（本轮"到真实后端跑一遍"才暴露，单测用手写 geometry dict 全绿所以长期潜伏）**
+| # | 缺陷 | 修法 |
+|---|------|------|
+| D-9 | **`SDEF SUR=` 面源在真实后端 100% 不可用**：`api_server._prepare_source_geometry` 里 `vc.surface_fn(typ, params, vc._surface_transform(d, tr_cards))` —— `_surface_transform()` **只接受 1 个参数**（TR 数据本身），多传一个 ⇒ `TypeError` ⇒ 被下面 `except` 吞掉 ⇒ `surfaces` 恒为空 ⇒ **每个面源都报「SUR=n 引用的曲面未定义」** | 改传 `vc._surface_transform(tr_data)`；并在 except 分支保留原因（原有行为） |
+| D-10 | **`CX/CY/CZ`（MCNP 轴对齐圆柱缩写，≡ `C/X` 等）被静默丢弃**：pymcnp 解析不了缩写（实测 `7 CX 0 0 3` → `InpError: INP card not recognized.`），而 `parse_surfaces` 的 except 只兜 P 系数形式 ⇒ 曲面消失（3D 预览 / 截面 / STEP 导出 / 源演示同时受影响） | `parse_surfaces` 里把 `CX/CY/CZ` 改写成 `C/X/C/Y/C/Z`（与既有 `HEX→RHP` 改写同一处风格） |
+
+**带外缺陷的回归**：新增 `tests/integration/test_source_demo_geometry.py`（6 例：PX/球面进 surfaces、`CX/CY/CZ` 不被丢、`trCards` 透传），补上「单测手写 geometry dict」与真实后端之间的接缝。
+
+**性能顺带**：`_inverse_cdf` 原先**每次抽样都重算 4096 点梯形积分**（实测 4.2 ms/次，500 粒子演示基本全花在这里）→ 加**结构化键**网格缓存（键 = 函数名+参数+区间；**不能用 `id(pdf)`**：临时 lambda 回收后 id 复用会把别的分布的概率网格当成自己的，实测 DIR 均值 0.667→0.709 漂移）⇒ 抽样快约 3 个数量级，后端测试套 34 s → 19 s。
+
+**新增/改动测试**：`tests/unit/test_source_sampler.py`（+6：平面源 POS/RAD 圆、面源方向绕法线含 NRM 双向、球面源朝外、柱面源明确报错、EXT 对称、SDEF TR）、`tests/unit/test_distribution_sampler.py`（+7：D 前缀、分布号 0=默认值、非法分布号、SP V 双向、−21 默认 a 随变量、−31 默认 a、`_range` 对称）、`tests/unit/test_distributions.py`（+1 源级锁）、`gui/test/distDual.test.ts`（+1 并修旧断言）。
+
+**门禁（改后实跑）**：pytest **982 passed / 1 failed（`test_meshtal_worker.py::test_worker_spawn_dev_mode_bad_tally_error`，GBK 解码环境问题，`git stash` 复核为**既有失败**、与本批无关）**、vitest **644 passed / 82 files**、tsc 两档 **EXIT 0**、`vite build` **EXIT 0**（已重建 `gui/dist`）。
+
+**本批自身引入并当场修掉的回归（防复犯）**：`CX/CY/CZ` 一度被**无条件**改写成 `C/X` ⇒ `CZ R` 两项式（`7 cz 0.3`）变 `C/Z 0.3`（少 2 个参数）⇒ pymcnp `InpError` ⇒ 曲面静默丢弃 ⇒ `test_api_contract.py` 格元覆盖两例转红。**pymcnp 三类的接受面各不相同**：`C/X·C/Y·C/Z` 认 4 项长式；`CX·CY` 什么都不认；`CZ` **只认 `CZ R`**。修法：改写加条件 `len(_p) - _kw_idx >= 3` + 回归 `test_cz_two_item_short_form_is_kept_verbatim`。
+
+**运行期复验（真实 HTTP，后端已重启加载新代码）**：平面源 `x≡5`、面内 `r∈[0.175,2.997]`（RAD≤3）、`dx∈[0.040,0.998]` **全正向**（绕 +X 面法线）；球面源方向·外法线 `min=0.066`、**反向 0/200**；`SI1 S D2 D3` 能量取值 `{1.0, 9.0}`；柱面源给出可操作报错。
+
+**已知未修（诚实登记）**：① `SP V` 的**体积加权语义**（概率 ∝ 栅元体积 × Pi）未实现——抽样侧把它当 D 表用，只有发射侧保留 `V` 字母；需要逐栅元体积（api_server 侧有 `cell_aabb` 但无精确体积）；契约已按现状标注。② `SI S` 分布号 0 的默认值只覆盖 Table 3.3 的标量变量默认（ERG/TME/WGT/RAD/EXT/DIR/X-Y-Z）。③ `SDEF TR=Dn`（变换分布，需 SI L + 一组 TR 卡）仍未实现。
 
 ### 📦 v1.7.6 发布（2026-09-11，用户指定版本；**已打包部署 + 冒烟通过**）
 
@@ -206,6 +272,9 @@
 
 | 日期 | 变更类型 | 改动描述 | 涉及 Agent |
 | :--- | :--- | :--- | :--- |
+| **2026-09-16** | 修复/后端 | **TRn + 锥面几何错位**（用户"k/z 解析还是不对"驱动；同类问题影响所有"先裁剪再变换"的曲面）：根因 —— TR 曲面旧走 `T(盒 − 实体)`，把**已裁剪**结果整体平移/旋转，既不是原曲面也不是原盒。实测 `101 2 K/Z 0 0 0 0.25 1` + `TR2 5 0 0` 的 STL 包围盒 `x[-500,10] y[-500,500]`（正确 `x[0,10] y[-5,5]`）；圆柱当年靠 `_make_primitive` 特例（先变换无界圆柱再裁剪）绕开，**锥/球/平面/宏体全中**。修法（两个 worker 同一口径）：局部盒 `B_loc = √3·B + max|平移|`（保证旋转后仍覆盖世界盒）→ `make_halfspace(type, params, B_loc)` → `apply_trn` → `shape.common(世界盒)`；等价于"先变换无界曲面再裁剪"且各类型内部实现不用改，`_make_primitive` 特例随之删除。**附带**：引用 `TRn` 但请求里没有该 TR 卡时**留告警**（旧行为静默按未变换处理 → 几何悄悄错位）。**运行期实证**（网页端后端真实 HTTP + STL 包围盒）：`K/Z`+平移 `x[0,10] y[-5,5] z[0,10]` ✓、`K/Z`+旋转 90° ✓、`CZ`+平移 `x[3,7] y[-2,2]` ✓、`PZ`+平移 `z≤25` ✓、`S`+平移 ✓；另用生产 payload 直喂 worker 复核一致。新增源码锁回归 `tests/integration/test_preview3d_worker.py::test_worker_tr_surface_builds_in_local_box_then_transforms`。门禁 `pytest tests/ -q` = **959 passed / 1 failed**（既有 GBK 环境失败，`git stash` 对照确认）。⚠️ 顺带澄清用户疑问：先前"K/Z 不对"的另一半原因是**部署前的旧后端进程**（Python 模块进程内加载、不热重载）——重启后端即恢复，与代码无关 | 后端 |
+| **2026-09-16** | 修复/前端 | **3D 预览图例读不到「材料」页注释**（用户报："3D 预览界面会读不到材料页中定义的材料注释"）：根因是**职责串源** —— `MaterialLegend` 的注释槽被塞的是**栅元注释**（`Preview3D` 的 `cellViews.find(cv => cv.mat === e.mat)?.comment`、`CrossSectionView` 的 `comment: cd.comment`），而「材料」页写的 `MaterialData.comment`（如 "UO2 燃料"）从未被查过；栅元一般没写注释 ⇒ 图例只显示 `M1`。**用户裁决的边界**：材料显示接材料页、栅元信息接栅元定义，两源不得互串（否则同一材料多栅元时图例会随机显示某个栅元的注释）。修法：新增纯模块 `gui/src/utils/materialLegend.ts`（`materialComment` / `materialLegendEntries`，**只**吃材料表），`Preview3D` 与 `CrossSectionView` 图例改为 `materialLegendEntries(mats, 材料表)`；材料表在三处接齐 —— 3D 用 `matList = materials ?? deck.materials`、3D 独立窗口的桥本就带 `{number, comment}`、**截面窗口新增桥字段 `materials`**（`windows.ts openCrossSection/readCrossSectionData` + `CrossSectionWindow` + `Preview3D` 内嵌兜底视图三条路径全通）。**栅元注释保留在栅元列表**（`CellList` 行尾）。测试：`gui/test/materialLegend.test.ts`（7 例，含调用点**源码锁**：图例实参不得出现 `cv.mat/cd.comment/c.comment`）+ `materialLegend.dom.test.tsx`（3 例，渲染 `M1 - UO2 燃料`、材料无注释只显示 `M3`、`M0 - 真空`）。门禁 vitest **638/0**（81 files）+ tsc 两档 EXIT 0。**⚠️ 未提交 / 未打包** | 前端 |
+| **2026-09-16** | 修复/后端 | **几何曲面语义全类型审计 + 11 类修复**（S5，用户报「几何里圆锥面解析有问题」→ 要求先全类型排查 → 指定权威源 `D:\MCNP\MCNP6\C810.pdf`）。**方法**：C810 抽文本逐页核对（Table 3.1 / §3-14 环面与锥例 / §3-17 三点平面 / §3-18~21 宏体）+ 43 用例 × 3 路径（体素 `surface_fn`／3D `_freecad_csg_worker`／2D 截面 `_freecad_cross_section_worker`）数值对拍。**教训**：别用上万次 `isInside` 采样（OCC 点分类慢，实测两次超时）→ 改"少量决定性点 + 1 次 Volume"；随机点不符率≠严重度（ELL `Rm<0` 整块失效只命中 2/3000）；真值必须先自证（手册例题回代、MCNP 自打印系数）。**修复清单**：① 圆锥——半径取 `1/√t²`（应 `√t²`）、顶点放轴端、`±1` 只当整体反号（应"选叶片：所选叶内为负、锥外为正"，C810 §2.C.1 + 3-14 例2）、**K/X 用 Y 轴 / K/Y 用 X 轴**；双叶锥（省略 ±1）pymcnp 拒收 → parse 前补 0（否则静默丢面）。② 三点平面 P_1——§3-17 感度规则未实现 → 一半点序整体翻面（实测 4000/4000、体积 40000 vs 24000）→ 新增 `quadric.plane_from_points` 三路径共用。③ SQ 的 D/E/F——C810 是 `+2D(x−x̄)+2E+2F` **线性项、无交叉项**，旧 `sq_to_gq` 当成交叉项（D=5 时体积 45340 vs 63183 = 28%；D=E=F=0 恰好等价故长期隐蔽）→ 修正展开 + 两处 worker 内联副本改为调用同一函数。④ ELL——Rm>0 旧式 `d1+d2 ≤ 2·Rm`（应 Rm/2）且与 FreeCAD 路径互相矛盾；Rm<0（中心+长轴矢量）两路径皆废 → 新增 `quadric.ellipsoid_field_fn`；FreeCAD 改**真椭圆弧**回转（"三点圆弧"其实是圆；"球+非均匀缩放"被实测否决：`isInside((2.2,0,0))=True` 而半轴=2）。⑤ ARB 面码——手册"第 4 位为 0 则忽略该点"，旧 `(digit)-1` 把 0 变成索引 −1 取到第 8 角点，且体心/面心用 8 角点（含未用零三元组）平均 → 远离原点翻面（3738/4000、体积 4372 vs 64000）→ 新增 `quadric.arb_face_indices` + 只用被引用角点；FreeCAD 的 ARB 改**面半空间求交**（`makeShell/makeSolid` 对绕向不一致的面给出负体积实体 → `box.cut` 静默失效，实测 Volume=−275）。⑥ 环面 TX/TY/TZ——体素完全不支持；FreeCAD 的 TX/TY 把管心放在**轴上**（OCC 报错丢弃）、TZ 丢 C；截面 worker 连 `_make_torus_halfspace` 都没有 → 新增 `quadric.torus_field_fn/torus_aabb`；FreeCAD 按"径向偏移 A + 椭圆管（B 轴向/C 径向）"回转（`Part.Ellipse` 要求 major ≥ minor，否则 `OCCError: Axis value is invalid` → 退化成整盒）。⑦ X/Y/Z 点定义回转面——体素不支持；FreeCAD 折线近似且 1 点平面体积 64000 vs 24000 → 新增 `quadric.point_surface_field_fn`（1/2/3 对坐标 = 平面/柱/单叶锥/回转二次曲面，锥用带符号 tan）+ FreeCAD 精确原语/分段回转（q<0 段必须单独成体：贴轴重复顶点让 `Part.Face` 判 invalid → 整块作废）。⑧ 宏体可选尾项——REC 10 项（第 10 项=短轴半径，方向 H×V1）、RHP 9/12 项（s/t 由 60° 旋转推出）、BOX 9 项（某维无限）：旧实现"pymcnp 少项=None → 序列化 TypeError → **整个预览 500**"或"pymcnp 拒收 → 静默丢面" → 新增 `quadric.{rec_params,rhp_params,box_params}` + parse 层补零；**HEX 是 RHP 同义词但 pymcnp 无 Hex 类 → 静默丢面** → parse 层改写助记符。⑨ 截面 worker 复制不全——缺 12 个 helper（环面/SPH/REC/BOX/WED/RHP/HEX/ARB/X-Y-Z 全 `NameError` 缺块；`_plane_halfspace` 也没有 → 一般平面被做成面片）→ **删除副本、委托 `_freecad_csg_worker.make_halfspace`（单一实现）**。⑩ AABB——`_surface_negative_aabb` 把"负号二次型"（f<0 = 无界外侧）当有界内部 → 裁剪（GQ 球负系数 172800 点越界）；斜置柱误称三轴有界；`classify_gq` 容差 1e-6→1e-3（手册 3-12 例3 的 `-.866` 舍入使斜置柱被判成椭球 → 假盒 y=±257、放大 2086×）→ 修 + 加"盒外探针"安全网。⑪ facet 引用（`1.1`）——`int('1.1')` → ValueError → 整次预览 500 → 改为 `["facet",n,f]` 节点 + 跳过该栅元并在响应 `skipped_cells` 归因；另修 `_surface_extent_values` 环面丢 C（A=1000/B=100/C=500 的 bound 1400 → 2050）。**验收**：新增 `tests/unit/test_surface_semantics.py`（31 例，逐条标 C810 出处）+ `test_voxel_csg_cone.py`（12 例）；对拍体素 44 用例 **0/4000**、AABB **无问题**、TR 7 类 **0/3000**、FreeCAD 两 worker 44 用例决定性点 **全 0**；`pytest tests/unit tests/parser -q` = **853 passed / 1 failed**（唯一失败 `test_meshtal_worker::test_worker_spawn_dev_mode_bad_tally_error` 经 `git stash` 对照确认为**既有环境问题**：Windows GBK 控制台解码 worker 输出）。文档同步 `MCNP6_曲面卡格式参考.md`（环面 A/C 抄反、锥面 ±1）与 `C810_卡片格式详细.md`（锥面方程、SQ 行）+ `gui/public/docs` 副本。**⚠️ 未提交 / 未打包** | 后端 |
 | **2026-09-11** | 发布/v1.7.6 | **v1.7.6 升版 + 打包部署**（S1.0f，**用户指定版本**）：按 `docs/手动打包方法.md` 8 步链路执行 —— 升版**六处**（**新发现手册漏列 `gui/package-lock.json`**：顶层 `version` + `packages[""]`）→ vite build → PyInstaller sidecar（`_internal\app\mcnp_tasks.py` 等全在位）→ 替换 binaries → tauri build（`Compiling mcnp-ui v1.7.6`，33 s）→ **6.2 时效坑再次命中**（`target\release` 仍是 09/10 的 28561279 B 旧 sidecar 且**缺 `mcnp_tasks.py`**，已按手册强制覆盖为 28615181 B）→ 备份旧包 `_backup_1.7.5_20260912_114743`（223.1 MB / 2303 files）→ 部署 `D:\MCNP\MCNP输入卡生成器`（徽章 1.7.6，`_internal` 2294 files）→ **冒烟通过**：5001 3 s 就绪 + MCP 8100 LISTENING；`xsdir-check` 200、`diff-inp` **200**（旧包 500）、`lattice-extent` 200、`source-demo-sample` **200**（旧包 404）。**6.2 判据固化**：直接查 `target\release\_internal\app\` 里有没有本批新增模块，比对比字节数更硬 | 构建 Owner |
 | **2026-09-11** | 新增/后端+前端 | **一键运行 MCNP 支持多核（tasks N）+ 排他卡提示**（S1.0e）：C810 页 875 权威 —— `TASKS n` 走 OpenMP 线程，且 **DBCN(2,3,4)/SSW/SSR/PTRAC 与 `tasks>1` 不兼容（FATAL）**。实测（8 物理核/16 逻辑核，10M 历史）tasks 1/4/**8**/9/16 = 22.35 / 8.38 / **8.36** / 8.81 / **15.06** 秒 ⇒ **取物理核数而非逻辑核数**。实现 **10 文件**：抽 `utils/detectedCores.ts`（**消除两处重复定义**）、`PreviewDialog` footer 加核数滑杆并传 `tasks`、新增 `TasksIncompatibleHint` 挂到 PTRAC 启用与 SSW/SSR 两处（**选模式即提示**）、新增纯模块 `app/mcnp_tasks.py`（扫卡+强制降级，正确处理 `nJ` 跳格）+ 后端 bat 追加 ` tasks N` + spec 登记 + **25 例单测**。门禁 pytest **900** / vitest **625** / tsc 0 / build 0。**当时未打包/未升版；同日已随 v1.7.6 升版打包部署，见上条** | 后端+前端 |
 | **2026-09-11** | 改进/前端 + 诊断 | **源演示粒子圆点化 + SDEF 能量非正值诊断**（S1.0d-3）：① 用户裁决"换圆形贴图点" → 新增模块级单例 `getDotTexture()`（64² canvas 径向渐变圆 + `PointsMaterial.alphaTest=0.5`），把 `THREE.Points` 默认的**轴对齐方块**渲成**圆点**（零新依赖/零性能代价，保住屏幕空间可见性；jsdom 无 canvas 静默降级为方块）。② **`C810.pdf` 首次访问成功**（本机 PyMuPDF 已装、零新依赖）：提取 SI/SP 权威定义（PDF 页 746-747 / 印刷页 3-63）—— **SI = 自变量值，SP = 对应概率；H（默认）下 SI 是分箱边界、SP 首个数值项必须为 0（占位符）**，抽样 = 选分箱后**箱内均匀**。③ **定案用户报的"粒子颜色不对"**：其卡 `si1 -2 1` + `sp1 0 1` 即**能量 [-2,1] MeV 均匀**（**定义范围的是 `si1`，`sp1` 的 0 是占位符**）⇒ 约 2/3 粒子负能量 → `source_sampler.py:431` 的 `energy > 0` 过滤使 `energyRange` 失真 → 前端 `normalizeEnergy01` 钳到最浅色 → **颜色层次塌成一片近白**。A/B 实证（改注入副本 `si1 0 2`，**用户原卡未动**）：负能量 **0**、`energyRange` 与真实一致、t 值 **10 桶均匀** `[49,48,50,43,55,56,54,45,51,49]`、观感恢复**完整浅蓝→深蓝层次** ⇒ **程序符合 C810 无 bug**；缺口是**缺"能量分布可能产生非正值"的校验**（待裁决）。门禁 tsc 两档 **0** / vitest **625/0** / build **0**。**已随 v1.7.6 打包部署** | 前端 |

@@ -214,6 +214,8 @@ def _plane_coeff_to_points(A: float, B: float, C: float, D: float) -> list:
 def parse_surfaces(text: str) -> list:
     """将 MCNP 曲面文本解析为 pymcnp 表面对象列表（支持 TR 引用号）"""
     import re
+    from freecad_preview import (cone_card_missing_sheet,
+                                 box_card_missing_vector)  # 可选尾项判定（纯文本）
     surfs = []
     _cls_map = _surf_classes()  # 惰性构建 pymcnp 曲面类表（拖慢启动的重型 import 只在此触发一次）
     for _line in text.strip().splitlines():
@@ -236,6 +238,31 @@ def parse_surfaces(text: str) -> list:
         if len(_p) < 2: continue
         _kw_idx = 1
         if len(_p) > 2 and _cls_map.get(_p[2].upper()): _kw_idx = 2
+        _kw = _p[_kw_idx].upper()
+        if _kw == "HEX":
+            # MCNP 里 HEX 是 RHP 的同义词；pymcnp 没有 Hex 类 → 不改写就会被静默丢弃
+            _p[_kw_idx] = "RHP"
+            _l = " ".join(_p)
+            _kw = "RHP"
+        elif _kw in ("CX", "CY", "CZ") and len(_p) - _kw_idx >= 3:
+            # MCNP 的轴对齐圆柱缩写有三项式 `CX y z R`（≡ `C/X y z R`，C810 Table 3.1）。
+            # pymcnp 的三种类的接受面**各不相同**（2026-09-17 实测）：
+            #   C/X·C/Y·C/Z ← 4 项长式；CX·CY ← **什么都不认**；CZ ← **只认 `CZ R` 两项式**
+            # 所以：**三项式必须改写成 C/X 长式**（否则 InpError 被下面 except 吞掉 →
+            # 曲面静默丢弃、SDEF SUR=/3D/截面/STEP 全受影响）；
+            # 而 `CZ R` 两项式**必须原样保留**（改写成 `C/Z R` 反而少 2 个参数 → 同样被丢）。
+            _p[_kw_idx] = "C/" + _kw[1]
+            _l = " ".join(_p)
+            _kw = _p[_kw_idx]
+        elif cone_card_missing_sheet(_p, _kw_idx):
+            # 双叶锥（省略最后一项 ±1）pymcnp 解析不了 → 补 0 表示双叶
+            # （不补就是静默丢曲面：引用它的栅元在预览里全消失）
+            _l = _l + " 0"
+            _p = _l.split()
+        elif box_card_missing_vector(_p, _kw_idx):
+            # BOX 省略第三边向量（9 项）= 某维无限 → 补零向量（quadric.box_params 认无限）
+            _l = _l + " 0 0 0"
+            _p = _l.split()
         _cls = _cls_map.get(_p[_kw_idx].upper())
         if _cls is None: continue
         try:
@@ -1109,18 +1136,25 @@ def _deck_snapshot(surfs, cells_data, tr_cards) -> dict:
     cells:    [{number,material,ast}]（ast 为 _geometry_ast_to_json JSON 列表）
     tr_cards: parse_tr_cards 产出 dict
     """
-    from freecad_preview import _pymcnp_surf_to_dict, _geometry_ast_to_json
+    from freecad_preview import _pymcnp_surf_to_dict, _geometry_ast_to_json, ast_has_facet
+    cells = []
+    for c in cells_data:
+        ast = None
+        if c.get("ast") is not None:
+            try:
+                ast = _geometry_ast_to_json(c["ast"].ast)
+            except Exception:
+                ast = None
+            if ast is not None and ast_has_facet(ast):
+                ast = None   # facet 引用无几何求值支持 → 下游按"不可解析"逐栅元降级
+        cells.append({
+            "number": c.get("number"),
+            "material": c.get("material", "0"),
+            "ast": ast,
+        })
     return {
         "surfaces": [_pymcnp_surf_to_dict(s) for s in surfs],
-        "cells": [
-            {
-                "number": c.get("number"),
-                "material": c.get("material", "0"),
-                "ast": _geometry_ast_to_json(c["ast"].ast)
-                if c.get("ast") is not None else None,
-            }
-            for c in cells_data
-        ],
+        "cells": cells,
         "tr_cards": tr_cards,
     }
 
@@ -2807,7 +2841,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
                                         "freecad": freecad_bin})
             engine.cleanup()  # 引擎临时目录可删，会话目录已独立
             self._ok({"stl_files": stl_files, "stl_data": stl_data, "freecad": freecad_bin,
-                      "count": len(stl_data)})
+                      "count": len(stl_data),
+                      "skipped_cells": getattr(engine, "skipped_cells", [])})
         except Exception as e:
             import traceback
             self._err(str(e) + " | " + traceback.format_exc())
@@ -3201,8 +3236,19 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 d = _pymcnp_surf_to_dict(s)
                 typ = (d.get("type") or "").upper()
                 params = d.get("params") or []
-                field = vc.surface_fn(typ, params, vc._surface_tr(d, tr_cards))
-                surfaces[int(s.number)] = {"type": typ, "params": params, "field": field}
+                tr_data = vc._surface_tr(d, tr_cards)
+                # ⚠ `vc._surface_transform(tr_data)` 只吃 **TR 数据本身**（1 参）。
+                # 旧写法误传 (surface_dict, tr_cards) 两个参数 ⇒ TypeError ⇒ 被下面
+                # except 吞掉 ⇒ surfaces 恒为空 ⇒ 任何 `SDEF SUR=` 面源都报
+                # 「SUR=n 引用的曲面未定义」（2026-09-16 实测；CEL/体源不受影响）。
+                field = vc.surface_fn(typ, params, vc._surface_transform(tr_data))
+                # TR 的 rotate/origin 同时交给源抽样侧：面源位置/法线要在世界系里
+                # （voxel_csg._surface_transform 是 world→local，这里存 local→world 所需量）
+                surfaces[int(s.number)] = {
+                    "type": typ, "params": params, "field": field,
+                    "rotate": (tr_data or {}).get("rotate"),
+                    "origin": (tr_data or {}).get("translate") or (0.0, 0.0, 0.0),
+                }
             except Exception as e:
                 _source_geometry_errors.append(f"曲面 {getattr(s, 'number', '?')}: {e}")
                 continue
@@ -3260,7 +3306,9 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 continue
 
         return {"cells": cell_fields, "surfaces": surfaces,
-                "geometryErrors": _source_geometry_errors}
+                "geometryErrors": _source_geometry_errors,
+                # SDEF TR=n（源变换）用：抽出的位置/方向要按该卡变换（C810 Table 3.3）
+                "trCards": tr_cards}
 
     # ── 格阵 3D 预览（阶段3 preview-lattice：universe 实例化 + 嵌套 fill 递归）──
     def _handle_preview_lattice(self):

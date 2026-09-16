@@ -314,3 +314,25 @@ def test_ai_schema_passthrough():
     # 模拟 _adv_from_dict 重建
     adv2 = AdvancedSettings(**{k: v for k, v in d.items() if k in AdvancedSettings.__dataclass_fields__})
     assert adv2.sdef_distributions == v2_json
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# 源级锁：SI 字母含义必须按 C810 3-63（不许再写成「A 三角 / S 对数」）
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_si_letter_semantics_source_lock():
+    """C810 3-63 原文：H=直方图分箱边界；L=离散源变量值；
+    A=**概率密度定义点**；S=**分布号**（可嵌套约 20 层）。
+
+    2026-09-16：旧注释把 A/S 写成「三角/对数」（C810 正文无此二词），
+    报错文案会直接误导用户，这里用源码锁钉住。
+    """
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[2] / "app" / "generator" / "distributions.py"
+    text = src.read_text(encoding="utf-8")
+    assert "A = **points where a probability density distribution" in text, \
+        "词表注释必须引用 C810 3-63 的 A 定义原文"
+    assert "S = **distribution numbers**" in text
+    assert "A（三角）" not in text and "S（对数）" not in text, \
+        "A/S 不得再被写成「三角/对数」"
+    assert "A（概率密度定义点）/S（分布号）" in text, "报错文案必须用 C810 措辞"

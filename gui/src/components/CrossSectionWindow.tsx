@@ -55,6 +55,7 @@ export default function CrossSectionWindow() {
       onClose: () => { closeCurrentWindow(); },
       onPlaneChange: fetchSlices,
       cellComments: (init.cells || []).map((c) => ({ number: parseInt(c.num) || 0, comment: c.comment })),
+      materials: init.materials,
     }),
   );
 }

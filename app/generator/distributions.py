@@ -39,8 +39,14 @@ from typing import Any
 
 import numpy as np
 
-# ── 卡语法词表（唯一事实；源分布卡说明.md 三/四节 + MCNP5 Manual Vol II p.3-62~64）──
-_SI_LETTERS = ("L", "H", "A", "S")  # C810 权威：MCNP 仅支持 H 直方图/L 离散/A 三角/S 对数
+# ── 卡语法词表（唯一事实；源分布卡说明.md 三/四节 + C810 p.3-63~3-67）──
+# C810 3-63 原文（SI option）：omitted or H = bin boundaries for a histogram distribution；
+# L = discrete source variable values；A = **points where a probability density distribution
+# is defined**；S = **distribution numbers**。
+# ⚠ 2026-09-16 修正：旧注释/报错文案写作「H 直方图/L 离散/A **三角**/S **对数**」——
+# 「三角」「对数」在 C810 正文里**不存在**，会让用户把 A（概率密度定义点，点间线性插值）
+# 与 S（分布号，可嵌套约 20 层）理解错。
+_SI_LETTERS = ("L", "H", "A", "S")
 _SP_LETTERS = ("D", "C", "V")
 _DS_LETTERS = ("H", "L", "S", "T", "Q")
 _SB_FN_CODES = ("-21", "-31")
@@ -95,7 +101,8 @@ def _parse_si(toks: list[str]) -> dict:
         vals = toks[1:]
     elif toks and re.match(r"^[A-Za-z]{1,3}$", toks[0]):
         raise SourceSamplingError(
-            f"SI 类型 {toks[0]!r} 非法：MCNP 仅支持 H（直方图）/L（离散）/A（三角）/S（对数）")
+            f"SI 类型 {toks[0]!r} 非法：C810 3-63 只允许 H（直方图分箱边界）/L（离散源变量值）"
+            "/A（概率密度定义点）/S（分布号）——省略即 H")
     return {"type": typ, "values": vals}
 
 
@@ -450,8 +457,30 @@ class DistributionSampler:
         return e
 
     # ── 主接口 ──────────────────────────────────────────────
-    def sample(self, eid, rng: random.Random) -> float:
-        return self._sample_entry(self._entry(eid), rng, 0)
+    def sample(self, eid, rng: random.Random, var: str = "", cel: bool = False,
+               axs: bool = False) -> float:
+        """从分布 eid 抽一个标量。
+
+        ``var`` = 该分布服务的源变量名（ERG/DIR/RAD/EXT/TME/X/Y/Z/CEL…，C810 Table 3.3）。
+        它决定三件 MCNP 语义：① ``SP V`` 是否合法（仅 CEL，C810 3-64，由 ``cel`` 判定
+        源是否为栅元源）；② 内置函数在「SI 单值」下的**对称默认**（C810 3-66 特殊默认
+        3/4/5：DIR/EXT 的 ``SI x`` ⇒ 等价 ``SI −x x``；RAD 的 ``SI x`` ⇒ 等价 ``SI 0 x``）；
+        ③ ``SP −21`` 不给参数 a 时的**变量默认值**（DIR=1；RAD=2，但 ``axs`` 为真或
+        JSU≠0 时为 1；EXT=0）。
+        """  # noqa: D401
+        return self._sample_entry(self._entry(eid), rng, 0, var=var, cel=cel, axs=axs)
+
+    @staticmethod
+    def _default_power(var, axs: bool = False) -> float:
+        """C810 3-66：SP −21 的 a 默认值随变量（DIR=1；RAD=2，定义 AXS 或 JSU≠0 时 1；EXT=0）。"""
+        key = (var or "").strip().upper()
+        if key == "DIR":
+            return 1.0
+        if key == "RAD":
+            return 1.0 if axs else 2.0
+        if key == "EXT":
+            return 0.0
+        return 2.0   # 未知变量按 RAD 语义（体积均匀）兜底
 
     def resolve_ds(self, eid, parent_value, parent_si=None) -> dict:
         ds = self._entry(eid).get("ds")
@@ -482,26 +511,36 @@ class DistributionSampler:
         return p_true[i] / p_bias[i] if p_true[i] > 0 else 1.0
 
     # ── 内部：单条目抽样 ────────────────────────────────────
-    def _sample_entry(self, e, rng, depth):
+    def _sample_entry(self, e, rng, depth, var="", cel=False, axs=False):
         if depth > 20:
             raise SourceSamplingError("SI S 嵌套深度超限（MCNP 上限约 20）")
         si = e.get("si") or {}
         sp = e.get("sp") or {}
         sb = e.get("sb")
         si_type = (si.get("type") or "").strip().upper()
-        si_vals = self._floats(si.get("values"))
+        # ⚠ SI 的 S 类型里存的是**分布号**（可带 D 前缀），不能先过 _floats：
+        # 旧顺序在 `SI1 S D2 D3` 上直接抛"分布值无法解析为数值: D2"（C810 3-64 允许 D 前缀）。
+        si_vals = ([] if si_type == "S" else self._floats(si.get("values")))
         fn = (sp.get("fnCode") or "").strip()
+        has_axs = bool(axs or e.get("_axs"))
+        self._check_sp_v(sp, sb, var, cel)
 
         if fn:
-            return self._sample_builtin(fn, sp, si_vals, rng)
+            return self._sample_builtin(fn, sp, si_vals, rng, var=var, axs=has_axs)
 
         if si_type == "S":
-            ids = [int(float(v)) for v in (si.get("values") or [])]
+            # C810 3-64：S 选项的每个分布号**可带 D 前缀**（D 可省）——
+            # 旧实现直接 float('D3') → ValueError（不是 SourceSamplingError，
+            # 会被兜底成"源抽样失败: could not convert string to float"）。
+            ids = [self._dist_ref(v, e) for v in (si.get("values") or [])]
             sp_type = (sp.get("type") or "D").strip().upper() or "D"
             sp_vals = self._floats(sp.get("values"))
             probs = self._probs(sp_type, sp_vals, len(ids), sb)
             idx = _pick(probs, rng)
-            return self._sample_entry(self._entry(ids[idx]), rng, depth + 1)
+            if ids[idx] == 0:
+                # C810 3-64：分布号为 0 ⇒ 该变量用默认值（SDEF 缺省语义，见 _VAR_DEFAULTS）
+                return self._var_default(var, e)
+            return self._sample_entry(self._entry(ids[idx]), rng, depth + 1, var=var, cel=cel)
 
         if si_type in ("", "H"):
             if len(si_vals) < 2:
@@ -608,8 +647,52 @@ class DistributionSampler:
             r -= masses[i]
         return xs[k - 1]
 
+    # ── SP V 校验 / 分布号解析 / 变量默认值 ──────────────────
+    #: SP V（按体积加权）只在源变量是 CEL 时有意义（C810 3-64）
+    _V_ONLY_VARS = ("CEL",)
+    #: 变量默认值（C810 Table 3.3）：SI S 里分布号 0 时使用
+    _VAR_DEFAULTS = {"ERG": 14.0, "TME": 0.0, "WGT": 1.0, "RAD": 0.0, "EXT": 0.0,
+                     "DIR": 0.0, "XYZ": 0.0, "CEL": 1.0}
+
+    @staticmethod
+    def _check_sp_v(sp, sb, var, cel=False) -> None:
+        """`SP V`（或 `SB V`）仅对 CEL 源合法（C810 3-64：V = for cell distributions only）。
+
+        ``cel`` = 本次抽样是否来自 CEL 源（由编排层给出）；变量名不是 CEL、
+        且源也不是栅元源时报错（有错就地报，不静默当 D 处理）。
+        """
+        vname = (var or "").strip().upper()
+        for card, obj in (("SP", sp), ("SB", sb)):
+            if not obj:
+                continue
+            typ = (obj.get("type") or "").strip().upper()
+            if typ == "V" and vname != "CEL" and not cel:
+                raise SourceSamplingError(
+                    f"{card} V（按体积加权）只能用于 CEL 源变量（C810 3-64："
+                    "V−for cell distributions only）——当前源变量为 "
+                    f"{var or '（未标注）'}，且源不是 CEL 栅元源")
+
+    @staticmethod
+    def _var_default(var, e):
+        """SI S 中分布号 0 → 变量默认值；未知变量给 0.0 但记明来源。"""
+        key = (var or "").strip().upper()
+        if key in ("X", "Y", "Z"):
+            return 0.0
+        return DistributionSampler._VAR_DEFAULTS.get(key, 0.0)
+
+    def _dist_ref(self, tok, e) -> int:
+        """SI S 的分布号 token → int；**D 前缀可选**（C810 3-64）。"""
+        s = str(tok).strip().upper()
+        if s.startswith("D"):
+            s = s[1:]
+        try:
+            return int(float(s))
+        except (TypeError, ValueError):
+            raise SourceSamplingError(
+                f"SI S 的分布号 {tok!r} 无法解析为整数（C810 3-64：分布号可带 D 前缀或省略）")
+
     # ── 内置函数（C810 Table 3.4）───────────────────────────
-    def _sample_builtin(self, fn, sp, si_vals, rng):
+    def _sample_builtin(self, fn, sp, si_vals, rng, var="", axs=False):
         params = self._floats(sp.get("fnParams") or [])
         if fn == "-2":
             self._need(params, 0, 1, "-2")
@@ -624,7 +707,8 @@ class DistributionSampler:
             a = params[0] if len(params) > 0 else 0.965
             b = params[1] if len(params) > 1 else 2.29
             return self._inverse_cdf(lambda E: math.exp(-E / a) * math.sinh(math.sqrt(b * E)),
-                                     lo=0.0, hi=max(20.0, 12.0 * a), rng=rng)
+                                     lo=0.0, hi=max(20.0, 12.0 * a), rng=rng,
+                                     key=("watt", float(a), float(b)))
         if fn == "-4":
             self._need(params, 0, 2, "-4")
             a = abs(params[0]) if params else 0.01
@@ -639,14 +723,17 @@ class DistributionSampler:
             v = rng.gauss(math.sqrt(max(b, 0.0)), a / math.sqrt(2.0))
             return max(0.0, v) ** 2
         if fn == "-21":
-            self._need(params, 1, 1, "-21")
-            a = params[0]
-            lo, hi = self._range(si_vals, (0.0, 1.0))
+            # C810 3-66：`Default depends on the variable. For DIR, a = 1. For RAD, a = 2,
+            # **unless AXS is defined or JSU ≠ 0**, in which case a = 1. For EXT, a = 0.`
+            self._need(params, 0, 1, "-21")
+            a = params[0] if params else self._default_power(var, axs=bool(axs))
+            lo, hi = self._range(si_vals, (0.0, 1.0), var)
             return self._power_law(a, lo, hi, rng)
         if fn == "-31":
-            self._need(params, 1, 1, "-31")
-            a = params[0]
-            lo, hi = self._range(si_vals, (-1.0, 1.0))
+            # C810 3-66：指数分布默认 a = 0（退化为区间内均匀）
+            self._need(params, 0, 1, "-31")
+            a = params[0] if params else 0.0
+            lo, hi = self._range(si_vals, (-1.0, 1.0), var)
             return self._exponential(a, lo, hi, rng)
         if fn == "-41":
             self._need(params, 2, 2, "-41")
@@ -669,19 +756,35 @@ class DistributionSampler:
         return b
 
     @staticmethod
-    def _range(si_vals, default):
-        if not si_vals:
+    def _range(si_vals, default, var=""):
+        """内置函数的取样区间（C810 3-66「Special defaults」规则 3/4/5）。
+
+        - 无 SI ⇒ 该函数的默认区间（−21 的 DIR ⇒ [0,1]、−31 的 DIR/EXT ⇒ [−1,1]）。
+        - **SI 单值 x**：DIR/EXT ⇒ [−x, x]（规则 5：`If SI x and SP −21 or SP −31 are
+          present for EXT, the SI is treated as if it were SI −x x`）；RAD ⇒ [0, x]
+          （规则 4：`If SI x and SP −21 are present for RAD … SI 0 x`）。
+        - SI 双值 ⇒ 原样 [I1, I2]。
+        ⚠ 2026-09-16 修正：旧实现不分变量一律 (0, x)，导致 EXT/DIR 上的
+        `SI1 5 / SP1 −31 1.5` 只在 [0,5] 抽（负半轴整段丢失，实测 0/400 负值）。
+        """
+        vals = list(si_vals or [])
+        if not vals:
             return default
-        if len(si_vals) == 1:
-            return (0.0, si_vals[0])  # RAD 语义 [0, x]（EXT [-x,x] 由 source_sampler 补全）
-        return (si_vals[0], si_vals[1])
+        if len(vals) == 1:
+            x = vals[0]
+            if (var or "").strip().upper() in ("DIR", "EXT"):
+                return (min(-abs(x), abs(x)), max(-abs(x), abs(x)))
+            return (0.0, x)
+        return (vals[0], vals[1])
 
     @staticmethod
     def _power_law(a, lo, hi, rng):
         # p(x)=c|x|^a。数值逆 CDF 统一处理同号/跨零区间（避免负数小数次方）。
         if hi <= lo:
             raise SourceSamplingError("幂律范围无效（hi<=lo）")
-        return DistributionSampler._inverse_cdf(lambda x: abs(x) ** a, lo, hi, rng)
+        return DistributionSampler._inverse_cdf(
+            lambda x: abs(x) ** a, lo, hi, rng,
+            key=("pl", float(a), float(lo), float(hi)))
 
     @staticmethod
     def _exponential(a, lo, hi, rng):
@@ -701,17 +804,31 @@ class DistributionSampler:
                 return x
         return max(mean, 0.0)
 
+    # 数值逆 CDF 的网格缓存：`_inverse_cdf` 每次调用都要重算 4096 点的梯形积分
+    # （实测 4.2 ms/次）——抽样 500 粒子时它是最主要的开销，缓存后同一分布降到 ~10 µs。
+    # 键必须**结构化**（函数号 + 参数 + 区间），**不能用 id(pdf)**：临时 lambda 被回收后
+    # id 会被复用，会把别的分布的概率网格当成本次的结果（实测 DIR 均值从 0.667 漂到 0.709）。
+    _CDF_CACHE: dict = {}
+
     @staticmethod
-    def _inverse_cdf(pdf, lo, hi, rng, n=4096):
-        """数值逆 CDF：pdf 在 [lo,hi] 上梯形积分 → 查表线性插值。"""
-        xs = np.linspace(lo, hi, n + 1)
-        ys = np.array([max(0.0, pdf(float(x))) for x in xs])
-        cdf = np.zeros(n + 1)
-        for i in range(1, n + 1):
-            cdf[i] = cdf[i - 1] + 0.5 * (ys[i - 1] + ys[i]) * (xs[i] - xs[i - 1])
-        total = float(cdf[n])
-        if total <= 0:
-            raise SourceSamplingError("内置函数概率密度积分为零")
+    def _inverse_cdf(pdf, lo, hi, rng, n=4096, key=None):
+        """数值逆 CDF：pdf 在 [lo,hi] 上梯形积分 → 查表线性插值（网格按 ``key`` 缓存）。"""
+        cache_key = key if key is not None else (id(pdf), float(lo), float(hi), int(n))
+        entry = DistributionSampler._CDF_CACHE.get(cache_key)
+        if entry is None:
+            xs = np.linspace(lo, hi, n + 1)
+            ys = np.array([max(0.0, pdf(float(x))) for x in xs])
+            cdf = np.zeros(n + 1)
+            for i in range(1, n + 1):
+                cdf[i] = cdf[i - 1] + 0.5 * (ys[i - 1] + ys[i]) * (xs[i] - xs[i - 1])
+            total = float(cdf[n])
+            if total <= 0:
+                raise SourceSamplingError("内置函数概率密度积分为零")
+            if len(DistributionSampler._CDF_CACHE) > 64:
+                DistributionSampler._CDF_CACHE.clear()
+            entry = (xs, cdf, total)
+            DistributionSampler._CDF_CACHE[cache_key] = entry
+        xs, cdf, total = entry
 
         def draw():
             u = rng.uniform(0.0, total)

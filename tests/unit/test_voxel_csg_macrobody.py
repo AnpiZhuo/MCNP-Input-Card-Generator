@@ -47,10 +47,15 @@ def test_rec_elliptic_cylinder():
 
 
 def test_ell_ellipsoid():
-    # 焦点 (0,0,-1),(0,0,1) 长轴半长 2
-    p = [0, 0, -1, 0, 0, 1, 2]
-    assert_inside("ELL", p, [(0, 0, 0), (1, 0, 0)])
-    assert_outside("ELL", p, [(3, 0, 0)])
+    # C810 §3-20：Rm>0 时 V1/V2 = 两焦点、Rm = 长轴**长度** → 半长轴 Rm/2。
+    # 焦点 (0,0,∓2)，长轴长 6 → a=3、c=2、b=√5≈2.236
+    p = [0, 0, -2, 0, 0, 2, 6]
+    assert_inside("ELL", p, [(0, 0, 0), (1, 0, 0), (0, 0, 2.9)])
+    assert_outside("ELL", p, [(0, 0, 3.1), (2.5, 0, 0)])
+    # Rm<0：V1 = 中心、V2 = 长轴矢量（模 = 长半径）、|Rm| = 短半径
+    q = [0, 0, 0, 0, 0, 3, -2]
+    assert_inside("ELL", q, [(0, 0, 0), (0, 0, 2.5), (1.9, 0, 0)])
+    assert_outside("ELL", q, [(0, 0, 3.5), (2.5, 0, 0)])
 
 
 def test_box_parallelepiped():
@@ -99,5 +104,13 @@ def test_existing_surfaces_no_regression():
 
 
 def test_unsupported_type_raises():
+    # TX/TY/TZ（环面）与 X/Y/Z（点定义回转面）2026-09-16 已实现 → 用真正未知的助记符
     with pytest.raises(ValueError):
-        surface_fn("TX", [0, 0, 0, 5, 2, 2])
+        surface_fn("ZZZ", [0, 0, 0, 5, 2, 2])
+
+
+def test_torus_tx_now_supported():
+    """TX 环面（C810 §3-14）：轴 = x；A=5 主半径、B=2 轴向(=x)次半径、C=2 径向次半径。"""
+    assert_inside("TX", [0, 0, 0, 5, 2, 2], [(0, 5, 0), (0, 5, 1.5), (1.5, 5, 0)])
+    # 孔中心、轴向超出 B、径向超出 C 都在外面
+    assert_outside("TX", [0, 0, 0, 5, 2, 2], [(0, 0, 0), (2.5, 5, 0), (0, 7.5, 0)])

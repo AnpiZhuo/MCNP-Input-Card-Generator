@@ -68,6 +68,7 @@ interface Preview3DProps {
 /* ---- 色板（10 色，按材料号取模） ---- */
 import { getMatColor as getColor } from "../utils/materialColors";
 import { MaterialLegend, CellList, UniverseCellList } from "./MaterialPanel";
+import { materialLegendEntries } from "../utils/materialLegend";
 import { useDeck } from "../utils/DeckContext";
 import { openCrossSection } from "../utils/windows";
 import { apiUrl } from "../utils/api";
@@ -658,6 +659,8 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
           }),
           cellNums: cellNums,
           center: center,
+          // 材料页注释（图例注释的权威来源）随桥传给截面窗口
+          materials: (matList || []).map((m: any) => ({ number: m.number, comment: m.comment })),
         }).then(function(opened) {
           if (!opened) setCsSlices(j.slices);
         });
@@ -1113,9 +1116,9 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         React.createElement("div", {
           style: { padding: "6px 14px", fontSize: 10, color: "var(--text-tertiary)", borderBottom: "1px solid var(--border-glass)" } as React.CSSProperties,
         }, "勾选状态实时生效，仅勾选的栅元会导出到 STEP 文件"),
-        /* 材料颜色对照（共享组件） */
+        /* 材料颜色对照（共享组件）：注释**只**取材料页（材料显示接材料页，栅元注释归栅元列表） */
         React.createElement(MaterialLegend, {
-          entries: legendEntries.map(e => ({ mat: e.mat, comment: cellViews.find(cv => cv.mat === e.mat)?.comment })),
+          entries: materialLegendEntries(legendEntries.map(e => e.mat), matList as any),
         }),
         /* 操作提示 */
         React.createElement("div", {
@@ -1349,6 +1352,8 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       plane: csPlane,
       onClose: function() { setCsSlices(null); },
       onPlaneChange: function(newPlane: any) { fetchCrossSection(newPlane); },
+      // 内嵌兜底视图同样吃材料页注释（与独立窗口一致）
+      materials: (matList || []).map((m: any) => ({ number: m.number, comment: m.comment })),
     }),
     /* 材料选择浮层（点击栅元行的 M材料号 弹出）——点击外部遮罩或 ✕ 关闭 */
     matPicker && React.createElement(React.Fragment, { key: "mat-picker" },
