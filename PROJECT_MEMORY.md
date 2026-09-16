@@ -107,6 +107,19 @@
 
 **⚠️ 本批自身引入并当场修掉的回归（记下来防复犯）**：把 `CX/CY/CZ` **无条件**改写成 `C/X` 后，`CZ R` 两项式（`7 cz 0.3`）被改成 `C/Z 0.3`（少 2 个参数）→ pymcnp `InpError` → 曲面静默丢弃 → `test_api_contract.py` 的格元覆盖两例转红（其 `COV_SURF` 正是 `7 cz 0.3`）。**pymcnp 三种类的接受面各不相同**：`C/X·C/Y·C/Z` 认 4 项长式；`CX·CY` **什么都不认**；`CZ` **只认 `CZ R` 两项式**。⇒ 改写必须带条件 `len(_p) - _kw_idx >= 3`，并补回归 `test_cz_two_item_short_form_is_kept_verbatim`。
 
+## S5.6 重打包部署（2026-09-17 第二轮，**版本仍 1.7.6**；含 S5.3 三项新实现）
+
+**提交**：`cf0efd6`（SP V 体积加权 / SI S 分布号 0 / SDEF TR=Dn 三项实现 + 回归 + 文档）。
+
+**链路（实跑）**：停部署版与 dev 后端 → PyInstaller **128 s / EXIT 0**（sidecar **32,512,851 B** + `_internal` 7867 文件）→ binaries 替换 → `npm run build:app` **69 s / EXIT 0**（vite 7.60 s → 构建前 sync ✅ → `Compiling mcnp-ui v1.7.6` 26.52 s → **构建后 sync 自动命中"python.exe 大小不符"并自动覆盖 + 复核一致 ✅**）→ `--check --require-target` ✅ → 备份 `D:\MCNP\_backup_1.7.6_20260917_014123`（7877 文件 / 242.2 MB）→ 部署（exe 6,627,840 B / python.exe 32,512,851 B / `_internal` 7867 文件，关键模块与文档全在位）。
+
+> **6.2 第三次命中，且这次是"自动治愈"**：`build:app` 的收尾 `sync-sidecar --require-target` 自己发现 `target\release\python.exe` 与 `binaries\` 不一致 → 自动镜像 → 复核一致退出 0。**人工零介入**（前两轮都要我手动覆盖）。这就是把它做成构建一步的价值。
+
+**冒烟（部署目录里的 `python.exe` 直接起 sidecar，真实 HTTP）**：`xsdir-check` 200（xsdir 7925）/ `mcnp-detect` 200 / POST `diff-inp` 200 / `lattice-extent` 200 / `preview-lattice` 200 / `validate-lattice-surfaces` 200 / `source-demo-sample` 200。
+**五项运行期确认**：① 平面源 `x≡5`、`r≤3`、`dx∈[0.020,0.999]` 全正向；② `SI1 S D2 D3` ⇒ 能量 `{1,9}`；③ 球面源方向反向 **0/200**；④ `7 CX 0 0 3` 报「不能作面源」；⑤ CEL 球源 `|r|∈[0.681,4.995]`；**⑥ 新增 `SP V` 体积占比实测 0.307 vs 理论 0.296**（球 33.51 / 壳 79.59）。
+
+**说明**：本轮冒烟用"直接起 sidecar"而不是双击 exe —— 因为第一轮我试图自动启动部署版时，用户正好手动关掉了窗口（我把 `Get-Process` 的一次报错误读成"启动即退出"，已撤回该判断）。**部署版主程序能否正常开窗需要用户目视确认**（我只验证了同一套 `_internal`/`python.exe` 的后端行为）。
+
 ## S5.5 打包部署（2026-09-17，**版本仍 1.7.6**：bug 修复批不升版）
 
 **提交**：`e6f3a0c`（修复本体：11 类几何 + 面源/分布语义 + 带外 2 条 + 回归）、`acdc0b5`（打包链路 6.2 根治）、`<docs>(memory)`（本文件 + CHANGELOG 门禁计数与批次记录）。
