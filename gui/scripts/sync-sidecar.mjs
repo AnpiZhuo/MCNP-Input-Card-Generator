@@ -13,10 +13,18 @@
  * `tauri build` 无论走哪条路径，源与目标都已一致 ⇒ 6.2 从"每次都踩"降级为"几乎不用查"。
  *
  * ## 用法（在 gui/ 下）
- *     node scripts/sync-sidecar.mjs           # 同步 + 校验（默认，afterBuildCommand 调用）
- *     node scripts/sync-sidecar.mjs --check   # 只校验，不写盘（不一致则退出码 1）
+ *     node scripts/sync-sidecar.mjs              # 同步 + 校验（默认）
+ *     node scripts/sync-sidecar.mjs --check      # 只校验，不写盘（不一致则退出码 1）
+ *     node scripts/sync-sidecar.mjs --require-target   # 目标必须存在（构建产物应已生成）
  *
- * 无 `target/release`（首次打包）→ 跳过：此时不可能有旧产物。
+ * ## ⚠️ 必须在 tauri build **之后**再跑一次（2026-09-17 实测）
+ * 构建**前**同步挡不住它：`tauri build` 在编译期会用 `binaries\` 的内容去写
+ * `target\release\python.exe`，但**只写 `_internal`、不写 `python.exe`** —— 实测
+ *   （第 1 次打包）build:app = vite build → sync-sidecar(✅ 构建前一致) → tauri build
+ *   ⇒ 构建后 `python.exe` 仍是 **09/12 的 28,631,092 B**，而 `binaries\` 已是 32,503,246 B；
+ *      `_internal` 却是新的（7867 文件）。
+ * 所以 `build:app` 里同步放在 **tauri build 之后**（见 package.json）。
+ * `beforeBuildCommand` 里那次仍保留：它负责"首次打包/无 target"的兜底与早失败。
  */
 import { existsSync, mkdirSync, readdirSync, statSync, copyFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve, relative } from "node:path";
@@ -90,12 +98,21 @@ function copyTree(src, dst) {
 
 function main(argv) {
   const checkOnly = argv.includes("--check");
+  const requireTarget = argv.includes("--require-target");
   if (!existsSync(SRC_DIR) || !existsSync(join(SRC_DIR, SIDECAR_SRC))) {
+    if (requireTarget) {
+      console.error(`[sync-sidecar] ❌ --require-target：源 sidecar 不存在：${SRC_DIR}\\${SIDECAR_SRC}`);
+      return 1;
+    }
     console.log(`[sync-sidecar] 源不存在，跳过：${SRC_DIR}\\${SIDECAR_SRC}`);
     console.log("[sync-sidecar] （首次打包时正常：先跑第 4/5 步生成 sidecar）");
     return 0;
   }
   if (!existsSync(DST_DIR)) {
+    if (requireTarget) {
+      console.error(`[sync-sidecar] ❌ --require-target：目标不存在：${DST_DIR}（tauri build 没跑？）`);
+      return 1;
+    }
     console.log(`[sync-sidecar] 目标不存在，跳过：${DST_DIR}（首次打包正常）`);
     return 0;
   }

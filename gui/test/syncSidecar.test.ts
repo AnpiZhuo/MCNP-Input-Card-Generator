@@ -65,4 +65,24 @@ describe("sync-sidecar 的目录比较", () => {
     expect(r.sizeDiff).toHaveLength(1);
     expect(r.sizeDiff[0]).toContain("python.exe");
   });
+
+  it("缺整个 _internal 目录（旧 sidecar 只剩 exe）→ missing 覆盖全树", () => {
+    const src = mk({ "python.exe": "exe", "_internal/app/a.py": "x", "_internal/app/b.py": "y" });
+    const dst = mk({ "python.exe": "exe" });
+    const r = compareTrees(src, dst);
+    expect(r.same).toBe(false);
+    expect(r.missing.sort()).toEqual(["_internal/app/a.py", "_internal/app/b.py"]);
+    expect(r.extra).toEqual([]);
+  });
+});
+
+describe("sync-sidecar 的 --require-target 语义（构建后自检用）", () => {
+  it("build:app 的收尾步骤必须带 --require-target（否则首次/失败构建会被静默放过）", async () => {
+    const pkg = (await import("../package.json")) as { default: { scripts: Record<string, string> } };
+    const chain = pkg.default.scripts["build:app"];
+    expect(chain).toContain("tauri build");
+    // 关键：同步必须出现在 tauri build **之后**（构建期 tauti 会用 binaries\ 覆盖 _internal
+    // 但**不覆盖 python.exe**，实测构建后 python.exe 仍是旧版）
+    expect(chain.indexOf("sync-sidecar.mjs --require-target")).toBeGreaterThan(chain.indexOf("tauri build"));
+  });
 });
