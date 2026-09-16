@@ -15,6 +15,25 @@
 
 ## 一、批次详情档案（原 PROJECT_MEMORY.md 顶部修复横幅，含独有验收细节）
 
+### 📦 打包部署（2026-09-17，**版本仍 1.7.6**：bug 修复批不升版；已部署 + 冒烟通过）
+
+**提交**：`e6f3a0c`（修复本体）/ `acdc0b5`（打包链路 6.2 根治）/ 本次（记忆 + 计数）。
+
+| 步 | 内容 | 结果 |
+| :-- | :--- | :--- |
+| 1 | 版本核对**六处** | ✅ 全 1.7.6（package.json / package-lock×2 / tauri.conf.json / Cargo.toml / Cargo.lock / README 徽章）——**未升版**（bug 修复批硬规则） |
+| 2 | 门禁 | ✅ pytest **982/1**（既有 GBK 环境失败）/ vitest **644/0** / tsc 两档 0 / build 0 |
+| 3+6 | **`npm run build:app`**（新命令：vite build → 构建前 sync → tauri build → **构建后 sync --require-target**） | ✅ EXIT 0，**40 s**（vite 6.12 s / `Compiling mcnp-ui v1.7.6` 13.74 s） |
+| 4 | PyInstaller | ✅ EXIT 0，**113 s**；sidecar **32,503,246 B** + `_internal` **7867 文件** |
+| 5 | 替换 binaries | ✅ `preview_cache.py` / `generator\source_sampler.py` / `vendor\geouned` 全在位 |
+| **6.2** | sidecar 时效 | ⚠️ **又中一次**：构建**前** sync 报 ✅、tauri build 成功，但构建后 `python.exe` 仍是 09/12 的 28,631,092 B（`_internal` 却已刷新）⇒ `tauri build` 编译期只写 `_internal`、**不写 `python.exe`**。**已把收尾同步加进 `build:app`**（`--require-target` 同步+自检），并加单测断言"同步必须在 tauri build 之后" |
+| 7 | 部署 | ✅ 备份 `D:\MCNP\_backup_1.7.6_20260917_010859`（7877 文件 / 242.1 MB）→ 部署 exe 6,627,840 B + python.exe 32,503,246 B + `_internal` 7867 文件 + README/AI接入.md；文档两处到位（`_internal\app\docs\源分布卡说明.md` 21,902 B、`gui\dist\docs\` 8 个 md 内嵌 exe） |
+| 8 | 冒烟 | ✅ 主程序 + sidecar（2 s 就绪 5001）+ MCP 8100 LISTENING；`xsdir-check` 200（xsdir 7925）/ `mcnp-detect` 200 / POST `diff-inp` 200 / `lattice-extent` 200 / `preview-lattice` 200 / `validate-lattice-surfaces` 200 / `source-demo-sample` 200 |
+
+**本批修复的运行期确认**（部署版真实 HTTP，非源码直调）：① 平面源 `SUR=5 PX 5` + `RAD=D1` → `x≡5`、`r≤3`、`dx∈[0.075,0.999]` **全正向**（此前该场景在真实后端必报「曲面未定义」）；② `SI1 S D2 D3` → 能量 `{1,9}`（此前 ValueError）；③ 球面源方向反向 **0/200**（此前 102/200 朝球心）；④ `7 CX 0 0 3` 报「**不能作面源**」而非"未定义"；⑤ CEL 球形栅元源 `|r|∈[0.606,4.992]`。
+
+> **踩坑注记**：GET 打 `/api/diff-inp`、`/api/lattice-extent` 返回 500 属正常——这两个端点只认 POST（按 `docs/fix-verification.md` §1 的冒烟脚本口径复核即 200）。别据此误判"部署坏了"。
+
 ### 🔧 打包坑 6.2（tauri build 不刷新 sidecar）根治（2026-09-17，工作区未提交）
 
 **背景**：用户问「之前那个 6.2 坑，改了吗？」——**没改**（当时用户说"先别打包"，我没碰打包链路）。这次连"坑是否客观存在"一起补上实验证据。

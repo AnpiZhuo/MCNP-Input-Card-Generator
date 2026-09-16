@@ -100,6 +100,26 @@
 
 **⚠️ 本批自身引入并当场修掉的回归（记下来防复犯）**：把 `CX/CY/CZ` **无条件**改写成 `C/X` 后，`CZ R` 两项式（`7 cz 0.3`）被改成 `C/Z 0.3`（少 2 个参数）→ pymcnp `InpError` → 曲面静默丢弃 → `test_api_contract.py` 的格元覆盖两例转红（其 `COV_SURF` 正是 `7 cz 0.3`）。**pymcnp 三种类的接受面各不相同**：`C/X·C/Y·C/Z` 认 4 项长式；`CX·CY` **什么都不认**；`CZ` **只认 `CZ R` 两项式**。⇒ 改写必须带条件 `len(_p) - _kw_idx >= 3`，并补回归 `test_cz_two_item_short_form_is_kept_verbatim`。
 
+## S5.5 打包部署（2026-09-17，**版本仍 1.7.6**：bug 修复批不升版）
+
+**提交**：`e6f3a0c`（修复本体：11 类几何 + 面源/分布语义 + 带外 2 条 + 回归）、`acdc0b5`（打包链路 6.2 根治）、`<docs>(memory)`（本文件 + CHANGELOG 门禁计数与批次记录）。
+
+**链路（用新命令，全程实跑）**：
+1. 版本核对**六处**全 1.7.6（package.json / package-lock 两处 / tauri.conf / Cargo.toml / Cargo.lock / README 徽章）；
+2. PyInstaller：`python -m PyInstaller --noconfirm mcnp_sidecar.spec` → **113 s / EXIT 0**；
+3. binaries：sidecar **32,503,246 B** + `_internal` **7867 文件**（`preview_cache.py` / `source_sampler.py` / `vendor\geouned` 全在位）；
+4. `npm run build:app` → **40 s / EXIT 0**（vite build 6.12 s → 构建前 sync ✅ → `Compiling mcnp-ui v1.7.6` 13.74 s → **构建后 sync**）；
+5. 备份 `D:\MCNP\_backup_1.7.6_20260917_010859`（**7877 文件 / 242.1 MB**）；
+6. 部署 `D:\MCNP\MCNP输入卡生成器`：exe 6,627,840 B / python.exe 32,503,246 B / `_internal` 7867 文件 / README + AI接入.md；文档两处都在位（`_internal\app\docs\源分布卡说明.md` 21,902 B、`gui\dist\docs\` 8 个 md 随 exe 内嵌）。
+
+> **⚠️ 6.2 在本次打包里"又中了一次"，而且正好证明了为什么构建前同步不够**：第 1 次 `npm run build:app` 的**构建前** sync 报了 ✅，tauri build 也成功，但**构建后** `python.exe` 仍是 09/12 的 28,631,092 B（`binaries` 已是 32,503,246 B），`_internal` 却刷新了 ⇒ `tauri build` 在**编译期**用 `binaries\` 写 `target\release\`，**只写 `_internal`、不写 `python.exe`**。**修法**：`build:app` 收尾再加一次 `sync-sidecar --require-target`（同步 + 自检），`package.json` 已改并加单测断言"同步必须在 `tauri build` 之后"。
+
+**冒烟（部署版真实 HTTP）**：主程序 29 MB + sidecar PID 25180 于 5001（**2 s 就绪**）+ MCP **8100** LISTENING；
+`xsdir-check` 200（xsdir **7925** 条）/ `mcnp-detect` 200 / POST `diff-inp` **200** / `lattice-extent` 200 / `preview-lattice` 200 / `validate-lattice-surfaces` 200 / `source-demo-sample` 200；
+**本批修复的运行期确认**：① 平面源 `SUR=5 PX 5` + `RAD=D1` → `x≡5`、`r≤3`、`dx∈[0.075,0.999]` **全正向**（此前该场景在真实后端必报"曲面未定义"）；② `SI1 S D2 D3` → 能量 `{1,9}`（此前 ValueError）；③ 球面源方向反向 **0/200**、min cos 0.049（此前 102/200 朝球心）；④ `7 CX 0 0 3` 报「**不能作面源**」而非"曲面未定义"；⑤ CEL 球形栅元源 `|r|∈[0.606,4.992]`。
+
+**说明**：GET 打 `diff-inp`/`lattice-extent` 会 500 属正常（这两个端点只认 POST——按 `docs/fix-verification.md` 的冒烟脚本口径复核即 200）。
+
 ## S5.4 打包坑 6.2 根治（2026-09-17，用户"那个 6.2 坑改了吗？"驱动）
 
 **坑的精确机理（带标记对照实验）**：`tauri build` **会刷新 `target\release\_internal\`，但不刷新 `target\release\python.exe`** —— 重建后 `python.exe` 仍是 09/12 的 28,631,092 B（我加的标记文件还在），而 `binaries\` 已是 09/17 的 32,487,958 B；`_internal` 两侧一致（7867 文件 / 214,579,036 B）。⇒ "版本号新、后端旧"= sidecar 两件套里只换了一半。
