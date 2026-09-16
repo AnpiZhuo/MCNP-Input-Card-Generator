@@ -1,6 +1,6 @@
 {
   "build": {
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && npm run sync-sidecar",
     "beforeDevCommand": "npm run dev",
     "devPath": "http://localhost:1420",
     "distDir": "../dist"
