@@ -79,6 +79,9 @@
 | D-6 | **`SP −21/−31` 不给参数 a 时被判为错误**（`_need(params,1,1)`），而 C810 3-66 明确「默认随变量」 | a 缺省 = `DIR 1 / RAD 2（有 AXS 或 JSU≠0 时 1）/ EXT 0`；−31 缺省 a=0 |
 | D-7 | **`SDEF TR=n` 完全未消费**（位置/方向都留在未变换坐标系） | 新增 `_sdef_trn()` + 位置/方向变换；`_to_world/_to_world_dir` 约定改为 **Rᵀ·p + o**，与 `_freecad_csg_worker.apply_trn`（FreeCAD 矩阵按列组装 ⇒ 实际转置作用）逐位一致 |
 | D-8 | 前端 `distDual.parseDs` 对非 T 类型**无条件**把首 token 当 param ⇒ `DS1 L 1.5 2.5` 在前端表单里丢一个值（与后端 `_parse_ds` 口径不一致） | 改为「首 token 非数值才当 param」（与后端同口径），并补 Q/T/L 三类回归 |
+| D-11 | **`SP V` 的体积加权语义没实现**：C810 3-64 明写 `V — Probability is proportional to cell volume (times Pi if the Pi are present)`，而实现把 V 当 D 表用（只有发射侧保留字母） | 新增 `voxel_csg.cell_volume()`（确定性分层 MC，立方体/球对解析真值 8 / 33.51）+ `api_server` 逐栅元进 `cellVolumes` + `_resolve_v_probs()`：权重 = 体积（给了 Pi 再乘 Pi）；**缺体积按 C810 的 FATAL 语义明确报错**（不静默等概率） |
+| D-12 | **`SI S` 分布号 0 只覆盖硬编码默认**（变量默认值没读 SDEF 卡） | `_var_default(var, e, sdef_fields)`：优先读 SDEF 卡的**字面值**（如 `SDEF ERG=2.5` ⇒ 2.5），读不到才退回 Table 3.3 静态默认；编排层通过统一种子 `_Context._smp()` 把字段表透传 |
+| D-13 | **`SDEF TR=Dn`（变换分布）被忽略**：C810 3-64/3-66 明确 `TR = Dn` 时用 `SI L`（列 TR 编号）+ `SP option`（空白/D/C）抽一个 TR 号再变换 | `_sdef_trn(rng)` 支持分布形态：抽 TR 号 → 查 `trCards` → 施加位置/方向变换；固定整数形态与"缺卡"口径不变 |
 
 **带外发现（本轮"到真实后端跑一遍"才暴露，单测用手写 geometry dict 全绿所以长期潜伏）**
 | # | 缺陷 | 修法 |
@@ -92,13 +95,13 @@
 
 **新增/改动测试**：`tests/unit/test_source_sampler.py`（+6：平面源 POS/RAD 圆、面源方向绕法线含 NRM 双向、球面源朝外、柱面源明确报错、EXT 对称、SDEF TR）、`tests/unit/test_distribution_sampler.py`（+7：D 前缀、分布号 0=默认值、非法分布号、SP V 双向、−21 默认 a 随变量、−31 默认 a、`_range` 对称）、`tests/unit/test_distributions.py`（+1 源级锁）、`gui/test/distDual.test.ts`（+1 并修旧断言）。
 
-**门禁（改后实跑）**：pytest **982 passed / 1 failed（`test_meshtal_worker.py::test_worker_spawn_dev_mode_bad_tally_error`，GBK 解码环境问题，`git stash` 复核为**既有失败**、与本批无关）**、vitest **644 passed / 82 files**、tsc 两档 **EXIT 0**、`vite build` **EXIT 0**（已重建 `gui/dist`）。
+**门禁（三项实现后实跑）**：pytest **989 passed / 1 failed（同一既有 GBK 环境失败）**、vitest **644 / 82 files**、tsc 两档 **EXIT 0**、`vite build` **EXIT 0**。
 
 **本批自身引入并当场修掉的回归（防复犯）**：`CX/CY/CZ` 一度被**无条件**改写成 `C/X` ⇒ `CZ R` 两项式（`7 cz 0.3`）变 `C/Z 0.3`（少 2 个参数）⇒ pymcnp `InpError` ⇒ 曲面静默丢弃 ⇒ `test_api_contract.py` 格元覆盖两例转红。**pymcnp 三类的接受面各不相同**：`C/X·C/Y·C/Z` 认 4 项长式；`CX·CY` 什么都不认；`CZ` **只认 `CZ R`**。修法：改写加条件 `len(_p) - _kw_idx >= 3` + 回归 `test_cz_two_item_short_form_is_kept_verbatim`。
 
 **运行期复验（真实 HTTP，后端已重启加载新代码）**：平面源 `x≡5`、面内 `r∈[0.175,2.997]`（RAD≤3）、`dx∈[0.040,0.998]` **全正向**（绕 +X 面法线）；球面源方向·外法线 `min=0.066`、**反向 0/200**；`SI1 S D2 D3` 能量取值 `{1.0, 9.0}`；柱面源给出可操作报错。
 
-**已知未修（诚实登记）**：① `SP V` 的**体积加权语义**（概率 ∝ 栅元体积 × Pi）未实现——抽样侧把它当 D 表用，只有发射侧保留 `V` 字母；需要逐栅元体积（api_server 侧有 `cell_aabb` 但无精确体积）；契约已按现状标注。② `SI S` 分布号 0 的默认值只覆盖 Table 3.3 的标量变量默认（ERG/TME/WGT/RAD/EXT/DIR/X-Y-Z）。③ `SDEF TR=Dn`（变换分布，需 SI L + 一组 TR 卡）仍未实现。
+**已知未修**：无（原登记的三项——`SP V` 体积加权、`SI S` 分布号 0 的变量默认、`SDEF TR=Dn` 变换分布——已于同日全部实现，见上表 D-11/D-12/D-13；运行期实测 `SP V` 体积占比 0.295 vs 理论 0.296）。
 
 ### 📦 v1.7.6 发布（2026-09-11，用户指定版本；**已打包部署 + 冒烟通过**）
 

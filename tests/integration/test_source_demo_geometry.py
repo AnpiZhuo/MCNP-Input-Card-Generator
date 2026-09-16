@@ -24,8 +24,9 @@ for p in (str(PROJECT_DIR), str(BACKEND_DIR)):
 api_server = pytest.importorskip("api_server", reason="需要 gui/backend 可导入（pymcnp）")
 
 
-def _prep(surfaces_text: str, tr_text: str = ""):
-    return api_server.MCNPHandler._prepare_source_geometry(None, surfaces_text, [], tr_text)
+def _prep(surfaces_text: str, tr_text: str = "", cells: list | None = None):
+    return api_server.MCNPHandler._prepare_source_geometry(None, surfaces_text,
+                                                           cells or [], tr_text)
 
 
 def test_plane_surface_ready_for_source_sampling():
@@ -80,3 +81,20 @@ def test_tr_cards_passed_through_for_sdef_tr():
     g = _prep("5 PX 5", "TR2 0 0 100")
     assert "trCards" in g and "2" in g["trCards"]
     assert g["trCards"]["2"]["translate"] == [0.0, 0.0, 100.0]
+
+
+def test_cell_volumes_available_for_sp_v():
+    """`SP V`（C810 3-64 概率 ∝ 栅元体积）需要 geometry 给出逐栅元体积。
+
+    立方体 −1..1 ⇒ 8；球 SO 2 ⇒ 33.51。旧实现根本没算体积 ⇒ SP V 无从实现。
+    """
+    cube = _prep("1 px -1\n2 px 1\n3 py -1\n4 py 1\n5 pz -1\n6 pz 1",
+                 cells=[{"number": 1, "material": "1", "density": "-1",
+                         "surface_expr": "1 -2 3 -4 5 -6", "imp_n": "1", "render": True}])
+    assert cube["geometryErrors"] == [], cube["geometryErrors"]
+    assert abs(cube["cellVolumes"][1] - 8.0) < 0.1, cube["cellVolumes"]
+
+    sphere = _prep("1 so 2", cells=[{"number": 1, "material": "1", "density": "-1",
+                                     "surface_expr": "-1", "imp_n": "1", "render": True}])
+    v = sphere["cellVolumes"][1]
+    assert abs(v - 4.0 / 3.0 * 3.141592653589793 * 8.0) / v < 0.03, v

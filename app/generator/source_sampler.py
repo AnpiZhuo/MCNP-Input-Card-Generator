@@ -65,16 +65,32 @@ class _Context:
         toks = self._v(key).split()
         return tuple(_num(t, 0.0) for t in toks)
 
-    def _sdef_trn(self):
-        """SDEF TR=n（固定整数编号）的变换数据；缺省 / 分布形态 / 未定义 → None。
+    def _sdef_trn(self, rng=None):
+        """SDEF `TR=` 的变换数据。
 
-        C810 Table 3.3：TR = 源变换（可给编号，也可给分布 Dn —— 分布形态需要用户
-        自己给一组 TR 卡，本项目按「未实现即明确不静默」处理：仅支持整数编号）。
+        两种形态（C810 3-64 / 3-66）：
+        - `TR=n`：固定 TR 编号；
+        - `TR=Dn`：**变换分布** —— 该分布用 `SI L I1 ... Ik` 列出 k 个 TR 编号，
+          `SPn option`（空白/D/C）给出概率（C810：`The L option on the SI card is
+          required. The "option" on the SP and SB cards may be blank, D or C.`），
+          每个粒子抽一个 TR 号再变换。
+        取不到卡（编号没定义 / 分布没给）→ None（调用方按"未变换"处理；这与"缺 TR 卡"
+        的告警口径一致）。
         """
         v = self._v("sdef_tr")
-        if not v or v.upper().startswith("F") or _is_d_ref(v):
+        if not v:
             return None
         cards = (self.geometry or {}).get("trCards") or {}
+        if _is_d_ref(v):
+            if rng is None:
+                return None
+            tr_no = int(round(self._smp(int(v[1:]), rng, var="TR")))
+            tr = cards.get(str(tr_no)) or cards.get(tr_no)
+            return None if not tr else {
+                "origin": tuple(tr.get("translate") or (0.0, 0.0, 0.0)),
+                "rotate": tr.get("rotate")}
+        if v.upper().startswith("F"):
+            return None
         tr = cards.get(v) or cards.get(str(v))
         if not tr:
             return None
@@ -92,8 +108,8 @@ class _Context:
         normal = self._surface_normal
         dirv = self._direction(rng, pos, normal)
         wgt = self._wgt(rng, cel=cel)
-        # SDEF TR=n（源坐标变换）：位置与方向都要变换（C810 Table 3.3 TR 行）
-        trn = self._sdef_trn()
+        # SDEF TR=n / TR=Dn（源坐标变换 / 变换分布）：位置与方向都要变换
+        trn = self._sdef_trn(rng)
         if trn is not None:
             # SDEF TR 是**源坐标系**变换：对已抽出的世界系位置/方向再作用一次
             # （与曲面自身 TR 复合；_to_world_dir 内部是 Rᵀ·v，位置再加 origin）
@@ -117,7 +133,7 @@ class _Context:
     def _par(self, rng) -> str:
         v = self._v("sdef_par")
         if _is_d_ref(v):
-            val = self.s.sample(int(v[1:]), rng, var="PAR")
+            val = self._smp(int(v[1:]), rng, var="PAR")
             return _PAR_GROUP.get(str(int(val)), "other")
         if v:
             return _PAR_GROUP.get(v.strip().upper(), "other")
@@ -127,7 +143,7 @@ class _Context:
     def _erg(self, rng, pos_index, cel=False) -> float:
         v = self._v("sdef_erg")
         if _is_d_ref(v):
-            return self.s.sample(int(v[1:]), rng, var="ERG")
+            return self._smp(int(v[1:]), rng, var="ERG")
         toks = v.split()
         if len(toks) >= 2 and toks[0].upper().startswith("F"):
             # ERG=FPOS Dn：依赖位置索引
@@ -143,14 +159,28 @@ class _Context:
         if "value" in r:
             return float(r["value"])
         if "distribution" in r:
-            return self.s.sample(r["distribution"], rng, var="ERG", cel=cel)
+            return self._smp(r["distribution"], rng, var="ERG", cel=cel)
         return 14.0  # default
+
+    def _smp(self, eid, rng, **kw) -> float:
+        """统一的分布抽样入口：自动带上本源的 SDEF 字段与栅元体积。
+
+        这两样分别支撑 `SI S` 的分布号 0（= 该变量默认值）与 `SP V`（概率 ∝ 栅元体积）。
+        """
+        kw.setdefault("cel", self.cel_source)
+        return self.s.sample(eid, rng, sdef_fields=self.f,
+                             cell_volumes=self.cell_volumes, **kw)
+
+    @property
+    def cell_volumes(self) -> dict:
+        """几何层给的 {栅元号: 体积}（供 `SP V`；拿不到就是空字典）。"""
+        return (self.geometry or {}).get("cellVolumes") or {}
 
     # ── 权重 ─────────────────────────────────────────────────
     def _wgt(self, rng, cel=False) -> float:
         v = self._v("sdef_wgt")
         if _is_d_ref(v):
-            return self.s.sample(int(v[1:]), rng, var="WGT", cel=cel)
+            return self._smp(int(v[1:]), rng, var="WGT", cel=cel)
         return _num(v, 1.0)
 
     # ── 方向 ─────────────────────────────────────────────────
@@ -167,8 +197,7 @@ class _Context:
         # 参考轴：显式 VEC 优先；面源无 VEC 时 = 面法线（C810：VEC 缺省 = 面法线 with NRM sign）
         axis = vec if (vec and any(vec)) else (normal or ())
         if _is_d_ref(d):
-            mu = self.s.sample(int(d[1:]), rng, var="DIR", cel=self.cel_source,
-                               axs=bool(self._v("sdef_axs")))
+            mu = self._smp(int(d[1:]), rng, var="DIR", axs=bool(self._v("sdef_axs")))
             return self._dir_from_mu(mu, axis, rng)
         if d:
             # 固定 DIR（方向余弦数值，可多值 u v w）
@@ -274,8 +303,7 @@ class _Context:
     def _sample_cartesian(self, px, py, pz, rng):
         def axis(v, default, name):
             if _is_d_ref(v):
-                return self.s.sample(int(v[1:]), rng, var=name, cel=self.cel_source,
-                                     axs=bool(self._v("sdef_axs")))
+                return self._smp(int(v[1:]), rng, var=name, axs=bool(self._v("sdef_axs")))
             return _num(v, default)
         return (axis(px, 0.0, "X"), axis(py, 0.0, "Y"), axis(pz, 0.0, "Z"))
 
@@ -312,14 +340,16 @@ class _Context:
         """
         if _is_d_ref(rad):
             return _default_power_law(self.s, int(rad[1:]), rng, power, "RAD",
-                                      cel=self.cel_source, axs=bool(self._v("sdef_axs")))
+                                      cel=self.cel_source, axs=bool(self._v("sdef_axs")),
+                                      sdef_fields=self.f, cell_volumes=self.cell_volumes)
         return _num(rad, 0.0)
 
     def _axial_value(self, ext, rng) -> float:
         """EXT 值（沿轴距离）。SI 无 SP → 默认幂律 a=0（均匀）。"""
         if _is_d_ref(ext):
             return _default_power_law(self.s, int(ext[1:]), rng, 0.0, "EXT",
-                                      cel=self.cel_source)
+                                      cel=self.cel_source,
+                                      sdef_fields=self.f, cell_volumes=self.cell_volumes)
         return _num(ext, 0.0)
 
     @staticmethod
@@ -350,7 +380,8 @@ class _Context:
         return pos
 
 
-def _default_power_law(sampler, did, rng, power, var, cel=False, axs=False) -> float:
+def _default_power_law(sampler, did, rng, power, var, cel=False, axs=False,
+                       sdef_fields=None, cell_volumes=None) -> float:
     """「只有 SI、没有 SP」时 MCNP 自动补的默认幂律（C810 3-66 特殊默认 2/3/4/5）。
 
     - RAD 的 ``SIn`` 给半径范围（``SI 0 5`` 或单值 x ⇒ ``SI 0 x``，a 默认 2；有 AXS 时 1）；
@@ -360,7 +391,8 @@ def _default_power_law(sampler, did, rng, power, var, cel=False, axs=False) -> f
     entry = sampler._entry(did)
     sp = entry.get("sp") or {}
     if (sp.get("fnCode") or "").strip() or sp.get("values"):
-        return sampler.sample(did, rng, var=var, cel=cel, axs=axs)
+        return sampler.sample(did, rng, var=var, cel=cel, axs=axs,
+                              sdef_fields=sdef_fields, cell_volumes=cell_volumes)
     si_vals = sampler._floats((entry.get("si") or {}).get("values"))
     if not si_vals:
         return 0.0

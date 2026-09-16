@@ -378,3 +378,33 @@ def test_shell_mesh_covers_outer_extent():
     assert hi.min() > 1.8, f"outer shell clipped hi={hi}"
     assert hi.max() < 2.5, f"outer shell out of bounds hi={hi}"
     assert len(triangles) < 200000, f"triangle blowup {len(triangles)}"
+
+
+def test_cell_volume_estimator():
+    """`cell_volume`（SP V 用）：立方体/球对解析真值；无界 → None。"""
+    B = 1e6   # 与 api_server 侧一致（±1e300 哨兵在此被拒 → 体积无意义）
+    # 面 1/3/5 = 各轴 −1，面 2/4/6 = 各轴 +1；AST 形状照 Geometry.from_mcnp('1 -2 3 -4 5 -6')
+    # 的真实产物（−2 落在 ['unary', ['surf',2], 'neg']）——手搓错形状会让命中率恒 0。
+    surfs = {}
+    for n, (t, p) in {1: ("PX", [-1.0]), 2: ("PX", [1.0]), 3: ("PY", [-1.0]),
+                      4: ("PY", [1.0]), 5: ("PZ", [-1.0]), 6: ("PZ", [1.0])}.items():
+        surfs[n] = {"type": t, "params": p, "field": voxel_csg.surface_fn(t, p)}
+    cube = ["intersect", ["intersect", ["intersect", ["intersect",
+            ["intersect", ["surf", 1], ["unary", ["surf", 2], "neg"]], ["surf", 3]],
+            ["unary", ["surf", 4], "neg"]], ["surf", 5]],
+            ["unary", ["surf", 6], "neg"]]
+    cube_aabb = ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0), (True, True, True))
+    assert abs(voxel_csg.cell_volume(cube, surfs, B, aabb=cube_aabb) - 8.0) < 0.06   # 2^3
+    # 同时验"自己算紧盒"那条路径（给全部面的 type/params）
+    assert abs(voxel_csg.cell_volume(cube, surfs, B) - 8.0) < 0.06
+    sphere = {1: {"type": "SO", "params": [2.0], "field": voxel_csg.surface_fn("SO", [2.0])}}
+    v_true = 4.0 / 3.0 * 3.141592653589793 * 8.0
+    sph_aabb = ((-2.0, -2.0, -2.0), (2.0, 2.0, 2.0), (True, True, True))
+    v = voxel_csg.cell_volume(["unary", ["surf", 1], "neg"], sphere, B, aabb=sph_aabb)
+    assert abs(v - v_true) / v_true < 0.02
+    # 无界半空间（±1e300 哨兵）→ None，不给假体积
+    half = {1: {"type": "PX", "params": [1.0], "field": voxel_csg.surface_fn("PX", [1.0])}}
+    assert voxel_csg.cell_volume(["surf", 1], half, B) is None
+    # 同 seed 复现
+    assert voxel_csg.cell_volume(["unary", ["surf", 1], "neg"], sphere, B,
+                                 aabb=sph_aabb) == v

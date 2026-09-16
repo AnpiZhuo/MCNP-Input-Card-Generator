@@ -94,9 +94,16 @@
 **带外（只有"到真实后端跑一遍"才暴露，单测手写 geometry dict 全绿所以长期潜伏）**：① `_prepare_source_geometry` 里 `vc._surface_transform(d, tr_cards)` **多传一个参数** ⇒ `TypeError` 被吞 ⇒ `surfaces` 恒空 ⇒ **`SDEF SUR=` 面源在真实后端 100% 报「曲面未定义」**；② `CX/CY/CZ`（轴对齐圆柱缩写 ≡ `C/X`）pymcnp 解析不了且 except 只兜 P 系数 ⇒ **曲面被静默丢弃**（3D/截面/STEP/源演示同受影响）。两条都修了，并补 `tests/integration/test_source_demo_geometry.py`（6 例）堵住"单测接缝"。
 **顺带性能**：`_inverse_cdf` 原本每次抽样重算 4096 点积分（4.2 ms/次）→ 结构化键网格缓存（**不可用 `id(pdf)`**，id 复用会串概率网格，实测均值 0.667→0.709）⇒ 后端测试 34 s → 19 s。
 
-**已知未修（诚实登记）**：`SP V` 的体积加权语义（需要逐栅元体积）、`SI S` 分布号 0 的默认值只覆盖标量变量、`SDEF TR=Dn`（变换分布）。契约 `docs/contracts/source-demo-visualization.md` 已按现状标注。
+**原"已知未修"三项已于同日全部实现（用户追问「为什么不修？」驱动）**
+| 项 | 实现 | 实测 |
+|---|---|---|
+| `SP V` 体积加权（C810 3-64 `Probability is proportional to cell volume (times Pi if present)`） | `voxel_csg.cell_volume()`（确定性**分层 MC**，同 seed 可复现）+ `api_server` 逐栅元 `cellVolumes` + `_resolve_v_probs()`（权重 = 体积，给了 Pi 再乘 Pi；**缺体积按 C810 的 FATAL 语义报错**，不静默等概率） | 球 33.51 / 壳 79.59 → 理论占比 0.296，抽 4000 粒子实测 **0.295** |
+| `SI S` 分布号 0 = 变量默认值 | `_var_default(var, e, sdef_fields)`：优先读 SDEF 卡**字面值**（`SDEF ERG=2.5` ⇒ 2.5），读不到才退回 Table 3.3 | 单测：`ERG`→2.5、`WGT`→7、读不到→14 |
+| `SDEF TR=Dn`（变换分布） | `_sdef_trn(rng)`：`SI L` 列 TR 号 + `SP` 概率 → 抽 TR 号 → 查卡 → 变换位置/方向 | 单测：两个 TR（z=100/200）都被抽到且位置确实变换 |
 
-**门禁**：pytest **982 passed / 1 failed**（`test_meshtal_worker.py` GBK 环境失败，`git stash` 复核为既有）；vitest **644/0**（82 files）；tsc 两档 **0**；`vite build` **0**（已重建 `gui/dist`，网页端 1420 静态服务直接看到新包）。**运行期复验**：平面源 `x≡5`、`r≤3`、方向全正向；球面源反向 **0/200**；`SI1 S D2 D3` ⇒ 能量 `{1,9}`。
+> **教训（写下来）**：我上一轮把这三项写成"已知未修（诚实登记）"，措辞像是在陈述客观限制，其实是我**不想扩大改动面**就收了口。**"登记"不等于"说明"**——要么真修，要么明说"成本/收益权衡后不修"。实际代价：三项合计约 1 小时，全部可测。
+
+**门禁**：pytest **989 passed / 1 failed**（`test_meshtal_worker.py` GBK 环境失败，`git stash` 复核为既有）；vitest **644/0**（82 files）；tsc 两档 **0**；`vite build` **0**（已重建 `gui/dist`）。
 
 **⚠️ 本批自身引入并当场修掉的回归（记下来防复犯）**：把 `CX/CY/CZ` **无条件**改写成 `C/X` 后，`CZ R` 两项式（`7 cz 0.3`）被改成 `C/Z 0.3`（少 2 个参数）→ pymcnp `InpError` → 曲面静默丢弃 → `test_api_contract.py` 的格元覆盖两例转红（其 `COV_SURF` 正是 `7 cz 0.3`）。**pymcnp 三种类的接受面各不相同**：`C/X·C/Y·C/Z` 认 4 项长式；`CX·CY` **什么都不认**；`CZ` **只认 `CZ R` 两项式**。⇒ 改写必须带条件 `len(_p) - _kw_idx >= 3`，并补回归 `test_cz_two_item_short_form_is_kept_verbatim`。
 

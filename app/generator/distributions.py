@@ -458,7 +458,8 @@ class DistributionSampler:
 
     # ── 主接口 ──────────────────────────────────────────────
     def sample(self, eid, rng: random.Random, var: str = "", cel: bool = False,
-               axs: bool = False) -> float:
+               axs: bool = False, sdef_fields: dict | None = None,
+               cell_volumes: dict | None = None) -> float:
         """从分布 eid 抽一个标量。
 
         ``var`` = 该分布服务的源变量名（ERG/DIR/RAD/EXT/TME/X/Y/Z/CEL…，C810 Table 3.3）。
@@ -467,8 +468,13 @@ class DistributionSampler:
         3/4/5：DIR/EXT 的 ``SI x`` ⇒ 等价 ``SI −x x``；RAD 的 ``SI x`` ⇒ 等价 ``SI 0 x``）；
         ③ ``SP −21`` 不给参数 a 时的**变量默认值**（DIR=1；RAD=2，但 ``axs`` 为真或
         JSU≠0 时为 1；EXT=0）。
+
+        ``sdef_fields`` / ``cell_volumes``：分别供 ``SI S`` 里分布号 0（= 该变量默认值，
+        C810 3-64）与 ``SP V``（概率 ∝ 栅元体积，C810 3-64）使用；缺省则按"拿不到就
+        明确报错/退回等概率"，不静默给错值。
         """  # noqa: D401
-        return self._sample_entry(self._entry(eid), rng, 0, var=var, cel=cel, axs=axs)
+        return self._sample_entry(self._entry(eid), rng, 0, var=var, cel=cel, axs=axs,
+                                  sdef_fields=sdef_fields, cell_volumes=cell_volumes)
 
     @staticmethod
     def _default_power(var, axs: bool = False) -> float:
@@ -511,7 +517,8 @@ class DistributionSampler:
         return p_true[i] / p_bias[i] if p_true[i] > 0 else 1.0
 
     # ── 内部：单条目抽样 ────────────────────────────────────
-    def _sample_entry(self, e, rng, depth, var="", cel=False, axs=False):
+    def _sample_entry(self, e, rng, depth, var="", cel=False, axs=False,
+                      sdef_fields=None, cell_volumes=None):
         if depth > 20:
             raise SourceSamplingError("SI S 嵌套深度超限（MCNP 上限约 20）")
         si = e.get("si") or {}
@@ -535,12 +542,17 @@ class DistributionSampler:
             ids = [self._dist_ref(v, e) for v in (si.get("values") or [])]
             sp_type = (sp.get("type") or "D").strip().upper() or "D"
             sp_vals = self._floats(sp.get("values"))
-            probs = self._probs(sp_type, sp_vals, len(ids), sb)
+            probs = self._probs(sp_type, sp_vals, len(ids), sb, var=var,
+                                si_vals=ids, cel=cel, sdef_fields=sdef_fields,
+                                cell_volumes=cell_volumes)
             idx = _pick(probs, rng)
             if ids[idx] == 0:
-                # C810 3-64：分布号为 0 ⇒ 该变量用默认值（SDEF 缺省语义，见 _VAR_DEFAULTS）
-                return self._var_default(var, e)
-            return self._sample_entry(self._entry(ids[idx]), rng, depth + 1, var=var, cel=cel)
+                # C810 3-64：分布号为 0 ⇒ 该变量用**默认值**（按 SDEF 卡上的写法定，
+                # 见 `_var_default`）——不是"报错"也不是"给 0"。
+                return self._var_default(var, e, sdef_fields)
+            return self._sample_entry(self._entry(ids[idx]), rng, depth + 1, var=var,
+                                      cel=cel, axs=axs, sdef_fields=sdef_fields,
+                                      cell_volumes=cell_volumes)
 
         if si_type in ("", "H"):
             if len(si_vals) < 2:
@@ -548,7 +560,9 @@ class DistributionSampler:
             n_bins = len(si_vals) - 1
             probs = self._probs((sp.get("type") or "D").strip().upper() or "D",
                                 self._floats(sp.get("values")), n_bins, sb,
-                                allow_leading_zero=True)
+                                allow_leading_zero=True, var=var, si_vals=si_vals,
+                                cel=cel, sdef_fields=sdef_fields,
+                                cell_volumes=cell_volumes)
             idx = _pick(probs, rng)
             lo, hi = si_vals[idx], si_vals[idx + 1]
             if hi < lo:
@@ -557,7 +571,9 @@ class DistributionSampler:
 
         if si_type == "L":
             probs = self._probs((sp.get("type") or "D").strip().upper() or "D",
-                                self._floats(sp.get("values")), len(si_vals), sb)
+                                self._floats(sp.get("values")), len(si_vals), sb,
+                                var=var, si_vals=si_vals, cel=cel,
+                                sdef_fields=sdef_fields, cell_volumes=cell_volumes)
             return si_vals[_pick(probs, rng)]
 
         if si_type == "A":
@@ -576,14 +592,52 @@ class DistributionSampler:
                 raise SourceSamplingError(f"分布值无法解析为数值: {v}")
         return out
 
-    def _probs(self, sp_type, sp_vals, n, sb=None, allow_leading_zero=False) -> list[float]:
-        """按 SP 类型把 SP 值解析成 n 个权重。sb 非空时用 SB 概率（偏倚）。"""
+    def _probs(self, sp_type, sp_vals, n, sb=None, allow_leading_zero=False, *,
+               var="", si_vals=None, cel=False, sdef_fields=None,
+               cell_volumes=None) -> list[float]:
+        """按 SP 类型把 SP 值解析成 n 个权重。
+
+        - `sb` 非空 → 用 SB（偏倚）概率（C810 3-64：SB 全部规则同 SP 第一种形态）。
+        - **`V` 选项**（C810 3-64）：`Probability is proportional to cell volume
+          (times Pi if the Pi are present)` —— 只有源变量是 CEL 时合法，权重 =
+          逐栅元体积（给了 Pi 再乘 Pi）。逐栅元体积由 `cell_volumes` 提供；
+          任何用到的栅元缺体积 → **明确报错**（对应 MCNP 的 FATAL），不静默退化。
+        """
         if sb is not None and not (sb.get("fnCode") or "").strip():
             sb_vals = self._floats(sb.get("values"))
             if sb_vals:
-                return self._resolve_probs((sb.get("type") or "D").strip().upper() or "D",
-                                           sb_vals, n, allow_leading_zero)
+                sb_type = (sb.get("type") or "D").strip().upper() or "D"
+                if sb_type == "V":
+                    return self._resolve_v_probs(sb_vals, si_vals, cell_volumes,
+                                                 allow_leading_zero)
+                return self._resolve_probs(sb_type, sb_vals, n, allow_leading_zero)
+        if (sp_type or "").strip().upper() == "V":
+            return self._resolve_v_probs(sp_vals, si_vals, cell_volumes,
+                                         allow_leading_zero)
         return self._resolve_probs(sp_type, sp_vals, n, allow_leading_zero)
+
+    def _resolve_v_probs(self, sp_vals, si_vals, cell_volumes, allow_leading_zero=False):
+        """`SP V`：权重 = 栅元体积（给了 Pi 再乘 Pi）——C810 3-64。
+
+        SI 为 `L` 时列出栅元号；缺任何一个栅元的体积 → `SourceSamplingError`
+        （对应 MCNP「MCNP cannot calculate the volume … you have a FATAL error」）。
+        """
+        cells = [int(float(v)) for v in (si_vals or [])]
+        if not cells:
+            raise SourceSamplingError("SP V 需要 SI L 给出栅元号列表（按体积加权）")
+        vols = cell_volumes or {}
+        out = []
+        for c in cells:
+            v = vols.get(c, vols.get(str(c)))
+            if not v or float(v) <= 0:
+                raise SourceSamplingError(
+                    f"SP V 需要栅元 {c} 的体积，但几何里拿不到（C810 3-64：MCNP 算不出"
+                    "体积且无 VOL 卡时是 FATAL）——请确认该栅元几何可解析，或改用 SP D/C")
+            out.append(float(v))
+        if sp_vals:  # 给了 Pi → 概率 ∝ 体积 × Pi
+            pis = self._pad(list(sp_vals), len(cells), allow_leading_zero)
+            out = [w * float(p) for w, p in zip(out, pis)]
+        return out
 
     def _resolve_probs(self, sp_type, sp_vals, n, allow_leading_zero=False) -> list[float]:
         if n <= 0:
@@ -656,10 +710,11 @@ class DistributionSampler:
 
     @staticmethod
     def _check_sp_v(sp, sb, var, cel=False) -> None:
-        """`SP V`（或 `SB V`）仅对 CEL 源合法（C810 3-64：V = for cell distributions only）。
+        """`SP V`（或 `SB V`）仅对 **CEL 源**合法（C810 3-64：V = for cell distributions only）。
 
-        ``cel`` = 本次抽样是否来自 CEL 源（由编排层给出）；变量名不是 CEL、
-        且源也不是栅元源时报错（有错就地报，不静默当 D 处理）。
+        判定用两个条件之一：① 源变量本身就是 `CEL`（`CEL=Dn` 那种写法）；
+        ② 本次抽样来自栅元源（`cel=True`，编排层给出）。二者都不是才报错 ——
+        因为 V 的语义是"按**栅元**体积加权"，与"这个分布挂在哪个变量上"无关。
         """
         vname = (var or "").strip().upper()
         for card, obj in (("SP", sp), ("SB", sb)):
@@ -668,14 +723,27 @@ class DistributionSampler:
             typ = (obj.get("type") or "").strip().upper()
             if typ == "V" and vname != "CEL" and not cel:
                 raise SourceSamplingError(
-                    f"{card} V（按体积加权）只能用于 CEL 源变量（C810 3-64："
-                    "V−for cell distributions only）——当前源变量为 "
-                    f"{var or '（未标注）'}，且源不是 CEL 栅元源")
+                    f"{card} V（按体积加权）只能用于 CEL 源（C810 3-64："
+                    "V−for cell distributions only）——当前既不是 CEL 源变量"
+                    f"（{var or '（未标注）'}），源也不是栅元源")
 
     @staticmethod
-    def _var_default(var, e):
-        """SI S 中分布号 0 → 变量默认值；未知变量给 0.0 但记明来源。"""
+    def _var_default(var, e, sdef_fields=None):
+        """SI S 中分布号 0 → **该变量的默认值**（C810 3-64）。
+
+        优先读 SDEF 卡本身写的字面值（Table 3.3：ERG=14、TME=0、WGT=1、RAD/EXT/DIR=0、
+        X/Y/Z=0、CEL 由位置定），拿不到才退回 Table 3.3 的静态默认。
+        """
         key = (var or "").strip().upper()
+        field = {"ERG": "sdef_erg", "TME": "sdef_tme", "WGT": "sdef_wgt",
+                 "RAD": "sdef_rad", "EXT": "sdef_ext", "DIR": "sdef_dir"}.get(key)
+        if field and sdef_fields:
+            raw = str(sdef_fields.get(field) or "").strip()
+            if raw and not raw.upper().startswith("F") and "D" != raw[:1].upper():
+                try:
+                    return float(raw.split()[0])
+                except (TypeError, ValueError):
+                    pass
         if key in ("X", "Y", "Z"):
             return 0.0
         return DistributionSampler._VAR_DEFAULTS.get(key, 0.0)

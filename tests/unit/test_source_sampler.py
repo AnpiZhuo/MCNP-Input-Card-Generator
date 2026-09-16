@@ -5,6 +5,7 @@ DS 依赖链 + MCNP 语义错误。全部固定 seed 保证确定性。
 """
 import collections
 import math
+import random
 
 import numpy as np
 import pytest
@@ -266,6 +267,77 @@ def test_sdef_tr_transforms_position_and_direction():
         assert p["z"] > 99.0
         # 方向也要转（PX 面法线 +X → 世界 +Y）
         assert p["dy"] > 0.0, "方向必须经 TR 旋转（旧实现完全忽略 TR）"
+
+
+# ── SP V / SI S 分布号 0 / SDEF TR=Dn ─────────────────────
+
+def test_sp_v_samples_cells_by_volume():
+    """C810 3-64 `SP V`：`Probability is proportional to cell volume`（CEL 源）。
+
+    两个栅元体积比 1:7 ⇒ 抽到栅元 1 的概率应≈1/8。
+    """
+    def shell_field(lo2, hi2):
+        def f(x, y, z):
+            r2 = x ** 2 + y ** 2 + z ** 2
+            return (r2 >= lo2) & (r2 <= hi2)
+        return f
+    geo = {
+        "cells": {1: {"field": shell_field(0.0, 1.0), "aabb": ((-1, -1, -1), (1, 1, 1))},
+                  2: {"field": shell_field(1.0, 4.0), "aabb": ((-2, -2, -2), (2, 2, 2))}},
+        "cellVolumes": {1: 4.0 / 3.0 * math.pi, 2: 28.0 / 3.0 * math.pi},
+    }
+    r = _ok(sample_source(
+        {"sdef_cel": "1", "sdef_erg": "D1"},
+        [{"id": 1, "si": {"type": "L", "values": ["1", "2"]},
+          "sp": {"type": "V", "values": []}}],
+        geometry=geo, n_particles=4000, seed=4))
+    # V 的权重体现在**抽到哪个栅元号**上（体积 1:7 ⇒ 抽到 1 的概率≈1/8）
+    small = sum(1 for p in r["particles"] if p["energy"] == 1.0)
+    assert abs(small / 4000 - 0.125) < 0.03, f"体积比 1:7 ⇒ 栅元1占比应≈0.125，实得 {small/4000:.3f}"
+
+
+def test_sp_v_without_volume_reports_error():
+    """缺栅元体积 ⇒ 报错（不是静默等概率）。"""
+    geo = {"cells": {1: {"field": lambda x, y, z: x * 0 <= 1e9,
+                         "aabb": ((-1, -1, -1), (1, 1, 1))}},
+           "cellVolumes": {}}
+    r = sample_source({"sdef_cel": "1", "sdef_erg": "D1"},
+                      [{"id": 1, "si": {"type": "L", "values": ["1"]},
+                        "sp": {"type": "V", "values": []}}],
+                      geometry=geo, n_particles=10, seed=1)
+    assert r["status"] == "error" and "体积" in r["error"]
+
+
+def test_si_s_zero_uses_sdef_field_value():
+    """C810 3-64：分布号 0 ⇒ **该变量默认值**；能读到 SDEF 字面值就用它（不是硬编码 14）。"""
+    from app.generator.distributions import DistributionSampler
+    entry = {"id": 1, "si": {"type": "S", "values": ["0"]},
+             "sp": {"type": "D", "values": ["1"]}}
+    s = DistributionSampler([entry])
+    assert s.sample(1, random.Random(1), var="ERG", sdef_fields={"sdef_erg": "2.5"}) == 2.5
+    assert s.sample(1, random.Random(1), var="WGT", sdef_fields={"sdef_wgt": "7"}) == 7.0
+    # 读不到 → 退回 Table 3.3 静态默认
+    assert s.sample(1, random.Random(1), var="ERG", sdef_fields={}) == 14.0
+
+
+def test_sdef_tr_distribution_applies_sampled_transform():
+    """C810 3-64/3-66：`TR=Dn` 走**变换分布**（SI L 列 TR 号，SP 选概率）——旧实现忽略。"""
+    geo = _plane_geom()
+    geo["trCards"] = {
+        "2": {"translate": [0.0, 0.0, 100.0],
+              "rotate": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]},
+        "3": {"translate": [0.0, 0.0, 200.0],
+              "rotate": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]},
+    }
+    r = _ok(sample_source(
+        {"sdef_sur": "5", "sdef_pos_x": "5", "sdef_pos_y": "0", "sdef_pos_z": "0",
+         "sdef_rad": "1", "sdef_tr": "D9", "sdef_erg": "14"},
+        [{"id": 9, "si": {"type": "L", "values": ["2", "3"]},
+          "sp": {"type": "D", "values": ["1", "1"]}}],
+        geometry=geo, n_particles=200, seed=6))
+    zs = [p["z"] for p in r["particles"]]
+    assert all(z > 99.0 for z in zs), "TR=Dn 必须真的生效（旧实现忽略 sdef_tr）"
+    assert any(z > 199.0 for z in zs) and any(z < 199.0 for z in zs), "两个 TR 号都要被抽到"
 
 
 def test_surface_source_ext_single_si_symmetric():

@@ -131,13 +131,36 @@ def test_sp_v_requires_cel_source():
         DistributionSampler([entry]).sample(1, _rng(), var="ERG")
 
 
-def test_sp_v_allowed_for_cel_source():
+def test_sp_v_weights_by_cell_volume():
+    """C810 3-64：`V — Probability is proportional to cell volume (times Pi if present)`。
+
+    SI L 列出栅元号，SP V 未给 Pi ⇒ 权重 = 体积；给了 Pi ⇒ 体积 × Pi。
+    """
     entry = {"id": 1, "si": {"type": "L", "values": ["1", "2"]},
-             "sp": {"type": "V", "values": ["1", "1"]}}
+             "sp": {"type": "V", "values": []}}
     s = DistributionSampler([entry])
-    rng = random.Random(1)   # 每个用例独立种子，避免跨用例共享 Random 顺序
-    vals = {s.sample(1, rng, var="CEL", cel=True) for _ in range(200)}
-    assert vals == {1.0, 2.0}
+    vol = {1: 3.0, 2: 1.0}
+    rng = random.Random(1)
+    vals = [s.sample(1, rng, var="CEL", cel=True, cell_volumes=vol) for _ in range(4000)]
+    assert set(vals) == {1.0, 2.0}
+    assert abs(vals.count(1.0) / 4000 - 0.75) < 0.03, "体积 3:1 ⇒ 概率 3:1"
+
+    # 给了 Pi：体积 × Pi（3×1 : 1×3 = 1:1）
+    entry2 = {"id": 1, "si": {"type": "L", "values": ["1", "2"]},
+              "sp": {"type": "V", "values": ["1", "3"]}}
+    s2 = DistributionSampler([entry2])
+    rng = random.Random(2)
+    vals2 = [s2.sample(1, rng, var="CEL", cel=True, cell_volumes=vol) for _ in range(4000)]
+    assert abs(vals2.count(1.0) / 4000 - 0.5) < 0.03, "体积 × Pi ⇒ 1:1"
+
+
+def test_sp_v_missing_volume_reports_fatal():
+    """拿不到栅元体积 ⇒ 明确报错（C810 3-64：MCNP 算不出体积且无 VOL 卡是 FATAL），不静默按 D 抽。"""
+    entry = {"id": 1, "si": {"type": "L", "values": ["1", "2"]},
+             "sp": {"type": "V", "values": []}}
+    with pytest.raises(SourceSamplingError, match="体积"):
+        DistributionSampler([entry]).sample(1, _rng(), var="CEL", cel=True,
+                                            cell_volumes={1: 3.0})
 
 
 # ── 内置函数在「SI 单值」下的对称默认（C810 3-66 特殊默认 3/4/5）──

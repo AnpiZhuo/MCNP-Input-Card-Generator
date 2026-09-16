@@ -28,7 +28,8 @@
 - **接口不变量**：
   - 抽样覆盖 SI `L/H/A/S`（无字母 `""` = H）+ SP `D/C/V`（无字母 `""` = D）+ 内置函数 `-2/-3/-4/-5/-6/-21/-31/-41` + SB 偏倚。
   - SI `S` 递归选子分布（**分布号可带 `D` 前缀**，C810 3-64；**分布号 0 = 该变量用 Table 3.3 默认值**）；SI `A` 概率密度定义点线性插值；SP `C` 累积概率二分。
-  - **SP/SB `V` 仅对 CEL 源合法**（C810 3-64：for cell distributions only）：非 CEL 场景抛错。⚠ **未实现体积加权语义**——采样侧仍按 `D` 表处理（概率值原样使用），只有发射侧保留 `V` 字母；实现需要逐栅元体积，登记为已知缺口。
+  - **SP/SB `V` 仅对 CEL 源合法**（C810 3-64：for cell distributions only）：非 CEL 场景抛错。**体积加权语义已实现**——`Probability is proportional to cell volume (times Pi if the Pi are present)`：权重 = 逐栅元体积（给了 `Pi` 再乘 `Pi`），体积由 `geometry.cellVolumes` 提供（api_server 用 `voxel_csg.cell_volume()` 分层 MC 估计，同 seed 可复现）；**用到的栅元缺体积 → 抛 `SourceSamplingError`**（对应 MCNP「算不出体积且无 VOL 卡 = FATAL」）。
+  - **`SI S` 里分布号为 0**（C810 3-64：该变量用默认值）：优先取 SDEF 卡上的**字面值**（`SDEF ERG=2.5` ⇒ 2.5），读不到才退回 Table 3.3 静态默认；`sample(..., sdef_fields=…)` 传入字段表。
   - **内置函数默认参数**按 C810 3-66：`SP −21` 不给 a ⇒ DIR=1、RAD=2（**定义了 AXS 或 JSU≠0 ⇒ 1**）、EXT=0；`SP −31` 不给 a ⇒ 0。
   - **`SI x` + `SP −21/−31` 的对称默认**（C810 3-66 规则 4/5）：RAD ⇒ 等价 `SI 0 x`；DIR/EXT ⇒ 等价 `SI −x x`（由 `sample(..., var=…)` 传入变量名判定）。
   - 任何分布引用不存在的 id / SP 个数与 SI 不匹配 / SI H 边界非单调 / 概率和为 0 / SI S 分布号非法 → 抛 `SourceSamplingError`（见 §4）。
@@ -38,7 +39,7 @@
 
 - **接口**：`sample_source(sdef_fields, distributions, geometry=None, *, n_particles=500, seed=None) -> dict`
   - 输入：`sdef_fields`（SDEF 字段 dict）、`distributions`（v2 分布条目）、`geometry`（CEL/SUR 用，其余可 None）。
-    `geometry` 由 **api_server 层准备**（复用其 `parse_surfaces` / `Geometry.from_mcnp` / `resolve_cell_complements` / `voxel_csg` 构造 field 函数）：`{cells: {num: {field, aabb}}, surfaces: {num: {type, params, field, rotate, origin}}, trCards}`——source_sampler 只消费 field/变换、不解析几何（保持纯 stdlib+numpy，不 import pymcnp）。`rotate`/`origin` 是该曲面自身 TR 卡的 3×3 与平移；`trCards` 供 `SDEF TR=n` 使用（未实现 `TR=Dn`）。
+    `geometry` 由 **api_server 层准备**（复用其 `parse_surfaces` / `Geometry.from_mcnp` / `resolve_cell_complements` / `voxel_csg` 构造 field 函数）：`{cells: {num: {field, aabb}}, surfaces: {num: {type, params, field, rotate, origin}}, trCards, cellVolumes}`——source_sampler 只消费 field/变换/体积、不解析几何（保持纯 stdlib+numpy，不 import pymcnp）。`rotate`/`origin` 是该曲面自身 TR 卡的 3×3 与平移；`trCards` 供 `SDEF TR=n`/`TR=Dn` 使用；`cellVolumes` 是逐栅元体积（`SP V` 用）。
   - 输出（`status=ok`）：`{status, particles:[{id,x,y,z,dx,dy,dz,energy,weight,particle}], energyRange:{min,max}, bounds:{min:[x,y,z],max:[x,y,z]}}`。
   - 输出（`status=error`）：`{status, error, hint?}`（见 §4 错误清单）。
 - **接口不变量**：
@@ -48,7 +49,7 @@
   - **面源（①）语义（C810 3-58 ~ 3-59 + Table 3.3）**：只支持**平面**（P/PX/PY/PZ）、**球面**（SO/S/SPH/SX/SY/SZ）、**椭球面**（GQ/SQ，近似）；柱面/锥面/环面按 MCNP 语义**明确报错**并提示改用退化体源（原文：Cylindrical surface sources must be specified as degenerate volume sources）。
     - 平面：位置 = `POS + RAD·(面内单位矢量)`（RAD 缺省幂律 a=1 ⇒ 面内均匀），位置恒在面上；球面：位置按面积均匀。
     - **方向参考轴**：显式 `VEC` 优先；面源缺 `VEC` ⇒ **面法线**（球面 = 径向、带 `NRM` 符号）；`DIR` 缺省 ⇒ 余弦分布 `p(μ)=2μ`。`NRM` 只影响面法线符号。
-    - `SDEF TR=n`（整数编号）：对抽出的**位置与方向**都作用一次（约定 `p_global = Rᵀ·p + o`，与 `_freecad_csg_worker.apply_trn` 一致）；`TR=Dn`（变换分布）**未实现**。
+    - `SDEF TR=n`（整数编号）或 **`TR=Dn`（变换分布：`SI L` 列 TR 号 + `SP` 给概率，C810 3-64/3-66）**：对抽出的**位置与方向**都作用一次（约定 `p_global = Rᵀ·p + o`，与 `_freecad_csg_worker.apply_trn` 一致）；TR 卡取不到时按"未变换"处理并走既有告警口径。
   - 纯 stdlib + numpy + `random.Random(seed)`；无 FreeCAD（几何判定走 voxel_csg，见模块 C）。
 - **内部 seam**（实现私有，供其单测）：`_sample_variable(field_name)`、`_compose_position()`、`_sample_direction()`——不构成对外接口。
 

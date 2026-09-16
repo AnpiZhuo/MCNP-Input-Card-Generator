@@ -1239,6 +1239,94 @@ def _tangent_plane_mesh(ast, surfaces_by_num, tr_cards, B, segments: int = 48):
         return None
 
 
+def cell_volume(ast, surfaces_by_num, B, tr_cards=None, n: int = 20000, seed: int = 12345,
+                aabb=None):
+    """栅元体积估计（纯 numpy，确定性：固定种子的**分层**采样）。
+
+    用途：C810 3-64 的 `SP V`（"Probability is proportional to cell volume"）——
+    源抽样需要每个栅元的体积。FreeCAD 侧 `shape.Volume` 精确但要求 FreeCAD 进程，
+    而源抽样（`source_sampler`）刻意不 import FreeCAD，故这里用**分层 MC**：
+    在栅元 AABB 内按 side³ 网格分格、每格一个抖动点，体积 ≈ V_box × 命中率。
+    相对误差约 1/√n（n=20000 → ~0.7%），对"按体积加权的抽样概率"足够
+    （MCNP 自己也只把 V 当权重）。
+
+    ``surfaces_by_num`` 可以是 {num: field 函数}（与 `eval_cell_field` 同用）或
+    {num: {"type","params","field",…}}。**有界性来自 ``aabb``**：调用方若已经算过
+    栅元紧盒（api_server 就是），直接传进来最省事也最准；否则本函数按
+    `cell_aabb` 自己算（此时要求 surfaces_by_num 带 type/params）。
+
+    返回 None：包围盒无界/退化、或一个样本都没命中（调用方按语义报错，不给假 0）。
+    """
+    fns = {}
+    aabb_surfs = {}
+    for sn, s in (surfaces_by_num or {}).items():
+        if callable(s):
+            fns[sn] = s
+            aabb_surfs[sn] = {"type": "?unknown", "params": [], "field": s}
+        elif isinstance(s, dict) and callable(s.get("field")):
+            fns[sn] = s["field"]
+            aabb_surfs[sn] = s
+        else:
+            return None
+
+    info = aabb
+    if info is None:
+        try:
+            info = cell_aabb(ast, aabb_surfs, B, tr_cards)
+        except Exception:  # noqa: BLE001
+            info = None
+    if info is None:
+        return None
+    lo = np.asarray(info[0], dtype=float)
+    hi = np.asarray(info[1], dtype=float)
+    if not (np.all(np.isfinite(lo)) and np.all(np.isfinite(hi))):
+        # 无界轴用 ±1e300 哨兵（见 _surface_positive_aabb）→ 体积无意义，明确返回 None
+        return None
+    B = float(B)
+    if np.any(np.abs(lo) > B * 1.000001) or np.any(np.abs(hi) > B * 1.000001):
+        return None
+    span = hi - lo
+    v_box = float(np.prod(span))
+    if not (v_box > 0.0) or not np.isfinite(v_box):
+        return None
+
+    fns = {}
+    for sn in _ast_surf_nums(ast):
+        s = surfaces_by_num.get(sn)
+        # 两种调用约定都吃：api_server 传的是 {num: field 函数}（与 eval_cell_field 同用），
+        # 而预览路径传的是 {num: {"type","params","field",…}}。此前只认后者 ⇒
+        # `s.get("field")` 对函数对象返回 None ⇒ 直接 None（体积永远拿不到）。
+        if callable(s):
+            fns[sn] = s
+        elif isinstance(s, dict) and callable(s.get("field")):
+            fns[sn] = s["field"]
+        else:
+            return None
+    rng = np.random.default_rng(seed)
+    side = max(1, int(round(n ** (1.0 / 3.0))))
+    hit = 0
+    total = 0
+    for gx in range(side):
+        for gy in range(side):
+            for gz in range(side):
+                u = (np.array([gx, gy, gz], dtype=float) + rng.random(3)) / side
+                p = lo + u * span
+                try:
+                    inside = eval_cell_field(ast, fns, np.asarray([p[0]]),
+                                             np.asarray([p[1]]), np.asarray([p[2]]))
+                except Exception:  # noqa: BLE001
+                    continue
+                total += 1
+                if bool(np.asarray(inside).ravel()[0]):
+                    hit += 1
+    if total == 0:
+        return None
+    frac = hit / total
+    if frac <= 0.0:
+        return None
+    return v_box * frac
+
+
 def mesh_cell_polydata(ast, surfaces_by_num, tr_cards, B, res: int = None):
     """体素求值栅元并提取水密三角形网格（纯 numpy，无 vtk）。
 

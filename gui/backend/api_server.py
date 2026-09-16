@@ -3269,6 +3269,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 cells_by_num[int(num)] = None
 
         cell_fields = {}
+        cell_volumes: dict[int, float] = {}
         for num, ast in cells_by_num.items():
             if ast is None:
                 continue
@@ -3300,6 +3301,12 @@ class MCNPHandler(BaseHTTPRequestHandler):
                                                     "params": surfaces[sn]["params"]}
                                                for sn in nums}, 1e6)
                 cell_fields[num] = {"field": make_field(resolved, fns), "aabb": aabb}
+                # 栅元体积（C810 3-64 的 `SP V`：「概率与栅元体积成比例」要用）。
+                # 分层 MC、同 seed 可复现；复用上面已算好的紧盒（aabb）。
+                # 无界/退化/全不命中 → 不进表（SP V 命中时按 FATAL 报错，不塞假值）。
+                vol = vc.cell_volume(resolved, fns, 1e6, aabb=aabb)
+                if vol and vol > 0:
+                    cell_volumes[num] = vol
             except Exception as e:
                 # 不再静默：记录原因（此前 `continue` 让"几何全丢"看起来像"没有栅元"）
                 _source_geometry_errors.append(f"栅元 {num}: {e}")
@@ -3308,7 +3315,9 @@ class MCNPHandler(BaseHTTPRequestHandler):
         return {"cells": cell_fields, "surfaces": surfaces,
                 "geometryErrors": _source_geometry_errors,
                 # SDEF TR=n（源变换）用：抽出的位置/方向要按该卡变换（C810 Table 3.3）
-                "trCards": tr_cards}
+                "trCards": tr_cards,
+                # SP V（按体积加权）用：{栅元号: 体积}（分层 MC 估计，可缺失）
+                "cellVolumes": cell_volumes}
 
     # ── 格阵 3D 预览（阶段3 preview-lattice：universe 实例化 + 嵌套 fill 递归）──
     def _handle_preview_lattice(self):
