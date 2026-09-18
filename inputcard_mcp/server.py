@@ -142,9 +142,54 @@ def _extra_section_keys(sections: dict) -> dict:
     return out
 
 
+# ── 工作区 deck ⇄ 前端 deck（单一双向缝）────────────────────────────
+# `/workspace` 是一条**有损/无损**必须严格定义的缝：前端 deck 比后端语义段多几个
+# 后端 DeckData **不建模**的键，往返任何一个掉队，前端 `useDeckSynced` 就会判「不等价」
+# 而整份采纳回显 —— 症状就是用户的编辑"变回初始状态"（2026-09-17 实证的计数卡清空）。
+#
+# 因此这里只开两个口，成对使用，不在别处散写：
+#   PUT：`_frontend_only_keys(deck)` 取回不建模键并存进 `_WORKSPACE["frontend_keys"]`
+#   GET：`_ws_frontend_deck()` 把「建模段 + 不建模键」合成回显 deck
+# 建模段自身（含顶层 tallies 归一化）的权威在 `api_server.deck_from_json`
+# / `deck_to_frontend_dict` —— 这里不重复实现映射。
+_FRONTEND_ONLY_KEYS = (
+    # 决定「该段用文本还是表单」：丢了会静默切回表单模式，用户的文本编辑"看不见"
+    "rawOverrides", "textMode",
+    # E0/En/T0/Tn 网格单一权威：丢了网格编辑器全空
+    "grids",
+    # 源类型向导分组（纯 UI，不参与生成）
+    "sourceTemplate",
+)
+
+
+def _frontend_only_keys(deck: dict) -> dict:
+    """从前端 deck 取出后端不建模、但回显必须原样带回的键（PUT /workspace 用）。"""
+    if not isinstance(deck, dict):
+        return {}
+    return {k: deck[k] for k in _FRONTEND_ONLY_KEYS if k in deck}
+
+
+def _ws_frontend_deck() -> dict:
+    """工作区 → 前端 deck（GET /workspace 回显用）：建模段 + 不建模键。
+
+    合成顺序：先铺前端专用键，再让后端建模的段覆盖同名键 —— **段是权威**
+    （AI 经 patch_section 的改动必须赢过 PUT 时存下的旧前端键）。
+    """
+    deck = deck_to_frontend_dict(_ws_deck())
+    keys = _WORKSPACE.get("frontend_keys")
+    merged = dict(keys) if isinstance(keys, dict) else {}
+    merged.update(deck)
+    return merged
+
+
 # ── 当前工作区（有状态会话）──────────────
 # 程序前端把所有标签页合成的当前 deck 推到这里；MCP 工具在「不传 inp」时读写它。
-_WORKSPACE = {"revision": 0, "sections": None, "deck_text": ""}
+#
+# `writer`：最近一次 PUT 的工作区主人 id（前端每个程序实例生成一个）。
+# 用途单一但关键：**多实例共用 8100 时，每个前端只回显「自己这轮写上去的」工作区**。
+# 否则 A 实例的编辑会把 B 实例的界面覆盖成 A 的工作区（B 上表现为"改动全部变回初始状态"），
+# 而两边都没有任何报错 —— 这正是 2026-09-17 那次"计数卡回弹"最容易被误判的形态。
+_WORKSPACE = {"revision": 0, "sections": None, "deck_text": "", "frontend_keys": {}, "writer": ""}
 
 
 def _default_sections():
@@ -495,10 +540,14 @@ def _mcp_http_main(host="127.0.0.1", port=8100):
     @mcp.custom_route("/workspace", methods=["GET"])
     async def get_ws(_request: Request) -> Response:
         # 回显给前端：revision（用于判断 AI 是否改动）+ sections + 前端形态 deck（loadDeck 用）
+        # deck 走 _ws_frontend_deck()：后端建模的段 + 前端专用键（文本模式/网格/源模板），
+        # 否则每次回显都会把这几个键抹掉（2026-09-17 实证：计数卡被清空回初始状态即此类丢失）。
+        # writer：本次工作区由哪个程序实例 PUT 上来的 —— 前端据此只回显自己那份（多实例隔离）。
         return _cors(JSONResponse({
             "revision": _WORKSPACE["revision"],
+            "writer": _WORKSPACE.get("writer", ""),
             "sections": _ws_sections(),
-            "deck": deck_to_frontend_dict(_ws_deck()),
+            "deck": _ws_frontend_deck(),
         }))
 
     @mcp.custom_route("/workspace", methods=["PUT"])
@@ -506,8 +555,13 @@ def _mcp_http_main(host="127.0.0.1", port=8100):
         # 前端把当前全部标签页 deck 推上来（前端 JSON 形态），后端转成 sections 作权威
         body = await request.json()
         if isinstance(body, dict):
+            if body.get("client_id"):
+                _WORKSPACE["writer"] = str(body["client_id"])
             if body.get("deck"):
-                _set_ws_sections(_deck_to_sections(deck_from_json(body["deck"])))
+                deck_json = body["deck"]
+                # 顶层 tallies 由 deck_from_json 归一化进 tally（见其 docstring）
+                _set_ws_sections(_deck_to_sections(deck_from_json(deck_json)))
+                _WORKSPACE["frontend_keys"] = _frontend_only_keys(deck_json)
             elif "sections" in body:
                 _set_ws_sections(body["sections"])
             else:

@@ -1415,14 +1415,24 @@ def _adv_from_dict(d: dict) -> AdvancedSettings:
     )
 
 def deck_from_json(data: dict) -> DeckData:
-    """JSON → DeckData 转换"""
+    """JSON → DeckData 转换。
+
+    ⚠️ 前端 deck 的计数卡是**顶层** `tallies`（DeckContext.TallyDef[]，TallyTab 的单一权威），
+    而 `tally` 只装网格/截断/FMESH/PTRAC。早期只读 `tally` ⇒ 经 MCP `/workspace`
+    推上来的计数列表被静默丢成空（PUT 存空 → GET 回显 `tallies: []` → 前端
+    `useDeckSynced` 判定不等价就整份采纳 ⇒ **计数卡被清空回初始状态**，2026-09-17 实证）。
+    这里把顶层 `tallies` 归一化进 `tally`；后端口径（`tally.tallies`）存在时它优先。
+    """
+    tally_raw = dict(data.get("tally") or {})
+    if not tally_raw.get("tallies") and isinstance(data.get("tallies"), list):
+        tally_raw["tallies"] = data["tallies"]
     return DeckData(
         basic=_basic_from_dict(data.get("basic", {})),
         surfaces=data.get("surfaces", ""), tr_cards=data.get("tr_cards", ""),
         cells=_cells_from_list(data.get("cells", [])),
         materials=_materials_from_list(data.get("materials", [])),
         sources=_sources_from_list(data.get("sources", [])),
-        tally=_tally_from_dict(data.get("tally", {})),
+        tally=_tally_from_dict(tally_raw),
         adv=_adv_from_dict(data.get("adv", {})),
         universe_comments=(data.get("universe_comments")
                            or data.get("universeComments") or {}),
@@ -1511,6 +1521,14 @@ def _deck_to_frontend_dict(deck: DeckData, include_frontend_aliases: bool = Fals
         "enableTn": td.get("generate_tn", False),
         "multiplier": td.get("multiplier", ""),
     } for td in tally_raw.get("tallies", [])]
+    # ⚠️ 前端口径里，计数卡列表**只**在顶层 `tallies`（TallyTab 的单一权威）；
+    # `deck.tally` 只装网格/截断/FMESH/PTRAC。后端 DeckData 把两者都放在 tally 子对象里，
+    # `asdict` 于是会**同时**吐出 `tally.tallies` 与顶层 `tallies` —— 前端把回显整份并进自己的
+    # deck 后，两处开始各说各话：`deck_from_json` 见 `tally.tallies` 非空就忽略顶层，
+    # 于是**用户新增/删除计数卡在后续 PUT 里被静默丢弃**（2026-09-17 实证：新增 F6/删除 F4 均不生效）。
+    # 所以在前端口径里把子对象里的 tallies 摘掉，一个概念只留一个位置。
+    if isinstance(deck_dict.get("tally"), dict):
+        deck_dict["tally"].pop("tallies", None)
     if include_warnings:
         deck_dict["_warnings"] = warnings or []
     return deck_dict
