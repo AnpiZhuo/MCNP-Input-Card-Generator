@@ -24,8 +24,11 @@ const WINDOWS_TS = readFileSync(join(HERE, "../../src/utils/windows.ts"), "utf-8
  * 已登记的弹出窗口 label（**单一期望清单**）。
  * main.rs create_or_focus 与 App.tsx WindowRouter 两侧都必须恰好是这一组。
  * 新增窗口时**必须**把 label 加进本数组，否则「未登记窗口」用例会红（T3 FE-11/FE-12 加固）。
+ *
+ * `tally_chart`（2026-09-17 新增）：Tally 通量图从输出页的弹窗升级为独立窗口
+ * ——弹窗固定 maxWidth 640、图只有 560×300、且与数据表挤在同一卡片里，还不能导出。
  */
-const EXPECTED_WINDOW_LABELS: string[] = ["preview3d", "cross_section", "volume", "ptrac", "source-demo"];
+const EXPECTED_WINDOW_LABELS: string[] = ["preview3d", "cross_section", "volume", "ptrac", "source-demo", "tally_chart"];
 
 /** main.rs 里所有 create_or_focus(&app, "<label>", ...) 的窗口 label */
 function mainRsWindowLabels(src: string): string[] {
@@ -91,5 +94,9 @@ describe("窗口 label ↔ App.tsx 路由一致性（P0 回归）", () => {
 
   it("演示源桥 key mcnp_win_source_demo（KEY_SOURCE_DEMO）存在（契约 §5）", () => {
     expect(WINDOWS_TS).toMatch(/KEY_SOURCE_DEMO = "mcnp_win_source_demo"/);
+  });
+
+  it("Tally 通量图桥 key mcnp_win_tally_chart（KEY_TALLY_CHART）存在", () => {
+    expect(WINDOWS_TS).toMatch(/KEY_TALLY_CHART = "mcnp_win_tally_chart"/);
   });
 });

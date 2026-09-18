@@ -2,7 +2,7 @@
  * 主动解析 keff：输入 mctal 文件路径或运行目录 → /api/parse-keff →
  * 显示最终 keff（combined 优先）+ 逐周期收敛曲线（Recharts）。
  */
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
   CartesianGrid,
   Line,
@@ -15,6 +15,9 @@ import {
 import FloatingDialog from "./FloatingDialog";
 import { apiUrl, errorHint } from "../utils/api";
 import { convergencePoints } from "../utils/sweepDashboard";
+import { ExportButton } from "../export/useFigureExport";
+import { build2dSpec, subtitleOf } from "../export/figureSpecs";
+import { snapshotSvg } from "../export/captureFrame";
 
 interface KeffResult {
   cycles: number[];
@@ -74,6 +77,18 @@ export default function KeffDialog({ onClose }: { onClose: () => void }) {
   const finalKeff = keff?.combined?.mean ?? (keff && keff.mean.length ? keff.mean[keff.mean.length - 1] : null);
   const finalStd = keff?.combined?.std ?? (keff && keff.std.length ? keff.std[keff.std.length - 1] : null);
 
+  /**
+   * 出图：Recharts 本身就渲染成 **SVG** ⇒ 直接抓下来就是真矢量，
+   * 不用像 3D 那样做帧捕获（这也是"能用矢量就用矢量"里最便宜的一块）。
+   *
+   * ⚠️ 抓取必须发生在**点击那一刻**（`build()` 内），不能放渲染体里算：
+   * Recharts 的 `<svg>` 由它自己的 effect 绘制，渲染期 `querySelector("svg")` 可能
+   * 取到上一帧的空壳甚至 null。`snapshotSvg` 会把 CSS 变量解析成实际颜色，
+   * 否则脱离文档后整片变黑。
+   */
+  const chartRef = useRef<HTMLDivElement>(null);
+  const grabChartSvg = () => snapshotSvg(chartRef.current?.querySelector("svg") as SVGSVGElement | null, { background: "#ffffff" });
+
   return (
     <FloatingDialog
       title="主动解析 keff（mctal 收敛）"
@@ -81,6 +96,28 @@ export default function KeffDialog({ onClose }: { onClose: () => void }) {
       width={680}
       footer={
         <>
+          {keff && (
+            <ExportButton
+              label="keff 收敛曲线"
+              build={() => {
+                const svg = grabChartSvg();
+                return {
+                  view: "keff收敛",
+                  nameParts: ["keff", finalKeff === null ? "" : finalKeff.toFixed(5)],
+                  vector: build2dSpec({
+                    title: "k-eff 逐周期收敛",
+                    subtitle: subtitleOf([
+                      finalKeff === null ? undefined : `最终 k-eff ${finalKeff.toFixed(5)}${finalStd !== null ? ` ± ${finalStd.toFixed(5)}` : ""}`,
+                      `周期数 ${keff.cycles.length}（${keff.combined ? "combined keff" : "末周期均值"}）`,
+                      path.trim() ? `来源 ${path.trim()}` : undefined,
+                    ]),
+                    panels: svg ? [{ svg }] : [],
+                    caption: "红色虚线为 k = 1；图为屏幕图的直接导出（坐标系与配色沿用屏幕）",
+                  }),
+                };
+              }}
+            />
+          )}
           <button className="btn btn-ghost btn-sm" onClick={onClose}>关闭</button>
           <button className="btn btn-primary btn-sm" onClick={doParse} disabled={busy}>
             {busy ? "解析中…" : "解析 keff"}
@@ -122,6 +159,7 @@ export default function KeffDialog({ onClose }: { onClose: () => void }) {
                 周期数：{keff.cycles.length}（{keff.combined ? "combined keff" : "末周期均值"}）
               </div>
             </div>
+            <div ref={chartRef}>
             <LineChart width={640} height={240} data={points} margin={{ top: 8, right: 20, bottom: 4, left: 4 }}>
               <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
               <XAxis dataKey="cycle" type="number" domain={["dataMin", "dataMax"]} tick={{ fontSize: 11, fill: "var(--text-tertiary, #94a3b8)" }} label={{ value: "cycle", position: "insideBottomRight", offset: -2, style: { fontSize: 10, fill: "var(--text-tertiary, #94a3b8)" } }} />
@@ -132,6 +170,7 @@ export default function KeffDialog({ onClose }: { onClose: () => void }) {
               <ReferenceLine y={1} stroke="#f87171" strokeDasharray="4 4" />
               <Line type="monotone" dataKey="mean" stroke="#38bdf8" strokeWidth={2} dot={false} isAnimationActive={false} />
             </LineChart>
+            </div>
           </>
         )}
       </div>

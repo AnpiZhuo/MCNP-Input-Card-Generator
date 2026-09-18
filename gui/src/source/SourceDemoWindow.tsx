@@ -13,6 +13,8 @@ import { getMatColor } from "../utils/materialColors";
 import { DEFAULT_SHELL_OPACITY } from "../three/cellMaterial";
 import { createSourceDemoRenderer, type SourceDemoRendererHandle } from "./SourceDemoRenderer";
 import { TRACK_LEGEND, TRACK_PARTICLE_LABELS, TRACK_COLORS } from "../ptrac/trackColors";
+import { ExportButton } from "../export/useFigureExport";
+import { build3dSpec, subtitleOf } from "../export/figureSpecs";
 
 interface BridgeData {
   /** 栅元的**后端格式**（{number, material, surface_expr, ...}）—— fetchPreview3dStl 建外壳
@@ -26,6 +28,8 @@ interface BridgeData {
   energyRange: { min: number; max: number };
   sdefFields: Record<string, string>;
   sdefDistributions: any[];
+  /** 工况标题（可选；进导出图的副标题，便于汇报时分辨是哪张卡） */
+  title?: string;
 }
 
 export default function SourceDemoWindow() {
@@ -148,9 +152,30 @@ export default function SourceDemoWindow() {
         )}
       </div>
       <div style={{ width: 300, borderLeft: "1px solid rgba(255,255,255,0.08)", background: "rgba(10,10,30,0.6)", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden" }}>
-        <div style={{ padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(241,241,249,0.85)" }}>🎬 演示源 — SDEF</span>
-          <button className="btn btn-ghost btn-xs" onClick={() => { closeCurrentWindow(); }} style={{ fontSize: 16, padding: "4px 10px" }}>✕</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <ExportButton
+              label="演示源图"
+              build={() => {
+                const canvas = rendererRef.current?.renderNow();
+                return {
+                  view: "演示源",
+                  nameParts: [`${count}粒子`],
+                  raster: canvas
+                    ? build3dSpec({
+                        canvas,
+                        title: "源粒子抽样演示（SDEF）",
+                        subtitle: subtitleOf([`样本 ${count} 个`, data.title ? `「${data.title}」` : undefined]),
+                        legend: TRACK_LEGEND.map((l) => ({ color: l.color, label: `${l.label} ${particleCounts[l.key] || 0}` })),
+                        caption: "圆点=粒子出射点，方向线=飞行方向；颜色按粒子类型",
+                      })
+                    : undefined,
+                };
+              }}
+            />
+            <button className="btn btn-ghost btn-xs" onClick={() => { closeCurrentWindow(); }} style={{ fontSize: 16, padding: "4px 10px" }}>✕</button>
+          </div>
         </div>
 
         <div style={{ padding: "8px 14px", borderBottom: "1px solid rgba(255,255,255,0.06)", fontSize: 11, lineHeight: 1.7, color: "var(--text-secondary)" }}>

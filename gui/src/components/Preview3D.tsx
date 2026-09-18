@@ -68,7 +68,8 @@ interface Preview3DProps {
 /* ---- 色板（10 色，按材料号取模） ---- */
 import { getMatColor as getColor } from "../utils/materialColors";
 import { MaterialLegend, CellList, UniverseCellList } from "./MaterialPanel";
-import { materialLegendEntries } from "../utils/materialLegend";
+import { ExportButton } from "../export/useFigureExport";
+import { build3dSpec, materialLegendItems, subtitleOf } from "../export/figureSpecs";import { materialLegendEntries } from "../utils/materialLegend";
 import { useDeck } from "../utils/DeckContext";
 import { openCrossSection } from "../utils/windows";
 import { apiUrl } from "../utils/api";
@@ -80,51 +81,14 @@ import { createRenderLoop } from "../three/renderGate";
 import { createTickGrid } from "../three/TickGrid";
 import { AXIS_CONFIG } from "../three/axisConfig";
 import { offsetPlaneForStl } from "../three/planeOffset";
+import { parsePlane, planeToStr } from "../three/planeEquation";
+import { PlaneControls } from "./PlaneControls";
 import { buildQuickCellPreview, wireColorForMaterial } from "../three/quickCellPreview";
 import { type QuickCellResult, type QuickShape } from "../utils/quickCell";
 import { useQuickAddOverlap } from "../utils/useQuickAddOverlap";
 import FloatingDialog from "./FloatingDialog";
 
-/* ---- plane eq formatting/parsing ---- */
-function planeToStr(plane: any): string {
-  var fmt = function(v: number): string {
-    if (v === 1) return '';
-    if (v === -1) return '-';
-    if (v === Math.floor(v) && isFinite(v)) return String(v);
-    return v.toFixed(3).replace(/\.?0+$/, '');
-  };
-  var parts: string[] = [];
-  if (plane.A !== 0) parts.push(fmt(plane.A) + 'X');
-  if (plane.B !== 0) parts.push(fmt(plane.B) + 'Y');
-  if (plane.C !== 0) parts.push(fmt(plane.C) + 'Z');
-  if (parts.length === 0) parts.push('0');
-  var dStr = (function(v: number): string {
-    if (v === Math.floor(v) && isFinite(v)) return String(v);
-    return v.toFixed(3).replace(/\.?0+$/, '');
-  })(plane.D);
-  return parts.join(' + ') + ' = ' + dStr;
-}
-
-function parsePlane(s: string): any {
-  var cleaned = s.replace(/\s+/g, '');
-  var pc = function(v: string): number {
-    if (v === '' || v === '+') return 1;
-    if (v === '-') return -1;
-    return parseFloat(v);
-  };
-  var a=0,b=0,c=0,d=0;
-  var xm = cleaned.match(/([+-]?\d*\.?\d*)x/i);
-  if (xm) a = pc(xm[1]);
-  var ym = cleaned.match(/([+-]?\d*\.?\d*)y/i);
-  if (ym) b = pc(ym[1]);
-  var zm = cleaned.match(/([+-]?\d*\.?\d*)z/i);
-  if (zm) c = pc(zm[1]);
-  var dm = cleaned.match(/=([+-]?\d*\.?\d+)/);
-  if (dm) d = parseFloat(dm[1]);
-  if (!xm && !ym && !zm && !dm) return null;
-  return {A:a, B:b, C:c, D:d};
-}
-
+/* ---- 平面方程：解析/格式化/步长已抽到 three/planeEquation（三处窗口共用，单一权威） ---- */
 
 
 /* ---- 场景管理器（封装 Three.js 生命周期） ---- */
@@ -445,6 +409,15 @@ function initScene(
     scene: scene,
     markDirty: markDirty,
     frameCamera: frameCamera,
+    /**
+     * 出图用：**同步**把当前帧画进 canvas 并交出 canvas 本体。
+     * 必须同步——本渲染器没开 `preserveDrawingBuffer`，异步（等 rAF）再取图会拿到空画布。
+     * 见 `export/captureFrame` 的模块说明。
+     */
+    renderNow(): HTMLCanvasElement {
+      renderer.render(scene, camera);
+      return canvas;
+    },
     setVisible(index: number, vis: boolean) {
       for (var _mi = 0; _mi < meshes.length; _mi++) {
         if (meshes[_mi].userData.index === index) { meshes[_mi].visible = vis; markDirty(); return; }
@@ -1053,6 +1026,34 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         style: { fontSize: 14, fontWeight: 600, color: "rgba(241,241,249,0.85)" },
       }, "🎨 3D 预览 — 演示模式"),
       React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
+        React.createElement(ExportButton, {
+          build: () => {
+            const canvas = ctrlRef.current?.renderNow();
+            return {
+              view: "3D预览",
+              nameParts: [deck?.basic?.title, `${visibleCount}栅元`],
+              raster: canvas
+                ? build3dSpec({
+                    canvas,
+                    title: "3D 几何预览",
+                    subtitle: subtitleOf([
+                      deck?.basic?.title ? `「${deck.basic.title}」` : undefined,
+                      `可见栅元 ${visibleCount}/${cellViews.length}`,
+                    ]),
+                    legend: materialLegendItems(
+                      legendEntries.map((e) => ({
+                        mat: e.mat,
+                        color: e.color,
+                        label: (matList || []).find((m: any) => String(m.number) === String(e.mat))?.comment || "",
+                      })),
+                    ),
+                    caption: "材料配色与屏幕一致；图为当前视角取景",
+                  })
+                : undefined,
+            };
+          },
+          label: "3D 预览图",
+        }),
         React.createElement("span", {
           style: { fontSize: 11, color: "var(--text-tertiary)" },
         }, "🖱 拖拽旋转 · 滚轮缩放 · 右键平移"),
@@ -1189,7 +1190,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
                 : (latticeOverview ? "按宇宙色块显示装配格位（省性能）" : "显示真实几何（性能优先）")),
           ),
         ),
-        /* 截面控制 */
+        /* 截面控制（平面方程 + 步长：共享控件，与截面窗口 / 切面面板同一份语义） */
         React.createElement("div", {
           style: {
             padding: "8px 14px", borderBottom: "1px solid var(--border-glass)",
@@ -1197,39 +1198,20 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
           } as React.CSSProperties,
         },
           React.createElement("div", { style: { fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 } }, "✂ 截面控制"),
-          React.createElement("div", { style: { display: "flex", gap: 4, marginBottom: 4 } as React.CSSProperties },
-            React.createElement("input", {
-              type: "text",
-              value: eqInput,
-              onChange: function(e: React.ChangeEvent<HTMLInputElement>) { setEqInput(e.target.value); },
-              onBlur: function() { var p = parsePlane(eqInput); if (p) setCsPlane(p); },
-              onKeyDown: function(e: React.KeyboardEvent) { if (e.key === "Enter") { var p = parsePlane(eqInput); if (p) setCsPlane(p); } },
-              placeholder: "X + Y + Z = 0",
-              style: { flex: 1, padding: "2px 4px", fontSize: 10, background: "var(--bg-input)", border: "1px solid var(--border-glass)", color: "var(--text-primary)", borderRadius: 4, fontFamily: "Consolas,monospace" } as React.CSSProperties,
-            }),
-            React.createElement("button", {
-              className: "btn btn-primary btn-xs",
-              onClick: function() {
-                var p = parsePlane(eqInput);
-                if (p) fetchCrossSection(p);
-              },
-              style: { fontSize: 10, flexShrink: 0 },
-            }, "✂ 截面"),
-          ),
-          React.createElement("div", { style: { display: "flex", gap: 4, alignItems: "center" } as React.CSSProperties },
-            React.createElement("span", { style: { fontSize: 10, color: "var(--text-tertiary)", flexShrink: 0 } }, "步长"),
-            React.createElement("button", {
-              className: "btn btn-ghost btn-xs",
-              onClick: function() { var v = parseFloat(csStep) || 1; setCsStep(Math.max(0.001, v / 2).toFixed(3)); },
-              style: { fontSize: 10 },
-            }, "◀"),
-            React.createElement("span", { style: { fontSize: 10, color: "var(--text-primary)", minWidth: 30, textAlign: "center" } as React.CSSProperties }, csStep),
-            React.createElement("button", {
-              className: "btn btn-ghost btn-xs",
-              onClick: function() { var v = parseFloat(csStep) || 1; setCsStep((v * 2).toFixed(3)); },
-              style: { fontSize: 10 },
-            }, "▶"),
-          ),
+          React.createElement(PlaneControls, {
+            plane: csPlane,
+            onPlaneChange: setCsPlane,
+            step: parseFloat(csStep) || 1,
+            onStepChange: function(v: number) { setCsStep(String(v)); },
+            onSubmitPlane: function(p: any) { fetchCrossSection(p); },
+            compact: true,
+            stepTitle: "沿法向前进/后退一个步长（在截面窗口里步进）",
+          }),
+          React.createElement("button", {
+            className: "btn btn-primary btn-xs",
+            onClick: function() { fetchCrossSection(csPlane); },
+            style: { fontSize: 10, marginTop: 4, width: "100%" },
+          }, "✂ 截面"),
         ),
         /* 栅元列表（共享组件）—— checkbox + 栅元N + 色点 + M材料号(可点) + 注释 */
         /* 格阵装配适配：universe 栅元（u 非空）经 fill 装配显示，不作为独立栅元列出 */

@@ -42,6 +42,12 @@ export interface SourceDemoRendererHandle {
   setShellOpacity(v: number): void;
   setParticleOpacity(v: number): void;
   setDirectionLength(scale: number): void;
+  /**
+   * 出图用：**同步**重画当前帧并交出 canvas。
+   * 必须同步——本渲染器没开 `preserveDrawingBuffer`，等 rAF 再取图会拿到空画布
+   * （见 `export/captureFrame` 的模块说明）。
+   */
+  renderNow(): HTMLCanvasElement;
   dispose(): void;
 }
 
@@ -452,6 +458,10 @@ export function createSourceDemoRenderer(
       // ⇒ 「方向线长度」滑杆**完全无效**（拖动不产生任何变化）。现按新倍率重建方向线几何。
       directionScale = scale;
       updateDirectionLines(true);
+    },
+    renderNow(): HTMLCanvasElement {
+      renderer.render(scene, camera);
+      return canvas;
     },
     dispose() {
       ro?.disconnect();

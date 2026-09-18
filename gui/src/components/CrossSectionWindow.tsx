@@ -4,16 +4,20 @@
  * 3D 窗口点「截面」→ windows.ts openCrossSection() 写桥 + 开窗。
  * 步进（onPlaneChange）重新请求后端 /api/cross-section，更新本地 slices。
  */
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import CrossSectionView from "./CrossSectionView";
 import { readCrossSectionData, closeCurrentWindow } from "../utils/windows";
 import { apiUrl } from "../utils/api";
 import { offsetPlaneForStl } from "../three/planeOffset";
+import { ExportButton } from "../export/useFigureExport";
+import type { ExportFigureRequest } from "../export/exportFigure";
 
 export default function CrossSectionWindow() {
   const [init] = useState(() => readCrossSectionData());
   const [slices, setSlices] = useState<any[] | null>(init?.slices || null);
   const [plane, setPlane] = useState(init?.plane || { A: 0, B: 0, C: 1, D: 0 });
+  /** 由 CrossSectionView 在挂载后回填："把当前这张矢量图变成导出请求" */
+  const buildExportRef = useRef<(() => ExportFigureRequest) | null>(null);
 
   // 步进：重新请求后端（从 STL 切，只切勾选+非真空栅元）
   const fetchSlices = (newPlane: { A: number; B: number; C: number; D: number }) => {
@@ -56,6 +60,11 @@ export default function CrossSectionWindow() {
       onPlaneChange: fetchSlices,
       cellComments: (init.cells || []).map((c) => ({ number: parseInt(c.num) || 0, comment: c.comment })),
       materials: init.materials,
+      exportButton: React.createElement(ExportButton, {
+        label: "截面矢量图",
+        build: () => buildExportRef.current?.() ?? { view: "截面", vector: undefined },
+      }),
+      registerExportBuilder: (fn) => { buildExportRef.current = fn; },
     }),
   );
 }

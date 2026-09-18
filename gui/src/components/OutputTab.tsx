@@ -7,7 +7,7 @@ import { workflowStep, noFileMessage, type MeshWorkflowState } from "../volume/w
 import { decideResolution, DEFAULT_RESOLUTION, MAX_RESOLUTION, OVER_BUDGET_POPUP_COPY } from "../volume/downsampleRequest";
 import { openVolume3DWindow, readOutputDir } from "../volume/openVolume3DWindow";
 import { openPtrac3DWindow } from "../ptrac/openPtracWindow";
-import { buildFluxChartSvg } from "../utils/tallyChart";
+import { openTallyChart } from "../utils/windows";
 import KeffDialog from "./KeffDialog";
 
 export default function OutputTab() {
@@ -16,7 +16,7 @@ export default function OutputTab() {
   const [filePath, setFilePath] = useState("");
   const [selectedTally, setSelectedTally] = useState("1");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [chartTally, setChartTally] = useState<string | null>(null);
+  /** Tally 通量图已升级为独立窗口（TallyChartWindow），弹窗状态随之移除 */
   const [keffOpen, setKeffOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { deck } = useDeck();
@@ -303,8 +303,13 @@ export default function OutputTab() {
               if (!parsed) { alert("请先解析输出文件"); return; }
               const tally = parsed.tallies[Number(selectedTally)];
               if (!tally || !tally.rows.length) { alert("该计数无数据"); return; }
-              setChartTally(selectedTally);
-            }}>绘图</button>
+              // 独立窗口（原来是 maxWidth:640 的弹窗：图小、与数据表互挤、无法调大小）
+              openTallyChart({
+                tallyNumber: String(selectedTally),
+                rows: tally.rows,
+                title: deck.basic?.title || "",
+                path: filePath || "",
+              });            }}>绘图</button>
             <button className="btn btn-ghost btn-xs" onClick={handleExportCsv}>导出 CSV</button>
           </div>
         </div>
@@ -455,22 +460,9 @@ export default function OutputTab() {
         )}
       </div>
 
-      {/* 绘图弹窗：Tally 通量 SVG 折线图 */}
-      {chartTally !== null && parsed && parsed.tallies[Number(chartTally)] && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 1300, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <div className="glass-card" style={{ maxWidth: 640, padding: 16, width: "92%" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>Tally {chartTally} 通量图</span>
-              <button className="btn btn-ghost btn-xs" onClick={() => setChartTally(null)}>✕ 关闭</button>
-            </div>
-            <div style={{ overflowX: "auto" }}
-              dangerouslySetInnerHTML={{ __html: buildFluxChartSvg(parsed.tallies[Number(chartTally)].rows) }} />
-            <div style={{ fontSize: 10, color: "var(--text-tertiary)", marginTop: 8 }}>
-              红短线为相对误差（1σ）；通量跨 100 倍以上时 y 轴自动切换对数刻度。
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Tally 通量图已升级为独立窗口（见 TallyChartWindow）：
+          原弹窗固定 maxWidth 640，图只有 560×300 且与数据表挤在同一卡片里，
+          不能调大小、也无法与其它结果图一样导出。 */}
 
       {/* F3 超预算弹窗：要更流畅，还是要更精细？ */}
       {meshBudget && (

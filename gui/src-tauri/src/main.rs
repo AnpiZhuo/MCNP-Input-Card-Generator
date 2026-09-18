@@ -98,6 +98,17 @@ async fn open_source_demo_window(app: tauri::AppHandle) -> Result<(), String> {
     create_or_focus(&app, "source-demo", "演示源", 1300.0, 820.0, "source-demo")
 }
 
+/// 「Tally 通量图」独立窗口。
+///
+/// 为什么给它独立窗口：它原本只是输出页里一个 `maxWidth:640` 的弹窗 —— 图小、不能调整大小、
+/// 还和数据表挤在同一张卡片里；而本程序里凡是"要看的结果图"都已经有自己的窗口
+/// （3D 预览 / 截面 / 3D 结果 / 3D 径迹 / 演示源），唯独它没有。独立后同时解决三件事：
+/// 图能铺满窗口、导出按钮与其它窗口位置一致、数据表留在输出页不再被挤压。
+#[tauri::command]
+async fn open_tally_chart_window(app: tauri::AppHandle) -> Result<(), String> {
+    create_or_focus(&app, "tally_chart", "Tally 通量图", 1000.0, 700.0, "tally_chart")
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -110,7 +121,8 @@ fn main() {
             open_cross_section_window,
             open_volume3d_window,
             open_ptrac_window,
-            open_source_demo_window
+            open_source_demo_window,
+            open_tally_chart_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

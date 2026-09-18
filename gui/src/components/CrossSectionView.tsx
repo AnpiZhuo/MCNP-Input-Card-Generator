@@ -24,12 +24,24 @@ interface Props {
   cellComments?: { number: number; comment?: string }[];
   /** 材料页材料表（{number, comment}）：材料图例注释的**权威来源**；缺省回退 useDeck() */
   materials?: { number: number; comment?: string }[];
+  /** 标题栏里的导出按钮（由宿主给，保持本组件不依赖出图链路） */
+  exportButton?: React.ReactNode;
+  /**
+   * 把"当前这张矢量图 → 导出请求"的构建函数回填给宿主（宿主负责按钮与触发）。
+   * 为什么用回填而不是让本组件自己导出：`svgRef` 在这里，而按钮在宿主手上；
+   * 这样两个职责各归其位，本组件仍可独立测试。
+   */
+  registerExportBuilder?: (fn: (() => ExportFigureRequest) | null) => void;
 }
 
 /* ---- 色板（按材料号取模） ---- */
 import { getMatColor as matColor } from "../utils/materialColors";
 import { MaterialLegend, CellList } from "./MaterialPanel";
 import { materialLegendEntries } from "../utils/materialLegend";
+import { PlaneControls } from "./PlaneControls";
+import { snapshotSvg } from "../export/captureFrame";
+import { build2dSpec, subtitleOf } from "../export/figureSpecs";
+import type { ExportFigureRequest } from "../export/exportFigure";
 
 /* ---- 叉积 ---- */
 function cross(a: number[], b: number[]): number[] {
@@ -83,7 +95,7 @@ function makeProjector(base: { u: number[]; v: number[]; ox: number; oy: number;
 }
 
 /* ---- 主组件（SVG 渲染） ---- */
-export default function CrossSectionView({ slices, plane, onClose, onPlaneChange, cellComments, materials }: Props) {
+export default function CrossSectionView({ slices, plane, onClose, onPlaneChange, cellComments, materials, exportButton, registerExportBuilder }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const groupRef = useRef<SVGGElement>(null);
   // 主/子窗口等比缩放时，悬停标签定位用「真实像素」坐标而容器走缩放后坐标系，需除以 scale。
@@ -214,6 +226,34 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
   const planeLabel = `${plane.A}X + ${plane.B}Y + ${plane.C}Z = ${plane.D}`;
   const totalPolys = cellData.reduce((s, c) => s + c.polygons.length, 0);
 
+  /**
+   * 出图：把屏幕上这张 SVG **连样式一起抓下来**（脱离文档后没有 CSS 环境，
+   * 不内联样式会整片变黑），配材料图例，走纯矢量出口（PDF+SVG、透明底）。
+   */
+  const buildExport = () => {
+    const svg = snapshotSvg(svgRef.current, { stripSelector: '[data-export-strip="1"]' });
+    const legend = materialLegendEntries(
+      cellData.map((cd) => cd.material),
+      materials ?? (deck as any)?.materials,
+    ).map((e) => ({ color: matColor(e.mat), label: `M${e.mat}${e.comment ? " " + e.comment : ""}` }));
+    const panels = svg ? [{ svg, heading: `截面 ${planeLabel}` }] : [];
+    return {
+      view: "截面",
+      nameParts: [`${plane.A}/${plane.B}/${plane.C}`, plane.D],
+      vector: build2dSpec({
+        title: "二维截面",
+        subtitle: subtitleOf([`切割平面 ${planeLabel}`, `栅元 ${cellData.length} 个 / 多边形 ${totalPolys} 个`]),
+        panels,
+        caption: legend.length ? `材料：${legend.map((l) => l.label).join("、")}` : undefined,
+      }),
+    };
+  };
+
+  useEffect(() => {
+    registerExportBuilder?.(buildExport);
+    return () => registerExportBuilder?.(null);
+  });
+
   return React.createElement("div", {
     className: "preview-overlay",
     style: {
@@ -237,6 +277,7 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
           "滚轮缩放 · 拖拽平移"),
         React.createElement("span", { style: { fontSize: 11, color: "var(--text-tertiary)" } },
           `${cellData.length} 栅元 / ${totalPolys} 多边形`),
+        exportButton ?? null,
         React.createElement("button", {
           className: "btn btn-ghost btn-xs", onClick: onClose,
           style: { fontSize: 16, padding: "4px 10px" },
@@ -296,16 +337,16 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
             materials ?? (deck as any)?.materials,
           ),
         }),
-        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, margin: "8px 0 4px" } as React.CSSProperties },
-          React.createElement("span", { style: { fontSize: 11, color: "var(--text-secondary)", flex: 1 } }, "📏 步进"),
-          React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: () => { if (onPlaneChange) onPlaneChange({ ...plane, D: plane.D - step }); }, style: { fontSize: 10 } }, "◀"),
-          React.createElement("input", {
-            type: "text", value: String(step),
-            onChange: (e: React.ChangeEvent<HTMLInputElement>) => { const v = parseFloat(e.target.value); if (!isNaN(v) && v > 0) setStep(v); },
-            style: { width: 40, height: 20, fontSize: 10, textAlign: "center", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-primary)", borderRadius: 3, outline: "none" } as React.CSSProperties,
-          }),
-          React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: () => { if (onPlaneChange) onPlaneChange({ ...plane, D: plane.D + step }); }, style: { fontSize: 10 } }, "▶"),
-        ),
+        /* 平面 + 步进（共享控件：方程解析/步长语义与 3D 预览、切面面板完全一致） */
+        React.createElement(PlaneControls, {
+          plane: plane,
+          onPlaneChange: (p) => { if (onPlaneChange) onPlaneChange(p); },
+          step: step,
+          onStepChange: setStep,
+          showStepButtons: !!onPlaneChange,
+          onStepMove: (p) => { if (onPlaneChange) onPlaneChange(p); },
+          stepTitle: "沿法向平移一个步长并重新切",
+        }),
         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, margin: "8px 0 4px" } as React.CSSProperties },
           React.createElement("span", { style: { fontSize: 11, color: "var(--text-secondary)", flex: 1 } }, "🔄 旋转"),
           React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: () => setRotation(r => r - 15), style: { fontSize: 10 } }, "◀"),

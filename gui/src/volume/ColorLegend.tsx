@@ -8,6 +8,7 @@
  * 曾试双柄叠层滑杆，手动改数字后拖动吸附逻辑诡异，用户拍板移除）。
  */
 import React from "react";
+import { WEATHER_STOPS } from "./colorize";
 
 /** 等距刻度（含两端）：legendTicks(0, 100, 4) → [0, 25, 50, 75, 100] */
 export function legendTicks(min: number, max: number, n = 4): number[] {
@@ -38,9 +39,9 @@ export interface ColorLegendProps {
 
 export default function ColorLegend({ min, max, unit = "归一化计数" }: ColorLegendProps) {
   const ticks = legendTicks(min, max, 4);
-  const colors = [
-    "#3b4cc0", "#00e5ff", "#fde047", "#f97316", "#dc2626",
-  ];
+  // 色带锚点单一来源：`colorize.WEATHER_STOPS`（契约 §4.3.1）。曾在此内联同一份 5 色，
+  // 等于第二份色表 —— 改锚点时这里会静默漂移，已改回派生。
+  const colors = WEATHER_STOPS.map(([, [r, g, b]]) => `rgb(${r},${g},${b})`);
   const height = 10;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2, width: "100%", fontSize: 10 }}>

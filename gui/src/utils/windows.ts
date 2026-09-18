@@ -16,6 +16,7 @@ const KEY_MAT_CHANGE = "mcnp_win_material_change";
 const KEY_PTRAC = "mcnp_win_ptrac";
 const KEY_QUICK_CELL = "mcnp_win_quick_cell";
 const KEY_SOURCE_DEMO = "mcnp_win_source_demo";
+const KEY_TALLY_CHART = "mcnp_win_tally_chart";
 
 /** 当前是否运行在 Tauri 环境（浏览器模式回退主窗口覆盖层） */
 export async function isTauri(): Promise<boolean> {
@@ -168,6 +169,29 @@ export function readPtracData(): Record<string, any> | null {
     if (!raw) return null;
     const j = JSON.parse(raw);
     localStorage.removeItem(KEY_PTRAC);
+    return j;
+  } catch {
+    return null;
+  }
+}
+
+/** 主窗口：打开「Tally 通量图」独立窗口（先写数据桥再开窗） */
+export async function openTallyChart(data: Record<string, any>): Promise<boolean> {
+  try {
+    localStorage.setItem(KEY_TALLY_CHART, JSON.stringify(data));
+  } catch (e) {
+    console.warn("tally-chart bridge write failed", e);
+  }
+  return openChildWindow("open_tally_chart_window", "tally_chart");
+}
+
+/** 读取「Tally 通量图」桥数据（新窗口一次性消费） */
+export function readTallyChartData(): Record<string, any> | null {
+  try {
+    const raw = localStorage.getItem(KEY_TALLY_CHART);
+    if (!raw) return null;
+    const j = JSON.parse(raw);
+    localStorage.removeItem(KEY_TALLY_CHART);
     return j;
   } catch {
     return null;

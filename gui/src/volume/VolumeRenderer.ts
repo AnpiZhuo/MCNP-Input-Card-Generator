@@ -86,6 +86,12 @@ export interface VolumeRendererHandle {
   play(): void;
   pause(): void;
   seek(timeIdx: number): void;
+  /**
+   * 出图用：**同步**重画当前帧并交出 canvas。
+   * 必须同步——本渲染器没开 `preserveDrawingBuffer`，等 rAF 再取图会拿到空画布
+   * （见 `export/captureFrame` 的模块说明）。
+   */
+  renderNow(): HTMLCanvasElement;
   dispose(): void;
   markDirty(): void;
 }
@@ -440,6 +446,10 @@ export function createVolumeRenderer(
       opts.onTimeSeek?.(timeIdx);
     },
     markDirty,
+    renderNow(): HTMLCanvasElement {
+      renderer.render(scene, camera);
+      return canvas;
+    },
     dispose() {
       clearTimer();
       ro?.disconnect();

@@ -4,6 +4,7 @@ import TabPanels from "./components/TabPanels";
 import PreviewDialog from "./components/PreviewDialog";
 import Preview3DWindow from "./components/Preview3DWindow";
 import CrossSectionWindow from "./components/CrossSectionWindow";
+import TallyChartWindow from "./components/TallyChartWindow";
 import ResultWindow from "./volume/ResultWindow";
 import PtracWindow from "./ptrac/PtracWindow";
 import SourceDemoWindow from "./source/SourceDemoWindow";
@@ -87,9 +88,13 @@ function AppInner() {
   const { deck, patch, loadDeck } = useDeck();
   // AI 接入：当前工作区同步到 /workspace + 轮询回显 + 状态（MCP over HTTP）
   const [aiOpen, setAiOpen] = useState(false);
+  // 回显必须按**最新** deck 合并：`deck` 在回调闭包里是渲染时快照，用它会把
+  // 已删除/旧内容复活（hook 只回显自己写上去的工作区，多实例隔离见 useAiWorkspace）。
+  const deckRef = React.useRef(deck);
+  deckRef.current = deck;
   // deck.adv 已是源/高级唯一权威。AI 回显直接把后端 deck（adv 权威）整份并入，loadDeck 内做旧存档迁移兜底；
   // 「源项」页从 deck.adv 派生 → AI 改 adv 后界面自动跟随（无需 aiProject 中间态投影）。
-  const ai = useAiWorkspace(deck, (aiDeck: any) => loadDeck({ ...deck, ...aiDeck }));
+  const ai = useAiWorkspace(deck, (aiDeck: any) => loadDeck(aiDeck), { getLatestDeck: () => deckRef.current });
 
   useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, [theme]);
   // 主题一变就持久化到独立键（清空工作区不影响主题）
@@ -446,7 +451,7 @@ function AppInner() {
         )}
       </div>
       {preview && <PreviewDialog content={preview} onClose={() => setPreview(null)} onRegenerate={handleGenerate} outputPath={outputPath} fileName={(deck.basic?.title || "MCNP_Input").replace(/[^a-zA-Z0-9_\-]/g,"_") + suffix} mcnpExe={mcnpInfo.exe || "mcnp6.exe"} closureGenerateWarn={closureGenerateWarn} onClearClosureGenerateWarn={() => setClosureGenerateWarn(null)} />}
-      {aiOpen && <AiAccessPanel mcpUrl={ai.mcpUrl} status={ai.status} onClose={() => setAiOpen(false)} />}
+      {aiOpen && <AiAccessPanel mcpUrl={ai.mcpUrl} status={ai.status} owned={ai.owned.current} onClose={() => setAiOpen(false)} />}
       {/* Portal 根节点：createPortal 弹窗挂到这里才能随缩放容器一起等比缩放（见 utils/appScale.tsx）。
           零尺寸 + absolute：不占布局、不遮挡点击；挂进来的固定定位弹窗按缩放容器（zoom）坐标系定位并缩放 */}
       <div id="app-portal-root" style={{ position: "absolute", width: 0, height: 0 }} />
@@ -464,13 +469,13 @@ function AppInner() {
 function WindowRouter() {
   const [label, setLabel] = useState<string>(() => {
     const h = window.location.hash.replace(/^#\/?/, "");
-    if (["preview3d", "cross_section", "volume", "ptrac", "source-demo"].includes(h)) return h;
+    if (["preview3d", "cross_section", "volume", "ptrac", "source-demo", "tally_chart"].includes(h)) return h;
     return "main";
   });
   useEffect(() => {
-    // 调试入口：URL hash #/preview3d / #/cross_section / #/volume / #/ptrac / #/source-demo 可强制窗口类型
+    // 调试入口：URL hash #/preview3d / #/cross_section / #/volume / #/ptrac / #/source-demo / #/tally_chart 可强制窗口类型
     const h = window.location.hash.replace(/^#\/?/, "");
-    if (["preview3d", "cross_section", "volume", "ptrac", "source-demo"].includes(h)) { setLabel(h); return; }
+    if (["preview3d", "cross_section", "volume", "ptrac", "source-demo", "tally_chart"].includes(h)) { setLabel(h); return; }
     // 无 hash 时回退到 Tauri window label（鲁棒性兜底）
     currentWindowLabel().then(setLabel).catch(() => setLabel("main"));
   }, []);
@@ -479,6 +484,7 @@ function WindowRouter() {
   if (label === "volume") return <AppScaleProvider designWidth={1300} designHeight={820}><ResultWindow /></AppScaleProvider>;
   if (label === "ptrac") return <AppScaleProvider designWidth={1300} designHeight={820}><PtracWindow /></AppScaleProvider>;
   if (label === "source-demo") return <AppScaleProvider designWidth={1300} designHeight={820}><SourceDemoWindow /></AppScaleProvider>;
+  if (label === "tally_chart") return <AppScaleProvider designWidth={1000} designHeight={700}><TallyChartWindow /></AppScaleProvider>;
   return <AppScaleProvider><DeckProvider><AppInner /></DeckProvider></AppScaleProvider>;
 }
 

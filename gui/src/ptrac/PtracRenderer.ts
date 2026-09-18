@@ -41,6 +41,12 @@ export interface PtracRendererHandle {
   setTrackOpacity(v: number): void;
   setParticleVisible(particle: string, vis: boolean): void;
   setHighlight(nps: number | null): void;
+  /**
+   * 出图用：**同步**重画当前帧并交出 canvas。
+   * 必须同步——本渲染器没开 `preserveDrawingBuffer`，等 rAF 再取图会拿到空画布
+   * （见 `export/captureFrame` 的模块说明）。
+   */
+  renderNow(): HTMLCanvasElement;
   dispose(): void;
 }
 
@@ -404,6 +410,10 @@ export function createPtracRenderer(canvas: HTMLCanvasElement, opts: PtracRender
     setHighlight(nps: number | null) {
       highlightNps = nps;
       applyVisibility();
+    },
+    renderNow(): HTMLCanvasElement {
+      renderer.render(scene, camera);
+      return canvas;
     },
     dispose() {
       ro?.disconnect();

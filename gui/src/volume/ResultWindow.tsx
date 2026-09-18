@@ -8,7 +8,7 @@
  *
  * 首帧：读桥 → meshtal-texture 取当前帧 → createVolumeRenderer → 后续帧 texSubImage3D 复用。
  */
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { readVolumeData, closeCurrentWindow } from "../utils/windows";
 import { meshtalTexture, errorHint, type MeshtalTextureFrame } from "../utils/api";
 import { getMatColor } from "../utils/materialColors";
@@ -24,6 +24,9 @@ import { DEFAULT_SHELL_OPACITY } from "../three/cellMaterial";
 import { defaultDisplayMin, minPositiveOfBytes } from "./colorize";
 import VolumeControlPanel from "./VolumeControlPanel";
 import SliceExportPanel from "./SliceExportPanel";
+import { ExportButton } from "../export/useFigureExport";
+import { build3dSpec, subtitleOf, volumeColorbar } from "../export/figureSpecs";
+import type { AABB } from "../export/planeSample";
 
 interface BridgeData {
   stlData: Record<string, string>;
@@ -63,6 +66,22 @@ export default function ResultWindow() {
   timeIndexRef.current = timeIndex;
   // 当前 (energy,time) 帧标量（供切面/导出）
   const [currentFrame, setCurrentFrame] = useState<VolumeFrame | null>(null);
+
+  /**
+   * 网格世界坐标范围（自由平面取样用）。
+   * 优先用 meshtal 解析出的 `worldBox`（真实网格边界）；没有就按下标当坐标兜底
+   * —— 兜底时平面方程里的数值不是真实物理坐标，但方向/步长/等值线仍然可用，
+   * 且界面会照常显示，不会静默切成空图。
+   */
+  const scalarBox = useMemo<AABB | null>(() => {
+    const wb = data?.worldBox;
+    if (wb && wb.min && wb.max) {
+      return { min: [wb.min[0], wb.min[1], wb.min[2]], max: [wb.max[0], wb.max[1], wb.max[2]] };
+    }
+    const r = currentFrame?.resolution;
+    if (r) return { min: [0, 0, 0], max: [Math.max(1, r[0] - 1), Math.max(1, r[1] - 1), Math.max(1, r[2] - 1)] };
+    return null;
+  }, [data, currentFrame]);
 
   /** 取 (energy,time) 帧 → VolumeFrame（异常带 hint） */
   const fetchTexture = async (energyBin: number, timeIdx: number): Promise<VolumeFrame> => {
@@ -216,6 +235,40 @@ export default function ResultWindow() {
     locked: c.mat === "0",
   }));
 
+  /** 出图：3D 体积视图 + 材料图例 + 色阶（当前能量/时间帧与屏幕上一致） */
+  const buildExport = () => {
+    const canvas = rendererRef.current?.renderNow();
+    const seen = new Set<string>();
+    const legend: { color: string; label: string }[] = [];
+    for (const c of data.cells) {
+      if (seen.has(c.mat)) continue;
+      seen.add(c.mat);
+      legend.push({ color: getMatColor(c.mat), label: c.mat === "0" ? "M0 真空" : `M${c.mat}${c.comment ? " " + c.comment : ""}` });
+    }
+    const eLabel = data.energyOptions?.[energyIndex]?.label;
+    const tLabel = data.timeOptions?.[timeIndex]?.label;
+    return {
+      view: "3D体积",
+      nameParts: [`tally${data.meshtal.tallyNumber}`, data.meshtal.resolution, eLabel, tLabel],
+      raster: canvas
+        ? build3dSpec({
+            canvas,
+            title: "3D 网格计数体积",
+            subtitle: subtitleOf([
+              `tally ${data.meshtal.tallyNumber}`,
+              `${data.meshtal.particle || "-"} / ${data.meshtal.geom}`,
+              `分辨率 ${data.meshtal.resolution}³`,
+              eLabel ? `能量 ${eLabel}` : undefined,
+              tLabel ? `时间 ${tLabel}` : undefined,
+            ]),
+            legend,
+            colorbar: volumeColorbar(colorRange.min, colorRange.max, data.unit || "归一化计数"),
+            caption: "色阶下限为当前显示阈值；体积与几何外壳透明度与屏幕一致",
+          })
+        : undefined,
+    };
+  };
+
   return (
     <div style={containerStyle}>
       <div style={{ flex: 1, display: "flex", position: "relative", minWidth: 0 }}>
@@ -229,7 +282,10 @@ export default function ResultWindow() {
       <div style={{ width: 300, borderLeft: "1px solid rgba(255,255,255,0.08)", background: "rgba(10,10,30,0.6)", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden" }}>
         <div style={{ padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(241,241,249,0.85)" }}>🧊 3D 结果 — 网格计数体积</span>
-          <button className="btn btn-ghost btn-xs" onClick={() => { closeCurrentWindow(); }} style={{ fontSize: 16, padding: "4px 10px" }}>✕</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <ExportButton build={buildExport} label="3D 体积图" />
+            <button className="btn btn-ghost btn-xs" onClick={() => { closeCurrentWindow(); }} style={{ fontSize: 16, padding: "4px 10px" }}>✕</button>
+          </div>
         </div>
 
         {/* A1.2 不匹配横幅 */}
@@ -267,7 +323,7 @@ export default function ResultWindow() {
           <button className="btn btn-ghost btn-xs" style={{ flex: 1, fontSize: 11 }} onClick={() => setAll(false)}>全部取消</button>
         </div>
         <CellList rows={cellRows} onToggle={toggleCell} />
-        <SliceExportPanel frame={currentFrame} displayMin={colorRange.min} />
+        <SliceExportPanel frame={currentFrame} displayMin={colorRange.min} scalarBox={scalarBox} />
         <div style={{ padding: "8px 14px", borderTop: "1px solid rgba(255,255,255,0.06)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>粒子 {data.meshtal.particle || "-"} · 网格 {data.meshtal.geom}</span>
           <button className="btn btn-primary btn-xs" onClick={() => { closeCurrentWindow(); }}>关闭</button>

@@ -15,6 +15,8 @@ import { DEFAULT_SHELL_OPACITY } from "../three/cellMaterial";
 import { createPtracRenderer, type PtracRendererHandle } from "./PtracRenderer";
 import { sampleTracks } from "./decimateTracks";
 import { TRACK_LEGEND, TRACK_COLORS, TRACK_PARTICLE_LABELS, energyRangeOfTracks, allPointsCoincident } from "./trackColors";
+import { ExportButton } from "../export/useFigureExport";
+import { build3dSpec, subtitleOf } from "../export/figureSpecs";
 
 interface BridgeData {
   stlData: Record<string, string>;
@@ -127,6 +129,29 @@ export default function PtracWindow() {
   const displayedCount = sampleTracks(tracksRef.current, SAMPLE_STEPS[sampleIdx]).length;
   const coincidentPos = tracksRef.current.length > 0 ? allPointsCoincident(tracksRef.current) : null;
 
+  /** 出图：视图 + 粒子类型图例（3D 视角与屏幕一致；配色走论文主题） */
+  const buildExport = () => {
+    const canvas = rendererRef.current?.renderNow();
+    const legend = TRACK_LEGEND.map((l) => ({ color: l.color, label: l.label }));
+    return {
+      view: "3D径迹",
+      nameParts: [trackCount, SAMPLE_LABELS[sampleIdx]],
+      raster: canvas
+        ? build3dSpec({
+            canvas,
+            title: "3D 粒子径迹（PTRAC）",
+            subtitle: subtitleOf([
+              header?.title ? `「${header.title}」` : undefined,
+              `径迹 ${displayedCount}/${trackCount} 条`,
+              `抽样 ${SAMPLE_LABELS[sampleIdx]}`,
+            ]),
+            legend,
+            caption: `能量着色：低能（浅）→ 高能（深） · ${energyRange.min === energyRange.max ? "无能量信息" : `${fmt(energyRange.min)} → ${fmt(energyRange.max)} MeV`}`,
+          })
+        : undefined,
+    };
+  };
+
   return (
     <div style={containerStyle}>
       <div style={{ flex: 1, display: "flex", position: "relative", minWidth: 0 }}>
@@ -138,9 +163,12 @@ export default function PtracWindow() {
         )}
       </div>
       <div style={{ width: 300, borderLeft: "1px solid rgba(255,255,255,0.08)", background: "rgba(10,10,30,0.6)", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden" }}>
-        <div style={{ padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(241,241,249,0.85)" }}>🧭 3D 径迹 — PTRAC</span>
-          <button className="btn btn-ghost btn-xs" onClick={() => { closeCurrentWindow(); }} style={{ fontSize: 16, padding: "4px 10px" }}>✕</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <ExportButton build={buildExport} label="3D 径迹图" />
+            <button className="btn btn-ghost btn-xs" onClick={() => { closeCurrentWindow(); }} style={{ fontSize: 16, padding: "4px 10px" }}>✕</button>
+          </div>
         </div>
 
         {/* 统计行 */}
