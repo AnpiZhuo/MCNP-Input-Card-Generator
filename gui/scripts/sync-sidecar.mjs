@@ -96,9 +96,42 @@ function copyTree(src, dst) {
   }
 }
 
+/**
+ * PyInstaller 的产物落点。
+ *
+ * ⚠️ 由 `mcnp_sidecar.spec` 显式设为 **`gui/dist_sidecar/python`**，不是默认的 `gui/dist/python`：
+ * `vite build` 会**清空 `gui/dist/`**，两者同处一个目录会让"先 PyInstaller → 再 build:app"
+ * 静默地把新 sidecar 删掉，随后同步出去的是上一次的旧 exe（坑 6.7，2026-09-18 实测）。
+ */
+const PYINSTALLER_OUT = join(TAURI_DIR, "..", "dist_sidecar", "python");
+
+/** 供外部（如 `build:release` 链、单测）做"产物是否就绪"的前置判断 */
+export function pyinstallerOutputReady() {
+  return existsSync(PYINSTALLER_OUT) && existsSync(join(PYINSTALLER_OUT, "python.exe"));
+}
+
 function main(argv) {
   const checkOnly = argv.includes("--check");
   const requireTarget = argv.includes("--require-target");
+  /**
+   * ⚠️ 坑 6.7（2026-09-18 实测，新坑）：`vite build` 会**清空 `gui/dist/`**，
+   * 而 PyInstaller 的产物正是 `gui/dist/python/`。所以「先 PyInstaller → 再 `npm run build:app`」
+   * 这个看起来最自然的顺序是**错的**：vite 把刚打好的 sidecar 删掉，
+   * 本脚本随后拿不到新产物，就把 `binaries/` 里**上一次的旧 python.exe**
+   * 同步进 target/release，还报"✅ 已是最新" ⇒ 打出"版本号新、后端旧"的包，
+   * 而且**冒烟才发现**（前端新、后端旧，症状是修复不生效）。
+   *
+   * 这里显式拦一道：`binaries/` 有 sidecar 但 `dist/python/` 不存在
+   * ⇒ 说明产物被 vite 清掉了，**必须重跑 PyInstaller**，即顺序应为
+   * `npm run build:app`（含 vite build）→ PyInstaller → 覆盖 binaries → 再 `sync-sidecar`。
+   */
+  if (existsSync(SRC_DIR) && existsSync(join(SRC_DIR, SIDECAR_SRC)) && !existsSync(PYINSTALLER_OUT)) {
+    console.error(`[sync-sidecar] ❌ PyInstaller 产物不存在：${PYINSTALLER_OUT}`);
+    console.error("   没有新产物时继续同步，只会把 binaries/ 里上一次的旧 sidecar 铺出去");
+    console.error("   （症状：版本号新、后端旧，修复完全不生效 —— 坑 6.2/6.7）。已中止。");
+    console.error("   请先跑 `python -m PyInstaller --noconfirm mcnp_sidecar.spec` 再同步。");
+    return 1;
+  }
   if (!existsSync(SRC_DIR) || !existsSync(join(SRC_DIR, SIDECAR_SRC))) {
     if (requireTarget) {
       console.error(`[sync-sidecar] ❌ --require-target：源 sidecar 不存在：${SRC_DIR}\\${SIDECAR_SRC}`);

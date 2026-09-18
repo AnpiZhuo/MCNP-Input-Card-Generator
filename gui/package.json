@@ -10,6 +10,7 @@
     "check-sidecar": "node scripts/sync-sidecar.mjs --check",
     "verify-sidecar": "node scripts/sync-sidecar.mjs --check --require-target",
     "build:app": "vite build && node scripts/sync-sidecar.mjs && tauri build && node scripts/sync-sidecar.mjs --require-target",
+    "build:release": "node scripts/build-release.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
@@ -40,3 +41,4 @@
     "vitest": "^1.6.0"
   }
 }
+

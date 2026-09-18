@@ -86,3 +86,56 @@ describe("sync-sidecar 的 --require-target 语义（构建后自检用）", () 
     expect(chain.indexOf("sync-sidecar.mjs --require-target")).toBeGreaterThan(chain.indexOf("tauri build"));
   });
 });
+
+describe("坑 6.7/6.8：sidecar 产物缺失时必须中止，绝不把旧副本铺出去", () => {
+  it("PyInstaller 产物目录不存在 → 退出码 1 且提示先跑 PyInstaller", async () => {
+    /**
+     * 事故复盘（2026-09-18/19 实测，两次都打成"版本号新、后端旧"的包）：
+     * ① `vite build` 清空 `gui/dist/`，而 PyInstaller 默认产物也在 `gui/dist/python/`
+     *    ⇒ "先 PyInstaller → 再 build:app"会把新 sidecar 删掉；
+     * ② `gui/build/mcnp_sidecar/` 的增量缓存会让 PyInstaller 复用**旧模块字节码**
+     *    （改了 `inputcard_mcp/server.py`，产物 PYZ 里仍是 09-12 的旧代码）。
+     * 两种情况都会让同步把 `binaries/` 里上一次的 python.exe 铺进 target/release，
+     * 还报"✅ 已是最新"。所以"产物缺失即中止"这条必须一直守住。
+     *
+     * 产物落点现在是 `gui/dist_sidecar/python`（spec 里刻意与 vite 的 dist 分开）。
+     */
+    const { renameSync, existsSync } = await import("node:fs");
+    const gui = join(__dirname, "..");
+    const out = join(gui, "dist_sidecar", "python");
+    const hidden = join(gui, "dist_sidecar", "python_guard_test");
+
+    if (!existsSync(out)) {
+      // 没跑过 PyInstaller 的环境：产物本来就不存在，守卫同样应当拦住
+      const r = runSync();
+      expect(r.code).toBe(1);
+      expect(r.err).toContain("PyInstaller 产物不存在");
+      return;
+    }
+    renameSync(out, hidden);
+    try {
+      const r = runSync();
+      expect(r.code).toBe(1);
+      expect(r.err).toContain("PyInstaller 产物不存在");
+      expect(r.err).toContain("mcnp_sidecar.spec");
+    } finally {
+      renameSync(hidden, out);
+    }
+  });
+
+  it("spec 不设 distpath（COLLECT 无该属性，赋值会被静默忽略）——落点只能靠命令行参数", async () => {
+    const { readFileSync } = await import("node:fs");
+    const spec = readFileSync(join(__dirname, "..", "mcnp_sidecar.spec"), "utf8");
+    // 防止有人"修"成 spec 里赋值：那会静默失效，产物又回到 dist/ 被 vite 清掉
+    expect(spec).not.toMatch(/^\s*coll\.distpath\s*=/m);
+  });
+});
+
+/** 跑一次 sync-sidecar --check，收集退出码与输出 */
+function runSync(): { code: number; err: string } {
+  const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+  const r = spawnSync(process.execPath, [join(__dirname, "..", "scripts", "sync-sidecar.mjs"), "--check"], {
+    encoding: "utf8",
+  });
+  return { code: r.status ?? -1, err: `${r.stdout || ""}${r.stderr || ""}` };
+}

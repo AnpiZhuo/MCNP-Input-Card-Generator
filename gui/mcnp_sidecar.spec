@@ -121,3 +121,14 @@ coll = COLLECT(
     upx=False,
     name="python",
 )
+
+# ── 产物落点：**必须用命令行 `--distpath dist_sidecar` 指定为独立目录** ──
+# 为什么不用默认的 `dist/python`：`vite build` 会**清空 `gui/dist/`**，
+# 于是"先 PyInstaller → 再 npm run build:app"会把刚打好的 sidecar 删掉，
+# 同步脚本随后把 binaries/ 里**上一次的旧 python.exe** 铺进 target/release，
+# 还报"✅ 已是最新" ⇒ 打出"版本号新、后端旧"的包（冒烟才发现修复不生效，坑 6.7）。
+# 两者物理分开后互不干扰，构建顺序不再有隐藏依赖。
+#
+# ⚠️ 为什么不在这里写 `coll.distpath = ...`：COLLECT 对象没有这个属性，
+# 赋值会被**静默忽略**（实测：照样写进 dist/）。落点只能用命令行参数，
+# 因此统一走 `npm run build:sidecar`（脚本里带 --distpath），不要手敲裸 PyInstaller。

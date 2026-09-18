@@ -76,6 +76,41 @@ contour / planeSample / cjkFont / saveFile / figureSpecs / exportFigure / useFig
 
 **门禁**：pytest **996** / vitest **731（90 files）** / tsc 两档 **0** / vite build **0**。
 
+### S6.4 打包（2026-09-19 凌晨，**版本仍 1.7.6**）—— 一次打包连踩三个"后端旧"的坑
+
+**链路实录**：`npm run build:release`（新增的一步式脚本）→ PyInstaller 清缓存重建 → 覆盖
+`src-tauri/binaries/` → `sync-sidecar` 镜像 + `--require-target` 自检 → 备份
+`D:\MCNP\_backup_1.7.6_20260918_235527`（7877 文件）→ 部署 `D:\MCNP\MCNP输入卡生成器`
+（exe **6,854,656 B** / python.exe **32,514,167 B** `F9B3A2BE…` / `_internal` 7867 文件 /
+README 13095 B / AI接入.md 3798 B）→ 冒烟。
+
+**冒烟（部署版真实 HTTP）**：`xsdir-check` 200（xsdir 7925）/ `mcnp-detect` 200 / `diff-inp` 200 /
+`lattice-extent` 200 / `import-step` 200；MCP `/workspace` 往返实测
+`writer=deploy-smoke · tallies=[14] · tally 子对象无 tallies · grids 在位` ✅（本次修复核心场景）。
+
+**★ 三个坑（都表现为"版本号新、后端旧"= 修复完全不生效，且**冒烟才发现**）**：
+1. **坑 6.7 落点冲突**：PyInstaller 默认写 `gui/dist/python/`，而 `vite build` **清空 `gui/dist/`**
+   ⇒ "先 PyInstaller → 再 build:app"会把刚打好的 sidecar 删掉，`sync-sidecar` 随后把
+   `binaries/` 里**上一次的旧 python.exe** 铺出去，还报"✅ 已是最新"。
+   **根治**：PyInstaller 用 `--distpath dist_sidecar`（与 vite 的 dist 物理分开）；
+   `sync-sidecar` 加守卫（产物缺失即中止并给正确顺序）。
+2. **坑 6.8 PyInstaller 增量缓存**（本次最隐蔽的一个）：`gui/build/mcnp_sidecar/` 残留上次 Analysis，
+   PyInstaller 据此**复用旧模块字节码** —— 实测 `inputcard_mcp/server.py` 已改，新产物的 PYZ 里
+   仍是 **09-12 的旧代码**（`python.exe` 哈希与旧版**逐字节相同** `D943A87D…`）。
+   **根治**：每次构建前**强制删 `build/mcnp_sidecar`**；判定手段 = 读 PYZ 归档或直接冒烟行为。
+3. **坑 6.9 `binaries/` 才是同步的比较源**：`sync-sidecar` 只比对 `src-tauri/binaries/` 与
+   `target/release/`，**不会自动去 `dist_sidecar/` 取新产物** —— 不先覆盖 `binaries/`，
+   它比对"一致"的是两份旧货（本次实测：报了两次"已是最新"，实际全是 09-17 的旧 exe）。
+   **根治**：`build-release.mjs` 第 ③ 步显式覆盖 `binaries/`。
+
+**部署踩坑（我犯的）**：第一条 `robocopy /MIR` 把整个 `target/release` 镜像进交付目录，
+把 `deps/` `.fingerprint/` `.cargo-*` `bundle/` `wix/` `mcnp_ui.pdb` 一并灌入，
+还用源目录里的**同名空文件**把 `AI接入.md` 覆盖成 0 字节。已即时修正（删垃圾 + 重拷文档）。
+**教训**：部署**只拷三件套 + 两个 md**（手册第 7 步），别图省事 /MIR 整个 release 目录。
+
+**新增构建入口**：`npm run build:release`（脚本 `gui/scripts/build-release.mjs`）——把"清缓存 /
+独立落点 / 覆盖 binaries / 严格自检"四件事固化，避免再次出现隐藏顺序依赖。
+
 ---
 
 ## S5（上一批次，详情见 `docs/CHANGELOG.md` 与下方归档条目）几何曲面语义全类型审计 + 11 类修复；+ S5.3 源分布卡/源演示按 C810 重核；+ S5.4 打包坑 6.2 根治（2026-09-16 ~ 09-17）
