@@ -10,7 +10,7 @@
  * material="0"、density=""；保存时 fg.raw = compressRaw(cellsToRaw(fg))（项12 编辑器路径 nR 压缩）；
  * 保存前 detectFillCycle（项13）命中 → 阻止保存 + 提示。
  */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import FloatingDialog from "./FloatingDialog";
 import LatticeCanvas from "./LatticeCanvas";
 import LatticePreview3D from "./LatticePreview3D";
@@ -214,9 +214,29 @@ export default function LatticeEditDialog({ surfacesText, deckCells, initialCell
     ];
   }, [xDir, yDir, zDir]);
   const dimsKey = dims.join("x");
+  // 上一版 range：尺寸/范围变化时按**绝对格位坐标**搬运涂色（旧实现按扁平索引，
+  // 改 -8:8 → -9:9 时格位号整体平移 → 整张图错乱）
+  const prevRangeRef = useRef<string[]>(
+    init ? init.fg.range.slice() : ["-8:8", "-8:8", "0:0"],
+  );
   useEffect(() => {
     // fill 语法=平行四边形：hex 与矩形一致，默认全格位填充（不强制六边形）
-    setCells((prev) => resizeLatticeCells(prev, initialRectCells(dims[0], dims[1], dims[2], defaultPaintU)));
+    const range = [
+      rangeFromDirCounts(xDir.neg, xDir.pos),
+      rangeFromDirCounts(yDir.neg, yDir.pos),
+      rangeFromDirCounts(zDir.neg, zDir.pos),
+    ];
+    const pRange = prevRangeRef.current;
+    setCells((prev) =>
+      resizeLatticeCells(
+        prev,
+        initialRectCells(dims[0], dims[1], dims[2], defaultPaintU),
+        dims,
+        range,
+        pRange.length ? pRange : undefined,
+      ),
+    );
+    prevRangeRef.current = range;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dimsKey]);
 

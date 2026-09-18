@@ -1,6 +1,9 @@
 # 项目记忆文档（AI 速查手册）
 
-> 最后更新时间：2026-09-17（**本批 S6 已闭环待打包**：① 计数卡"手动改动变回初始状态"**真根因**修复（回显 deck 同时带 `tally.tallies` 与顶层 `tallies` ⇒ 多轮往返下用户新增/删除计数卡被静默丢弃）；② 8100 端口守卫 + MCP 工作区归属隔离；③ **出图全链**（11 新模块：论文配色合成图 / 矢量 PDF+SVG / 自由平面切面 + 等值线 / 成叠导出 / Tally 独立窗口 / keff 导出）；④ 自审抓到并修掉 9 处真 bug。门禁 pytest **996 passed** / vitest **731 passed / 90 files** / tsc 两档 0 / build 0，详见下方 S6）。
+> 最后更新时间：2026-10-15（**本批 S7 已提交 ✅ / 未重打包**：格阵编辑器"**改范围就乱序**"——`resizeLatticeCells`
+> 按**扁平下标**搬运涂色，范围 -8:8 → -9:9 时格位号整体平移 ⇒ 整张图沿对角线错位；改为按**绝对格位坐标**搬运。
+> **纯前端修复，不动后端/sidecar**，无需重打包链路。门禁 vitest **737 passed / 90 files** / tsc 两档 0 / build 0，详见下方 S7）。
+> 此前（2026-09-17，**本批 S6 已闭环待打包**：① 计数卡"手动改动变回初始状态"**真根因**修复（回显 deck 同时带 `tally.tallies` 与顶层 `tallies` ⇒ 多轮往返下用户新增/删除计数卡被静默丢弃）；② 8100 端口守卫 + MCP 工作区归属隔离；③ **出图全链**（11 新模块：论文配色合成图 / 矢量 PDF+SVG / 自由平面切面 + 等值线 / 成叠导出 / Tally 独立窗口 / keff 导出）；④ 自审抓到并修掉 9 处真 bug。门禁 pytest **996 passed** / vitest **731 passed / 90 files** / tsc 两档 0 / build 0，详见下方 S6）。
 > 此前（2026-09-17，S5.3~S5.6：源分布卡文档按 C810 重写 + 粒子源演示 8 处行为缺陷 + 2 个带外缺陷（`SDEF SUR=` 面源在真实后端全废、`CX/CY/CZ` 三项式被静默丢弃）；S5.4 打包坑 6.2（`tauri build` 不刷新 `python.exe`）**根治为构建命令的一步**；门禁 pytest 982/1（GBK 环境失败）/ vitest 644/82）。此前（2026-09-12，**STEP 导入 500 热修**：`/api/import-step` 手写 `CellRow` 字段映射 ⇒ 每次导入必 HTTP 500；已收敛到单一序列化 seam + 补回归测试 + **仅重打包 sidecar 部署（未升版）**，详见下方 S4）。此前（2026-09-10，**SDEF 源粒子演示可视化（TODO #6）落地**，已提交 `4f0798fa`：后端三深模块（`DistributionSampler` 分布抽样 / `source_sampler` 源编排 / `voxel_csg` 全宏体拆解）+ 端点 `/api/source-demo-sample` + 独立「🎬 演示源」3D 窗口；按 C810.pdf 权威语义**做全不降级**、有错就地报）。此前（2026-09-04，**后端拉起提速 + preview_cache 跨进程持久化**，已提交 commit 0a266cd；此前未提交 3D 功能已一并提交 f7fc2ed）。此前（2026-08-28，**v1.7.4**：3D 预览 MCNP 窗口裁剪修复 + U 分组侧边栏，**追加两项 Bug 修复——① disc STL 键错配（d8b6747，BEAVRS 燃料 pin 方块→真实圆柱）；② z 居中（5fafd1d，燃料棒/围板整体上移 230→位置正确，用户已复验确认），均仅重打包 sidecar 部署**；门禁后端 test_lattice(81)+test_api_contract(17) 绿 / 前端 vitest 527/527 / tsc EXIT 0）。此前（2026-08-27）：v1.7.4 上线（MCNP 窗口裁剪 + U 分组侧边栏，已打包部署 `D:\MCNP\MCNP输入卡生成器`；门禁后端 **85/85**（test_lattice+test_api_contract）/ 前端 vitest **527/527** / tsc EXIT 0）。此前（2026-08-24）：Wave 2a 后端 15 项修复**全绿**：pytest **703/0/0**（基线 686 + 新增 17）——项 2/4/5/9/13/15 + 项 14 剩余 + api.yaml cycle 契约 + R1 五夹具/kitchen_sink R4 不回退 + 契约闸门含 cycle HTTP 用例；详见 docs/backend-changes.md §AA。前端 Wave 2b 并行进行中，golden 已写盘全部可断言无 skip）。此前：格阵 fill 三阶段**最终复验全绿**：pytest **674/0** / vitest **466/0 无 skip** / tsc EXIT 0 / 契约闸门 15/15 / 空 STL 修复生效，用户指定 E2E 17/17 PASS，**建议放行统一提交**，详见 docs/qa-report-final.md —— **按人脑模型重组**（原「顶部横幅 + §8 流水混装」整理为「短期记忆 / 长期记忆」两区，完整流水外置 `docs/CHANGELOG.md`）。同日完成 **GQ/SQ 3D 预览修复 + 渲染后续增强 + OWEN 四项 + 参数扫描前端**：全部门禁绿（pytest **573/0** / vitest **358/0** / tsc EXIT 0）+ PyInstaller sidecar 重打包 + 打包版冒烟通过。
 >
 > **人脑模型组织说明**：
@@ -14,6 +17,41 @@
 # ◉ 短期记忆（工作记忆）—— 当前活跃上下文
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
+
+## S7（当前批次）格阵编辑器「改范围就乱序」（2026-10-15，**纯前端 · 版本仍 1.7.6 · 未重打包**）
+
+> **三态**：**已改 ✅ / 已提交 ✅ / 已打包部署 ❌ 不需要（无后端/无 sidecar 改动）**
+
+### S7.1 用户报告：「fill=-8:8 -8:8 0:0 的填充是对的，改成 -9:9 -9:9 0:0 就乱顺序，是你定义有问题？」
+
+**结论：MCNP FILL 条目序（行主序、i 最快）与生成/解析/3D 展开都没错，错的是编辑器"改尺寸时保留已涂色格位"那条 UI 逻辑。**
+
+**真根因**（`gui/src/utils/lattice.ts` 旧 `resizeLatticeCells`）：
+
+```ts
+return fresh.map((c, i) => (prev[i] ? { ...prev[i] } : c));   // ← 扁平下标对齐
+```
+
+范围 -L:M 一变，**每格的绝对格位号整体平移**，扁平下标不再指同一格位 ⇒ 整张图被沿对角线拖走。
+实测（17×17 居中同心环 → 19×17）：环心跑到偏右下，左上角出现"实心块 + 旧行残影"——**这就是"乱序"的真身**。
+用户看到的第二张图（左上角一整块同色）正是索引对齐的指纹：旧图前 N 格被原样塞进新图前 N 格。
+
+**修法**：按**绝对格位坐标**搬运。range token `"a:b"` → 起始绝对号 = a、格数 = b−a+1，
+扁平 `idx = (i−start0) + nx·((j−start1) + ny·(k−start2))`；旧格位换绝对号后只搬落在新范围内的
+（越界丢弃 = 缩范围裁剪；扩范围新增格位取默认涂色笔）。新增小工具 `rangeDims` / `rangeStarts`；
+`resizeLatticeCells(prev, fresh, freshDims, freshRange, prevRange)`；`LatticeEditDialog` 用 `useRef` 记住上一版 range 传下去。
+
+**跨语言口径**：与 Python `_range_count` / `_dir_counts_from_range`、后端 `expand_positions` 的 −N:M 居中公式一致；
+实测 MCNP 往返（19×17 → `format_fill_cards` → `parse_fill_tokens`）条目序**逐项相等**。
+
+### S7.2 门禁与验证
+
+- 新增回归：`gui/test/lattice.test.ts` 3 例（居中变宽 / 单轴加宽不错行 / 缩范围裁剪）+
+  `gui/test/latticeEditDialog.dom.test.tsx` 1 例端到端（涂两个对角 → 改 `x 向左` 8→9 → 断言新格位号 1 与 305）。
+- **vitest 737 passed / 90 files**（基线 733 + 新增 4），`tsc --noEmit` + `tsc -p tsconfig.test.json --noEmit` 两档 **EXIT 0**，
+  `vite build` EXIT 0；pytest 未跑（**无后端改动**）。
+- **打包口径**：本次只改 `gui/src`（前端源码），`gui/dist` 由启动脚本每次自动构建；
+  **不重打包 installer**（sidecar/后端逐字节未变，重打包是纯浪费）。
 
 ## S6（当前批次）计数卡回显根因 + 出图全链 + 自审修复（2026-09-17，**版本仍 1.7.6**）
 
@@ -741,6 +779,7 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 - **geouned 的安装位置只能在 FreeCAD 的 Python 里问（2026-09-12 实证）**：`_resolve_geouned_path()` 原来在**后端解释器**里 `find_spec("geouned")` ⇒ 开发机恒报「缺少 geouned 包: 」（路径为空，用户看不出该做什么）。现为候选链（`GEOUNED_PATH` → 冻结 `_MEIPASS/vendor` → 后端解释器 → **FreeCAD 解释器子进程探测**）+ **`_is_geouned_dir()` 验证**（须有 `geouned/__init__.py` + `geouned/GEOUNED/__init__.py`）。**本机 FreeCAD site-packages 里那个只含空 `GEOReverse`、没有 `__init__.py` 的残缺 namespace 包证明：光判 `isdir` 会把残缺安装当可用**，worker 起来才炸 `ImportError: cannot import name 'CadToCsg'`。开发环境跑 STEP 导入须 `set GEOUNED_PATH=D:\MCNP\GEOUNED`。
 - **❗发布链路的三个"必中坑"（2026-09-12 两轮热修实证）**：① **改了 TSX 就必须重出 Tauri exe** —— 前端 bundle 内嵌在 `MCNP 输入卡生成器.exe` 里，只重打 sidecar 用户**看不到前端修复**（本轮「导入即关窗」只有重跑 `vite build` + `tauri build` 才生效）；只改 Python 才可以 sidecar-only。② **6.2 时效校验升级为逐文件哈希比对**：`target\release\python.exe` 可能已是新版而 `_internal` 仍是旧的（Tauri 只拷 `externalBin` 的 exe，**不拷 `_internal`**）—— 本批用 `Get-FileHash` + `Compare-Object` 比出 **10 项差异**（`app\voxel_csg.py`/`step_importer*.py`/`preview_cache.py`/`base_library.zip`…）；"查有没有本批新增模块"的旧判据在**全是改文件**时查不出来。③ **部署前必须停掉 `MCNP 输入卡生成器.exe` 与其 sidecar**：否则文件被占用，且残留旧 sidecar 会与新起的 dev 后端**互相劫持 5001**（本轮实测：预览请求落到旧代码，数字看起来像"没修好"，白排查一轮）。
 - **`C810.pdf` 已可直读（2026-09-11 打通，重要能力）**：本机 **PyMuPDF（`fitz`）已安装** ⇒ **零新依赖**即可提取这份 1001 页权威手册的文本，卡格式语义不必再靠 `app/docs/` 派生 md 猜（§4 待办 5 的 `DSn` 语义亦可照此核对）。范例脚本在仓库外：`D:\MCNP\_agent_probe\{pdf_index.py,pdf_extract.py,pdf_tasks.py}`。**已提取定案**：SI/SP（页 746-747）、tasks（页 520/875）。
+- **❗"改尺寸保留原内容"必须按绝对坐标搬，不能按扁平下标（2026-10-15 实证，用户报"fill 改成 -9:9 就乱顺序"）**：`resizeLatticeCells` 旧实现 `fresh.map((c,i) => prev[i] ?? c)` —— 范围 -L:M 一变，**每格的绝对格位号整体平移**，扁平下标不再指同一格位 ⇒ 17×17 居中同心环改 19×17 时整张图沿对角线拖走（图面"左上角一整块同色 + 旧行残影"就是这种错位的指纹）。**规律：凡是"编号区间可平移"的序列（格阵 FILL / 网格 / 分箱），索引空间与格位空间不是一回事**；搬运/合并/删除都要先换算成绝对格位号（`start` 本轴 -L、`idx=(i-start0)+nx·((j-start1)+ny·(k-start2))`），越界即丢弃。⇒ 同时提防**"用户说乱序，就以为卡写错了"**：先分清是「生成/解析的条目序」还是「编辑器状态搬运」——本次 **FILL 条目序、3D 展开全对**，实测 MCNP 往返逐项相等，错的只有编辑器那段。
 
 ## §7 技术争议与决议（语义记忆）
 
@@ -803,7 +842,7 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 | 门禁 | 命令/位置 | 基线 |
 | :--- | :--- | :--- |
 | pytest | `tests/`（unit + parser + integration，含契约漂移闸门 test_api_contract.py 与真实 HTTP） | **最新实跑（2026-09-11）：900 passed / 0 failed / 0 skipped**。沿革：573(08-22) → … → 765(09-09) → 875(09-10) → **900(09-11，含 +25 例 `test_mcnp_tasks.py`)**。**重跑后请覆盖本行** |
-| vitest | `gui/test/`（**78 个测试文件**；含 jsdom DOM 交互） | **最新实跑（2026-09-10）：78 files / 625 tests passed / 0 skip**。沿革：358(08-22) → … → 587+4(09-09) → **625(09-10)**。**重跑后请覆盖本行** |
+| vitest | `gui/test/`（**90 个测试文件**；含 jsdom DOM 交互） | **最新实跑（2026-10-15）：90 files / 737 tests passed / 0 skip**。沿革：358(08-22) → … → 587+4(09-09) → 625(09-10) → 731(09-17) → **737(10-15，+4 格阵 resize 回归)**。**重跑后请覆盖本行** |
 | tsc | `gui/` 下 `npm run typecheck`（= `tsc --noEmit && tsc -p tsconfig.test.json --noEmit`） | 两档 **EXIT 0**。**2026-09-10 扩容**：此前只查 `src/`，测试文件不在类型检查内（审计 TD-17） |
 | 漂移闸门 | handlers dict ↔ `docs/contracts/api.yaml` 双向一致；spec `_keep_py` ↔ `_import_app` 双向一致 | **49 端点**；spec 闸门（`test_sidecar_spec_keep.py`）**绿** |
 

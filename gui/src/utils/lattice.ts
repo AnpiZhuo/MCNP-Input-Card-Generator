@@ -265,6 +265,25 @@ export function dirCountsFromRange(token: string): { neg: number; pos: number; d
   return { neg: neg === 0 ? 0 : neg, pos: b, dims: b - a + 1 };
 }
 
+/** range token 列表 → 每轴格数 [nx,ny,nz]（非法/缺失轴兜底 1） */
+function rangeDims(range: string[]): number[] {
+  const d = [1, 1, 1];
+  for (let a = 0; a < 3; a++) {
+    d[a] = dirCountsFromRange(range[a] ?? "").dims || 1;
+  }
+  return d;
+}
+
+/** range token 列表 → 每轴起始绝对格位号（"a:b" → [a]；非法/缺失轴兜底 0） */
+function rangeStarts(range: string[]): number[] {
+  const s = [0, 0, 0];
+  for (let a = 0; a < 3; a++) {
+    const m = (range[a] ?? "").trim().match(/^(-?\d+):(-?\d+)$/);
+    if (m) s[a] = parseInt(m[1], 10);
+  }
+  return s;
+}
+
 /** 初始矩形格阵：全部格位填 defaultU（k 层，行主序） */
 export function initialRectCells(cols: number, rows: number, layers: number, defaultU: string): FillGridCellJson[] {
   const cells: FillGridCellJson[] = [];
@@ -494,9 +513,54 @@ export function autoGenerateSurfaces(
   return { lines, surfaceExpr, surfacesText: next };
 }
 
-/** 尺寸变化时保持已涂色格位（新格位按 fresh 默认值填充） */
-export function resizeLatticeCells(prev: FillGridCellJson[], fresh: FillGridCellJson[]): FillGridCellJson[] {
-  return fresh.map((c, i) => (prev[i] ? { ...prev[i] } : c));
+/**
+ * 尺寸/范围变化时保持已涂色格位（按**绝对格位坐标**搬运，新格位取 fresh 默认值）。
+ *
+ * 修复（用户复验：「-8:8 -8:8 改 -9:9 -9:9 就乱顺序」）：
+ * 旧实现 `fresh.map((c, i) => prev[i] ?? c)` 是**扁平索引对齐**。范围变了 → 每格的
+ * 绝对格位号整体平移，扁平索引对齐 ≠ 格位对齐 → 整张图被沿对角线拖走
+ * （17×17 居中环改 19×17：原中心 (i=8,j=8) 绝对号 (0,0) 在新图是扁平 170，
+ * 旧扁平 161 的格却被搬到那里，图面错乱）。
+ *
+ * 正解：范围 token "a:b" → 起始绝对号 start=a、格数 dims=b−a+1；扁平
+ * idx = (i−start0) + nx·((j−start1) + ny·(k−start2))。旧格位 (i,j,k) 转绝对号
+ * (i+start_prev[axis])，再折算新图坐标 (绝对号 − start_new[axis])；落在
+ * [0, dims_new[axis]) 内才搬运（同格位覆盖），越界丢弃（缩范围被裁掉、扩范围
+ * 多出的格位取 fresh 默认值——与 MCNP 范围语义一致）。
+ *
+ * 跨语言 L3/L7：start/dims 换算与 Python `_range_count` / `_dir_counts_from_range`、
+ * 后端 `expand_positions` 的 −N:M 居中公式一致。
+ *
+ * @param freshDims  新图每轴格数（= 旧 dims 与层数差之和；决定输出扁平布局）
+ * @param freshRange 新图 range token（如 ["-9:9","-9:9","0:0"]）
+ * @param prevRange  旧图 range token；缺省按新图 range 解释（只改某轴范围时其它轴起点同旧图）
+ */
+export function resizeLatticeCells(
+  prev: FillGridCellJson[],
+  fresh: FillGridCellJson[],
+  freshDims: number[],
+  freshRange: string[] = [],
+  prevRange: string[] = [],
+): FillGridCellJson[] {
+  const out = fresh.map((c) => ({ ...c }));
+  if (!prev.length || !fresh.length) return out;
+  const d0 = Math.max(1, freshDims[0] ?? 1);
+  const d1 = Math.max(1, freshDims[1] ?? 1);
+  const d2 = Math.max(1, freshDims[2] ?? 1);
+  const start = rangeStarts(freshRange);
+  const use = prevRange.length ? prevRange : freshRange;
+  const prevStart = rangeStarts(use);
+  const pd = rangeDims(use.length ? use : freshRange);
+  const pnx = pd[0];
+  const pny = pd[1];
+  for (let pIdx = 0; pIdx < prev.length; pIdx++) {
+    const i = (pIdx % pnx) + prevStart[0] - start[0];
+    const j = (Math.floor(pIdx / pnx) % pny) + prevStart[1] - start[1];
+    const k = Math.floor(pIdx / (pnx * pny)) + prevStart[2] - start[2];
+    if (i < 0 || i >= d0 || j < 0 || j >= d1 || k < 0 || k >= d2) continue;
+    out[i + d0 * (j + d1 * k)] = { ...prev[pIdx] };
+  }
+  return out;
 }
 
 /* ── 宏体自动生成（项 3/4，跨语言 L4/L5）────────────────────── */

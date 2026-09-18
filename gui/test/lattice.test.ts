@@ -294,11 +294,43 @@ describe("初始格位 + 尺寸保持", () => {
   it("resizeLatticeCells 保持已涂色格位", () => {
     const prev = [{ u: "9", dx: "", dy: "", dz: "" }, { u: "8", dx: "", dy: "", dz: "" }];
     const fresh = initialRectCells(3, 1, 1, "1");
-    const next = resizeLatticeCells(prev, fresh);
+    const next = resizeLatticeCells(prev, fresh, [3, 1, 1], ["0:2", "0:0", "0:0"], ["0:1", "0:0", "0:0"]);
     expect(next).toHaveLength(3);
     expect(next[0].u).toBe("9");
     expect(next[1].u).toBe("8");
     expect(next[2].u).toBe("1");
+  });
+  // 用户复验回归：-8:8 → -9:9 曾「乱顺序」（旧实现按扁平索引搬运，格位号平移后整图错位）
+  it("resizeLatticeCells 按绝对格位坐标搬运：范围 -L:M 变宽时同格位不动、新格位取默认", () => {
+    // 旧图 3×3（-1:1），中心 (i=1,j=1) 为绝对格位 (0,0) 涂 5
+    const prev = initialRectCells(3, 3, 1, "7");
+    prev[1 + 3 * 1] = { u: "5", dx: "", dy: "", dz: "" };
+    const fresh = initialRectCells(5, 5, 1, "1");
+    const next = resizeLatticeCells(prev, fresh, [5, 5, 1], ["-2:2", "-2:2", "0:0"], ["-1:1", "-1:1", "0:0"]);
+    expect(next).toHaveLength(25);
+    expect(next[12].u).toBe("5"); // 新中心 (2,2) = 绝对 (0,0)（旧扁平索引对齐会放到 idx 4 = 错）
+    expect(next[4].u).toBe("1");  // 新 (4,0) = 绝对 (2,-2) → 越界，默认填充值
+    expect(next[0].u).toBe("1");
+    // 旧图其余格位（绝对 (i,j) ∈ [-1,1]²）原样搬入新图的中心 3×3 区
+    expect(next[6].u).toBe("7");  // 新 (0,0) = 绝对 (-2,-2)
+    expect(next[7].u).toBe("7");  // 新 (1,0) = 绝对 (-1,-2)
+    expect(next[11].u).toBe("7"); // 新 (0,1) = 绝对 (-2,-1)
+    expect(next[18].u).toBe("7"); // 新 (3,3) = 绝对 (0,1)
+    expect(next[24].u).toBe("1"); // 新 (4,4) = 绝对 (2,2) → 越界，默认填充值
+  });
+  it("resizeLatticeCells 仅某轴加宽（-1:1 → -2:1）：同 y 行的格位不错行", () => {
+    // 旧图 3×2（x −1:1, y 0:1）：第 0 行 "10 11 12"，第 1 行 "20 21 22"（扁平 j 主序）
+    const prev = ["10", "11", "12", "20", "21", "22"].map((u) => ({ u, dx: "", dy: "", dz: "" }));
+    const fresh = initialRectCells(4, 2, 1, "0");
+    const next = resizeLatticeCells(prev, fresh, [4, 2, 1], ["-2:1", "0:1", "0:0"], ["-1:1", "0:1", "0:0"]);
+    // 新图 x 起点 −2 → 旧 x=−1 的内容整体右移 1 格，绝对格位号 (x,y) 不变
+    expect(next.map((c) => c.u)).toEqual(["0", "10", "11", "12", "0", "20", "21", "22"]);
+  });
+  it("resizeLatticeCells 缩范围裁掉越界格位、扩范围取默认", () => {
+    const prev = initialRectCells(3, 1, 1, "9");
+    const fresh = initialRectCells(1, 1, 1, "2");
+    const next = resizeLatticeCells(prev, fresh, [1, 1, 1], ["0:0", "0:0", "0:0"], ["0:2", "0:0", "0:0"]);
+    expect(next.map((c) => c.u)).toEqual(["9"]);
   });
   it("rangeFromDims 与 maxSurfaceNumber", () => {
     expect(rangeFromDims([17, 17, 1])).toEqual(["0:16", "0:16", "0:0"]);

@@ -113,6 +113,28 @@ describe("项2：第 0 步方向块数 -N:M", () => {
     expect(screen.queryByText("列数 (i)")).toBeNull();
     expect(screen.queryByText("行数 (j)")).toBeNull();
   });
+
+  it("用户复验回归：x 层数 8→9（-8:8 → -9:8）时已涂色格位按绝对格位号平移，不错乱", () => {
+    renderDialog([mkCell({ u: "10" })]); // 默认 17×17（x/y 各 ±8）
+    fireEvent.click(screen.getByText("画布涂色"));
+    // 涂两个对角：扁平 0 = (i=0,j=0) 绝对 (-8,-8)；扁平 288 = (i=16,j=16) 绝对 (8,8)
+    fireEvent.click(screen.getByTestId("palette-0")); // void 笔
+    fireEvent.click(screen.getByTestId("lcell-0"));
+    fireEvent.click(screen.getByTestId("lcell-288"));
+    expect(screen.getByTestId("lcell-0").getAttribute("aria-label")).toBe("格位 0 U=0");
+    expect(screen.getByTestId("lcell-288").getAttribute("aria-label")).toBe("格位 288 U=0");
+    // 回第 0 步改 x 向左 8 → 9：range -9:8 ⊗ -8:8 → nx=18、共 306 格位
+    fireEvent.click(screen.getByText("类型与尺寸"));
+    fireEvent.change(numInput("x 向左"), { target: { value: "9" } });
+    expect(screen.getByText(/范围：-9:8/)).toBeTruthy();
+    fireEvent.click(screen.getByText("画布涂色"));
+    // 绝对 (-8,-8) 在新图 i=1,j=0 → 扁平 1；绝对 (8,8) 在新图 i=17,j=16 → 17 + 18*16 = 305
+    expect(screen.getByTestId("lcell-1").getAttribute("aria-label")).toBe("格位 1 U=0");
+    expect(screen.getByTestId("lcell-305").getAttribute("aria-label")).toBe("格位 305 U=0");
+    // 旧扁平索引 0 / 288 现落在别的绝对格位（-9,-8）/（-4,-1）→ 默认填充值，不是涂色值
+    expect(screen.getByTestId("lcell-0").getAttribute("aria-label")).toBe("格位 0 U=10");
+    expect(screen.getByTestId("lcell-288").getAttribute("aria-label")).toBe("格位 288 U=10");
+  });
 });
 
 describe("项6/7：调色板与画布同屏 + void 恒首位", () => {
