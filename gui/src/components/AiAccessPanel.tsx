@@ -10,6 +10,8 @@ import type { AiStatus } from "../hooks/useAiWorkspace";
 interface Props {
   mcpUrl: string;
   status: AiStatus;
+  /** 当前工作区是否由本实例写入（false = 被其它程序实例占用，本程序只读不回显） */
+  owned?: boolean;
   onClose: () => void;
 }
 
@@ -22,7 +24,7 @@ const AI_SETUP_PROMPT =
   `\n` +
   `请用你支持的方式（如 "添加 MCP server / mcpServers 配置入口"）把它加上；如无法自动改配置，请把上面的 http URL 明确告诉我，并提醒我手动填入。加好后我即可调用 read_document / list_section / patch_section / add_shape / validate_document / generate_document 等工具读写本程序工作区。`;
 
-export default function AiAccessPanel({ mcpUrl, status, onClose }: Props) {
+export default function AiAccessPanel({ mcpUrl, status, owned = true, onClose }: Props) {
   const copyPrompt = () => {
     (navigator.clipboard?.writeText(AI_SETUP_PROMPT) ?? Promise.reject()).catch(() => {});
   };
@@ -36,6 +38,9 @@ export default function AiAccessPanel({ mcpUrl, status, onClose }: Props) {
       React.createElement("div", { style: { marginBottom: 6 } },
         "接入状态：", React.createElement("b", { style: { color: status === "ok" ? "#2e7d32" : "#c62828" } },
           status === "ok" ? "已就绪（AI 可连接）" : "未运行（需启动 MCP over HTTP）")),
+      !owned && React.createElement("div", { style: { marginBottom: 6, color: "#f9a825" } },
+        "⚠ 当前工作区由**另一个程序实例**写入（两个程序共用本机 8100）：本窗口不再采纳 AI 回显，" +
+        "以免被另一实例的内容覆盖。要在这里用 AI 接入，请先关掉另一个程序实例。"),
       React.createElement("div", { style: { margin: "8px 0" } },
         React.createElement("code", { style: { padding: "4px 6px", background: "var(--bg-input)", borderRadius: 4, fontSize: 12 } }, mcpUrl)),
       React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },

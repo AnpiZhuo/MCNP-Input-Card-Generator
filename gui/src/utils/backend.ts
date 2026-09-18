@@ -5,9 +5,42 @@ let pythonProcess: any = null;
 let mcpProcess: any = null;
 let closeUnlisten: (() => void) | null = null;
 
+/** MCP over HTTP 工作区端口（inputcard_mcp.main 默认 8100） */
+const MCP_HTTP_PORT = 8100;
+
+/**
+ * 本机环回端口是否已有服务在跑。
+ *
+ * 与 backend.ts 里 5001 的「先探测再拉起」同一套路（首次尝试 mcp 时实测有坑：
+ * 残留旧进程占着 8100 ⇒ sidecar spawn 出来 bind 失败即退，前端却以为自己在用新实例，
+ * 实际读写的是**旧进程里的旧工作区** ⇒ 界面莫名其妙回弹且无任何报错）。
+ *
+ * 走 CSP 允许的 `http://127.0.0.1:<port>/`（Tauri 生产环境 CSP 里没有裸 TCP 的余地），
+ * `cache: "no-store"` + 短超时：只关心「连得上 / 连不上」，不看内容。
+ * 任何响应（含 404/405）都算「有服务在监听」。
+ */
+export async function isLocalPortServing(port: number): Promise<boolean> {
+  try {
+    await fetch(`http://127.0.0.1:${port}/`, {
+      method: "GET",
+      cache: "no-store",
+      signal: AbortSignal.timeout(1500),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** 启动 AI 接入通道：MCP over HTTP（inputcard-mcp --mcp-http → 本机 8100 /mcp + /workspace） */
 async function startMcpHttp(): Promise<void> {
   if (mcpProcess) return;
+  // 8100 已有实例在跑 → 复用，不再拉起（避免双实例：新进程 bind 失败静默退出，
+  // 前端连到旧进程的旧工作区，回显把界面改回旧状态且查不出原因）
+  if (await isLocalPortServing(MCP_HTTP_PORT)) {
+    console.log(`MCP over HTTP already running on ${MCP_HTTP_PORT}, skip spawn (reuse)`);
+    return;
+  }
   try {
     const { Command } = await import("@tauri-apps/api/shell");
     mcpProcess = Command.sidecar("python", ["--mcp-http"]);

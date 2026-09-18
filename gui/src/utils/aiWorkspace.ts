@@ -7,6 +7,15 @@
  */
 export const AI_HTTP_BASE = "http://127.0.0.1:8100";
 
+/**
+ * 本程序实例身份（每个窗口/每次启动一个）。
+ *
+ * 后端把它记成工作区的 `writer`，回显时原样带回：**前端只采纳自己写上去的那份工作区**。
+ * 多实例共用同一个 8100 时（例如打包版与 dev 版同时开着），否则 A 的编辑会把 B 的界面
+ * 覆盖成 A 的内容 —— B 上表现为"我的改动全变回初始状态"，且两边都不报错（2026-09-17 实证）。
+ */
+export const CLIENT_ID = `app-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
 /** MCP 协议端点：AI 客户端把这个作为 MCP server URL */
 export const aiMcpUrl = (): string => AI_HTTP_BASE + "/mcp";
 /** 前端同步「当前工作区」的端点 */
@@ -20,7 +29,7 @@ export async function putWorkspace(deck: unknown): Promise<WorkspacePutResult> {
     const r = await fetch(aiWorkspaceUrl(), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ deck }),
+      body: JSON.stringify({ deck, client_id: CLIENT_ID }),
       signal: AbortSignal.timeout(8000),
     });
     const j = await r.json();
@@ -30,8 +39,8 @@ export async function putWorkspace(deck: unknown): Promise<WorkspacePutResult> {
   }
 }
 
-/** 读取当前工作区（revision + 前端 deck 形态）；AI 未改动时 revision 不变 */
-export async function getWorkspace(): Promise<{ revision: number; deck?: any } | null> {
+/** 读取当前工作区（revision + writer + 前端 deck 形态）；AI 未改动时 revision 不变 */
+export async function getWorkspace(): Promise<{ revision: number; writer?: string; deck?: any } | null> {
   try {
     const r = await fetch(aiWorkspaceUrl(), { signal: AbortSignal.timeout(8000) });
     if (!r.ok) return null;

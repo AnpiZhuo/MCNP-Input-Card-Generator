@@ -3,7 +3,7 @@
  * aiWorkspace 纯函数：MCP over HTTP 的工作区通道（同步 PUT / 回显 GET 的 URL 与请求封装）。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { aiMcpUrl, aiWorkspaceUrl, putWorkspace, getWorkspace } from "../src/utils/aiWorkspace";
+import { aiMcpUrl, aiWorkspaceUrl, putWorkspace, getWorkspace, CLIENT_ID } from "../src/utils/aiWorkspace";
 
 beforeEach(() => { (globalThis as any).fetch = vi.fn(); });
 afterEach(() => { vi.restoreAllMocks(); });
@@ -19,10 +19,19 @@ describe("aiWorkspace", () => {
     const r = await putWorkspace({ cells: [] });
     expect(r.ok).toBe(true);
     expect(r.revision).toBe(7);
-    // 以 { deck } 形式 PUT
+    // 以 { deck, client_id } 形式 PUT
     const [url, init] = (globalThis as any).fetch.mock.calls[0];
     expect(url).toBe("http://127.0.0.1:8100/workspace");
     expect(JSON.parse(init.body).deck).toEqual({ cells: [] });
+  });
+
+  it("每次 PUT 带本实例身份 client_id（供后端记 writer，多实例隔离用）", async () => {
+    (globalThis as any).fetch.mockResolvedValue({ ok: true, json: async () => ({ ok: true, revision: 1 }) });
+    await putWorkspace({ cells: [] });
+    const body = JSON.parse((globalThis as any).fetch.mock.calls[0][1].body);
+    expect(typeof body.client_id).toBe("string");
+    expect(body.client_id).toBe(CLIENT_ID);
+    expect(CLIENT_ID.length).toBeGreaterThan(6);
   });
 
   it("putWorkspace/getWorkspace 网络失败 → ok:false / null（不抛）", async () => {
