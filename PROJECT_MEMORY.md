@@ -1,6 +1,6 @@
 # 项目记忆文档（AI 速查手册）
 
-> 最后更新时间：2026-09-20（**S9 已改 ✅ / 已提交 ⏳ / 打包中**：
+> 最后更新时间：2026-09-20（**S9 全链已提交 ✅ / 已打包部署 ✅ · 版本仍 1.7.6**：
 > **真实 MCNP 结果的 keff 解析**（用户「程序解析不到 keff 序列」，打包版实测 HTTP 500 同文案）：`app/mctal_parser.py`
 > 原先只认 **OWEN 简化夹具**（`k eff (c) <mean> <std>` 行 + `combined keff = ...`），**真实 MCNP6 mctal 里这些字段名一个都没有** ——
 > KCODE 结果在**文末** `kcode <总周期> <跳过> <每周期值数>` 之后的**裸数值块**（实测 600×19、无字段名，按列定位：
@@ -38,9 +38,10 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
-## S9（当前批次）真实 MCNP keff 解析修复 + keff 解析玻璃卡（2026-09-20，**已改 ✅ / 已提交 ⏳ / 打包中**）
+## S9（当前批次）真实 MCNP keff 解析修复 + keff 解析玻璃卡（2026-09-20，**已提交 ✅ / 已打包部署 ✅ · 版本仍 1.7.6**）
 
-> **三态**：**已改 ✅ / 已提交 ⏳（见 S9.7）/ 打包中**。详细流水：`docs/CHANGELOG.md` 总表 + `docs/backend-changes.md`（§真实 MCNP 结果的 keff 序列解析修复）+ `docs/frontend-changes.md`（§keff 解析：独立玻璃卡 + 两个子按钮）。
+> **三态**：**已改 ✅ / 已提交 ✅（`2a18f43`）/ 已打包部署 ✅**（`node scripts/build-release.mjs` 236 s → 备份 `_backup_1.7.6_20260920_004344` → 部署 + 冒烟通过；详见 S9.7）。
+> 详细流水：`docs/CHANGELOG.md` 总表 + `docs/backend-changes.md`（§真实 MCNP 结果的 keff 序列解析修复）+ `docs/frontend-changes.md`（§keff 解析：独立玻璃卡 + 两个子按钮）。
 
 ### S9.1 起因（用户两句话）
 
@@ -123,6 +124,30 @@
 `app.models` 等**冻结在 exe 的 PYZ 里**（判据：直接读 exe 内 PYZ 名字表，见 §6）。
 ⇒ **可以只替换 `_internal\app\*.py` 做"部分热修"**（重启生效；本批已实测 mctal 的 keff 解析恢复），
 但 `.o` 入参、扫描侧 keff、前端玻璃卡**都改在冻结部分/前端 bundle 里 ⇒ 必须重新打包**。
+
+### S9.7 提交与打包部署（2026-09-20，**版本仍 1.7.6**）
+
+用户指令：「维护项目记忆，提交，打包」；版本按手册规则（bug 修复批不升版）**向用户确认后保持 1.7.6**，
+交付口径也由用户选定：**按手册执行（停程序 → 备份 → 部署 → 冒烟），冒烟后程序留着开着**。
+
+**提交**：`2a18f43`（21 文件 = 后端 4 + 前端 3 + spec 1 + 测试 5 + 夹具 2 + 文档 5 + 记忆 1）。
+
+| 步 | 内容 | 结果 |
+| :-- | :--- | :--- |
+| 1 | 版本核对 | ✅ 六处仍 1.7.6（`tauri.conf.json` / `package.json` / `package-lock.json` 两处 / `Cargo.toml` / `Cargo.lock` / README 徽章）；用户确认不升版 |
+| 2 | 门禁 | ✅ pytest **1019/0** / vitest **96 files 799 passed** / tsc 两档 0 / vite build 0 / compileall 0 |
+| 3 | 打包 | ✅ `node scripts/build-release.mjs`（= `npm run build:release`）**236 s**；其中 `tauri build` `Compiling mcnp-ui v1.7.6` **29.25 s**，PyInstaller 6.21.0 / Python 3.13.14 |
+| 4 | 6.2 时效校验 | ✅ 已自动化且**本次点名了本批改动**：`缺 1 个 app/file_dialog.py`、`大小不符 3 个 app/mctal_parser.py (10507←5294) / outp_parser.py (8254←4504) / sweep.py (14568←11728)` → 自动镜像 → `--require-target` ✅ **7868 文件 / python.exe 32516335 B**（"版本号新、后端旧"这次不可能发生） |
+| 5 | 产物 | `MCNP 输入卡生成器.exe` **6609408 B**（MD5 `1BC2F7BD51078C8F29322E0A4005023F`）；`python.exe` **32516335 B**（MD5 `E3C2913FBD492041CAC09D596FE1F14E`） |
+| 6 | 备份 | ✅ `D:\MCNP\_backup_1.7.6_20260920_004344`（7877 文件 / 242.2 MB，robocopy 8 s） |
+| 7 | 部署 | ✅ `D:\MCNP\MCNP输入卡生成器` 7872 文件 / 242 MB；在位清单 10 项全 OK（`preview_cache.py`、**`file_dialog.py` 2824 B**、`mctal_parser.py` 10507 B、`outp_parser.py` 8254 B、`sweep.py` 14568 B、`vendor\geouned`、README、AI接入.md）；部署 exe MD5 **等于** `target/release` 那份 |
+| 8 | 前端内嵌证据 | 旧包 bundle `index-C1-X34nn.js` → 新包 **`index-BXZQ_LUu.js`**；该 bundle（`gui/dist/assets/index-BXZQ_LUu.js`）内含 `解析 mctal` / `解析 .o` / `keff 解析` / `withContent` / `/api/choose-file`。**注**：Tauri 内嵌资源是压缩的 ⇒ 直接在 exe 里搜中文串搜不到，**只能拿 bundle 名当锚**（本次即如此） |
+| 9 | 冒烟（本次加了一条比 3D 预览更硬的） | ✅ 5001 约 **4 s** 就绪 + 8100 LISTENING；`/api/xsdir-check` = `loaded:true, count:7925`；`/api/parse-keff` **三种入参全 ok** —— mctal 600 周期 `combined 0.992775±0.000356395`、**`.o` 600 周期 `0.99277±0.00036`（本批新能力 ⇒ 直接证明 exe 内 `api_server` 已是新版）**、夹具目录自动找文件；`/api/diff-inp` 回归 ok |
+| 10 | 收尾 | 程序按用户要求**留着开着**（未按 §8.3 清理）；临时热修备份 `D:\MCNP\_hotfix_backup_20260920_002352` **已删**（被本次完整备份取代）；工作区 16 个 `_` 前缀历史 scratch 仍未跟踪（非本批产物） |
+
+> **本批给手册补的一条判据**：验收"后端真的换了"最省事的做法**不是** 3D 预览，而是
+> **打本批新增/新支持的那个端点**（本次 = `/api/parse-keff` 传 `.o`）。旧 `api_server` 只认 mctal ⇒
+> `.o` 能出序列即为"新后端已在 exe 里"的充分证据，且一条 curl 就完成。
 
 ## S8（上一批次）排版审计 + 出图一律 PNG + 截面悬停修复（2026-09-19，**已提交 ✅ / 已打包部署 ✅ · 版本仍 1.7.6**）
 
