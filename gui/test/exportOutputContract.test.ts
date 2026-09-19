@@ -1,13 +1,16 @@
 // @vitest-environment jsdom
 /**
- * 出图出口契约（2026-09-19 用户裁决：**所有导出的图片都是 PNG**，该透明的透明）。
+ * 出图出口契约（2026-09-19 用户裁决：**所有导出的图片都是 PNG**，**一律白底**）。
  *
  * 这一批锁的是"产物形态"，不是像素：
  *  1. 二维图（原 PDF+SVG）与三维图**都只出 PNG** —— 不再有 pdf / svg 产物；
- *  2. 缺省**透明底**（不传 background 就不铺底）；
- *  3. 显式要求白底的图（fmesh 热图）仍能拿到白底；
- *  4. 用户在「另存为」里取消 → `cancelled`，且**不残留半份文件**（旧实现先落 SVG 再落 PDF，
+ *  2. 产物**白底**（用户当天先要透明、实机看过之后改口"png 都改为白底"）；
+ *  3. 用户在「另存为」里取消 → `cancelled`，且**不残留半份文件**（旧实现先落 SVG 再落 PDF，
  *     在 PDF 那步取消会留下一个没人认领的 SVG）。
+ *
+ * ⚠️ 注意区分**产物底色**与**3D 中间帧**：产物白底，但 3D 取帧仍是透明的
+ * （`renderTransparentNow`）——不这样，WebGL 的深色场景底会被一起贴上来。
+ * 后者的回归在 `captureTransparent3D` 那组用例里。
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -62,20 +65,23 @@ describe("exportFigure 出口契约：一律 PNG", () => {
     expect(saveCalls[0].fileName.endsWith(".png")).toBe(true);
   });
 
-  it("二维矢量图缺省透明底（栅格化时 background=null）", async () => {
+  it("二维矢量图一律白底（栅格化时 background=#ffffff）", async () => {
     await exportFigure({
       view: "截面",
       vector: { panels: [{ svg: `<svg width="100" height="100"><g/></svg>` }] },
     });
-    expect(rasterizeBg).toEqual([null]);
+    expect(rasterizeBg).toEqual(["#ffffff"]);
   });
 
-  it("显式要求白底时透传（fmesh 热图那类）", async () => {
-    await exportFigure({
-      view: "fmesh切面",
-      vector: { background: "#ffffff", panels: [{ svg: `<svg width="100" height="100"><g/></svg>` }] },
-    });
-    expect(rasterizeBg).toEqual(["#ffffff"]);
+  it("调用方显式要透明底时仍能拿到（能力保留，门面默认不再用它）", async () => {
+    // 注意：门面在**栅格化那一步**固定传白底（保证不透明），所以这里断言的是
+    // "矢量合成层仍认调用方的 background" —— 合成出的 SVG 最底层有没有那块白矩形。
+    const { buildVectorFigure } = await import("../src/export/vectorFigure");
+    const svg = `<svg width="100" height="100"><g/></svg>`;
+    const withWhite = buildVectorFigure({ background: "#ffffff", panels: [{ svg }] });
+    const transparent = buildVectorFigure({ background: null, panels: [{ svg }] });
+    expect(withWhite.svg).toContain('fill="#ffffff"');
+    expect(transparent.svg).not.toContain('fill="#ffffff"');
   });
 
   it("三维（栅格）通路 → 也是 PNG", async () => {

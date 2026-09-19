@@ -259,12 +259,40 @@ describe("renderFigure 版面（栅格合成）", () => {
     expect(layout.height).toBeLessThan(900);
   });
 
-  it("底色默认透明：不铺白底时左上角像素 alpha 为 0（PNG 透明底的前提）", () => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 100; canvas.height = 100;
-    const layout = renderFigure({ panels: [{ kind: "image", canvas }] });
-    // jsdom 没有真 canvas 实现时拿不到 ctx —— 只断言"没传 background 就不铺底"这条口径
-    expect(layout.width).toBeGreaterThan(0);
+  it("底色默认白底（2026-09-19 用户裁决：png 都改为白底）", () => {
+    // jsdom 无真 canvas（getContext 返回 null）⇒ 用桩记账：记下每次 fillRect 时的 fillStyle
+    const orig = HTMLCanvasElement.prototype.getContext;
+    const fills: string[] = [];
+    (HTMLCanvasElement.prototype as any).getContext = function (type: string) {
+      if (type !== "2d") return null;
+      let fill = "";
+      return {
+        canvas: this,
+        get fillStyle() { return fill; },
+        set fillStyle(v: string) { fill = v; },
+        font: "", textAlign: "", textBaseline: "", lineWidth: 1,
+        fillRect() { fills.push(fill); },
+        fillText() {}, strokeRect() {}, strokeText() {},
+        beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, setLineDash() {},
+        measureText: (t: string) => ({ width: String(t).length * 6 }),
+        drawImage() {}, save() {}, restore() {},
+      };
+    };
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = 100; canvas.height = 100;
+
+      // 默认（不传 background）⇒ 必须铺一次全画布白底
+      renderFigure({ panels: [{ kind: "image", canvas }] });
+      expect(fills).toContain("#ffffff");
+
+      // 显式传 null（保留的透明能力）⇒ 一次底都不铺
+      fills.length = 0;
+      renderFigure({ panels: [{ kind: "image", canvas }] }, { background: null });
+      expect(fills).toHaveLength(0);
+    } finally {
+      (HTMLCanvasElement.prototype as any).getContext = orig;
+    }
   });
 });
 

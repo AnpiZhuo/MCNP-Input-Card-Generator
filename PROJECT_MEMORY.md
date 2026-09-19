@@ -1,7 +1,8 @@
 # 项目记忆文档（AI 速查手册）
 
-> 最后更新时间：2026-09-19（**本批 S8 已提交 ✅ / 已打包部署 ✅（版本仍 1.7.6）**：**出图出口改为一律 PNG（透明底）** +
-> **2026-09-19 排版审计**（用视觉能力逐界面核）查出并修掉 6 类"明显非人类排版"：① `QuickCellForm` 固定像素排版
+> 最后更新时间：2026-09-19（**本批 S8 已提交 ✅ / 已打包部署 ✅（版本仍 1.7.6）**：**出图出口改为一律 PNG**，
+> 底色按用户当天两次裁决最终定为**白底**（先"该用透明底的用透明底"→ 实机看过 → "png 都改为白底"）+
+> **排版审计**（用视觉能力逐界面核）查出并修掉 6 类"明显非人类排版"：① `QuickCellForm` 固定像素排版
 > 要 356px，3D 侧栏只给 271px ⇒ 输入框被裁；② 行容器 `alignItems:flex-end` ⇒ 行标签与字段标签错半格；
 > ③ `legendMetrics` 里 `Math.min(240,…)*2` ⇒ 图例上限写成 480px；④ 图例按两列排 ⇒ 第二列挂在图外空白上（占整图 ~35%）；
 > ⑤ 面板尺寸跟着窗口走（同一张卡能导出 280×233 或 609×822）；⑥ 长脚注单行画出边界。用户裁决：**2D 保持 PNG 不做矢量**、
@@ -57,9 +58,11 @@
 1. **「所有导出的图片改用 png 格式，该用透明底的用透明底」**（2026-09-19）：
    - `exportFigure` **只出 PNG**：二维图（截面/tally/keff/fmesh 切面）走「矢量合成 → 2× 栅格 → PNG」，
      三维走位图合成 → PNG；**PDF/SVG 从门面摘掉**（`figureToPdf` 实现仍在，只差格式决策）。
-   - **缺省透明底**：`renderFigure` / `buildVectorFigure` 的底色缺省从 `#ffffff` 改成 `null`；
-     `KeffDialog` 硬铺的白矩形去掉。
+   - **当天先做成缺省透明底**（`renderFigure` / `buildVectorFigure` 的底色缺省从 `#ffffff` 改成 `null`；
+     `KeffDialog` 硬铺的白矩形去掉）——⚠️ **此条当天晚些被用户推翻，最终口径是"白底"，见 S8.8**。
+     本节保留当时的决策与理由，**以 S8.8 为准**。
    - **3D 透明底要专门做**（见 §6 新坑）：新增 `captureFrame.captureTransparent3D()`。
+     ⚠️ 这一步**不受 S8.8 影响**：产物白底，但 3D 中间帧仍必须透明。
    - **该白底的仍白底**：fmesh 切面是整幅颜色填充，白底只铺在**热图范围内**（`SliceExportPanel.heatBase`）。
 2. **「2D 图就算了」**（2026-09-19）：接受 PNG 失去矢量性，**不恢复 PDF/SVG 出口**。
 3. **「3D 你自己看着办」** → **已做**：轴/刻度改**印刷墨色**（见 S8.4）。
@@ -80,7 +83,7 @@
 
 - `tsc --noEmit` + `tsc -p tsconfig.test.json --noEmit` **两档 EXIT 0**；
   `vitest run` **757 passed / 92 files**（基线 737/90 + 新增 20）；`vite build` **EXIT 0**。
-- 新增回归：`test/exportOutputContract.test.ts`（7 例：**一律 PNG** / 缺省透明底 / 显式白底透传 /
+- 新增回归：`test/exportOutputContract.test.ts`（7 例：**一律 PNG** / 透明底能力保留 / 显式背景透传 /
   三维通路也是 PNG / 空内容报错 / `captureTransparent3D` 取帧期间置空背景+alpha=0 且**抛错也还原**）；
   `test/sectionHit.test.tsx`（7 例，见 S8.6）；
   `exportFoundation.test.ts` 补 4 条**版面不变量**（图例宽不随条目数膨胀 / 长脚注折行 / 竖长条源画布高度受限 / 无面板不返回 0）；
@@ -129,7 +132,7 @@ cell 12 M5  y[-3.44,3.44] z[-5.30,8.70] ★覆盖(0,0)
 **提交（两个，按主题拆）**：
 | commit | 主题 |
 | :--- | :--- |
-| `8651244` | `feat(export)` 出图出口收敛为「一律 PNG + 缺省透明底」+ 6 类排版缺陷 + 3D 印刷墨色（26 文件） |
+| `8651244` | `feat(export)` 出图出口收敛为「一律 PNG」（该提交时底色是透明，**当天晚些被 S8.8 改成白底**）+ 6 类排版缺陷 + 3D 印刷墨色（26 文件） |
 | `1d705b1` | `fix(cross-section)` 悬停读数与图形不同源——命中检测改按绘制次序从后往前（+ 新增 `sectionHit.ts` 与其单测、本记忆） |
 
 > **提交时的教训**：第一次 `git add` 把 `gui/src/volume/VolumeRenderer.ts` 漏了（它在另一批的清单里），
@@ -167,10 +170,49 @@ cell 12 M5  y[-3.44,3.44] z[-5.30,8.70] ★覆盖(0,0)
 判"后端没变/变了"**；判"这批改动是否进了包"要用**功能冒烟**（端点行为）或 **exe 内嵌前端 bundle 的指纹**，
 不能用 sidecar 哈希。
 
-**⚠️ 待用户目视确认**：本批改了前端（`gui/dist` 内嵌进 exe）。我验的是"部署的 sidecar 行为 + 三件套一致性"，
-**主程序开窗后的界面行为**（出图按钮只出 PNG、快捷栅元侧栏加宽、截面悬停读数）需要用户实际点一下确认
-（按 S5 的旧例：部署版主程序能否正常开窗我只做了间接验证）。
+### S8.8 出图底色改回**白底**（2026-09-19 同日，用户实机看过之后改口）
 
+**用户原话**："算了，png 都改为白底吧。"（先说"该用透明底的用透明底"，看过实物后改了主意）
+
+**改动（单一处口径 + 三处跟随）**：
+- `exportFigure` 新增 `FIGURE_BACKGROUND = "#ffffff"`，两条通路都显式传白底
+  （矢量：`buildVectorFigure({ background })` + `svgToRaster({ background })` + `capturePngBytes({ background })`；
+  栅格：`renderFigure(spec, { background })` + `capturePngBytes`）；
+- `renderFigure` 的缺省底色从 `null` 改回 `"#ffffff"`（`spec.background` 优先于 `opts.background`）；
+- `vectorFigure`：**入口缺省仍不铺底**（保持"矢量层不自作主张"），产物白底由门面显式给 ——
+  这一点与栅格版相反，已写进 `VectorFigureSpec.background` 的注释，**改之前先看清哪一层负责铺底**；
+- `ExportButton` 的 tooltip 文案跟着改。
+
+**⚠️ 关键区分（写进代码注释，别混）**：**产物是白底，3D 的中间帧仍是透明**。
+`renderTransparentNow()`（`captureFrame.captureTransparent3D`）继续保留 —— 只有取到透明帧，
+才能把它干净地合成到白底版面上；否则 WebGL 的深色场景底（`0x0d0d22` 等）会被一起贴上来，
+表现为"白底图里有一块深蓝方块"。**"改成白底"不等于把透明取帧拆掉。**
+
+**门禁**：tsc 两档 **0** / vitest **92 files 757 passed** / `vite build` **0**。
+回归也跟着改了：`exportFoundation.test.ts` 的"底色默认"用例改成断言**默认铺白底**（用桩记账 `fillRect` 时的
+`fillStyle`，并断言显式传 `null` 时一次都不铺）；`exportOutputContract.test.ts` 的透明底用例改成
+"矢量合成层仍认调用方的 `background`"（门面在栅格化那步固定白底，所以不能拿它断言透明）。
+
+**重打包与部署（同日，第二次）**：`node scripts/build-release.mjs` **157 s / EXIT 0**
+（前端 bundle 指纹 `index-CDnBByYY.css` + `index-BZkpsDuI.js`，`tauri build` 13.22 s，PyInstaller 产物
+`python.exe` **32,514,167 B** / `_internal` 7867）；6.2 校验 `target/release/python.exe` ↔ `binaries/`
+MD5 一致（`2B47458F…`）；**`sync-sidecar` 再次自报"陈旧"并自动覆盖**（这个坑每轮必中）。
+备份 `D:\MCNP\_backup_1.7.6_20260919_130256`（7877 文件 / 242.2 MB）→ 部署
+`D:\MCNP\MCNP输入卡生成器`：exe **6,607,360 B**（MD5 `678CC9EE…`，与构建产物一致）/ `python.exe`
+**32,514,167 B** / `_internal` 7867 / README + AI接入.md；`preview_cache.py`、`vendor\geouned` 在位。
+
+**实机取图验证（这次做到了"看见像素"）**：起源码后端 + 新 `dist`，在 3D 预览点「导出」，
+把**导出用的那张合成画布**（597×663）搬进页面、先铺品红再叠上去截图 ⇒ **图内背景是纯白**、
+品红只在画布外的 padding 露出；4 条轴线与刻度、标题、**单列竖排图例**、脚注全在位 ⇒ **白底生效**。
+> ❗**本次踩到的取证坑（值得记）**：本环境里 **`<img>` 加载 `blob:`/`data:` URL 不会触发 `onload`**
+> （`new Image(); img.src=...` 永久 pending）。**第一版钩子用 `<img>` 显示导出结果，直接把导出挂死在
+> "导出中…"**（`capturePngBytes` 之前的链路都在等它）。⇒ 在此环境做"取图判读"，要么**钩住
+> `HTMLCanvasElement.prototype.toDataURL` 把画布本体搬进 DOM**（canvas→canvas `drawImage`，同步、可靠），
+> 要么用 CDP 截图；**不要走 `<img>`**。这条与 §6 里"`svgToRaster` 在 jsdom 里等 img 解码"是同一个根因。
+
+**⚠️ 待用户目视确认**：本批改了前端（`gui/dist` 内嵌进 exe）。我验的是"部署的 sidecar 行为 + 三件套一致性 +
+源码版实机取图（白底）"，**部署版主程序开窗后的界面行为**（出图按钮只出 PNG 且**白底**、快捷栅元侧栏加宽、
+截面悬停读数）需要用户实际点一下确认（按 S5 的旧例：部署版主程序能否正常开窗我只做了间接验证）。
 
 ## S7（上一批次）格阵编辑器「改范围就乱序」（2026-09-15，**纯前端 · 版本仍 1.7.6 · 未重打包**）
 
@@ -799,7 +841,7 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 | `gui/src/utils/rawOverrides.ts` | **raw_overrides 纯函数构造（V1.7.2.2 新增，含 sdef）** | 前端 |
 | `gui/src/utils/tallyChart.ts` | **OUTP 结果 SVG 折线图纯函数（V1.7.2.2 新增）**（2026-09-17 起：屏幕弹窗已由 `TallyChartWindow` 取代，此函数仅供单测/历史） | 前端 |
 | `gui/src/utils/tallyChartPaper.ts` | **出图版 tally 曲线**（论文配色、透明底、尺寸自适应、对数能量轴、误差棒、图例） | 前端 |
-| `gui/src/export/` | **出图链 11 模块（2026-09-17 新增；2026-09-19 出口收敛为「一律 PNG、缺省透明底」）**：plotTheme（屏幕/论文两套配色的单一权威 + `hexToInt`/`clearColorFor`）/captureFrame（WebGL 帧捕获 + **`captureTransparent3D` 透明取帧** + 从 DOM 抓自洽 SVG）/figureCanvas（栅格合成图版面，**印张基准 `PRINT_MAX_PANEL_SIDE` + 单列图例 + 脚注折行**）/vectorFigure（矢量合成；`background`/`maxPanelSide`；`figureToPdf` 保留但门面已不调）/contour（marching squares 等值线）/planeSample（任意平面切取样）/cjkFont（中文字体探测；**现仅供矢量 PDF 出口**）/saveFile（落盘）/figureSpecs（各视图的"图由哪些块组成"）/exportFigure（门面：**只出 PNG**）/useFigureExport（窗口接线按钮） | 前端 |
+| `gui/src/export/` | **出图链 11 模块（2026-09-17 新增；2026-09-19 出口收敛为「一律 PNG、白底」——当天先做成透明底、实机看过之后用户改口，见 S8.8）**：plotTheme（屏幕/论文两套配色的单一权威 + `hexToInt`/`clearColorFor`）/captureFrame（WebGL 帧捕获 + **`captureTransparent3D` 透明取帧**（供合成用，与产物底色是两件事）+ 从 DOM 抓自洽 SVG）/figureCanvas（栅格合成图版面，**印张基准 `PRINT_MAX_PANEL_SIDE` + 单列图例 + 脚注折行 + 缺省白底**）/vectorFigure（矢量合成；`background`/`maxPanelSide`；**入口缺省不铺底**，白底由门面给；`figureToPdf` 保留但门面已不调）/contour（marching squares 等值线）/planeSample（任意平面切取样）/cjkFont（中文字体探测；**现仅供矢量 PDF 出口**）/saveFile（落盘）/figureSpecs（各视图的"图由哪些块组成"）/exportFigure（门面：**只出 PNG、固定白底**）/useFigureExport（窗口接线按钮） | 前端 |
 | `gui/src/three/planeEquation.ts` | **切割平面方程单一权威**：解析/格式化/步长折半加倍/成叠平面序列（3D 预览截面、截面窗口、fmesh 切面三处共用） | 前端 |
 | `gui/src/components/PlaneControls.tsx` | **平面方程 + 步长 + 步进共享控件**（上条那三处共用，避免步长语义分叉） | 前端 |
 | `gui/src/components/TallyChartWindow.tsx` | **「Tally 通量图」独立窗口**（原为输出页弹窗，图小/与数据表互挤/不可导出） | 前端 |

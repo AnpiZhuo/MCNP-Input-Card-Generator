@@ -7,8 +7,7 @@
  * ## 我们替他决定的事（2026-09-19 用户裁决后**只有一种产物**）
  * | 情况 | 产物 | 依据 |
  * | :--- | :--- | :--- |
- * | 任何视图（3D / 截面 / 曲线 / 切面 / keff） | **PNG（2×、透明底）** | 用户原话："所有导出的图片改用 png 格式，该用透明底的用透明底" |
- * | 整幅颜色填充的图（fmesh 切面热图） | **PNG（2×、白底）** | 透明底会让颜色与色阶刻度对不上，属"不该用透明底"的那类 |
+ * | 任何视图（3D / 截面 / 曲线 / 切面 / keff） | **PNG（2×、白底）** | 用户原话（2026-09-19）："png 都改为白底" |
  *
  * ## 为什么不再出 PDF/SVG（这是有代价的选择，写在这里免得后人再问）
  * 2D 图原先出矢量 PDF+SVG（放大不糊、可编辑），改成 PNG 后**丢掉矢量性**：
@@ -53,11 +52,23 @@ export type ExportResult =
   | { status: "cancelled" }
   | { status: "error"; message: string };
 
-/** 透明底的 PNG（缺省）：论文主题本来就是透明底，PNG 支持 alpha，叠在任意底色上都干净 */
-const TRANSPARENT = null;
+/**
+ * 出图底色：**白底**（2026-09-19 用户裁决，取代当天的"缺省透明底"）。
+ *
+ * ## 为什么改成白底
+ * 用户先要"该用透明底的用透明底"，实机看过之后改口"png 都改为白底"。白底的现实好处：
+ * 贴进 Word/LaTeX 不会因为页面底色不同而出现"文字看不清"（论文主题的轴与文字是深色，
+ * 叠在深色幻灯片上时确实会糊）；也省掉"这张要不要透明"的判断负担。
+ *
+ * ## 那"透明取帧"还留着吗——留着，但不是给最终产物用的
+ * 3D 的 `renderTransparentNow()`（`captureFrame.captureTransparent3D`）仍在用：
+ * 取到**透明底**的一帧，才能把它干净地合成到这张白底版面上（否则会把 WebGL 的深色场景底
+ * 一起贴上来）。**产物是白底，中间帧是透明**——两件事，别混。
+ */
+const FIGURE_BACKGROUND = "#ffffff";
 
 /**
- * 出一张图。**只有 PNG 一种产物**；该透明的透明、该白底的白底。
+ * 出一张图。**只有 PNG 一种产物，一律白底**。
  *
  * 两条通路的差别只在于"先组合什么"：
  * - `vector` 给了 → 先做矢量合成（版面用真 `<text>`/`<path>`），再按 2× 栅格化；
@@ -66,12 +77,13 @@ const TRANSPARENT = null;
 export async function exportFigure(req: ExportFigureRequest): Promise<ExportResult> {
   const files: ExportedFile[] = [];
 
-  // ── 矢量通路：合成矢量 → 2× 栅格 → PNG（透明底 / 调用方指定的白底） ──
+  // ── 矢量通路：合成矢量（白底铺在最底层）→ 2× 栅格 → PNG ──
   if (req.vector) {
-    const built = buildVectorFigure({ theme: "paper", ...req.vector });
-    const canvas = await svgToRaster(built.svg, { scale: RASTER_SCALE, background: req.vector.background ?? TRANSPARENT });
+    const built = buildVectorFigure({ theme: "paper", background: FIGURE_BACKGROUND, ...req.vector });
+    const canvas = await svgToRaster(built.svg, { scale: RASTER_SCALE, background: FIGURE_BACKGROUND });
     if (!canvas) return { status: "error", message: "图像生成失败（矢量栅格化失败）" };
-    const bytes = await capturePngBytes(canvas, { scale: 1, background: null });
+    // 产物不透明：这里再按白底编码一次，保证 alpha 通道也干净（不依赖上游每一步都不漏底）
+    const bytes = await capturePngBytes(canvas, { scale: 1, background: FIGURE_BACKGROUND });
     if (!bytes) return { status: "error", message: "图像生成失败（编码失败）" };
     return await savePng(bytes, req);
   }
@@ -79,9 +91,9 @@ export async function exportFigure(req: ExportFigureRequest): Promise<ExportResu
   // ── 栅格通路（3D 视图、含热图的合成图） ──
   if (req.raster) {
     const prepared = await preparePanels({ theme: "paper", ...req.raster }, RASTER_SCALE);
-    // 合成图本身**不铺底色**：透明出图；`raster.background` 给了白底才铺
-    const { canvas } = renderFigure(prepared, { background: req.raster.background ?? TRANSPARENT });
-    const bytes = await capturePngBytes(canvas, { scale: 1, background: null });
+    // 白底铺在合成图最底层；3D 面板本身是透明取帧，叠上来正好
+    const { canvas } = renderFigure(prepared, { background: FIGURE_BACKGROUND });
+    const bytes = await capturePngBytes(canvas, { scale: 1, background: FIGURE_BACKGROUND });
     if (!bytes) return { status: "error", message: "图像生成失败（画布为空）" };
     return await savePng(bytes, req);
   }

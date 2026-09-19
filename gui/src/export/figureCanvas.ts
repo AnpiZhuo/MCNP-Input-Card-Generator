@@ -75,12 +75,11 @@ export interface FigureSpec {
    */
   maxPanelSide?: number;
   /**
-   * 底色：缺省 `null`（**透明**）。
+   * 底色：缺省 `"#ffffff"`（**白底**；2026-09-19 用户裁决，取代当天的"缺省透明底"）。
    *
-   * PNG 支持 alpha，透明底叠在任意底色上都干净，所以默认透明；
-   * "整幅颜色填充"的图（fmesh 切面热图）由调用方显式传 `"#ffffff"`。
-   * 与 `renderFigure(spec, { background })` 的同名选项等价，写进 spec 是为了
-   * 让"这张图要不要白底"这条决策跟图一起走，而不是散在门面里。
+   * 白底是**产物层**的决定（贴进 Word/LaTeX 不会因页面底色不同而看不清）；
+   * 要透明仍可显式传 `null`（本函数两种都支持），但门面 `exportFigure` 一律给白底。
+   * 写进 spec 是为了让"这张图要不要白底"跟图一起走，而不是散在门面里。
    */
   background?: string | null;
 }
@@ -159,12 +158,12 @@ function estimateLabelWidth(text: string, fontSize: number): number {
  * 版面：标题（+副标题）→ 内容行（各面板等高、居中、水平排列）→ 脚注。
  * 每栏之间有分隔线。
  *
- * **底色默认透明**（`opts.background` 缺省 null）—— 出图一律 PNG，PNG 支持 alpha，
- * 透明底叠在任意底色上都干净；确实需要白底的调用方显式传 `"#ffffff"`。
+ * **底色缺省白底**（`opts.background` 缺省 `"#ffffff"`，2026-09-19 用户裁决）：
+ * 论文配色是深色轴/文字，白底贴进文档最稳。要透明仍可显式传 `null`。
  */
 export function renderFigure(spec: FigureSpec, opts: { background?: string | null } = {}): FigureLayout {
   const theme = themeFor(spec.theme ?? "paper");
-  const bg = opts.background !== undefined ? opts.background : null;
+  const bg = opts.background !== undefined ? opts.background : (spec.background !== undefined ? spec.background : "#ffffff");
   const pad = theme.page.padding;
   const gap = 16;
   const maxSide = Math.max(120, spec.maxPanelSide ?? PRINT_MAX_PANEL_SIDE);

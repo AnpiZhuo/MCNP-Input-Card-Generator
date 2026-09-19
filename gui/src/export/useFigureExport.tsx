@@ -66,7 +66,7 @@ export interface ExportButtonProps {
 
 /**
  * 标题栏「导出」按钮。**不需要用户选任何东西**：
- * 点一下 → 出一张 **2× PNG**（透明底；整幅颜色填充的图铺白底），一律论文配色。
+ * 点一下 → 出一张 **2× PNG、白底**，一律论文配色。
  */
 export function ExportButton({ build, label, compact = true, title }: ExportButtonProps) {
   const [busy, setBusy] = useState(false);
@@ -93,7 +93,7 @@ export function ExportButton({ build, label, compact = true, title }: ExportButt
       className: compact ? "btn btn-ghost btn-xs" : "btn btn-primary btn-sm",
       onClick,
       disabled: busy,
-      title: title ?? "导出当前视图为 2× PNG（透明底；论文配色）",
+      title: title ?? "导出当前视图为 2× PNG（白底；论文配色）",
       style: compact ? { fontSize: 12, whiteSpace: "nowrap" } : undefined,
     },
     busy ? "导出中…" : "⬇ 导出",

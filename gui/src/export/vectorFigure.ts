@@ -44,12 +44,12 @@ export interface VectorFigureSpec {
    */
   maxPanelSide?: number;
   /**
-   * 底色：`"#ffffff"` 给有颜色填充的图（热图、色块、地图式等值线）铺底，
-   * `null`（缺省）保持透明。
+   * 底色：`"#ffffff"` 白底 / `null` 透明。
    *
-   * 为什么要有显式开关：PNG 支持 alpha，透明底叠在任意底色上都干净，所以**默认为透明**；
-   * 但"整幅颜色填充"的图（fmesh 切面热图）透出底色会让颜色与色阶刻度对不上，
-   * 那类图由调用方显式要求白底。
+   * ⚠️ 这里**缺省什么都不铺**（保持透明），当前口径与栅格版相反 ——
+   * 门面 `exportFigure` 一律显式传 `"#ffffff"`，所以产物仍是白底；
+   * 保留"缺省不铺"是为了让矢量出口在将来被直接调用时不会被迫带底。
+   * 有颜色填充的图（热图、色块、地图式等值线）**必须**白底，否则透出底色后颜色与色阶对不上。
    */
   background?: string | null;
   /**
@@ -168,8 +168,8 @@ const GAP = 14;
  * 组合矢量图。
  *
  * 版面与栅格版一致（标题 / 副标题 / 面板行 / 脚注）。
- * 底色**默认透明**（`spec.background` 缺省 null）：产物是 PNG，alpha 直接一路带到最终图；
- * 只有"整幅颜色填充"的图才由调用方给 `background: "#ffffff"`。
+ * 底色由调用方给（`spec.background`）；当前门面 `exportFigure` 一律传白底
+ * （2026-09-19 用户裁决"png 都改为白底"），因此产物是不透明的白底 PNG。
  */
 export function buildVectorFigure(spec: VectorFigureSpec): VectorFigure {
   const theme = themeFor(spec.theme ?? "paper");
