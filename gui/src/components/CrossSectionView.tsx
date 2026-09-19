@@ -40,6 +40,7 @@ import { MaterialLegend, CellList } from "./MaterialPanel";
 import { materialLegendEntries } from "../utils/materialLegend";
 import { PlaneControls } from "./PlaneControls";
 import { snapshotSvg } from "../export/captureFrame";
+import { topMostHit } from "../utils/sectionHit";
 import { build2dSpec, subtitleOf } from "../export/figureSpecs";
 import type { ExportFigureRequest } from "../export/exportFigure";
 
@@ -201,19 +202,11 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
     const local = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse());
     const mx = local.x, my = local.y;
     // 命中检测（多边形点即 <g> 本地坐标，无需再变换）
-    let found: { num: number; mat: string } | null = null;
-    for (const cd of cellData) {
-      for (const poly of cd.polygons) {
-        let inside = false;
-        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-          const xi = poly[i].x, yi = poly[i].y;
-          const xj = poly[j].x, yj = poly[j].y;
-          if ((yi > my) !== (yj > my) && mx < (xj - xi) * (my - yi) / (yj - yi) + xi) inside = !inside;
-        }
-        if (inside) { found = { num: cd.number, mat: cd.material }; break; }
-      }
-      if (found) break;
-    }
+    // ⚠️ 必须与**绘制次序**一致：后声明的栅元画在上面 ⇒ 从后往前找第一个命中的那个。
+    // 旧实现从数组头开始找，报的是"最先声明的栅元"，与图上看到的层相反
+    // （q1112 卡 X=0 平面上，图上钢盘盖住水芯，悬停却报 2 · M1）。
+    const hit = topMostHit(cellData, (cd) => cd.polygons, mx, my);
+    const found: { num: number; mat: string } | null = hit ? { num: hit.number, mat: hit.material } : null;
     // 反向投影：2D → 3D 平面坐标
     const p3d = {
       x: baseProj.ox + mx * baseProj.u[0] + my * baseProj.v[0],
@@ -228,7 +221,7 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
 
   /**
    * 出图：把屏幕上这张 SVG **连样式一起抓下来**（脱离文档后没有 CSS 环境，
-   * 不内联样式会整片变黑），配材料图例，走纯矢量出口（PDF+SVG、透明底）。
+   * 不内联样式会整片变黑），配材料图例，组合后出**透明底 PNG**。
    */
   const buildExport = () => {
     const svg = snapshotSvg(svgRef.current, { stripSelector: '[data-export-strip="1"]' });

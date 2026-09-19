@@ -1,6 +1,12 @@
 # 项目记忆文档（AI 速查手册）
 
-> 最后更新时间：2026-10-15（**本批 S7 已提交 ✅ / 未重打包**：格阵编辑器"**改范围就乱序**"——`resizeLatticeCells`
+> 最后更新时间：2026-09-19（**本批 S8 已改 ✅ / 未提交 / 未重打包**：**出图出口改为一律 PNG（透明底）** +
+> **2026-09-19 排版审计**（用视觉能力逐界面核）查出并修掉 6 类"明显非人类排版"：① `QuickCellForm` 固定像素排版
+> 要 356px，3D 侧栏只给 271px ⇒ 输入框被裁；② 行容器 `alignItems:flex-end` ⇒ 行标签与字段标签错半格；
+> ③ `legendMetrics` 里 `Math.min(240,…)*2` ⇒ 图例上限写成 480px；④ 图例按两列排 ⇒ 第二列挂在图外空白上（占整图 ~35%）；
+> ⑤ 面板尺寸跟着窗口走（同一张卡能导出 280×233 或 609×822）；⑥ 长脚注单行画出边界。用户裁决：**2D 保持 PNG 不做矢量**、
+> 3D 刻度墨色自行处置（已做）。门禁 vitest **757 passed / 92 files** / tsc 两档 0 / build 0，详见下方 S8）。
+> 此前（2026-09-15，**S7 已提交 ✅ / 未重打包**：格阵编辑器"**改范围就乱序**"——`resizeLatticeCells`
 > 按**扁平下标**搬运涂色，范围 -8:8 → -9:9 时格位号整体平移 ⇒ 整张图沿对角线错位；改为按**绝对格位坐标**搬运。
 > **纯前端修复，不动后端/sidecar**，无需重打包链路。门禁 vitest **737 passed / 90 files** / tsc 两档 0 / build 0，详见下方 S7）。
 > 此前（2026-09-17，**本批 S6 已闭环待打包**：① 计数卡"手动改动变回初始状态"**真根因**修复（回显 deck 同时带 `tally.tallies` 与顶层 `tallies` ⇒ 多轮往返下用户新增/删除计数卡被静默丢弃）；② 8100 端口守卫 + MCP 工作区归属隔离；③ **出图全链**（11 新模块：论文配色合成图 / 矢量 PDF+SVG / 自由平面切面 + 等值线 / 成叠导出 / Tally 独立窗口 / keff 导出）；④ 自审抓到并修掉 9 处真 bug。门禁 pytest **996 passed** / vitest **731 passed / 90 files** / tsc 两档 0 / build 0，详见下方 S6）。
@@ -18,7 +24,106 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
-## S7（当前批次）格阵编辑器「改范围就乱序」（2026-10-15，**纯前端 · 版本仍 1.7.6 · 未重打包**）
+## S8（当前批次）排版审计 + 出图一律 PNG（2026-09-19，**纯前端 · 版本仍 1.7.6 · 未提交 · 未重打包**）
+
+> **三态**：**已改 ✅ / 未提交 ⏳ / 已打包部署 ❌ 不需要（无后端/无 sidecar 改动；`gui/dist` 已重建）**
+
+### S8.1 起因
+
+用户报「快捷栅元界面、3D 预览里的快捷栅元界面、以及最近加的导出图片，**排版明显非人类**」，
+要求**用视觉能力审计**相关界面/导出图并顺带排查其他界面。审计方法：起真实后端（`api_server.py` 5001）
++ 静态前端（`python -m http.server 1420 --directory gui/dist`），用浏览器控制扩展实机读图 + DOM 量尺寸。
+
+> **注**：`vite dev`（1420 dev server）**在本机沙箱里会挂起**（esbuild 子进程管道），
+> 要起前端请用 `python -m http.server ... --directory gui/dist`（与 `启动MCNP输入卡生成器.bat` 同口径）。
+
+### S8.2 六类真排版缺陷（逐条实测，全部已修）
+
+| # | 缺陷 | 实测证据 | 修法 |
+|:--|:--|:--|:--|
+| 1 | **`QuickCellForm` 要 356px，3D 侧栏只给 271px** | 侧栏 `width:300` − 2×14 内边距 ⇒ `form.clientWidth=199 / scrollWidth=271`，溢出被 `overflow-x:hidden` **裁掉且无法滚到** ⇒ 输入框在视口外、"M0 — 真空"被截成"M0 — 真" | 3D 预览打开快捷建栅元时**侧栏加宽 300→400**（`Preview3D.QUICK_CELL_PANEL_W`，实测表单 371px 零溢出）；**去掉 `inset:0` 覆盖层**——它原来把整个侧栏（含 3D 图）全盖掉，用户"想看 3D 只剩一条缝" |
+| 2 | **行标签与字段标签错半格** | `style.row` 是 `alignItems:"flex-end"`，而行标签列是"标签在上"的纵列 ⇒ 「底面中心」被推到与**输入框底边**对齐，比字段标签「X」低一格（y=206 vs y=177） | 改 `flex-start`；行首标签列改固定 64px + `nowrap`（「半径 / 切分」不再被压成两行贴住字段）。修后实测同行 y 一致 |
+| 3 | **`legendMetrics` 的 `*2` 把图例上限写成 480px** | `figureCanvas.ts:105` 原为 `Math.max(150, Math.min(240, …) * 2)` —— 注释说 150–240，代码是 300–480 | 改成真上限 260 + 中文/ASCII 分别估宽（`estimateLabelWidth`） |
+| 4 | **图例按"每行两条"排，第二列挂在图外空白上** | `rows = ceil(条目数/2)` ⇒ 7 条材料排 4 行 2 列；实测 560px 宽的 3D 导出图里第二列（x 467–543）**整个落在图像右边缘（x=337）之外**，约 35% 图宽只有小字 | 改**单列竖排**（论文图例本来的形态）。实测图例面板 **480 → 120px**，占整图 **31% → 18%** |
+| 5 | **出图尺寸随人窗口变，且"2× 画布 1× 字号"** | 导出直接取当前帧：同一张卡实测导出过 560×523 与（窄窗口下）609×822 两种比例；`RASTER_SCALE=2` 只放大画布、字号仍是 1× 像素（标题实测 13px ⇒ 95mm 宽摆放时约 6.5pt） | 新增**印张基准** `PRINT_MAX_PANEL_SIDE=640`（只缩不放）+ 内容高上限 560；栅格/矢量两条出口同口径 |
+| 6 | **长脚注单行画出边界** | `ctx.fillText(spec.caption, …)` 无换行；55 个中文字符就顶满 560px 图宽 | 新增 `wrapText()`（中文按字断、ASCII 按词断）+ 多行绘制，行数参与高度 |
+
+**顺手修**：色带刻度/单位可能压出面板（刻度按可用宽度 `clip`、单位 `y` 钳在底边内）；
+`figureCanvas` 里那段被截断的空 JSDoc 块删掉；材料行/IMP 行 `minWidth:0`（实测 `scrollWidth` 356 vs 331 的 25px 溢出，可见约 2px）。
+
+### S8.3 用户裁决与落地
+
+1. **「所有导出的图片改用 png 格式，该用透明底的用透明底」**（2026-09-19）：
+   - `exportFigure` **只出 PNG**：二维图（截面/tally/keff/fmesh 切面）走「矢量合成 → 2× 栅格 → PNG」，
+     三维走位图合成 → PNG；**PDF/SVG 从门面摘掉**（`figureToPdf` 实现仍在，只差格式决策）。
+   - **缺省透明底**：`renderFigure` / `buildVectorFigure` 的底色缺省从 `#ffffff` 改成 `null`；
+     `KeffDialog` 硬铺的白矩形去掉。
+   - **3D 透明底要专门做**（见 §6 新坑）：新增 `captureFrame.captureTransparent3D()`。
+   - **该白底的仍白底**：fmesh 切面是整幅颜色填充，白底只铺在**热图范围内**（`SliceExportPanel.heatBase`）。
+2. **「2D 图就算了」**（2026-09-19）：接受 PNG 失去矢量性，**不恢复 PDF/SVG 出口**。
+3. **「3D 你自己看着办」** → **已做**：轴/刻度改**印刷墨色**（见 S8.4）。
+4. **「其余的你该怎么改就怎么改」** → 上述 6 类缺陷全修。
+
+### S8.4 3D 出图的"论文配色"补齐（本次自己判断要做的）
+
+3D 场景底色与**刻度标签/轴字母**都烧在 WebGL 里，原来只有"药丸底 + 亮字"一种画法 ⇒ 透明出图会在白纸上
+留一串**深色方块**、且亮绿（`0x44ff44`）几乎看不见。修法（**只发生在取图那一帧**，屏上观感不变）：
+
+- `axisConfig` 每条轴新增 **`paperInk`**（同色相压暗：红 `0xa11212` / 绿 `0x14701f` / 蓝 `0x144a9e`）；
+- `TickGrid` 新增 **`setLabelTheme("screen" | "paper")`**：paper = **透明底 + 深色字**（不再画药丸底）；
+- `Preview3D.renderTransparentNow()`：切墨色 → 重建刻度 → 切轴字母的**墨色副本身**（预建两份 sprite、只切 `visible`，
+  **零纹理 churn / 零闪烁**）→ 取帧 → `finally` 全部还原；
+- 材料色**不动**（色相必须与屏幕一一对应，否则用户没法照着屏幕认图）。
+
+### S8.5 门禁与验证（实跑）
+
+- `tsc --noEmit` + `tsc -p tsconfig.test.json --noEmit` **两档 EXIT 0**；
+  `vitest run` **757 passed / 92 files**（基线 737/90 + 新增 20）；`vite build` **EXIT 0**。
+- 新增回归：`test/exportOutputContract.test.ts`（7 例：**一律 PNG** / 缺省透明底 / 显式白底透传 /
+  三维通路也是 PNG / 空内容报错 / `captureTransparent3D` 取帧期间置空背景+alpha=0 且**抛错也还原**）；
+  `test/sectionHit.test.tsx`（7 例，见 S8.6）；
+  `exportFoundation.test.ts` 补 4 条**版面不变量**（图例宽不随条目数膨胀 / 长脚注折行 / 竖长条源画布高度受限 / 无面板不返回 0）；
+  `tickGrid.test.ts` 补 paper 主题**不画药丸底**；`axisConfig.test.ts` 补墨色**比屏幕色暗且色相不串**。
+- **视觉复查（实机 1:1）**：快捷建栅元弹窗（标签一行一对齐、5 个形状按钮单行可读、材料/IMP 行完整）；
+  3D 预览 + 快捷建栅元（表单与 3D 圆柱同屏并存，**3D 不再被挡**）；3D 预览原状态（刻度标签/药丸底/轴线无回归）；
+  3D 导出实跑拿到 PNG（合成画布 597×663，证明面板确实被归一）。PNG 本体 `colorType 6`（RGBA）。
+- **审计遗留（本次未做，明确记录）**：
+  1. **主界面整体过缩**：`computeAppScale = min(1, w/1200, h/800)` 用**整个视口高**，1536×864 上算得 0.6775，
+     设计稿缩完只需 813×542 而视口有 813×853 ⇒ **底部约 300px 空白**。属版面策略，要用户定"是否按可用高度重算"。
+  2. `exportFigure` 的矢量路径现在**先落 SVG 再落 PDF**的顺序问题随 PDF 摘除而消失，但 `exportMessage` 仍走 `alert()`
+     （项目 §6 有"alert 冻结渲染进程"的坑记录），未改。
+  3. `FloatingDialog` 宽度是各调用方写死的 px，窄窗口下无 `maxWidth` 保护（同类隐患，未发作）。
+  4. **大模型截面要等很久**：用用户那张 `q1112`（`1 cz 75` 大球 + 六个盘，10 个栅元）实测，
+     X=0 截面在后端**算超过 60 s 未返回**，前端 `AbortSignal.timeout(60000)` 会中止 ⇒ 覆盖层不出现。
+     不是本次改动引入（没碰后端与切片），但"点截面等一分钟"本身要治：可考虑切片前按栅元 STL
+     三角形数降采样、或后端加进度/异步返回。
+
+### S8.6 截面悬停读数与图形不同源（2026-09-19 用户实测，**同批修**）
+
+> 用户原话："在 X=0 时，会出现 cell2 覆盖中间部分的情况" → 追问后澄清：**图形正常，是鼠标悬停的材料号不对**。
+
+**真根因（纯前端，与后端数据无关）**：绘制按 `slices` 顺序（= 栅元卡声明顺序），**后声明者画在上面**；
+而 `CrossSectionView` 的命中检测**从数组头开始找第一个包含点的多边形** ⇒ 在"盘里套盘"处报的是
+**被盖住的那个**。用真后端对 `q1112` 在 X=0 平面实测（`/api/preview-3d` + `/api/cross-section`）：
+
+```
+cell 2  M1  y[-5.00,5.00] z[-90,90]   ★覆盖(0,0)   ← 图上被 cell3 盖住
+cell 3  M2  y[-3.97,3.97] z[-29.8,29.8]
+cell 12 M5  y[-3.44,3.44] z[-5.30,8.70] ★覆盖(0,0)
+```
+
+⇒ **数据层每层都是 MCNP 语义的正确形状**（与用户"图形正常"一致），错的只有读数。
+
+**修法**：新增深模块 `gui/src/utils/sectionHit.ts` —— `paintOrder()`（绘制次序 = 按声明次序，后声明在上）
+与 `topMostHit()`（**从绘制次序末尾往前**找第一个命中 = 视觉最上层）。组件改为调 `topMostHit`。
+**没顺手反转绘制次序**：那会改图形本身（谁盖住谁），属另一个更大的决定（要让 MCNP"先声明者占有重叠区"
+真正生效须做多边形布尔裁剪）；本模块只保证**读数与图形同源**，将来真做裁剪只需改 `paintOrder` 一处。
+
+**回归 `gui/test/sectionHit.test.tsx`（7 例）**：含**红能力证明**（把旧实现原样复刻进测试：同一点旧逻辑报 `2`、
+新逻辑报 `3`）与**"读数与图形同源"**（真渲染组件，从 DOM 取 `<polygon>` 的实际次序，断言"渲染在最后＝最上层"
+的多边形就是悬停报出的栅元 —— 以后改绘制次序，读数会跟着变，不会再次分叉）。
+
+## S7（上一批次）格阵编辑器「改范围就乱序」（2026-09-15，**纯前端 · 版本仍 1.7.6 · 未重打包**）
 
 > **三态**：**已改 ✅ / 已提交 ✅ / 已打包部署 ❌ 不需要（无后端/无 sidecar 改动）**
 
@@ -636,16 +741,16 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 | `gui/src/components/` | 标签页组件：BasicSettings/MaterialTab/GeometryTab/SourceTab/TallyTab/AdvancedTab/OutputTab | 前端 |
 | `gui/src/components/Preview3D.tsx` / `Preview3DWindow.tsx` | Three.js 3D 预览（独立窗口） | 前端 |
 | `gui/src/components/CrossSectionView.tsx` / `CrossSectionWindow.tsx` | 平面截面（独立窗口） | 前端 |
-| `gui/src/three/` | 3D 深模块：cameraParams/renderGate/cellMaterial/TickGrid/axisConfig（轴单一事实来源）/planeOffset（截面平面坐标换算）/quickCellPreview（快捷建栅元线框） | 前端 |
+| `gui/src/three/` | 3D 深模块：cameraParams/renderGate/cellMaterial/TickGrid（`setLabelTheme` 屏幕·纸质两种标签底）/axisConfig（轴单一事实来源；**`color` 屏幕色 + `paperInk` 出图墨色**）/planeOffset（截面平面坐标换算）/quickCellPreview（快捷建栅元线框） | 前端 |
 | `gui/src/volume/` | 体积可视化 11 模块（volumeShader/VolumeRenderer/colorize/alignWorld/downsampleRequest/fmeshState/ColorLegend/FMeshForm/VolumeControlPanel/ResultWindow/surfacesAABB） | 前端 |
 | `gui/src/ptrac/` | PTRAC 径迹 3D 窗口模块（trackColors/PtracRenderer/PtracWindow 等） | 前端 |
-| `gui/src/utils/quickCell.ts` / `gui/src/components/QuickCellDialog.tsx` | 快捷建栅元：纯函数生成（编号/校验/RCC/RPP/SPH/**HEX/TET**）+ 弹窗 | 前端 |
+| `gui/src/utils/quickCell.ts` / `gui/src/components/QuickCellDialog.tsx` / `QuickCellForm.tsx` | 快捷建栅元：纯函数生成（编号/校验/RCC/RPP/SPH/**HEX/TET**）+ 弹窗；**表单是固定像素排版，宿主宽度必须 ≥360px**（见 §5）；重合检测**恒开**（勾选框已按用户裁决删除） | 前端 |
 | `gui/src/utils/useQuickAddOverlap.ts` | **快捷建栅元重合检测+补集决策深模块（GeometryTab/Preview3D 共用）** | 前端 |
 | `gui/src/utils/batchCellEdit.ts` / `gui/src/components/BatchCellEditDialog.tsx` | 栅元列表批量编辑：纯函数应用（空字段=不改、曲面只追加）+ 弹窗 | 前端 |
 | `gui/src/utils/rawOverrides.ts` | **raw_overrides 纯函数构造（V1.7.2.2 新增，含 sdef）** | 前端 |
 | `gui/src/utils/tallyChart.ts` | **OUTP 结果 SVG 折线图纯函数（V1.7.2.2 新增）**（2026-09-17 起：屏幕弹窗已由 `TallyChartWindow` 取代，此函数仅供单测/历史） | 前端 |
 | `gui/src/utils/tallyChartPaper.ts` | **出图版 tally 曲线**（论文配色、透明底、尺寸自适应、对数能量轴、误差棒、图例） | 前端 |
-| `gui/src/export/` | **出图链 11 模块（2026-09-17 新增）**：plotTheme（屏幕/论文两套配色的单一权威）/captureFrame（WebGL 帧捕获 + 从 DOM 抓自洽 SVG）/figureCanvas（栅格合成图版面）/vectorFigure（矢量图 + SVG→PDF）/contour（marching squares 等值线）/planeSample（任意平面切取样）/cjkFont（中文字体探测与降级）/saveFile（落盘）/figureSpecs（各视图的"图由哪些块组成"）/exportFigure（门面：格式决策与自动降级）/useFigureExport（窗口接线按钮） | 前端 |
+| `gui/src/export/` | **出图链 11 模块（2026-09-17 新增；2026-09-19 出口收敛为「一律 PNG、缺省透明底」）**：plotTheme（屏幕/论文两套配色的单一权威 + `hexToInt`/`clearColorFor`）/captureFrame（WebGL 帧捕获 + **`captureTransparent3D` 透明取帧** + 从 DOM 抓自洽 SVG）/figureCanvas（栅格合成图版面，**印张基准 `PRINT_MAX_PANEL_SIDE` + 单列图例 + 脚注折行**）/vectorFigure（矢量合成；`background`/`maxPanelSide`；`figureToPdf` 保留但门面已不调）/contour（marching squares 等值线）/planeSample（任意平面切取样）/cjkFont（中文字体探测；**现仅供矢量 PDF 出口**）/saveFile（落盘）/figureSpecs（各视图的"图由哪些块组成"）/exportFigure（门面：**只出 PNG**）/useFigureExport（窗口接线按钮） | 前端 |
 | `gui/src/three/planeEquation.ts` | **切割平面方程单一权威**：解析/格式化/步长折半加倍/成叠平面序列（3D 预览截面、截面窗口、fmesh 切面三处共用） | 前端 |
 | `gui/src/components/PlaneControls.tsx` | **平面方程 + 步长 + 步进共享控件**（上条那三处共用，避免步长语义分叉） | 前端 |
 | `gui/src/components/TallyChartWindow.tsx` | **「Tally 通量图」独立窗口**（原为输出页弹窗，图小/与数据表互挤/不可导出） | 前端 |
@@ -721,13 +826,24 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
   中出现的旧式写法均为历史残留**。⚠️ **L1 锁死表曾写错公式 —— 它是跨语言实现依据，写错会污染实现**（审计 TD-29）。
   被反复"根因修复"过的高危公式，改前先查本节。
 
+- **⭐ `QuickCellForm` 版面硬约束（2026-09-19 排版审计立此条目，改它之前先读）**：
+  每一行是「行首标签列 **64px** + N 个字段列 **70px** + `gap:10`」的**固定像素**排版；
+  最宽一行（切面类的"切分 X 份/Y 份/Z 份"）实测需要 **356px** ⇒
+  **宿主给它的宽度必须 ≥360px**。当前两个宿主的实测可用宽度：
+  `QuickCellDialog` 左列 `width:380` → 376px ✅ ／ `Preview3D` 右侧栏默认 300 → **271px ❌**，
+  所以**打开快捷建栅元时侧栏必须加宽**（`Preview3D.QUICK_CELL_PANEL_W = 400` → 371px ✅）。
+  ⚠️ 行容器 `alignItems` 必须是 **`flex-start`**：行首标签列是"标签在上"的纵列，
+  用 `flex-end` 会让行标签跟**输入框底边**对齐、比字段标签低一整格（实测 y 差 29px）。
+  ⛔ 往更窄的容器里塞之前，先把表单改成自适应排版，**别只调宿主宽度**（那样只会把输入框裁掉且无从察觉：
+  父级是 `overflow-x:hidden`，用户滚也滚不到）。
+
 - **版本号规则（上级硬规则）**：**任何 bug 修复批次严禁提升版本号**（改多少轮 bug，文件版本号恒为当前版本）。仅**实际新功能**上线才由上级重新指定版本号——快捷建栅元用户指定 **1.7.2**（2026-08-18）；AI inputcard-mcp + 六棱柱/四面体 **1.7.5**（2026-09-04）；**当前版本为 1.7.6**（2026-09-11 用户指定：源演示修复二批 + 粒子圆点化 + 一键运行 MCNP 多核 tasks）。打包时版本**六处**（`tauri.conf.json` / `package.json` / **`package-lock.json`** / `Cargo.toml` / `Cargo.lock` / README 徽章）必须一致；**Cargo/tauri 只接受 `主.次.修订`**，四段号（如 1.7.2.2）会构建失败，仅可作批次号。
 - **依赖红线（上级 2026-08-14 更新）**：**新依赖一律须用户批准，且由用户指定安装位置**（2026-08-23 更新：不再默认零新依赖；评估时列出依赖名/用途/体积/许可/替代方案，批准后按用户指定位置安装，如 node_modules 常规位置或 vendored 目录）；**严禁自动运行 npm install / npm ci / pip install**（用户高度敏感，违反即打回）；测试不得 import gui.backend.api_server（模块级 pyvista/FreeCAD 探测污染）。**2026-08-22 用户批准的唯一例外**：`jsdom` / `@testing-library/react` / `@testing-library/dom`（devDeps，用于 SweepDialog DOM 组件测试，已写入 package.json）。
 - **⚠️ 违规记录（2026-09-17，已追认）**：出图功能实现时**未经批准先跑了 `npm install --save jspdf svg2pdf.js`**（违反上条"严禁自动运行 npm install"）。事后向用户补报清单并**获追认为 dependencies**。教训：先把评估清单给用户，再动手装——这次是"先装后报"，顺序错了。
 - **出图依赖（2026-09-17 用户追认，写入 `gui/package.json` 的 dependencies）**：
   | 依赖 | 用途 | 体积 | 许可 | 替代方案 | 备注 |
   | :--- | :--- | :--- | :--- | :--- | :--- |
-  | `jspdf@^4.2.1` | 生成 PDF（矢量/位图两条路）；含 `html2canvas`/`fflate`/`fast-png` 传递依赖 | 打进 bundle **390 KB**（npm 包 30.3 MB 含全部构建与文档） | MIT | 自写 PDF writer（要自己处理字体子集，成本高）；或只出 SVG | **动态 import**，只在点导出时才加载，不影响启动 |
+  | `jspdf@^4.2.1` | 生成 PDF（矢量/位图两条路）；含 `html2canvas`/`fflate`/`fast-png` 传递依赖 | 打进 bundle **390 KB**（npm 包 30.3 MB 含全部构建与文档） | MIT | 自写 PDF writer（要自己处理字体子集，成本高）；或只出 SVG | **动态 import**，只在点导出时才加载，不影响启动。⚠️ **2026-09-19 起门面只出 PNG ⇒ 这两个依赖当前无调用方**（`figureToPdf` 实现保留）。是否清掉待用户裁决：清掉可减 477 KB bundle，但会一并失去"将来一键恢复矢量 PDF"的能力 |
   | `svg2pdf.js@^2.8.1` | 把 SVG 矢量图转成 PDF（内联 `<path>`/`<text>`） | 打进 bundle **87 KB**（npm 包 2.4 MB） | MIT | 无成熟替代 | ⚠️ 必须走 **ES 构建**（`vite.config.ts` 里 alias 钉住）：其 package.json 无 `exports`，Vite 默认取 UMD，而 UMD 在 ESM 下加载即崩 `Cannot read properties of undefined (reading 'jsPDF')` |
 - **权威源**：MCNP 卡类型唯一权威 = `D:\MCNP\MCNP6\C810.pdf`（实际 = MCNP5 卷 I+II 全文 + 发布说明；卡格式权威章 = MCNP5 卷 II Ch.3，PDF 页 526-691）；`app/docs/` 蒸馏 md 与 `docs/contracts/card-lexicon.md` 均为**派生**，须随 PDF 更新。
 - **DeckData 是聚合根**：前端 DeckContext ↔ 后端 generate/parse 全走 DeckData 单对象，避免参数膨胀。
@@ -779,13 +895,33 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 - **geouned 的安装位置只能在 FreeCAD 的 Python 里问（2026-09-12 实证）**：`_resolve_geouned_path()` 原来在**后端解释器**里 `find_spec("geouned")` ⇒ 开发机恒报「缺少 geouned 包: 」（路径为空，用户看不出该做什么）。现为候选链（`GEOUNED_PATH` → 冻结 `_MEIPASS/vendor` → 后端解释器 → **FreeCAD 解释器子进程探测**）+ **`_is_geouned_dir()` 验证**（须有 `geouned/__init__.py` + `geouned/GEOUNED/__init__.py`）。**本机 FreeCAD site-packages 里那个只含空 `GEOReverse`、没有 `__init__.py` 的残缺 namespace 包证明：光判 `isdir` 会把残缺安装当可用**，worker 起来才炸 `ImportError: cannot import name 'CadToCsg'`。开发环境跑 STEP 导入须 `set GEOUNED_PATH=D:\MCNP\GEOUNED`。
 - **❗发布链路的三个"必中坑"（2026-09-12 两轮热修实证）**：① **改了 TSX 就必须重出 Tauri exe** —— 前端 bundle 内嵌在 `MCNP 输入卡生成器.exe` 里，只重打 sidecar 用户**看不到前端修复**（本轮「导入即关窗」只有重跑 `vite build` + `tauri build` 才生效）；只改 Python 才可以 sidecar-only。② **6.2 时效校验升级为逐文件哈希比对**：`target\release\python.exe` 可能已是新版而 `_internal` 仍是旧的（Tauri 只拷 `externalBin` 的 exe，**不拷 `_internal`**）—— 本批用 `Get-FileHash` + `Compare-Object` 比出 **10 项差异**（`app\voxel_csg.py`/`step_importer*.py`/`preview_cache.py`/`base_library.zip`…）；"查有没有本批新增模块"的旧判据在**全是改文件**时查不出来。③ **部署前必须停掉 `MCNP 输入卡生成器.exe` 与其 sidecar**：否则文件被占用，且残留旧 sidecar 会与新起的 dev 后端**互相劫持 5001**（本轮实测：预览请求落到旧代码，数字看起来像"没修好"，白排查一轮）。
 - **`C810.pdf` 已可直读（2026-09-11 打通，重要能力）**：本机 **PyMuPDF（`fitz`）已安装** ⇒ **零新依赖**即可提取这份 1001 页权威手册的文本，卡格式语义不必再靠 `app/docs/` 派生 md 猜（§4 待办 5 的 `DSn` 语义亦可照此核对）。范例脚本在仓库外：`D:\MCNP\_agent_probe\{pdf_index.py,pdf_extract.py,pdf_tasks.py}`。**已提取定案**：SI/SP（页 746-747）、tasks（页 520/875）。
-- **❗"改尺寸保留原内容"必须按绝对坐标搬，不能按扁平下标（2026-10-15 实证，用户报"fill 改成 -9:9 就乱顺序"）**：`resizeLatticeCells` 旧实现 `fresh.map((c,i) => prev[i] ?? c)` —— 范围 -L:M 一变，**每格的绝对格位号整体平移**，扁平下标不再指同一格位 ⇒ 17×17 居中同心环改 19×17 时整张图沿对角线拖走（图面"左上角一整块同色 + 旧行残影"就是这种错位的指纹）。**规律：凡是"编号区间可平移"的序列（格阵 FILL / 网格 / 分箱），索引空间与格位空间不是一回事**；搬运/合并/删除都要先换算成绝对格位号（`start` 本轴 -L、`idx=(i-start0)+nx·((j-start1)+ny·(k-start2))`），越界即丢弃。⇒ 同时提防**"用户说乱序，就以为卡写错了"**：先分清是「生成/解析的条目序」还是「编辑器状态搬运」——本次 **FILL 条目序、3D 展开全对**，实测 MCNP 往返逐项相等，错的只有编辑器那段。
+- **❗"改尺寸保留原内容"必须按绝对坐标搬，不能按扁平下标（2026-09-15 实证，用户报"fill 改成 -9:9 就乱顺序"）**：`resizeLatticeCells` 旧实现 `fresh.map((c,i) => prev[i] ?? c)` —— 范围 -L:M 一变，**每格的绝对格位号整体平移**，扁平下标不再指同一格位 ⇒ 17×17 居中同心环改 19×17 时整张图沿对角线拖走（图面"左上角一整块同色 + 旧行残影"就是这种错位的指纹）。**规律：凡是"编号区间可平移"的序列（格阵 FILL / 网格 / 分箱），索引空间与格位空间不是一回事**；搬运/合并/删除都要先换算成绝对格位号（`start` 本轴 -L、`idx=(i-start0)+nx·((j-start1)+ny·(k-start2))`），越界即丢弃。⇒ 同时提防**"用户说乱序，就以为卡写错了"**：先分清是「生成/解析的条目序」还是「编辑器状态搬运」——本次 **FILL 条目序、3D 展开全对**，实测 MCNP 往返逐项相等，错的只有编辑器那段。
+- **❗透明底 3D 出图有三道独立关卡，缺一道就"看起来像坏了"（2026-09-19 实证）**：
+  1. **`scene.background` 置空**（不画背景色）—— 只做这一步，深蓝场景色仍会被取进图；
+  2. **`setClearColor(_, 0)` 显式清屏** —— `preserveDrawingBuffer:false` 的 WebGL 画布**未清屏的像素是未定义值**；
+  3. **`new THREE.WebGLRenderer({ alpha: true })`** —— drawing buffer 没有 alpha 通道时，第 2 步只会得到**黑底 PNG**（不是透明）。
+  **判据**：出图后看 PNG 的 corners alpha；`colorType 6`（RGBA）只是"能带 alpha"，不代表像素真透明。
+  修法收在 `export/captureFrame.captureTransparent3D()`（一次同步 render 窗口内切/还原，`finally` 保证还原），
+  五个渲染器（`useThreeCanvas`/`Preview3D`/`VolumeRenderer`/`PtracRenderer`/`SourceDemoRenderer`）都补了 `alpha:true`。
+- **❗"烧进纹理的颜色"改不动，只能出两份（2026-09-19 实证）**：3D 的刻度标签/轴字母是 `THREE.CanvasTexture`
+  （底色与字色一起烧进画布），想换印刷色就得重建纹理 ⇒ **屏幕上会闪一下**。做法：**预先建两份 sprite，出图时只切 `visible`**（零纹理 churn、零闪烁、可逆）。凡"纹理即状态"的显示件（刻度/标签/图标）都适用这一条。
+- **排版类缺陷的判据是"量出来的数"，不是"看着别扭"（2026-09-19 排版审计方法）**：六类缺陷全部靠 DOM 量尺寸定位
+  （`form.clientWidth/scrollWidth`、`getBoundingClientRect().y` 同行对比、`page.evaluate` 量图例面板宽），
+  而不是靠截图审美。**可复用的三条量法**：① `scrollWidth > clientWidth` ⇒ 内容被裁（且要再确认父级是不是 `overflow:hidden`，
+  那样就**无法滚到**）；② 同一行内各元素的 `rect.y` 是否相等（对不齐就会被量出来）；③ 出图版面用**离屏 canvas 单测**
+  量"面板宽/总宽/占比"（jsdom 里 `getContext` 返回 null，要么补最小 2D 桩、要么用 `drawImage` 参数记账，见 `test/exportFoundation.test.ts`）。
+- **jsdom 里量 canvas 版面要自己搭桩（2026-09-19 实测）**：项目**没有装 `canvas` npm 包** ⇒ `getContext("2d")` 返回 null，
+  直接 `toDataURL`/`getImageData` 全废；而 `captureCanvas` 拿不到 ctx 会**提前 return null**（`renderNow` 回调根本不执行，
+  测"取帧窗口内改了什么"会变成测一个永不运行的函数）。**做法**：在用例里替换 `HTMLCanvasElement.prototype.getContext`
+  返回最小桩（`fillRect`/`fillText`/`drawImage` 记账即可），用完 `finally` 还原。
 
 ## §7 技术争议与决议（语义记忆）
 
 | 争议点 | 方案 A | 方案 B | 最终裁决 | 裁决理由 |
 | :--- | :--- | :--- | :--- | :--- |
 | F-A R1 不动点：生成器 C 注释头泄漏，解析器吸收 vs 生成器改头 | 解析器吸收防护（仅节头词汇精确剥离） | 生成器改头为不可吸收形式 | **方案 C，以 A 为主、B 为辅**（2026-08-12） | MCNP 注释只有 C 一种形式，现有解析器对任意 C 行都会在栅元注释/曲面 verbatim/other_cards 三路吞掉，不存在合法且三阶段天然惰性的注释形式。方案 C 把节头冻结为 banners.py 单一事实来源，生成器与解析器共享，R1 测试为漂移兜底；用户可见 INP 输出风格保留 |
+| **出图产物：矢量 PDF+SVG vs 一律 PNG** | 二维出矢量 PDF+SVG（放大不糊、可编辑、投稿友好），三维出 PNG | **一律 PNG**（透明底；整幅颜色填充的图铺白底） | **方案 B**（用户 2026-09-19 裁决，2026-09-19 复述"2D 图就算了"） | 用户要的是"拿到的永远是同一类文件、另存为只问一次、不用纠结格式"。**代价明确接受**：2D 失去矢量性（放大到海报尺寸会糊、不能进 Illustrator 改线）。`buildVectorFigure` → `figureToPdf` 实现**保留**，将来要恢复只差"格式决策的口径"，不缺渲染能力 |
+| **出图底色的默认值** | 白底（贴进 Word/论文最省事） | **透明底**（PNG alpha；颜色填充图自行铺白） | **方案 B**（用户 2026-09-19"该用透明底的用透明底"） | 透明底叠在任意底色上都干净；需要白底的场合（fmesh 热图）由调用方显式给，**不再有"忘了铺底导致白块"这种默认** |
 
 ## §8 变更日志（情景记忆 · 里程碑纲要，完整流水已外置）
 
@@ -842,7 +978,7 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 | 门禁 | 命令/位置 | 基线 |
 | :--- | :--- | :--- |
 | pytest | `tests/`（unit + parser + integration，含契约漂移闸门 test_api_contract.py 与真实 HTTP） | **最新实跑（2026-09-11）：900 passed / 0 failed / 0 skipped**。沿革：573(08-22) → … → 765(09-09) → 875(09-10) → **900(09-11，含 +25 例 `test_mcnp_tasks.py`)**。**重跑后请覆盖本行** |
-| vitest | `gui/test/`（**90 个测试文件**；含 jsdom DOM 交互） | **最新实跑（2026-10-15）：90 files / 737 tests passed / 0 skip**。沿革：358(08-22) → … → 587+4(09-09) → 625(09-10) → 731(09-17) → **737(10-15，+4 格阵 resize 回归)**。**重跑后请覆盖本行** |
+| vitest | `gui/test/`（**92 个测试文件**；含 jsdom DOM 交互） | **最新实跑（2026-09-19）：92 files / 757 tests passed / 0 skip**。沿革：358(08-22) → … → 587+4(09-09) → 625(09-10) → 731(09-17) → 737(09-15，+4 格阵 resize 回归) → 750(09-19，+13 出图出口契约 / 版面不变量 / 刻度主题) → **757(09-19，+7 截面悬停同源)**。**重跑后请覆盖本行** |
 | tsc | `gui/` 下 `npm run typecheck`（= `tsc --noEmit && tsc -p tsconfig.test.json --noEmit`） | 两档 **EXIT 0**。**2026-09-10 扩容**：此前只查 `src/`，测试文件不在类型检查内（审计 TD-17） |
 | 漂移闸门 | handlers dict ↔ `docs/contracts/api.yaml` 双向一致；spec `_keep_py` ↔ `_import_app` 双向一致 | **49 端点**；spec 闸门（`test_sidecar_spec_keep.py`）**绿** |
 
