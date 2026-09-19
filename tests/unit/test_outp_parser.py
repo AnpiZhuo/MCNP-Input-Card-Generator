@@ -1,5 +1,10 @@
-"""outp_parser 单测：MCNP6.1 紧凑布局 / 能量仓布局 / total 行 / nps 提取。"""
-from app.outp_parser import parse_outp
+"""outp_parser 单测：MCNP6.1 紧凑布局 / 能量仓布局 / total 行 / nps 提取 / KCODE 周期表。"""
+from pathlib import Path
+
+import pytest
+
+from app.mctal_parser import parse_mctal
+from app.outp_parser import parse_keff_cycles, parse_outp
 
 
 def _sample():
@@ -127,3 +132,83 @@ def test_f5_detector_layout():
         {"energy": "2.0000E-01", "flux": "2.345E-03", "error": "0.0060"},
     ]
     assert t["total"]["flux"] == "3.579E-03"
+
+
+# ── KCODE 逐周期 keff（print table 175）────────────────────────────────────────
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
+
+
+def test_keff_cycles_from_real_outp():
+    """真实 MCNP6 outp（ZEUS-1 case 1，600 周期）：周期表 + 结果段最终组合值。
+
+    该文件同时含表 175 单行式（``cycle N k(collision) ...``）与
+    "individual and average keff estimator results by cycle" 表；取后者（3 个估计量）。
+    """
+    text = (FIXTURES / "real_kcode_zeus1.o").read_text(encoding="utf-8", errors="replace")
+    h = parse_keff_cycles(text)
+    assert h is not None
+    assert len(h["cycles"]) == 600
+    assert h["cycles"][0] == 1 and h["cycles"][-1] == 600
+    assert h["mean"][0] == pytest.approx(1.04435)
+    assert h["mean"][-1] == pytest.approx(1.00217)
+    assert h["std"] == []                       # outp 不逐周期写 σ
+    assert h["combined"]["mean"] == pytest.approx(0.99277)
+    assert h["combined"]["std"] == pytest.approx(0.00036)
+
+
+def test_keff_cycles_outp_matches_mctal_fixture():
+    """同一算例的 .o 与 mctal 给出同一条逐周期序列（口径 = k(collision)）。
+
+    容差 1e-5：outp 的周期表只印 5 位小数，mctal 的 kcode 块印 6 位有效数字。
+    """
+    outp = parse_keff_cycles(
+        (FIXTURES / "real_kcode_zeus1.o").read_text(encoding="utf-8", errors="replace"))
+    mctal = parse_mctal(
+        (FIXTURES / "real_kcode_zeus1.mctal").read_text(encoding="utf-8"))
+    assert outp["cycles"] == mctal["keff"]["cycles"]
+    assert outp["mean"] == pytest.approx(mctal["keff"]["mean"], abs=1e-5)
+
+
+def test_keff_cycles_single_line_form_fallback():
+    """无估计量周期表时回落到表 175 单行式（``cycle N k(collision) X``）。"""
+    text = (
+        "1estimated keff results by cycle                       print table 175\n"
+        "\n"
+        " cycle     1    k(collision)  1.044348    prompt removal lifetime(abs)  "
+        "2.0068E+02    source points generated  10469\n"
+        " cycle     2    k(collision)  0.993455    prompt removal lifetime(abs)  "
+        "1.9538E+02    source points generated   9541\n"
+        "1keff results for: test\n"
+        " | the final estimated combined collision/absorption/track-length keff = "
+        "0.99277 with an estimated standard deviation of 0.00036   |\n"
+    )
+    h = parse_keff_cycles(text)
+    assert h["cycles"] == [1, 2]
+    assert h["mean"] == pytest.approx([1.044348, 0.993455])
+    assert h["combined"]["mean"] == pytest.approx(0.99277)
+
+
+def test_keff_cycles_none_without_cycle_table():
+    """非临界算例的输出（无周期表）→ None（不误判别的表）。"""
+    assert parse_keff_cycles("1tally        4        nps =       10000\n") is None
+    assert parse_keff_cycles("") is None
+
+
+def test_keff_cycles_ignores_skip_cycles_table():
+    """相邻的"不同跳过周期数"表（表头措辞不同、行首无 cycle/histories 对齐）不得混入。"""
+    text = (
+        "1individual and average keff estimator results by cycle\n\n"
+        "  cycle   histories   k(coll)  k(abs)  k(track)\n\n"
+        "     1       10000 | 1.04435  1.04378  1.04013  | \n"
+        "     2       10469 | 0.99345  0.99593  0.99674  | \n"
+        " -------------------------------------------------------------------\n"
+        "1individual and collision/absorption/track-length keffs for different "
+        "numbers of inactive cycles skipped\n\n"
+        "  skip  active     active\n"
+        " cycles cycles   neutrons\n\n"
+        "     0    600      5998960| 0.9928 0.0003  0.9929 0.0003  0.9932 0.0004 |\n"
+    )
+    h = parse_keff_cycles(text)
+    assert h["cycles"] == [1, 2]
+    assert h["mean"] == pytest.approx([1.04435, 0.99345])
+

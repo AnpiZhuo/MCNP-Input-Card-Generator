@@ -1,8 +1,11 @@
 /**
- * 主动解析 keff：输入 mctal 文件路径或运行目录 → /api/parse-keff →
- * 显示最终 keff（combined 优先）+ 逐周期收敛曲线（Recharts）。
+ * keff 结果窗口：最终 k-eff（combined 优先）+ 逐周期收敛曲线（Recharts）+ 出图。
+ *
+ * 入口是「keff 解析」玻璃卡（`KeffParseCard`）的两个子按钮 —— 卡片选好文件后把
+ * 路径作为 `initialPath` 传进来，本窗口挂载即解析。路径框仍可编辑：**运行目录**
+ * （让后端自动找 mctal* / *.o）只能靠手输/粘贴，卡片按钮选不了目录。
  */
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   CartesianGrid,
   Line,
@@ -26,37 +29,23 @@ interface KeffResult {
   combined: { mean: number; std: number } | null;
 }
 
-export default function KeffDialog({ onClose }: { onClose: () => void }) {
-  const [path, setPath] = useState("");
+export default function KeffDialog({ initialPath = "", onClose }:
+  { initialPath?: string; onClose: () => void }) {
+  const [path, setPath] = useState(initialPath);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [keff, setKeff] = useState<KeffResult | null>(null);
 
-  const browse = async () => {
+  const doParse = async (target?: string) => {
+    const p = (target ?? path).trim();
     setErr("");
-    try {
-      const r = await fetch(apiUrl("/api/choose-file"), {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
-      });
-      const j = await r.json();
-      if (j.status !== "ok") throw new Error(j.message);
-      if (j.cancelled || !j.path) return;
-      setPath(j.path);
-      setKeff(null);
-    } catch (e: any) {
-      setErr(errorHint(e, "选择文件失败"));
-    }
-  };
-
-  const doParse = async () => {
-    setErr("");
-    if (!path.trim()) { setErr("请先输入 mctal 路径或运行目录，或点「浏览」选择"); return; }
+    if (!p) { setErr("请先在「keff 解析」卡里选文件，或粘贴 mctal / outp 路径、运行目录"); return; }
     setBusy(true);
     setKeff(null);
     try {
       const r = await fetch(apiUrl("/api/parse-keff"), {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: path.trim() }),
+        body: JSON.stringify({ path: p }),
         signal: AbortSignal.timeout(30000),
       });
       const j = await r.json();
@@ -68,6 +57,12 @@ export default function KeffDialog({ onClose }: { onClose: () => void }) {
       setBusy(false);
     }
   };
+
+  // 卡片选好文件后直接出图（仅挂载时一次；之后由「解析」按钮/路径框驱动）
+  useEffect(() => {
+    if (initialPath.trim()) doParse(initialPath);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const points = useMemo(
     () => (keff ? convergencePoints({ cycles: keff.cycles, mean: keff.mean, std: keff.std }) : []),
@@ -92,7 +87,7 @@ export default function KeffDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <FloatingDialog
-      title="主动解析 keff（mctal 收敛）"
+      title="keff 收敛（mctal / outp）"
       onClose={onClose}
       width={680}
       footer={
@@ -120,7 +115,7 @@ export default function KeffDialog({ onClose }: { onClose: () => void }) {
             />
           )}
           <button className="btn btn-ghost btn-sm" onClick={onClose}>关闭</button>
-          <button className="btn btn-primary btn-sm" onClick={doParse} disabled={busy}>
+          <button className="btn btn-primary btn-sm" onClick={() => doParse()} disabled={busy}>
             {busy ? "解析中…" : "解析 keff"}
           </button>
         </>
@@ -133,12 +128,13 @@ export default function KeffDialog({ onClose }: { onClose: () => void }) {
             style={{ flex: 1, fontFamily: "Consolas,monospace", fontSize: 11 }}
             value={path}
             onChange={(e) => { setPath(e.target.value); setKeff(null); }}
-            placeholder="mctal 文件路径，或含 mctal 的运行目录（自动找 mctal*）"
+            placeholder="mctal / outp(.o) 文件路径，或运行目录（自动找 mctal* / *.o）"
           />
-          <button className="btn btn-ghost btn-sm" onClick={browse}>浏览</button>
         </div>
         <div style={{ fontSize: 11, color: "var(--text-tertiary)", lineHeight: 1.5 }}>
-          MCNP 临界计算的 mctal 文件通常无扩展名（如 run 目录下的 mctal / mctal_xxx），选目录也行。
+          选文件用输出页的「keff 解析」卡（<b>解析 mctal</b> / <b>解析 .o</b> 两个按钮）；
+          这里也可以直接粘贴路径或<b>运行目录</b>（目录会自动找 mctal* / *.o）。
+          mctal 通常无扩展名；<code>.o</code>（outp）的逐周期 keff 取 print table 175 的周期表。
         </div>
         {err && <div style={{ color: "#e53935", fontSize: 12 }}>{err}</div>}
 

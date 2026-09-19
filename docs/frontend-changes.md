@@ -1311,3 +1311,33 @@ ormalizeImportedMaterials（核素行 zaid 剥后缀，raw 行原样，rows/nucl
 - `gui/src/components/CellEditDialog.tsx:174`：**多余的三元分支 `: null,`**（TS1135 语法错误）⇒ **该文件无法编译**。已删（第 161–173 行本就是完整三元）。
 - **类型定义放宽 3 处**（行为等价，代码处处 `|| ""` 兜底）：`CellEditDialog.CellData.fill_grid`、`DeckContext.CellData.fill_grid` 改**可选**；`CycleCellLike.fill_grid` 加 `| null`（`parseFillGrid` 本就对 null 容错）。连带 `LatticeEditDialog.tsx:75` 补 `|| ""`。
 - **测试文件类型错误 35 处全部清偿**（TD-17 盲区首次暴露）：`fill_grid` 缺失/`si.type` 字面量收窄/mock fetch 类型/`sourceMode` 等**已退役字段**残留/`loadDeck` 载荷缺字段/`node:*` 缺类型。**新依赖（用户已批准）**：`@types/node@^22.20.2`（devDependency）。
+
+---
+
+## keff 解析：独立玻璃卡 + 两个子按钮（2026-09-20）
+
+> 用户原话：「你把 keff 解析做成一个单独的玻璃卡，里面两个子按钮，一个解析 mctal，
+> 一个解析 .o，解析 mctal 的，选择解析文件时，默认无后缀」。
+> 门禁（本次实测）：`npm run typecheck` EXIT 0；`npm test` 全绿；`npm run build` 成功。
+
+**为什么必须分两个按钮**：MCNP 的 mctal 文件**本体没有扩展名**（运行目录下就叫 `mctal`），
+而 outp 是 `.o`。一个按钮只能给一套默认过滤 ⇒ 用户总有一边打开窗口后**看不见自己的文件**。
+两个按钮各带一套默认过滤，规格在服务端 `app/file_dialog.py`（mctal 首项过滤 = `*`，即"无后缀"；
+Tk 以 `filetypes[0]` 为默认选中项）。
+
+- `gui/src/components/KeffParseCard.tsx`（**新**）：玻璃卡（沿用既有 `.glass-card` /
+  `.card-header` / `.card-title` 样式），两个子按钮 `📄 解析 mctal` / `🧾 解析 .o`；
+  点按钮 → `POST /api/choose-file {kind, withContent:false}` → 选中路径交给父级开结果窗口。
+  - `kind` 换两套默认过滤；`withContent:false` 只要路径（outp 可能几百 MB，不该读回 JSON）；
+  - **取消静默**（不报错、不开窗）；选择器报错在卡内提示；等待期间两个按钮同时禁用；
+  - 不设 `AbortSignal` 超时：系统文件窗口是模态的，用户可能挑很久（与原「浏览」一致）。
+- `gui/src/components/OutputTab.tsx`：输出文件卡头的 `🔬 解析 keff` 按钮**移除**，改为
+  **独立的 keff 解析玻璃卡**（位于「输出文件」与「Tally 结果」之间，单独一张卡）；
+  状态由 `keffOpen:boolean` 换成 `keffPath:string|null`（卡片选好文件即带路径开窗）。
+- `gui/src/components/KeffDialog.tsx`：从"输入+选择+解析"改为**结果窗口** —— 新增
+  `initialPath` 属性，挂载即解析（卡片选完直接出图）；路径框保留可编辑（**运行目录**只能
+  手输/粘贴，卡片按钮选不了目录），去掉「浏览」（它原先走的是 INP 过滤，对 keff 是错的）。
+- `gui/test/keffParseCard.dom.test.tsx`（**新**，5 例）：玻璃卡结构 + 两个按钮齐备；
+  mctal 按钮发的 body 必须恰为 `{kind:"mctal", withContent:false}`；outp 按钮 `kind:"outp"`；
+  取消静默；报错在卡内显示。
+

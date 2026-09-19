@@ -9,6 +9,7 @@ import { openVolume3DWindow, readOutputDir } from "../volume/openVolume3DWindow"
 import { openPtrac3DWindow } from "../ptrac/openPtracWindow";
 import { openTallyChart } from "../utils/windows";
 import KeffDialog from "./KeffDialog";
+import KeffParseCard from "./KeffParseCard";
 
 export default function OutputTab() {
   const [doc, setDoc] = useState<{path:string;title:string}|null>(null);
@@ -16,8 +17,9 @@ export default function OutputTab() {
   const [filePath, setFilePath] = useState("");
   const [selectedTally, setSelectedTally] = useState("1");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  /** Tally 通量图已升级为独立窗口（TallyChartWindow），弹窗状态随之移除 */
-  const [keffOpen, setKeffOpen] = useState(false);
+  /** Tally 通量图已升级为独立窗口（TallyChartWindow），弹窗状态随之移除。
+   *  keff：卡片（KeffParseCard）选好文件 → 结果窗口（KeffDialog）自己解析。 */
+  const [keffPath, setKeffPath] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { deck } = useDeck();
 
@@ -267,8 +269,6 @@ export default function OutputTab() {
           <div style={{ flex: 1, display: "flex", justifyContent: "center" }}>
             <button className="btn btn-ghost btn-xs" onClick={() => setDoc({path:"/docs/MCNP6_输出卡结构参考.md",title:"输出卡结构参考"})}>📖</button>
           </div>
-          <button className="btn btn-ghost btn-xs" onClick={() => setKeffOpen(true)}
-            title="主动解析 mctal 的 keff 收敛曲线">🔬 解析 keff</button>
         </div>
         <div className="form-row">
           <div className="form-group" style={{ flex: 1 }}>
@@ -287,7 +287,11 @@ export default function OutputTab() {
         </div>
       </div>
 
-      {keffOpen && <KeffDialog onClose={() => setKeffOpen(false)} />}
+      {keffPath !== null && (
+        <KeffDialog initialPath={keffPath} onClose={() => setKeffPath(null)} />
+      )}
+
+      <KeffParseCard onOpen={(p) => setKeffPath(p)} />
 
       <div className="glass-card">
         <div className="card-header">

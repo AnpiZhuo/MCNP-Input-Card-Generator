@@ -1768,7 +1768,6 @@ class MCNPHandler(BaseHTTPRequestHandler):
         临时目录在成功/失败后清理（摘要先拷到稳定目录再删）。
         """
         try:
-            import glob
             import math
             import shutil
             import subprocess
@@ -1812,8 +1811,20 @@ class MCNPHandler(BaseHTTPRequestHandler):
                             cwd=run_dir, capture_output=True, text=True, timeout=300,
                         )
                         rec["exitCode"] = proc.returncode
-                        rec["keff"] = sweep.parse_keff(
-                            (proc.stdout or "") + "\n" + (proc.stderr or ""))
+                        # MCNP 把 keff/收敛序列写在结果文件里（mctal，或 name= 前缀下的
+                        # outp ``sweep-XXX.o``），**stdout 只有少量提示行** ⇒ 必须读目录
+                        # （早先只解析 stdout，导致扫描汇总表的 keff 恒为 n/a）。
+                        res = sweep.scan_run_dir(run_dir)
+                        rec["keff"] = res["keff"]
+                        if res["history"]:
+                            rec["convergence"] = res["history"]
+                        std = sweep.history_keff_std(res["history"])
+                        if std is not None:
+                            rec["keffStd"] = std
+                        if rec["keff"] is None:
+                            # 兜底：极少数封装把结果也回显到 stdout
+                            rec["keff"] = sweep.parse_keff(
+                                (proc.stdout or "") + "\n" + (proc.stderr or ""))
                     except subprocess.TimeoutExpired:
                         # TD-26（t5）：原为裸 `pass` —— 超时后 exitCode 保持 None、无日志、
                         # 无标记，落盘 manifest/TSV 里与"MCNP 无输出"不可区分（都出 n/a）。
@@ -1822,22 +1833,6 @@ class MCNPHandler(BaseHTTPRequestHandler):
                         rec["timedOut"] = True
                         print(f"[sweep] 组合 {i} 超时（{sweep.SWEEP_PER_RUN_TIMEOUT}s）：{run_dir}",
                               file=sys.stderr)
-                    # 收敛序列（仪表盘小图）：优先读该组合目录里的 mctal
-                    # （name= 前缀可能影响 mctal 命名，故两种 glob 都试）
-                    try:
-                        mctal_paths = sorted(
-                            glob.glob(os.path.join(run_dir, "mctal*")) +
-                            glob.glob(os.path.join(run_dir, f"sweep-{i:03d}.m*")))
-                        if mctal_paths:
-                            with open(mctal_paths[0], "r", encoding="utf-8",
-                                      errors="replace") as f:
-                                hist = sweep.parse_keff_history(f.read())
-                            if hist:
-                                rec["convergence"] = hist
-                                if hist.get("std"):
-                                    rec["keffStd"] = hist["std"][-1]
-                    except Exception:
-                        pass
                     return rec
 
                 records = []
@@ -1881,16 +1876,16 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 if not run_dir or not os.path.isdir(run_dir):
                     continue
                 try:
-                    mctal_paths = sorted(glob.glob(os.path.join(run_dir, "mctal*")))
-                    if not mctal_paths:
-                        continue
-                    with open(mctal_paths[0], "r", encoding="utf-8",
-                              errors="replace") as f:
-                        hist = sweep.parse_keff_history(f.read())
-                    if hist:
-                        rec["convergence"] = hist
-                        if hist.get("std"):
-                            rec["keffStd"] = hist["std"][-1]
+                    res = sweep.scan_run_dir(run_dir)
+                    if res["history"]:
+                        rec["convergence"] = res["history"]
+                    std = sweep.history_keff_std(res["history"])
+                    if std is not None:
+                        rec["keffStd"] = std
+                    # 旧 manifest 的 keff 是"只解析 stdout"时代的产物（恒 n/a）：
+                    # 结果文件里有就补上，便于仪表盘恢复历史扫描的坐标。
+                    if rec.get("keff") is None and res["keff"] is not None:
+                        rec["keff"] = res["keff"]
                 except Exception:
                     continue
             self._ok({"status": "ok", "baseDir": base_dir, "manifest": manifest})
@@ -2529,22 +2524,40 @@ class MCNPHandler(BaseHTTPRequestHandler):
 
     # ── 选择文件（原生打开对话框，返回路径+内容）──
     def _handle_choose_file(self):
-        """弹出系统原生文件选择窗口，返回所选文件路径和内容（取消返回 cancelled）"""
+        """弹出系统原生文件选择窗口，返回所选文件路径（可选文本内容）。
+
+        可选入参（都可省，老调用不受影响）：
+
+        - ``kind``：``inp``（默认）/ ``mctal``（**默认无后缀过滤**，见
+          `app/file_dialog.py`）/ ``outp``（``*.o *.outp *.out``）；
+        - ``withContent``：默认 ``true``；``false`` 时只回路径不读内容
+          （keff 解析只要路径，而 outp 可能几百 MB）。
+
+        取消返回 ``{path:"", cancelled:true}``；选中返回 ``{path, content?, cancelled:false}``。
+        """
         try:
             import tkinter as tk
             from tkinter import filedialog
+            try:
+                data = self._read_body() or {}
+            except Exception:
+                data = {}                     # 无 body 也当"默认 kind"
+            spec = _import_app("file_dialog").dialog_spec(data)
             root = tk.Tk()
             root.withdraw()
             root.attributes("-topmost", True)
             try:
                 path = filedialog.askopenfilename(
-                    title="选择 MCNP INP 文件",
-                    filetypes=[("MCNP 输入卡", "*.inp *.i *.txt"), ("所有文件", "*.*")],
+                    title=spec["title"],
+                    filetypes=[tuple(ft) for ft in spec["filetypes"]],
                 )
             finally:
                 root.destroy()
             if not path:
                 self._ok({"path": "", "cancelled": True})
+                return
+            if not spec["with_content"]:
+                self._ok({"path": path, "cancelled": False})
                 return
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
@@ -3604,44 +3617,44 @@ class MCNPHandler(BaseHTTPRequestHandler):
 
     # ── OUTP 解析 ──
     def _handle_parse_keff(self):
-        """主动解析 mctal 的 keff 收敛序列（目录自动找 mctal* 文件）。"""
+        """主动解析 keff 收敛序列（mctal 或 outp(.o)；目录自动找结果文件）。"""
         try:
-            import glob
             data = self._read_body() or {}
             path = str(data.get("path", "")).strip()
             if not path:
-                self._err("缺少 mctal 文件路径或运行目录")
+                self._err("缺少 mctal / outp(.o) 文件路径或运行目录")
                 return
+            sweep = _import_app("sweep")
             if os.path.isdir(path):
-                candidates = sorted(glob.glob(os.path.join(path, "mctal*")))
-                if not candidates:
-                    self._err(f"目录中未找到 mctal 文件：{path}")
+                # 目录：mctal 优先、其次 outp（含 name= 前缀的 *.o / *.m），
+                # 取第一个能解出收敛序列的文件（与扫描侧同一套取舍）。
+                res = sweep.scan_run_dir(path)
+                hist, result_path = res["history"], res["path"]
+                if not hist:
+                    self._err(f"目录中未解析到 keff 收敛序列：{path}")
                     return
-                mctal_path = candidates[0]
             else:
-                mctal_path = path
-            if not os.path.isfile(mctal_path):
-                self._err(f"mctal 文件不存在：{mctal_path}")
-                return
-            parse_mctal = _import_app("mctal_parser").parse_mctal
-            with open(mctal_path, "r", encoding="utf-8", errors="replace") as f:
-                result = parse_mctal(f.read())
-            keff = result.get("keff") or {}
-            if not keff.get("mean"):
-                self._err(f"未在 mctal 中解析到 keff 收敛序列：{mctal_path}")
-                return
+                result_path = path
+                if not os.path.isfile(result_path):
+                    self._err(f"结果文件不存在：{result_path}")
+                    return
+                with open(result_path, "r", encoding="utf-8", errors="replace") as f:
+                    hist = sweep.parse_keff_history(f.read())
+                if not hist:
+                    self._err(f"未在结果文件中解析到 keff 收敛序列：{result_path}")
+                    return
             self._ok({
                 "status": "ok",
-                "path": mctal_path,
+                "path": result_path,
                 "keff": {
-                    "cycles": keff.get("cycles", []),
-                    "mean": keff.get("mean", []),
-                    "std": keff.get("std", []),
-                    "combined": keff.get("combined"),
+                    "cycles": hist.get("cycles", []),
+                    "mean": hist.get("mean", []),
+                    "std": hist.get("std", []),
+                    "combined": hist.get("combined"),
                 },
             })
         except Exception as e:
-            self._err(str(e), hint="keff 解析失败，请确认 mctal 文件有效")
+            self._err(str(e), hint="keff 解析失败，请确认 mctal / outp 文件有效")
 
     def _handle_parse_outp(self):
         try:

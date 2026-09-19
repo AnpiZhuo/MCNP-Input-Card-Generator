@@ -3,14 +3,18 @@
 import json
 import os
 import tempfile
+from pathlib import Path
 
 import pytest
 
 import app.sweep as sweep_mod
 from app.sweep import (
-    apply_parameters, build_summary_tsv, cartesian, cleanup_sweep_dir, parse_keff,
-    parse_keff_history, persist_sweep_summary, run_dir_name, sweep_budget_status,
+    apply_parameters, build_summary_tsv, cartesian, cleanup_sweep_dir,
+    history_keff_std, parse_keff, parse_keff_history, persist_sweep_summary,
+    run_dir_name, scan_run_dir, sweep_budget_status,
 )
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 
 
 def test_cartesian():
@@ -92,6 +96,67 @@ def test_parse_keff_history_from_mctal():
 def test_parse_keff_history_none_when_no_sequence():
     assert parse_keff_history("no keff here") is None
     assert parse_keff_history("") is None
+
+
+# ── 真实 MCNP 结果文件的 keff 序列（mctal kcode 块 / outp(.o) 周期表）──────
+def test_parse_keff_history_from_real_kcode_mctal():
+    """真实 mctal 的 kcode 块 → 600 周期序列 + combined（std 为空：不逐周期写 σ）。"""
+    text = (FIXTURES / "real_kcode_zeus1.mctal").read_text(encoding="utf-8")
+    h = parse_keff_history(text)
+    assert h is not None
+    assert len(h["cycles"]) == 600
+    assert h["mean"][0] == pytest.approx(1.04435)
+    assert h["std"] == []
+    assert h["combined"]["mean"] == pytest.approx(0.99277, abs=1e-5)
+    assert parse_keff(text) == pytest.approx(0.99277, abs=1e-5)
+
+
+def test_parse_keff_history_from_real_outp_file():
+    """outp（.o）也能给序列 —— /api/parse-keff 与扫描侧因此不限于 mctal。"""
+    text = (FIXTURES / "real_kcode_zeus1.o").read_text(encoding="utf-8", errors="replace")
+    h = parse_keff_history(text)
+    assert h is not None
+    assert len(h["cycles"]) == 600
+    assert h["mean"][0] == pytest.approx(1.04435)
+    assert h["combined"]["std"] == pytest.approx(0.00036)
+
+
+def test_history_keff_std_prefers_cycle_std_then_combined():
+    """σ 取值口径：OWEN 式逐周期 σ 优先；真实文件只有 combined.std。"""
+    assert history_keff_std({"std": [0.002, 0.0019], "combined": {"std": 0.001}}) == 0.0019
+    assert history_keff_std({"std": [], "combined": {"std": 0.00036}}) == 0.00036
+    assert history_keff_std({"std": [], "combined": None}) is None
+    assert history_keff_std(None) is None
+
+
+def test_scan_run_dir_reads_outp_when_no_mctal(tmp_path):
+    """运行目录里只有 outp（``name=`` 前缀的 sweep-001.o）时也能拿到 keff。"""
+    (tmp_path / "sweep-001.o").write_text(
+        (FIXTURES / "real_kcode_zeus1.o").read_text(encoding="utf-8", errors="replace"),
+        encoding="utf-8")
+    res = scan_run_dir(str(tmp_path))
+    assert res["path"].endswith("sweep-001.o")
+    assert res["keff"] == pytest.approx(0.99277)
+    assert len(res["history"]["cycles"]) == 600
+    assert history_keff_std(res["history"]) == pytest.approx(0.00036)
+
+
+def test_scan_run_dir_prefers_mctal(tmp_path):
+    """mctal 与 outp 同时存在 → mctal 优先（体积小且含 combined）。"""
+    (tmp_path / "mctal").write_text(
+        (FIXTURES / "real_kcode_zeus1.mctal").read_text(encoding="utf-8"),
+        encoding="utf-8")
+    (tmp_path / "sweep-001.o").write_text("1tally 4 nps = 100\n", encoding="utf-8")
+    assert scan_run_dir(str(tmp_path))["path"].endswith("mctal")
+
+
+def test_scan_run_dir_empty_or_missing(tmp_path):
+    """空目录 / 不存在目录 / 无结果文件 → 全空结构（扫描表由此判 n/a 而不是崩）。"""
+    for d in (str(tmp_path), str(tmp_path / "不存在"), ""):
+        res = scan_run_dir(d)
+        assert res["keff"] is None and res["history"] is None and res["path"] is None
+    (tmp_path / "sweep.i").write_text("t\n", encoding="utf-8")
+    assert scan_run_dir(str(tmp_path))["keff"] is None
 
 
 # ── T3：sweep-run 总时长预算（命令硬性超时纪律）──────────────

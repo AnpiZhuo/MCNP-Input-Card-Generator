@@ -258,9 +258,22 @@ paths:
     post:
       operationId: chooseFile
       tags: [io]
-      summary: 原生文件选择窗口（返回路径 + 文件内容）
-      description: 无 body 键；取消返回 {path:"", cancelled:true}，选中返回
-        {path, content, cancelled:false}（api_server.py:761-783）。
+      summary: 原生文件选择窗口（返回路径 + 可选文件内容）
+      description: |
+        可选 body 键：`kind`（`inp` 默认 / `mctal` / `outp`，决定标题与类型过滤；
+        `mctal` 默认"无后缀"——MCNP 的 mctal 本体没扩展名，加了过滤就看不见它，
+        规格见 `app/file_dialog.py`）、`withContent`（默认 `true`；`false` 时只回路径、
+        **不读文件内容**，供 keff 解析这类只要路径的调用，避免把几百 MB 的 outp 读成 JSON）。
+        取消返回 {path:"", cancelled:true}，选中返回 {path, content?, cancelled:false}。
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind: { type: string, enum: [inp, mctal, outp] }
+                withContent: { type: boolean }
       responses:
         '200':
           description: 选择结果
@@ -272,7 +285,7 @@ paths:
                   - type: object
                     properties:
                       path: { type: string }
-                      content: { type: string, description: 选中时才有（UTF-8，errors=replace） }
+                      content: { type: string, description: withContent 为 true 且选中时才有（UTF-8，errors=replace） }
                       cancelled: { type: boolean }
         '500':
           description: 无法打开系统文件选择器
@@ -1266,7 +1279,9 @@ paths:
       summary: 读取历史扫描目录（仪表盘数据源）
       description: |
         入参 {baseDir}；读取 {baseDir}/sweep-manifest.json，run 缺 convergence
-        时按 outputDir 重解析 mctal 补全；返回 {status, baseDir, manifest}。
+        时按 outputDir 重解析结果文件补全（mctal 优先、其次 outp `*.o`，见
+        `app/sweep.py:scan_run_dir`；顺带回填旧 manifest 缺失的 keff）。
+        返回 {status, baseDir, manifest}。
       requestBody:
         required: true
         content:
@@ -1320,10 +1335,12 @@ paths:
     post:
       operationId: parseKeff
       tags: [results]
-      summary: 主动解析 mctal 的 keff 收敛序列（目录自动找 mctal* 文件）
+      summary: 主动解析 mctal / outp(.o) 的 keff 收敛序列（目录自动找结果文件）
       description: |
-        入参 {path}（mctal 文件路径或运行目录）；返回
+        入参 {path}（mctal / outp(.o) 文件路径或运行目录）；返回
         {status, path, keff:{cycles, mean, std, combined:{mean,std}|null}}。
+        真实 MCNP 的 mctal/outp **不逐周期写 σ** ⇒ std 可能是空数组，最终值与其
+        σ 看 combined；逐周期序列口径 = k(collision)。
       requestBody:
         required: true
         content:

@@ -1444,3 +1444,93 @@ python -m pytest tests/unit/test_lattice.py -q            # 66 passed
 **spec 修正（TD-34 闸门抓出）**
 - `gui/mcnp_sidecar.spec`：`_keep_py` 中**误列 `_cross_section_helper.py`** —— 该文件在 `gui/backend/` 而非 `app/`（spec 第 41-44 行本就另有一段从 `GUI_BACKEND` 取它并投放到 `app`），`_keep_py` 里的那一条是无用项，会让 TD-34 闸门报"spec 与源码漂移"。已删除该条并加注释指路。
 - `tests/unit/test_sidecar_spec_keep.py`：`_parse_hidden` 原用 `re.findall(r'"([^"]+)"', spec_text)` 取"全 spec 字符串字面量"，实测在**同一份文本**上**静默丢内容**（返回 74 项且不含 `models.py`/`meshtal`/`generator`/`docs`；逐引号配对扫描返回 76 对且四者俱全；`[^"]+` 与 `\x22([^\x22]+)\x22` 两种写法均复现）⇒ 改为**显式配对扫描**（ASCII 双引号位置逐对切片），消除闸门的假红/假绿风险。该文件 6 例**首次执行，全绿**。
+
+---
+
+## 真实 MCNP 结果的 keff 序列解析修复（2026-09-20）
+
+> 症状：GUI「🔬 解析 keff」（`/api/parse-keff`）对**真实算例**报
+> `未在 mctal 中解析到 keff 收敛序列：<mctal>`（旧部署实测 HTTP 500，同文案）。
+> 触发算例：ZEUS-1 10 Uniform Units / HEU-MET-INTER-006 case 1（`KCODE 10000 1.0 100 600`，600 周期，无计数卡）。
+> 门禁：`python -m pytest tests -q` = **1012 passed / 0 failed**；`compileall app gui tests inputcard_mcp` EXIT 0。
+
+**根因（一句话）**：`app/mctal_parser.py` 只认 **OWEN 简化件**（`k eff (c) <mean> <std>` 行 +
+`combined keff = ...`）—— **真实 MCNP6 mctal 里这些字段名一个都没有**，于是 `keff=None`，
+端点按"解析不到序列"报错。
+
+**真实 mctal 长什么样（列语义逐列与同算例 `.o` 核验得出）**
+- 头部：`mcnp       6     <date> ...` / probid / `ntal     0`（旧版本探测只认 `version N`、`N mctal`，也匹配不上）；
+- KCODE 结果在**文末**：`kcode  600  100   19` = 总周期数 / 跳过周期数 / **每周期值数**，其后 600×19 个
+  **裸数值**（每行 5 个，共 4 行/周期），**无任何字段名**；
+- 列：1-3 = 逐周期 `k(coll) / k(abs) / k(trk)`；4-5 = 逐周期寿命；6-13 = 活跃周期累计平均
+  （三个估计量 + `col/abs/trk` 组合，各带 σ）；14-15 = "跳过前 N-1 个周期"口径的组合均值/σ；
+  16-17 = 平均寿命 ± σ；18 = 每周期源点数；19 = fom。**mctal 不逐周期写 σ**。
+
+**改动**
+- `app/mctal_parser.py`：新增 `_parse_kcode_series`（按列定位；`mean` = 第 1 列逐周期
+  k(collision)，`combined` = 第 12/13 列最后一组非零累计平均，`std` = `[]`）；版本探测认
+  `mcnp <ver>`；**tally 块扫描遇 `kcode` 头即收尾** —— 否则 kcode 的裸数值会被灌进最后一个
+  tally 的 `rows`（真实文件里两者可共存，属同一族的静默污染）。
+- `app/outp_parser.py`：新增 `parse_keff_cycles` —— print table 175 的
+  `individual and average keff estimator results by cycle` 表（表内每 10 行一条 `---` 分隔线；
+  必须与相邻的"不同跳过周期数"表区分，后者靠表头措辞不同天然排除）+ 单行式
+  `cycle N k(collision) X` 兜底；`combined` 取结果段
+  `final estimated combined ... keff = X with an estimated standard deviation of Y`。
+- `app/sweep.py`：`parse_keff_history` 改 mctal → outp 双来源并带出 `combined`；新增
+  `history_keff_std`（逐周期 σ 优先、回落 `combined.std`）与 `scan_run_dir`
+  （取运行目录里第一个能解出 keff/序列的结果文件：`mctal*` → `*mctal*` → `*.m` → `outp*` → `*.o`）。
+- `gui/backend/api_server.py`：`/api/parse-keff` 接受 mctal / outp(`.o`) / 目录（目录走
+  `scan_run_dir`，与扫描侧同一套取舍）。**扫描侧真 bug（同族）**：`sweep-run` 原来
+  `parse_keff(proc.stdout)` —— MCNP 的 keff **只写在结果文件里**（stdout 只有少量提示行）⇒
+  汇总 TSV 的 keff 恒 `n/a`；改为 `scan_run_dir` 读文件（stdout 仅作兜底），dashboard 侧
+  同时回填旧 manifest 缺失的 keff。
+- `gui/src/components/KeffDialog.tsx`：标题/占位符/说明文案改为 mctal / outp(`.o`)。
+- `docs/contracts/api.yaml`：`/api/parse-keff` summary/description 同步（std 可为空数组）。
+
+**证据（可复跑）**
+- 夹具 `tests/fixtures/real_kcode_zeus1.mctal`（141 KB）+ `real_kcode_zeus1.o`（570 KB），
+  两者同一算例：`test_outp_parser.test_keff_cycles_outp_matches_mctal_fixture` 断言
+  **600 周期逐值相等**（容差 1e-5 —— `.o` 只印 5 位小数、mctal 印 6 位有效数字，实测最大差 5e-6）。
+- 最终值三处一致：mctal 累计平均列 `0.992775 ± 0.000356`、`.o` 结果段 `0.99277 ± 0.00036`、
+  `.o` 的 skip=0 行 `0.99292 ± 0.00034`（= mctal 第 14/15 列首周期值）。
+- 新增用例 14：`test_mctal_parser` 3（真实文件 / kcode 块最小复刻 + 截断容错 / 只有 `kcode` 字样不崩）、
+  `test_outp_parser` 5（真实 `.o` / 与 mctal 交叉校验 / 单行式兜底 / 无表返 None / skip 表不混入）、
+  `test_sweep` 6（真实 mctal 与 `.o` 的 history、σ 口径、`scan_run_dir` 三种情形）。
+- handler 级实测（源码后端，进程内调 `MCNPHandler._handle_parse_keff`）：mctal / `.o` / 目录
+  三种入参都返回 `cycles=600, first=1.04435, last=1.00217`。
+- ⚠️ **部署侧**：打包安装版（`D:\MCNP\MCNP输入卡生成器\_internal\`）里的 `app/*.py` 是 spec
+  `_keep_py` 投放的数据文件，`api_server.py` 则冻结在 exe 内 ⇒ 只热替换 `_internal\app\`
+  下三个模块即可让**已安装版**恢复 mctal 的 keff 解析（重启生效）；`.o` 入参与扫描侧 keff
+  修复需要重新打包。
+
+### 续：`/api/choose-file` 的 kind / withContent（同日）
+
+GUI 侧把 keff 解析改成"玻璃卡 + 两个子按钮"（见 `docs/frontend-changes.md`），
+文件选择的**规格**随之落到后端：
+
+- `app/file_dialog.py`（**新**，纯 stdlib 可单测）：`dialog_spec(data)` →
+  `{kind, title, filetypes, with_content}`。三种 kind：`inp`（默认，兼容老调用）/
+  `mctal`（**默认无后缀**：首项过滤 `*`）/ `outp`（`*.o *.outp *.out`）。只认 `kind`，
+  不接受调用方自带 filetypes/title（免开注入面）；返回的 filetypes 是拷贝，防下游改到常量。
+- `gui/mcnp_sidecar.spec`：`_keep_py` 登记 `file_dialog.py`（`_import_app` 动态导入，
+  漏登记 = 打包版端点 500，正是 TD-34 闸门管的那类事故）。
+- `gui/backend/api_server.py:_handle_choose_file`：改用 `_import_app("file_dialog")`；
+  新增 `kind` / `withContent`（默认 true，兼容既有 4 处调用方）；`withContent=false`
+  时只回路径、**不读内容**（keff 解析只要路径，而 outp 可能几百 MB）；无 body 也不再
+  抛 `json.loads("")`（当空 dict 处理，等价老行为）。
+- `docs/contracts/api.yaml`：`/api/choose-file` 补 requestBody（kind 枚举 / withContent）
+  与 `content` 的可选说明；`/api/sweep-dashboard` 描述同步为 `scan_run_dir`。
+- 实测（进程内调 handler、tkinter 换成假弹窗，不真弹窗）：
+
+  | 入参 | 标题 | 首项过滤 | 响应键 |
+  | --- | --- | --- | --- |
+  | `{}`（老调用） | 选择 MCNP INP 文件 | `*.inp *.i *.txt` | path + content(139387 B) |
+  | `{kind:mctal, withContent:false}` | 选择 mctal 文件（通常无扩展名） | `*`（无后缀） | path（**无 content**） |
+  | `{kind:outp, withContent:false}` | 选择 MCNP 输出文件（.o / .outp / .out） | `*.o *.outp *.out` | path（**无 content**） |
+  | `{kind:木星}` | 回落 INP | `*.inp *.i *.txt` | path + content |
+
+- 新增用例：`tests/unit/test_file_dialog.py` 7 例（默认兼容 / mctal 无后缀 / outp /
+  kind 大小写与未知回落 / `withContent` 只认布尔 / filetypes 是拷贝 / 每种 kind 都有
+  "所有文件"兜底），`test_sidecar_spec_keep.py` 的 TD-34 闸门同时覆盖新登记项。
+
+

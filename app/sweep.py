@@ -22,10 +22,14 @@ import os
 import re
 import tempfile
 
-try:
+try:                                   # 源码树 / 打包后 app/ 在 sys.path 上
     from mctal_parser import parse_mctal
-except ImportError:  # 测试/直接 import app 包时在 app/ 下
+except ImportError:                    # 包内导入（import app.sweep）
     from app.mctal_parser import parse_mctal
+try:
+    from outp_parser import parse_keff_cycles
+except ImportError:
+    from app.outp_parser import parse_keff_cycles
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +81,11 @@ def parse_keff(text: str) -> float | None:
 def parse_keff_history(text: str) -> dict | None:
     """提取逐周期 keff 收敛序列（供仪表盘画收敛小图）。
 
-    输入可以是 mctal 文件全文或包含 k-eff 周期行的输出文本；
-    找不到周期序列返回 None。输出 {cycles, mean, std} 与 OWEN
-    RunResults.keff 的收敛字段对齐（缺 combined 不阻断）。
+    输入可以是 mctal（OWEN 式 ``k eff (c)`` 行，或**真实 MCNP6 ``kcode`` 块**）
+    或 outp（``.o``，print table 175 周期表）全文；找不到周期序列返回 None。
+    输出 ``{cycles, mean, std, combined}`` —— ``combined`` 是最终组合 keff 与其 σ
+    （可能为 None）。真实 MCNP 的 mctal/outp **都不逐周期写 σ** ⇒ 此时 ``std``
+    为空列表，最终值看 ``combined``。
     """
     try:
         r = parse_mctal(text)
@@ -89,10 +95,69 @@ def parse_keff_history(text: str) -> dict | None:
                 "cycles": k.get("cycles") or [],
                 "mean": [float(v) for v in k["mean"]],
                 "std": [float(v) for v in (k.get("std") or [])],
+                "combined": k.get("combined"),
             }
     except Exception:
         pass
+    try:
+        h = parse_keff_cycles(text)          # outp(.o) 兜底
+        if h and h.get("mean"):
+            return h
+    except Exception:
+        pass
     return None
+
+
+def history_keff_std(hist: dict | None) -> float | None:
+    """从 ``parse_keff_history`` 结果里取"最终值的 σ"。
+
+    逐周期 σ（``std``）只在 OWEN 式 mctal 里有；真实 MCNP 的 mctal/outp 只有
+    最终组合值的 σ（``combined.std``）⇒ 逐周期为空时回落到它。
+    """
+    if not hist:
+        return None
+    std = hist.get("std") or []
+    if std:
+        return float(std[-1])
+    combined = hist.get("combined") or {}
+    return None if combined.get("std") is None else float(combined["std"])
+
+
+def scan_run_dir(run_dir: str) -> dict:
+    """扫描一次运行目录里的 MCNP 结果文件 → ``{"path","text","keff","history"}``。
+
+    MCNP 把 keff / 收敛序列写在结果文件里（``mctal``，或 ``name=`` 前缀下的
+    outp ``*.o``），**stdout 只有少量提示行** ⇒ 取 keff 必须读文件（早先只解析
+    ``proc.stdout`` 时，扫描汇总表的 keff 恒为 ``n/a``）。
+
+    按 mctal → outp 的顺序取第一个"能解出 keff 或收敛序列"的文件；都解不出
+    （超时/崩溃/未跑）时返回全空结构。
+    """
+    import glob
+    empty = {"path": None, "text": "", "keff": None, "history": None}
+    if not run_dir or not os.path.isdir(run_dir):
+        return empty
+    seen: set[str] = set()
+    first_text = ""
+    for pattern in ("mctal*", "*mctal*", "outp*", "*.o"):
+        for path in sorted(glob.glob(os.path.join(run_dir, pattern))):
+            if path in seen or not os.path.isfile(path):
+                continue
+            seen.add(path)
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+            except OSError:
+                continue
+            if not text.strip():
+                continue
+            if not first_text:
+                first_text = text
+            keff = parse_keff(text)
+            hist = parse_keff_history(text)
+            if keff is not None or hist:
+                return {"path": path, "text": text, "keff": keff, "history": hist}
+    return {**empty, "text": first_text}
 
 
 def cartesian(parameters: list[dict]) -> list[dict]:
@@ -278,7 +343,8 @@ def build_summary_tsv(parameters: list[dict], records: list[dict]) -> str:
 
 
 __all__ = [
-    "parse_keff", "parse_keff_history", "cartesian", "apply_parameters", "run_dir_name",
+    "parse_keff", "parse_keff_history", "history_keff_std", "scan_run_dir",
+    "cartesian", "apply_parameters", "run_dir_name",
     "build_manifest", "build_summary_tsv",
     "sweep_budget_status", "persist_sweep_summary", "cleanup_sweep_dir",
 ]
