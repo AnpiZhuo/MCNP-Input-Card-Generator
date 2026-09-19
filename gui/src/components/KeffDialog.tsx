@@ -87,7 +87,8 @@ export default function KeffDialog({ onClose }: { onClose: () => void }) {
    * 否则脱离文档后整片变黑。
    */
   const chartRef = useRef<HTMLDivElement>(null);
-  const grabChartSvg = () => snapshotSvg(chartRef.current?.querySelector("svg") as SVGSVGElement | null, { background: "#ffffff" });
+  // 出图走透明底：原先这里硬铺白矩形，与"该透明的透明"口径冲突
+  const grabChartSvg = () => snapshotSvg(chartRef.current?.querySelector("svg") as SVGSVGElement | null);
 
   return (
     <FloatingDialog

@@ -14,6 +14,7 @@
  */
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { captureTransparent3D } from "../export/captureFrame";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { computeCameraParams, type CameraParams } from "../three/cameraParams";
 import { createRenderLoop } from "../three/renderGate";
@@ -92,6 +93,8 @@ export interface VolumeRendererHandle {
    * （见 `export/captureFrame` 的模块说明）。
    */
   renderNow(): HTMLCanvasElement;
+  /** 出图用：同步画一帧**透明底**帧并交出 canvas（不改屏幕观感） */
+  renderTransparentNow(): HTMLCanvasElement;
   dispose(): void;
   markDirty(): void;
 }
@@ -198,7 +201,8 @@ export function createVolumeRenderer(
   const camera = new THREE.PerspectiveCamera(45, w / h, initCam.near, initCam.far);
   camera.up.set(0, 0, 1); // Z-up
 
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+  // alpha:true 是出图透明底的前提（见 captureFrame.captureTransparent3D）；屏幕观感不变
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "high-performance" });
   renderer.setSize(w, h, false);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
@@ -449,6 +453,13 @@ export function createVolumeRenderer(
     renderNow(): HTMLCanvasElement {
       renderer.render(scene, camera);
       return canvas;
+    },
+    /**
+     * 出图用：同步画一帧**透明底**帧并交出画布。
+     * 细节（为什么要改场景背景 + 清屏 alpha + 立刻还原）见 `export/captureFrame`。
+     */
+    renderTransparentNow(): HTMLCanvasElement {
+      return captureTransparent3D(canvas, renderer, scene, () => renderer.render(scene, camera)) ?? canvas;
     },
     dispose() {
       clearTimer();

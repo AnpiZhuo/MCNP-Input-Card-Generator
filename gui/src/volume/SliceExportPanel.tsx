@@ -231,7 +231,8 @@ export default function SliceExportPanel({ frame, displayMin, scalarBox, plane: 
   };
 
   /**
-   * 出图：**位图热图作底 + 真矢量等值线**，走纯矢量出口（PDF+SVG、论文配色、透明底）。
+   * 出图：**位图热图作底 + 真矢量等值线**，组合后按 2× 栅格成**透明底 PNG**
+   * （热图自身带白底，见下方 heatBase；图与页面的其余留白保持透明）。
    *
    * ⚠️ 轴与层号**必须从传入的 `p` 现算**，不能用组件闭包里的 `axis/sliceIndex`：
    * 成叠导出会一次性遍一叠平面，闭包值永远是"当前屏幕上那一片"——
@@ -287,7 +288,10 @@ export default function SliceExportPanel({ frame, displayMin, scalarBox, plane: 
       ]);
     }
 
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${heatLayer}${contours}</svg>`;
+    // 热图是"整幅颜色填充"的图：**必须**自带白底，否则透明 PNG 透出底色后
+    // 颜色与色阶刻度对不上（白底只铺在热图范围内，图与页面的其余留白仍透明）。
+    const heatBase = heatLayer ? `<rect x="0" y="0" width="${width}" height="${height}" fill="#ffffff"/>` : "";
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${heatBase}${heatLayer}${contours}</svg>`;
     return {
       view: "fmesh切面",
       nameParts: [tag],

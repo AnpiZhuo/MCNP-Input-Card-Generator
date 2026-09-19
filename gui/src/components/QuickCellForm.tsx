@@ -3,8 +3,18 @@
  *
  * - 所有数值输入框默认空；空值按 0 处理（分块类环数/段数/份数/壳数按 1）
  * - 材料默认 M0 真空；材料为 0 时生成需自定义确认弹窗（酷炫风格，贴合主题）
+ * - 重合检测**恒开**（2026-09-19 用户裁决：删掉勾选框、默认就检测）——静默不检测会让用户丢几何
  * - onConfigChange 把当前形状/配置/材料回调给宿主（画线框预览）
  * - keepOpenAfterGenerate=true（3D 预览侧栏）生成后表单保持，由宿主决定何时恢复
+ *
+ * ## 版面约束（改这个文件前先读）
+ * 本表单的每一行都是「标签列 64px + 3 个字段列 70px + 间距」的**固定像素**排版，
+ * 最宽一行（切分：X 份/Y 份/Z 份）实测需要 **356px**。所以宿主给它的宽度**必须 ≥360px**。
+ * 两个宿主的实际可用宽度（2026-09-19 排版审计实测）：
+ *   - `QuickCellDialog` 左侧列 `width:380` → 表单 **376px** ✅ 有余量
+ *   - `Preview3D` 右侧栏 `width:300` → 表单 **271px** ❌ 曾溢出 43px 被 `overflow-x:hidden` 裁掉；
+ *     现已改为「打开快捷建栅元时侧栏加宽到 400px」（`Preview3D.QUICK_CELL_PANEL_W`）⇒ 371px ✅
+ * 再往窄处塞之前，先把这里改成自适应排版，别只调宿主宽度。
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -35,8 +45,17 @@ interface QuickCellFormProps {
 }
 
 const style: Record<string, React.CSSProperties> = {
-  row: { display: "flex", gap: 10, marginBottom: 8, alignItems: "flex-end" },
+  /**
+   * ⚠️ `alignItems` 必须是 `flex-start`（曾为 `flex-end`）。
+   * 每一行是「行标签列 + N 个"字段标签在上、输入框在下"的纵列」：
+   * `flex-end` 会把行标签推到与**输入框底边**对齐 ⇒ 行标签（底面中心）比字段标签（X）
+   * 低一格，视觉上整片标签参差错半格（2026-09-19 排版审计实测）。
+   * 顶端对齐才是"行标签与字段标签同一基线"的正常读法。
+   */
+  row: { display: "flex", gap: 10, marginBottom: 8, alignItems: "flex-start" },
   grp: { display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 0 },
+  /** 行首标签列：与字段标签同高对齐，不参与换行挤压 */
+  rowLabel: { flexShrink: 0, paddingTop: 1, whiteSpace: "nowrap" },
   lbl: { fontSize: 10, fontWeight: 500, color: "var(--text-tertiary)" },
   inp: {
     height: 28, padding: "0 8px", borderRadius: 5, border: "1px solid var(--border-glass)",
@@ -89,7 +108,6 @@ export default function QuickCellForm({
   const [impN, setImpN] = useState("0");
   const [impP, setImpP] = useState("0");
   const [impE, setImpE] = useState("0");
-  const [checkOverlap, setCheckOverlap] = useState(true);
   const [confirmVoid, setConfirmVoid] = useState(false);
 
   const config = useMemo(() => {
@@ -169,7 +187,8 @@ export default function QuickCellForm({
       surfacesText, trCardsText, cellNumbers, materials, material,
       impN, impP, impE, modeN, modeP, modeE,
     });
-    result.checkOverlap = checkOverlap;
+    // 重合检测恒开（用户 2026-09-19 裁决：去掉勾选框，默认就检测 —— 静默不检测会让用户丢几何）
+    result.checkOverlap = true;
     onGenerate(result);
     if (!keepOpenAfterGenerate) onCancel?.();
   };
@@ -183,7 +202,8 @@ export default function QuickCellForm({
 
   const numRow = (label: string, fields: { key: string; ph: string; w?: number }[], vals: Record<string, string>, set: (k: string, v: string) => void) =>
     React.createElement("div", { style: style.row, key: label },
-      React.createElement("div", { style: { ...style.grp, maxWidth: 64 } },
+      /* 行首标签列固定 64px 且不换行（"半径 / 切分"曾因 flex 收缩被压成两行、紧贴字段） */
+      React.createElement("div", { style: { ...style.rowLabel, width: 64 } },
         React.createElement("label", { style: style.lbl }, label),
       ),
       fields.map((f) =>
@@ -252,8 +272,8 @@ export default function QuickCellForm({
     return React.createElement(React.Fragment, null,
       numRow("尺寸", [{ key: "L", ph: "长 L" }, { key: "W", ph: "宽 W" }, { key: "H", ph: "高 H" }], rpp, (k, v) => setRpp((p) => ({ ...p, [k]: v }))),
       numRow("中心", [{ key: "cx", ph: "X" }, { key: "cy", ph: "Y" }, { key: "cz", ph: "Z" }], rpp, (k, v) => setRpp((p) => ({ ...p, [k]: v }))),
-      React.createElement("div", { style: style.row },
-        React.createElement("div", { style: { ...style.grp, maxWidth: 64 } },
+      React.createElement("div", { style: style.row, key: "size" },
+        React.createElement("div", { style: { ...style.rowLabel, width: 64 } },
           React.createElement("label", { style: style.lbl }, "倾斜角"),
         ),
         angleFields.map((f) =>
@@ -295,7 +315,7 @@ export default function QuickCellForm({
     ),
     inputGroup(),
     React.createElement("div", { style: { ...style.row, marginTop: 8 } },
-      React.createElement("div", { style: { ...style.grp, maxWidth: 150 } },
+      React.createElement("div", { style: { ...style.grp, maxWidth: 150, overflow: "hidden" } },
         React.createElement("label", { style: style.lbl }, "材料"),
         React.createElement("select", {
         className: "form-select",
@@ -307,20 +327,14 @@ export default function QuickCellForm({
           materials.map((m) => React.createElement("option", { key: m.number, value: String(m.number) }, `M${m.number}${m.comment ? " — " + m.comment : ""}`)),
         ),
       ),
-      React.createElement("div", { style: { ...style.grp, maxWidth: 200 } },
+      /* IMP 三格：`width:100%` 的输入框在 flex 列里会按内容撑宽，必须允许收缩（minWidth:0），
+         否则整行 scrollWidth 超出行宽（实测 356 vs 331）——虽只溢 2px 可见，仍是版面噪声 */
+      React.createElement("div", { style: { ...style.grp, maxWidth: 200, minWidth: 0 } },
         React.createElement("label", { style: style.lbl }, "IMP（默认 0；留空按基础页填1）"),
-        React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", height: 28 } },
+        React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", height: 28, minWidth: 0 } },
           impInput("N", impN, setImpN),
           impInput("P", impP, setImpP),
           impInput("E", impE, setImpE),
-        ),
-      ),
-      React.createElement("div", { style: { ...style.grp, maxWidth: 170 } },
-        React.createElement("label", { style: style.lbl }, "重合检测"),
-        React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", height: 28 } },
-          React.createElement("label", { style: { fontSize: 11, color: "var(--text-secondary)", display: "flex", gap: 3, alignItems: "center" } },
-            React.createElement("input", { type: "checkbox", checked: checkOverlap, onChange: (e) => setCheckOverlap(e.target.checked) }),
-            "添加时检测与已有栅元重合"),
         ),
       ),
     ),

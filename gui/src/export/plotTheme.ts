@@ -111,13 +111,23 @@ export function themeFor(kind: PlotThemeKind = "paper"): PlotTheme {
 /**
  * 3D 场景背景 → 出图用背景。
  *
- * 3D 用的是 WebGL 光栅渲染，**没法做矢量、也不做调色板反转**（材料的亮色在深色场景里
- * 是对的，反色会让图与屏幕对不上）。所以 3D 出图只做两件事：换白底 / 透明底，
- * 以及把坐标轴刻度文字改成深色。本函数给前者用。
+ * 3D 用的是 WebGL 光栅渲染，**没法做矢量**。所以 3D 出图做三件事：换底（透明底 / 白底）、
+ * 把**场景底色**清成透明、以及把**刻度与轴**换成印刷墨色。
+ *
+ * ## 3D 的"论文配色"是怎么落地的（2026-09-19 补齐）
+ * 刻度标签的底色与字色烧在 `CanvasTexture` 里（`three/TickGrid`），轴字母同理，
+ * 材料色则由 `cellMaterial` 直接上到材质 —— 三者的取色点各不相同，所以：
+ * - 场景底色：`captureFrame.captureTransparent3D` 在这一帧里置空 + `alpha=0` 清屏；
+ * - 刻度/轴线/轴字母：`Preview3D.renderTransparentNow` 切到 `axisConfig.paperInk`
+ *   （刻度标签同时切 `TickGrid.setLabelTheme("paper")`：**透明底 + 深色字**，
+ *   不再有屏幕上的深色药丸方块）；
+ * - 材料色：**不动**（色相必须与屏幕一一对应，否则用户没法照着屏幕认图）。
+ *
+ * 以上都只发生在**取图那一帧**内，屏幕观感不变。
  */
 export function sceneBackgroundFor(kind: PlotThemeKind): number | null {
   const t = themeFor(kind);
-  if (t.background === null) return null; // 透明：调用方用 alpha 清屏
+  if (t.background === null) return null; // 透明：调用方用 alpha=0 清屏
   return parseInt(t.background.replace("#", ""), 16);
 }
 
@@ -126,4 +136,29 @@ export function rgbOf(hex: string): { r: number; g: number; b: number } {
   const h = hex.replace("#", "");
   const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h, 16);
   return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+/**
+ * hex → WebGL/three 用的 0xRRGGBB。
+ *
+ * 为什么要这个函数：3D 视图的**场景底色**是 `new THREE.Color(0x0d0d22)` 这种数值，
+ * 而主题里的 `background` 是 `"#0a0a1e"` 字符串。出图要把场景底色临时换成透明，
+ * 从主题取色时就必须走这一条转换 —— 别在各窗口里再写一遍 `parseInt(...)`。
+ */
+export function hexToInt(hex: string): number {
+  return parseInt(hex.replace("#", ""), 16);
+}
+
+/**
+ * 截图/出图时的清屏色（`THREE.WebGLRenderer` 的 `setClearColor` 参数）。
+ *
+ * ⚠️ `preserveDrawingBuffer:false` 的 WebGL 画布，**未清屏的像素是未定义的**。
+ * 所以"透明出图"不能只把 `scene.background` 设成 null —— 必须**显式**清成
+ * `alpha = 0`，否则取到的帧可能带着上一帧或垃圾值。这就是本函数返回四元组的原因。
+ */
+export function clearColorFor(kind: PlotThemeKind): [number, number, number, number] {
+  const bg = themeFor(kind).background;
+  if (bg === null) return [0, 0, 0, 0];
+  const { r, g, b } = rgbOf(bg);
+  return [r / 255, g / 255, b / 255, 1];
 }

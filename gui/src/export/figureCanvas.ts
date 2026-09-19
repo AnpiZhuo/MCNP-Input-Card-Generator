@@ -65,7 +65,38 @@ export interface FigureSpec {
   theme?: "paper" | "screen";
   /** 内容区高度（像素）；缺省 420。所有面板按此高度等比缩放，行内对齐 */
   contentHeight?: number;
+  /**
+   * 面板最长边的上限（像素，缺省 `PRINT_MAX_PANEL_SIDE`）。
+   *
+   * 为什么要有这一条：面板尺寸原先**完全跟着源画布走** —— 3D 视图的 WebGL 画布
+   * 是「窗口再乘 DPR」，同一张卡在不同人机器上导出的图尺寸能差一倍（实测见过
+   * 280×233 与 609×822 两种）。出图是**交付物**，尺寸不该由谁的窗口大决定。
+   * 这里只做"缩到不再超过上限"，源本来就小就原样用，不做放大。
+   */
+  maxPanelSide?: number;
+  /**
+   * 底色：缺省 `null`（**透明**）。
+   *
+   * PNG 支持 alpha，透明底叠在任意底色上都干净，所以默认透明；
+   * "整幅颜色填充"的图（fmesh 切面热图）由调用方显式传 `"#ffffff"`。
+   * 与 `renderFigure(spec, { background })` 的同名选项等价，写进 spec 是为了
+   * 让"这张图要不要白底"这条决策跟图一起走，而不是散在门面里。
+   */
+  background?: string | null;
 }
+
+/**
+ * 出图版面的**印张基准**：任意面板最长边不超过这个像素数。
+ *
+ * 依据：导出栅格一律 2×（见 `exportFigure.RASTER_SCALE`），
+ * 所以 640 → 1280px 实物图；按论文双栏 96 mm 摆放时约 340 dpi，
+ * 标题（15px × 2）约 9 pt —— 缩放后仍然读得清。在此之前 3D 图会按画布原始
+ * 尺寸出图，窄窗口下能导出 609×822 的竖长条，字却只有 6 pt。
+ */
+export const PRINT_MAX_PANEL_SIDE = 640;
+
+/** 内容区高度上限：竖长条画面不许把版面撑成"一米长的图" */
+const PRINT_MAX_CONTENT_HEIGHT = 560;
 
 export interface FigureLayout {
   canvas: HTMLCanvasElement;
@@ -91,62 +122,105 @@ export function colorbarTicks(min: number, max: number, n = 4): number[] {
 
 const LEGEND_ROW_H = 22;
 const LEGEND_MAX_ROWS = 14;
+const LEGEND_SWATCH = 10;
+const LEGEND_TEXT_GAP = 4;
 
 /**
-
-/** 图例面板的实测尺寸（列数按条目数自适应，超过上限则截断并注明"等 N 项"） */
+ * 图例面板的实测尺寸。
+ *
+ * ⚠️ **单列竖排，不分成两列**。历史实现是"每行两个条目"，
+ * 于是两条短标签就被排在两个相隔 90px 的列上、图例面板因此恒有半幅空白；
+ * 实测一张 560px 宽的 3D 导出图里，右侧约 35% 是"只有第二列小字"的死区。
+ * 论文图的图例本来就该是竖排列表，这里不再按条目数改列数。
+ *
+ * 宽度按最长文字估（中文字宽≈字号，ASCII≈0.55 字号，与 `estimateTextWidth` 同口径）。
+ */
 function legendMetrics(panel: Extract<FigurePanel, { kind: "legend" }>, theme: PlotTheme) {
   const total = panel.items.length;
   const shown = panel.items.slice(0, LEGEND_MAX_ROWS);
   const truncated = total - shown.length;
-  // 每行最多两个条目，条目宽按最长文字估
-  const rows = Math.ceil((shown.length + (truncated > 0 ? 1 : 0)) / 2);
-  const longest = shown.reduce((m, it) => Math.max(m, it.label.length), 6);
-  const width = Math.max(150, Math.min(240, 26 + longest * theme.page.tickSize * 0.62) * 2);
+  const rows = shown.length + (truncated > 0 ? 1 : 0);
+  const longest = shown.reduce((m, it) => estimateLabelWidth(it.label, theme.page.tickSize), 0);
+  const width = Math.round(Math.max(120, Math.min(260, LEGEND_SWATCH + LEGEND_TEXT_GAP + longest + 12)));
   const height = Math.max(LEGEND_ROW_H * 2, rows * LEGEND_ROW_H + 8);
   return { width, height, shown, truncated, rows };
+}
+
+/** 标签宽度估算（中文字宽 = 字号，ASCII = 0.55 字号） */
+function estimateLabelWidth(text: string, fontSize: number): number {
+  let w = 0;
+  for (const ch of String(text)) w += /[\u2E80-\u9FFF\uFF00-\uFFEF]/.test(ch) ? fontSize : fontSize * 0.55;
+  return w;
 }
 
 /**
  * 排版并画出一整张图（栅格）。返回的 canvas 可直接编码 PNG。
  *
  * 版面：标题（+副标题）→ 内容行（各面板等高、居中、水平排列）→ 脚注。
- * 每栏之间有分隔线；论文主题是透明底（用白底导 PNG 由调用方在 `background` 决定）。
+ * 每栏之间有分隔线。
+ *
+ * **底色默认透明**（`opts.background` 缺省 null）—— 出图一律 PNG，PNG 支持 alpha，
+ * 透明底叠在任意底色上都干净；确实需要白底的调用方显式传 `"#ffffff"`。
  */
 export function renderFigure(spec: FigureSpec, opts: { background?: string | null } = {}): FigureLayout {
   const theme = themeFor(spec.theme ?? "paper");
-  const bg = opts.background !== undefined ? opts.background : "#ffffff";
+  const bg = opts.background !== undefined ? opts.background : null;
   const pad = theme.page.padding;
   const gap = 16;
-  const contentH = spec.contentHeight ?? 420;
+  const maxSide = Math.max(120, spec.maxPanelSide ?? PRINT_MAX_PANEL_SIDE);
 
-  // ── 单遍量测：每个面板按统一内容高度等比缩放后的尺寸 ──
+  // ── 单遍量测：先把每个面板按"最长边不超过 maxSide"缩到印张基准，再共用同一内容高度 ──
   type Measured = { panel: FigurePanel; w: number; h: number; heading?: string };
-  const measured: Measured[] = spec.panels.map((panel) => {
+  const sized = spec.panels.map((panel) => {
     if (panel.kind === "image") {
-      const ar = panel.canvas.width / Math.max(1, panel.canvas.height);
-      return { panel, w: Math.max(40, Math.round(contentH * ar)), h: contentH, heading: panel.heading };
+      const cw = Math.max(1, panel.canvas.width);
+      const ch = Math.max(1, panel.canvas.height);
+      // 只缩不放：源画布本来就小就原样用（放大会糊）
+      const s = Math.min(1, maxSide / Math.max(cw, ch));
+      return { panel, ar: cw / ch, w: Math.max(40, Math.round(cw * s)), h: Math.max(40, Math.round(ch * s)), heading: panel.heading };
     }
     if (panel.kind === "svg") {
       // 等比用**用户坐标范围**（viewBox 优先）算长宽比：只按 width/height 会与
       // 负原点/用户单位的 SVG 不一致（截面窗口导出的 SVG 正是这种）。
       const vb = splitSvg(panel.svg).viewBox;
       const sw = vb ? vb[2] : panel.width;
-      const sh = vb ? vb[3] : panel.height;
-      const ar = sw / Math.max(1e-9, sh);
-      return { panel, w: Math.max(40, Math.round(contentH * ar)), h: contentH, heading: panel.heading };
+      const sh = Math.max(1e-9, vb ? vb[3] : panel.height);
+      const s = Math.min(1, maxSide / Math.max(sw, sh));
+      return { panel, ar: sw / sh, w: Math.max(40, Math.round(sw * s)), h: Math.max(40, Math.round(sh * s)), heading: panel.heading };
     }
     if (panel.kind === "colorbar") {
-      return { panel, w: 220, h: contentH, heading: panel.heading };
+      return { panel, ar: 0, w: 0, h: 0, heading: panel.heading };
     }
     const m = legendMetrics(panel, theme);
-    return { panel, w: m.width, h: contentH, heading: panel.heading };
+    return { panel, ar: 0, w: m.width, h: m.height, heading: panel.heading };
+  });
+
+  // 内容高度 = 最高的位图面板（钳到上限），缺省用调用方的 contentHeight
+  const naturalH = Math.max(0, ...sized.filter((s) => s.h > 0).map((s) => s.h));
+  const contentH = Math.min(PRINT_MAX_CONTENT_HEIGHT, Math.max(160, naturalH || (spec.contentHeight ?? 420)));
+
+  const measured: Measured[] = sized.map((s) => {
+    if (s.panel.kind === "image" || s.panel.kind === "svg") {
+      // 面板框 = 等比缩放到内容高度（图不会被拉伸；窄画面两侧留白）
+      return { panel: s.panel, w: Math.max(40, Math.round(contentH * s.ar)), h: contentH, heading: s.heading };
+    }
+    if (s.panel.kind === "colorbar") {
+      return { panel: s.panel, w: 220, h: contentH, heading: s.heading };
+    }
+    return { panel: s.panel, w: s.w, h: contentH, heading: s.heading };
   });
 
   const contentW = measured.reduce((s, m) => s + m.w, 0) + gap * Math.max(0, measured.length - 1);
   const headH = spec.title ? theme.page.titleSize + 10 + (spec.subtitle ? theme.page.labelSize + 8 : 0) : 0;
-  const capH = spec.caption ? theme.page.captionSize + 12 : 0;
   const width = Math.max(320, Math.round(contentW + pad * 2));
+
+  // 脚注可能很长：先按可用宽度折行，再据实际行数算高度（原先单行直接画出边界外）
+  const capLines: string[] = [];
+  if (spec.caption) {
+    ctxProbe.font = `${theme.page.captionSize}px ${theme.fontFamily}`;
+    capLines.push(...wrapText(ctxProbe, spec.caption, width - pad * 2));
+  }
+  const capH = capLines.length ? capLines.length * (theme.page.captionSize + 4) + 8 : 0;
   const height = Math.round(pad + headH + contentH + capH + pad);
 
   const canvas = document.createElement("canvas");
@@ -196,16 +270,77 @@ export function renderFigure(spec: FigureSpec, opts: { background?: string | nul
     x += m.w + gap;
   });
 
-  // ── 脚注 ──
-  if (spec.caption) {
+  // ── 脚注（可多行；行数在量测阶段已经算出） ──
+  if (capLines.length) {
     ctx.fillStyle = theme.caption;
     ctx.font = `${theme.page.captionSize}px ${theme.fontFamily}`;
     ctx.textAlign = "left";
     ctx.textBaseline = "bottom";
-    ctx.fillText(spec.caption, pad, height - pad);
+    const lineH = theme.page.captionSize + 4;
+    capLines.forEach((line, i) => {
+      ctx.fillText(line, pad, height - pad - (capLines.length - 1 - i) * lineH);
+    });
   }
 
   return { canvas, width, height };
+}
+
+/**
+ * 量文字用的探针 ctx。
+ *
+ * canvas 的 `measureText` 必须挂在某个 2D 上下文上；拿不到（jsdom 无 canvas 包）
+ * 时退回 `vectorFigure.estimateTextWidth` 的粗估，**不因此抛错**——
+ * 出图链路里"少一次精确量宽"远好过"整张图导不出来"。
+ */
+let probeCtx: CanvasRenderingContext2D | null | undefined;
+const ctxProbe: { font: string; measureText(t: string): { width: number } } = {
+  font: "",
+  measureText(t: string) {
+    if (probeCtx === undefined) {
+      try {
+        probeCtx = document.createElement("canvas").getContext("2d");
+      } catch {
+        probeCtx = null;
+      }
+    }
+    if (probeCtx) {
+      probeCtx.font = this.font;
+      return probeCtx.measureText(t);
+    }
+    const size = parseFloat(/(\d+(?:\.\d+)?)px/.exec(this.font)?.[1] ?? "10") || 10;
+    return { width: estimateLabelWidth(t, size) };
+  },
+};
+
+/**
+ * 按像素宽度折行（中文按字断，ASCII 尽量按空格断）。
+ *
+ * 为什么不用 canvas 自带的换行：**canvas 没有自动换行**。原先脚注是单行 `fillText`，
+ * 实测 55 个中文字符就会顶到画面边缘、再长直接出界（图注是唯一承载"数据来源/参数"
+ * 的地方，被截掉等于信息丢失）。
+ */
+export function wrapText(
+  ctx: { measureText(t: string): { width: number } },
+  text: string,
+  maxWidth: number,
+): string[] {
+  if (!text) return [];
+  if (maxWidth <= 0 || ctx.measureText(text).width <= maxWidth) return [text];
+  const lines: string[] = [];
+  let line = "";
+  const pushLine = () => { if (line) { lines.push(line); line = ""; } };
+  // 先按"可断点"切段：ASCII 单词整体不断，中文逐字可断
+  for (const token of String(text).match(/[\u2E80-\u9FFF\uFF00-\uFFEF]|[^\s\u2E80-\u9FFF\uFF00-\uFFEF]+|\s+/g) ?? []) {
+    const tryLine = line + token;
+    if (ctx.measureText(tryLine).width <= maxWidth || !line) {
+      line = tryLine;
+      continue;
+    }
+    pushLine();
+    line = token.replace(/^\s+/, "");
+  }
+  pushLine();
+  return lines.length ? lines : [text];
 }
 
 function headingHeight(theme: PlotTheme): number {
@@ -284,21 +419,19 @@ function drawLegend(ctx: CanvasRenderingContext2D, panel: Extract<FigurePanel, {
   ctx.font = `${theme.page.tickSize}px ${theme.fontFamily}`;
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
-  const colW = w / 2;
   const top = y + 6;
   const entries: { color: string; label: string }[] = [...m.shown];
   if (m.truncated > 0) entries.push({ color: theme.textMuted, label: `…等 ${panel.items.length} 项` });
   entries.forEach((it, i) => {
-    const cx = x + (i % 2) * colW;
-    const cy = top + Math.floor(i / 2) * LEGEND_ROW_H + LEGEND_ROW_H / 2;
+    const cy = top + i * LEGEND_ROW_H + LEGEND_ROW_H / 2;
     if (cy > y + h) return;
     ctx.fillStyle = it.color;
-    ctx.fillRect(cx, cy - 5, 10, 10);
+    ctx.fillRect(x, cy - 5, LEGEND_SWATCH, LEGEND_SWATCH);
     ctx.strokeStyle = theme.border;
     ctx.lineWidth = 1;
-    ctx.strokeRect(cx, cy - 5, 10, 10);
+    ctx.strokeRect(x, cy - 5, LEGEND_SWATCH, LEGEND_SWATCH);
     ctx.fillStyle = theme.text;
-    ctx.fillText(clip(ctx, it.label, colW - 18), cx + 14, cy);
+    ctx.fillText(clip(ctx, it.label, w - LEGEND_SWATCH - 6), x + LEGEND_SWATCH + LEGEND_TEXT_GAP, cy);
   });
 }
 
@@ -330,13 +463,15 @@ function drawColorbar(ctx: CanvasRenderingContext2D, panel: Extract<FigurePanel,
     ctx.lineTo(bx + barW + 5, ty);
     ctx.stroke();
     ctx.fillStyle = theme.text;
-    ctx.fillText(fmt(t), bx + barW + 9, ty);
+    ctx.fillText(clip(ctx, fmt(t), w - (bx - x) - barW - 12), bx + barW + 9, ty);
   });
   ctx.fillStyle = theme.textMuted;
   ctx.font = `600 ${theme.page.tickSize}px ${theme.fontFamily}`;
   ctx.textAlign = "left";
   ctx.textBaseline = "bottom";
-  ctx.fillText(clip(ctx, panel.unit, w - 12), x + 4, by + barH + 26);
+  // 单位写在色带下方；位置按"色带走完后 26px"，但**不越过面板底边**（长单位名原先会压出框外）
+  const unitY = Math.min(by + barH + 26, y + h - 2);
+  ctx.fillText(clip(ctx, panel.unit, w - 12), x + 4, unitY);
 }
 
 /** 在色带上取色（线性插值；t∈[0,1]） */

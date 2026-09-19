@@ -30,7 +30,14 @@ export function useThreeCanvas(background = 0x0d0d22) {
     scene.background = new THREE.Color(background);
     const camera = new THREE.PerspectiveCamera(45, w / h, 0.01, 1e5);
     camera.up.set(0, 0, 1); // Z 朝上（数学/物理/MCNP 惯例）
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+    /**
+     * ⚠️ `alpha: true` 是**出图透明底**的前提（2026-09-19）。
+     * 出图时要把这一帧清成 `alpha = 0`（见 `captureFrame.captureTransparent3D`），
+     * 而 drawing buffer 没有 alpha 通道时，`setClearColor(_, 0)` 只会得到黑底 ——
+     * 透明 PNG 就会变成"黑底 PNG"。开 alpha 对屏幕观感无影响：
+     * 场景 `background` 是实色，正常渲染时不透明。
+     */
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "high-performance" });
     renderer.setSize(w, h, false);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     const controls = new OrbitControls(camera, canvas);

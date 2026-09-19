@@ -32,6 +32,15 @@ export interface TextureFactory {
   (label: string, color: number): THREE.Texture;
 }
 
+/**
+ * 刻度标签的两种底：`screen` 深色药丸（给深色场景）/ `paper` 透明底（给出图）。
+ *
+ * 为什么要有这一条：标签是画进 **CanvasTexture** 的，底色与字色一起被烧进纹理。
+ * 原来只有一种：`rgba(0,0,0,0.4)` 药丸 + 亮色字 —— 出透明底图时，那块黑药丸
+ * 会变成一个个挂在白纸上的深色方块（实测观感"像大黑痣"）。出图必须换成透明底 + 深色字。
+ */
+export type TickLabelTheme = "screen" | "paper";
+
 export interface TickGridAxis {
   dir: [number, number, number];
   color: number;
@@ -48,25 +57,47 @@ export interface RebuildResult {
 
 export interface TickGrid {
   rebuild(opts: { dist: number; axes: TickGridAxis[] }): RebuildResult;
+  /**
+   * 取出图用的标签底（透明底 + 深色字）。**只影响后续 rebuild 新建的纹理**，
+   * 调用方改完主题要自己再 `rebuild` 一次（见各渲染器的 `renderTransparentNow`）。
+   */
+  setLabelTheme(theme: TickLabelTheme): void;
   dispose(): void;
 }
 
-/** 默认纹理工厂：canvas 画黑底标签（依赖注入的兜底实现） */
-function defaultTextureFactory(label: string, color: number): THREE.Texture {
-  const c = document.createElement("canvas");
-  c.width = 128;
-  c.height = 48;
-  const ctx = c.getContext("2d");
-  if (ctx) {
-    ctx.fillStyle = "rgba(0,0,0,0.4)";
-    ctx.fillRect(0, 4, 128, 40);
-    ctx.fillStyle = "#" + color.toString(16).padStart(6, "0");
-    ctx.font = "Bold 28px Arial";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(label, 64, 26);
-  }
-  return new THREE.CanvasTexture(c);
+/** 把 0xRRGGBB 转成 CSS 颜色 */
+function hex(v: number): string {
+  return "#" + v.toString(16).padStart(6, "0");
+}
+
+/**
+ * 默认纹理工厂：把刻度标签画成一张画布纹理。
+ *
+ * - `screen`：深色半透明药丸 + 亮色字（深色场景里可读）
+ * - `paper`：**透明底** + 深色字（出图用；没有药丸，不会在白底上留黑块）
+ */
+function makeTextureFactory(theme: TickLabelTheme): TextureFactory {
+  return (label: string, color: number): THREE.Texture => {
+    const c = document.createElement("canvas");
+    c.width = 128;
+    c.height = 48;
+    const ctx = c.getContext("2d");
+    if (ctx) {
+      if (theme === "screen") {
+        ctx.fillStyle = "rgba(0,0,0,0.4)";
+        ctx.fillRect(0, 4, 128, 40);
+      }
+      ctx.fillStyle = hex(color);
+      ctx.font = "Bold 28px Arial";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, 64, 26);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    // 透明底纹理必须开透明，否则透明像素可能被当黑
+    tex.premultiplyAlpha = theme === "paper";
+    return tex;
+  };
 }
 
 /** 轴的垂直基向量（与既有轴顺序 X/Z/Y 的 perp 选择一致） */
@@ -87,7 +118,10 @@ export function createTickGrid(
   group: THREE.Group,
   createTexture?: TextureFactory,
 ): TickGrid {
-  const texFactory = createTexture ?? defaultTextureFactory;
+  // 注入了工厂就永远用注入的那个（测试记账用）；否则按当前主题取默认工厂
+  let theme: TickLabelTheme = "screen";
+  const texFactory = (label: string, color: number) =>
+    (createTexture ?? makeTextureFactory(theme))(label, color);
 
   // 台账：累计新建/释放（几何 + 纹理）
   let createdGeoms = 0;
@@ -183,9 +217,13 @@ export function createTickGrid(
     return { created, disposed, textures };
   }
 
+  function setLabelTheme(next: TickLabelTheme) {
+    theme = next;
+  }
+
   function dispose() {
     clearAll();
   }
 
-  return { rebuild, dispose };
+  return { rebuild, setLabelTheme, dispose };
 }

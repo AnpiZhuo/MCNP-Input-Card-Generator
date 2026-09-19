@@ -154,7 +154,9 @@ export default function QuickCellDialog({ surfacesText, trCardsText, cellNumbers
     width: 940,
   },
     React.createElement("div", { style: { display: "flex", gap: 14, minHeight: 480 } },
-      React.createElement("div", { style: { width: 360, flexShrink: 0, overflowY: "auto", paddingRight: 4 } },
+      /* 表单列 380px：`QuickCellForm` 每行是固定像素排版，最宽一行实测需要 356px
+         （曾用 360px，只剩 4px 余量，任何一处字号/内边距调整都会开始裁切） */
+      React.createElement("div", { style: { width: 380, flexShrink: 0, overflowY: "auto", overflowX: "hidden", paddingRight: 4 } },
         React.createElement(QuickCellForm, {
           surfacesText, trCardsText, cellNumbers, materials,
           modeN, modeP, modeE,

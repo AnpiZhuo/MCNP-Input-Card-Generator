@@ -38,6 +38,21 @@ export interface VectorFigureSpec {
   /** 内容区高度（px）；缺省 360 */
   contentHeight?: number;
   /**
+   * 面板最长边的上限（像素，缺省 640）。与 `FigureSpec.maxPanelSide` 同一口径：
+   * 出图是交付物，尺寸不该由源 SVG 的用户单位大小决定（截面 SVG 的 viewBox 是
+   * **平面用户坐标**，几毫米的模型与几米的模型能差三个数量级）。
+   */
+  maxPanelSide?: number;
+  /**
+   * 底色：`"#ffffff"` 给有颜色填充的图（热图、色块、地图式等值线）铺底，
+   * `null`（缺省）保持透明。
+   *
+   * 为什么要有显式开关：PNG 支持 alpha，透明底叠在任意底色上都干净，所以**默认为透明**；
+   * 但"整幅颜色填充"的图（fmesh 切面热图）透出底色会让颜色与色阶刻度对不上，
+   * 那类图由调用方显式要求白底。
+   */
+  background?: string | null;
+  /**
    * 追加到面板**右侧**的矢量片段（如色带图例），随内容高度对齐。
    * 为什么要这个：有颜色填充的图**必须带色阶刻度**，否则读者无法把颜色换算成数值
    * ——「视图 + 图例/元信息」是出图规格里明确要求的，不是可选装饰。
@@ -152,29 +167,41 @@ const GAP = 14;
 /**
  * 组合矢量图。
  *
- * 版面与栅格版一致（标题 / 副标题 / 面板行 / 脚注），但**不画背景**——
- * 论文主题透明底是用户明确要的；要白底由调用方在 PDF 层铺一层白矩形。
+ * 版面与栅格版一致（标题 / 副标题 / 面板行 / 脚注）。
+ * 底色**默认透明**（`spec.background` 缺省 null）：产物是 PNG，alpha 直接一路带到最终图；
+ * 只有"整幅颜色填充"的图才由调用方给 `background: "#ffffff"`。
  */
 export function buildVectorFigure(spec: VectorFigureSpec): VectorFigure {
   const theme = themeFor(spec.theme ?? "paper");
   const pad = theme.page.padding;
-  const contentH = spec.contentHeight ?? 360;
+  const maxSide = Math.max(120, spec.maxPanelSide ?? 640);
   const parts: string[] = [];
   const defs: string[] = [];
 
-  // ── 面板量测：统一内容高度、等比缩放 ──
+  // ── 面板量测：先按"最长边不超过 maxSide"定印张基准，再统一内容高度 ──
   const measured = spec.panels.map((p) => {
     const s = splitSvg(p.svg);
-    const ar = s.width / Math.max(1, s.height);
-    return { panel: p, parts: s, w: Math.max(40, Math.round(contentH * ar)), h: contentH };
+    const ar = (s.viewBox ? s.viewBox[2] : s.width) / Math.max(1e-9, s.viewBox ? s.viewBox[3] : s.height);
+    const long = Math.max(s.viewBox ? s.viewBox[2] : s.width, s.viewBox ? s.viewBox[3] : s.height);
+    const k = Math.min(1, maxSide / Math.max(1e-9, long));
+    return { panel: p, parts: s, ar, native: Math.max(120, Math.round(long * k)) };
   });
+  const contentH = spec.contentHeight
+    ?? Math.min(640, Math.max(200, ...measured.map((m) => (m.ar >= 1 ? Math.round(m.native / m.ar) : m.native))));
 
-  const contentW = measured.reduce((s, m) => s + m.w, 0) + GAP * Math.max(0, measured.length - 1)
+  const sized = measured.map((m) => ({ ...m, w: Math.max(40, Math.round(contentH * m.ar)), h: contentH }));
+
+  const contentW = sized.reduce((s, m) => s + m.w, 0) + GAP * Math.max(0, sized.length - 1)
     + (spec.trailing ? spec.trailing.width + GAP : 0);
   const headH = spec.title ? theme.page.titleSize + 12 + (spec.subtitle ? theme.page.labelSize + 8 : 0) : 0;
   const capH = spec.caption ? theme.page.captionSize + 12 : 0;
   const width = Math.max(320, Math.round(contentW + pad * 2));
   const height = Math.round(pad + headH + contentH + capH + pad);
+
+  // 底色（缺省透明）：铺在**最底层**，让所有面板叠在它上面
+  if (spec.background) {
+    parts.push(`<rect x="0" y="0" width="${width}" height="${height}" fill="${spec.background}"/>`);
+  }
 
   let y = pad;
   if (spec.title) {
@@ -195,7 +222,7 @@ export function buildVectorFigure(spec: VectorFigureSpec): VectorFigure {
 
   const contentTop = y;
   let x = pad;
-  measured.forEach((m, i) => {
+  sized.forEach((m, i) => {
     if (i > 0) {
       parts.push(
         `<line x1="${x - GAP / 2}" y1="${contentTop + 6}" x2="${x - GAP / 2}" y2="${contentTop + m.h - 6}" stroke="${theme.border}" stroke-width="1"/>`,

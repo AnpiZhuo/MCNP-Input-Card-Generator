@@ -8,7 +8,9 @@
  *   build={() => ({
  *     view: "3D几何",
  *     nameParts: [tallyNumber, resolution],
- *     raster: build3dSpec({ canvas: ctrl.renderNow(), title: "3D 几何", legend }),
+ *     // ⚠️ 3D 视图一律用 renderTransparentNow()：透明底出图必须在这一帧里
+ *     //    关掉场景底色并按 alpha=0 清屏（见 export/captureFrame）
+ *     raster: build3dSpec({ canvas: ctrl.renderTransparentNow(), title: "3D 几何", legend }),
  *   })}
  * />
  * ```
@@ -64,7 +66,7 @@ export interface ExportButtonProps {
 
 /**
  * 标题栏「导出」按钮。**不需要用户选任何东西**：
- * 点一下 → 二维出 PDF+SVG、含位图出 2× PNG，全部论文配色。
+ * 点一下 → 出一张 **2× PNG**（透明底；整幅颜色填充的图铺白底），一律论文配色。
  */
 export function ExportButton({ build, label, compact = true, title }: ExportButtonProps) {
   const [busy, setBusy] = useState(false);
@@ -91,7 +93,7 @@ export function ExportButton({ build, label, compact = true, title }: ExportButt
       className: compact ? "btn btn-ghost btn-xs" : "btn btn-primary btn-sm",
       onClick,
       disabled: busy,
-      title: title ?? "导出当前视图为出图用文件（二维矢量 PDF+SVG，三维 2× PNG；全部论文配色）",
+      title: title ?? "导出当前视图为 2× PNG（透明底；论文配色）",
       style: compact ? { fontSize: 12, whiteSpace: "nowrap" } : undefined,
     },
     busy ? "导出中…" : "⬇ 导出",

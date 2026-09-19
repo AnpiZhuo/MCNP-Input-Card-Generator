@@ -35,6 +35,74 @@ export interface CaptureOptions {
   quality?: number;
 }
 
+/** three.js 场景底色开关（结构化类型，避免本模块 import three） */
+export interface SceneBackgroundLike {
+  background: unknown;
+}
+
+/** 渲染器上我们要用的两件事（结构化类型，避免本模块 import three） */
+export interface ClearColorRenderer {
+  setClearColor(color: number, alpha?: number): void;
+  getClearColor?(target: { r: number; g: number; b: number }): { r: number; g: number; b: number };
+  getClearAlpha?(): number;
+}
+
+/**
+ * 出一张**透明底**的 3D 帧。
+ *
+ * ## 为什么必须走这个函数，不能只把 `opts.background` 传 null
+ * `opts.background: null` 只做到"**不铺**底色"，可 3D 视图的场景本身带着
+ * `scene.background = new THREE.Color(0x0d0d22)` —— 那层深蓝会被原样取进图里。
+ * 想拿到真透明，必须在这一帧里三件事同时成立：
+ *   1. `scene.background = null`（不画背景色）
+ *   2. 渲染器按 `alpha = 0` 清屏（未清屏的像素在 `preserveDrawingBuffer:false` 下是垃圾值）
+ *   3. 取完像素立刻把前两者还原（用户屏幕上的观感不能被出图改掉）
+ *
+ * 副作用被限制在**一次同步 render 的窗口内**，还原写在 `finally` 里，抛错也不漏。
+ *
+ * @param renderer 渲染器（three 的 `WebGLRenderer` 满足本接口）
+ * @param scene 场景（只要带 `background` 字段）
+ * @param renderNow 同步重画函数（一般是 `() => renderer.render(scene, camera)`）
+ */
+export function captureTransparent3D(
+  canvas: HTMLCanvasElement | null | undefined,
+  renderer: ClearColorRenderer,
+  scene: SceneBackgroundLike,
+  renderNow: () => void,
+  opts: { scale?: number; clearColor?: [number, number, number, number] } = {},
+): HTMLCanvasElement | null {
+  const prevSceneBg = scene.background;
+  // 保存渲染器原清屏色（尽力而为：拿不到就只还原场景背景，绝不因为取不到而失败）
+  let prevHex: number | null = null;
+  let prevAlpha: number | null = null;
+  try {
+    if (typeof renderer.getClearAlpha === "function") prevAlpha = renderer.getClearAlpha();
+    if (typeof renderer.getClearColor === "function") {
+      const c = renderer.getClearColor({ r: 0, g: 0, b: 0 });
+      prevHex = channelToHex(c.r, c.g, c.b);
+    }
+  } catch { /* 忽略：无法读取原色不是致命问题 */ }
+
+  try {
+    scene.background = null;
+    const [r, g, b, a] = opts.clearColor ?? [0, 0, 0, 0];
+    renderer.setClearColor(channelToHex(r * 255, g * 255, b * 255), a);
+    return captureCanvas(canvas, { scale: opts.scale ?? 1, background: null, renderNow });
+  } finally {
+    scene.background = prevSceneBg;
+    try {
+      if (prevHex !== null) renderer.setClearColor(prevHex, prevAlpha ?? 1);
+      else if (prevAlpha !== null) renderer.setClearColor(0x000000, prevAlpha);
+    } catch { /* 还原失败不影响已取到的像素 */ }
+  }
+}
+
+/** 0–255 分量 → 0xRRGGBB（three 的 `setClearColor` 要的是这个整数） */
+function channelToHex(r: number, g: number, b: number): number {
+  const q = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+  return (q(r) << 16) | (q(g) << 8) | q(b);
+}
+
 /** 取当前帧 → 一张（可放大/可加底色的）离屏画布。失败返回 null（如画布尺寸为 0）。 */
 export function captureCanvas(canvas: HTMLCanvasElement | null | undefined, opts: CaptureOptions = {}): HTMLCanvasElement | null {
   if (!canvas) return null;

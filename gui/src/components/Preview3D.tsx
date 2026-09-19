@@ -69,7 +69,9 @@ interface Preview3DProps {
 import { getMatColor as getColor } from "../utils/materialColors";
 import { MaterialLegend, CellList, UniverseCellList } from "./MaterialPanel";
 import { ExportButton } from "../export/useFigureExport";
-import { build3dSpec, materialLegendItems, subtitleOf } from "../export/figureSpecs";import { materialLegendEntries } from "../utils/materialLegend";
+import { captureTransparent3D } from "../export/captureFrame";
+import { build3dSpec, materialLegendItems, subtitleOf } from "../export/figureSpecs";
+import { materialLegendEntries } from "../utils/materialLegend";
 import { useDeck } from "../utils/DeckContext";
 import { openCrossSection } from "../utils/windows";
 import { apiUrl } from "../utils/api";
@@ -87,6 +89,14 @@ import { buildQuickCellPreview, wireColorForMaterial } from "../three/quickCellP
 import { type QuickCellResult, type QuickShape } from "../utils/quickCell";
 import { useQuickAddOverlap } from "../utils/useQuickAddOverlap";
 import FloatingDialog from "./FloatingDialog";
+
+/**
+ * 快捷建栅元时右侧栏的加宽宽度。
+ * 依据：`QuickCellForm` 每行是固定像素排版（标签列 64 + 3×70 字段 + 间距），
+ * 最宽一行实测需要 356px；400 − 2×14 内边距 = 372px，留 16px 余量。
+ * 300px（常规侧栏）只能给 271px ⇒ 会裁掉输入框（2026-09-19 排版审计实测）。
+ */
+const QUICK_CELL_PANEL_W = 400;
 
 /* ---- 平面方程：解析/格式化/步长已抽到 three/planeEquation（三处窗口共用，单一权威） ---- */
 
@@ -120,7 +130,8 @@ function initScene(
 
   /* 渲染器 — 不设 CSS 尺寸（让 flex 布局控制），避免 1x1 钉死 */
   // powerPreference: high-performance → 优先独显（全堆芯等大场景集显卡死）
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+  // alpha:true 是出图透明底的前提（见 captureFrame.captureTransparent3D）；屏幕观感不变
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "high-performance" });
   renderer.setSize(w, h, false);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = false;
@@ -139,12 +150,22 @@ function initScene(
   /* ---- 动态数轴线（正负双向无限延伸） ---- */
   // 轴顺序单一事实来源 = AXIS_CONFIG（X 红 / Y 绿 / Z 蓝；2026-08-18 修复 Y/Z 互换）
   const AXIS_COLORS = AXIS_CONFIG.map((a) => a.color);
+  /** 出图墨色（同色相压暗）：亮绿 0x44ff44 落白纸上几乎看不见，见 axisConfig 注释 */
+  const AXIS_INK = AXIS_CONFIG.map((a) => a.paperInk);
   const AXIS_LABELS = AXIS_CONFIG.map((a) => a.label);
   const AXIS_EXTENT = sceneExtent * 3;
 
   // 三条彩色轴线（从 -extent 到 +extent）；标签存数组以便 updateAxes 重定位
   const axisLines: THREE.Line[] = [];
   const axisLabels: { sprite: THREE.Sprite; dir: THREE.Vector3; sign: number }[] = [];
+  /**
+   * 轴字母的**印刷墨色副本身**（出图用）。
+   *
+   * 为什么做副本身而不是"改颜色"：轴字母的画布纹理被烧进 sprite 材质，
+   * 想换色只能重建纹理 —— 而重建会在一瞬间让屏幕上的字母消失/闪烁。
+   * 两份 sprite **预先都建好**，出图时只切 `visible`：零纹理churn、零闪烁、可逆。
+   */
+  const axisLabelsInk: { sprite: THREE.Sprite; dir: THREE.Vector3; sign: number }[] = [];
   const axisDirs = AXIS_CONFIG.map((a) => new THREE.Vector3(...a.dir));
   axisDirs.forEach((dir, ai) => {
     const pts = [dir.clone().multiplyScalar(-AXIS_EXTENT), dir.clone().multiplyScalar(AXIS_EXTENT)];
@@ -166,8 +187,15 @@ function initScene(
       scene.add(lbl);
       return lbl;
     };
-    axisLabels.push({ sprite: mkLabel(AXIS_LABELS[ai], AXIS_COLORS[ai], dir.clone().multiplyScalar(AXIS_EXTENT + 20)), dir, sign: 1 });
-    axisLabels.push({ sprite: mkLabel("-" + AXIS_LABELS[ai], AXIS_COLORS[ai], dir.clone().multiplyScalar(-AXIS_EXTENT - 20)), dir, sign: -1 });
+    const plus = dir.clone().multiplyScalar(AXIS_EXTENT + 20);
+    const minus = dir.clone().multiplyScalar(-AXIS_EXTENT - 20);
+    axisLabels.push({ sprite: mkLabel(AXIS_LABELS[ai], AXIS_COLORS[ai], plus), dir, sign: 1 });
+    axisLabels.push({ sprite: mkLabel("-" + AXIS_LABELS[ai], AXIS_COLORS[ai], minus), dir, sign: -1 });
+    const inkPlus = mkLabel(AXIS_LABELS[ai], AXIS_INK[ai], plus);
+    const inkMinus = mkLabel("-" + AXIS_LABELS[ai], AXIS_INK[ai], minus);
+    inkPlus.visible = false;
+    inkMinus.visible = false;
+    axisLabelsInk.push({ sprite: inkPlus, dir, sign: 1 }, { sprite: inkMinus, dir, sign: -1 });
   });
 
   // 根据实际几何范围重算轴线长度与标签位置（让轴相对几何"无限长"）
@@ -182,6 +210,9 @@ function initScene(
     axisLabels.forEach((l) => {
       l.sprite.position.copy(l.dir.clone().multiplyScalar((extent + 20) * l.sign));
     });
+    axisLabelsInk.forEach((l) => {
+      l.sprite.position.copy(l.dir.clone().multiplyScalar((extent + 20) * l.sign));
+    });
   }
 
   // 动态刻度：TickGrid 深模块（台账 + 完整 dispose，步长表扩到 1e6）
@@ -189,12 +220,16 @@ function initScene(
   scene.add(tickGroup);
   const tickGrid = createTickGrid(tickGroup);
 
+  /** 当前是否在"出图取景"中（决定刻度标签底色与刻度线墨色） */
+  let usePaperLabels = false;
+
   function rebuildTicks() {
     try {
       const dist = camera.position.length();
+      tickGrid.setLabelTheme(usePaperLabels ? "paper" : "screen");
       tickGrid.rebuild({
         dist,
-        axes: axisDirs.map((d, ai) => ({ dir: [d.x, d.y, d.z], color: AXIS_COLORS[ai] })),
+        axes: axisDirs.map((d, ai) => ({ dir: [d.x, d.y, d.z], color: (usePaperLabels ? AXIS_INK : AXIS_COLORS)[ai] })),
       });
     } catch (e) { console.warn("[3D] rebuildTicks error:", e); }
   }
@@ -417,6 +452,32 @@ function initScene(
     renderNow(): HTMLCanvasElement {
       renderer.render(scene, camera);
       return canvas;
+    },
+    /**
+     * 出图用：同步画一帧**透明底**帧并交出 canvas。
+     *
+     * 除了透明清屏（见 `captureFrame.captureTransparent3D`），这里还要把**刻度/轴**临时
+     * 换成印刷墨色：刻度标签的底色与字色是烧进 CanvasTexture 的，屏幕版是"深色药丸 +
+     * 亮绿字"，直接出透明底图会在白纸上留下一个个深色方块、且亮绿几乎不可见。
+     * 换色只发生在这**一帧**内：先用纸质主题重建刻度（`rebuildTicks` 会先完整 dispose 旧纹理），
+     * 切换轴字母的墨色副本身与轴线颜色，然后 `finally` 里全部还原。
+     */
+    renderTransparentNow(): HTMLCanvasElement {
+      usePaperLabels = true;
+      try {
+        rebuildTicks();
+        axisLines.forEach((ln, ai) => (ln.material as THREE.LineBasicMaterial).color.setHex(AXIS_INK[ai]));
+        axisLabels.forEach((l) => { l.sprite.visible = false; });
+        axisLabelsInk.forEach((l) => { l.sprite.visible = true; });
+        return captureTransparent3D(canvas, renderer, scene, function() { renderer.render(scene, camera); }) || canvas;
+      } finally {
+        usePaperLabels = false;
+        axisLines.forEach((ln, ai) => (ln.material as THREE.LineBasicMaterial).color.setHex(AXIS_COLORS[ai]));
+        axisLabels.forEach((l) => { l.sprite.visible = true; });
+        axisLabelsInk.forEach((l) => { l.sprite.visible = false; });
+        rebuildTicks();   // 还原屏幕版刻度（含标签底）
+        markDirty();
+      }
     },
     setVisible(index: number, vis: boolean) {
       for (var _mi = 0; _mi < meshes.length; _mi++) {
@@ -1028,7 +1089,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
         React.createElement(ExportButton, {
           build: () => {
-            const canvas = ctrlRef.current?.renderNow();
+            const canvas = ctrlRef.current?.renderTransparentNow();
             return {
               view: "3D预览",
               nameParts: [deck?.basic?.title, `${visibleCount}栅元`],
@@ -1091,7 +1152,10 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       React.createElement("div", {
         ref: panelRef,
         style: {
-          width: 300, borderLeft: "1px solid var(--border-glass)",
+          /* 快捷建栅元打开时加宽：表单每行需要 356px，300px 侧栏只能给 271px（见下方注释） */
+          width: quickAddOpen ? QUICK_CELL_PANEL_W : 300,
+          transition: "width 160ms ease",
+          borderLeft: "1px solid var(--border-glass)",
           background: "var(--bg-glass)",
           display: "flex", flexDirection: "column", overflow: "hidden",
           flexShrink: 0, position: "relative",
@@ -1288,7 +1352,14 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
             onClick: onClose,
           }, "关闭"),
         ),
-        /* 快捷建栅元覆盖层（替代侧栏显示；线框直接画进主场景） */
+        /* 快捷建栅元：**占用侧栏本身并把它加宽**，不用覆盖层盖住 3D 视图。
+         *
+         * 历史实现是 `position:absolute; inset:0` 的覆盖层 —— 它把整个 300px 侧栏
+         * （栅元列表、材料图例、截面控件）全盖掉，用户"想看 3D 却只剩一条窄缝"；
+         * 而表单每一行需要 **356px**（标签列 64 + 3×70 字段 + 间距），在 300px 侧栏里
+         * 只能拿到 271px ⇒ 输入框被挤到视口外、`overflow-x:hidden` 直接裁掉（实测溢出 43px）。
+         * 现在：侧栏临时加宽到 `QUICK_CELL_PANEL_W`，表单在正常文档流里排 ——
+         * 3D 视图始终可见且不被遮挡，表单也不再被裁。 */
         quickAddOpen && React.createElement("div", {
           style: {
             position: "absolute", inset: 0, zIndex: 20,
@@ -1309,7 +1380,8 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
             }, "恢复栅元控制"),
           ),
           React.createElement("div", {
-            style: { flex: 1, overflowY: "auto", padding: "12px 14px" } as React.CSSProperties,
+            /* 表单需要 ≥356px；侧栏 400px − 2×14px 内边距 = 372px，留出余量 */
+            style: { flex: 1, overflowY: "auto", overflowX: "hidden", padding: "12px 14px" } as React.CSSProperties,
           },
             React.createElement(QuickCellForm, {
               surfacesText: surfaces || "",

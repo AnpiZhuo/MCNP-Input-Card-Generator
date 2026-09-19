@@ -21,6 +21,7 @@ import {
   type AABB, type Vec3, type Translatable,
 } from "../volume/alignWorld";
 import { trackColor, trackShade, normalizeEnergy01, type ParticleKey } from "../ptrac/trackColors";
+import { captureTransparent3D } from "../export/captureFrame";
 import type { SourceParticle } from "../utils/api";
 
 export interface SourceCellView {
@@ -48,6 +49,8 @@ export interface SourceDemoRendererHandle {
    * （见 `export/captureFrame` 的模块说明）。
    */
   renderNow(): HTMLCanvasElement;
+  /** 出图用：同步画一帧**透明底**帧并交出 canvas（不改屏幕观感） */
+  renderTransparentNow(): HTMLCanvasElement;
   dispose(): void;
 }
 
@@ -110,7 +113,7 @@ export function createSourceDemoRenderer(
   const camera = new THREE.PerspectiveCamera(45, w / h, initCam.near, initCam.far);
   camera.up.set(0, 0, 1); // Z-up（MCNP 全局坐标）
 
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "high-performance" });
   renderer.setSize(w, h, false);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
@@ -462,6 +465,9 @@ export function createSourceDemoRenderer(
     renderNow(): HTMLCanvasElement {
       renderer.render(scene, camera);
       return canvas;
+    },
+    renderTransparentNow(): HTMLCanvasElement {
+      return captureTransparent3D(canvas, renderer, scene, () => renderer.render(scene, camera)) ?? canvas;
     },
     dispose() {
       ro?.disconnect();

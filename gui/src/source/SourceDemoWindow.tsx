@@ -158,7 +158,7 @@ export default function SourceDemoWindow() {
             <ExportButton
               label="演示源图"
               build={() => {
-                const canvas = rendererRef.current?.renderNow();
+                const canvas = rendererRef.current?.renderTransparentNow();
                 return {
                   view: "演示源",
                   nameParts: [`${count}粒子`],

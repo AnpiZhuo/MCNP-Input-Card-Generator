@@ -66,7 +66,7 @@ export interface TwoDExportInput {
   trailing?: { svg: string; width: number; heading?: string };
 }
 
-/** 2D 类视图（截面 / tally 曲线 / 切面）的出图描述：纯矢量出口 */
+/** 2D 类视图（截面 / tally 曲线 / 切面）的出图描述：先做矢量合成，再按 2× 栅格成 PNG */
 export function build2dSpec(input: TwoDExportInput): VectorFigureSpec {
   return {
     title: input.title,

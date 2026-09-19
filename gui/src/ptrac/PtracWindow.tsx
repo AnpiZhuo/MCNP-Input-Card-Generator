@@ -129,9 +129,9 @@ export default function PtracWindow() {
   const displayedCount = sampleTracks(tracksRef.current, SAMPLE_STEPS[sampleIdx]).length;
   const coincidentPos = tracksRef.current.length > 0 ? allPointsCoincident(tracksRef.current) : null;
 
-  /** 出图：视图 + 粒子类型图例（3D 视角与屏幕一致；配色走论文主题） */
+  /** 出图：视图 + 粒子类型图例（3D 视角与屏幕一致；配色走论文主题；**透明底**） */
   const buildExport = () => {
-    const canvas = rendererRef.current?.renderNow();
+    const canvas = rendererRef.current?.renderTransparentNow();
     const legend = TRACK_LEGEND.map((l) => ({ color: l.color, label: l.label }));
     return {
       view: "3D径迹",

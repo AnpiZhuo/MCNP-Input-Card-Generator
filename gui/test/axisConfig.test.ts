@@ -14,4 +14,24 @@ describe("AXIS_CONFIG（3D 预览坐标轴）", () => {
     expect(AXIS_CONFIG[1].color).toBe(0x44ff44);
     expect(AXIS_CONFIG[2].color).toBe(0x4488ff);
   });
+
+  /**
+   * 出图墨色（2026-09-19 透明底）：亮色落在白纸/浅底上会看不见，出图要换深色同色相墨。
+   * 这里锁两条不变量：① 每轴都有墨色；② 墨色确实比屏幕色暗（否则等于没换）。
+   */
+  it("每轴都有出图墨色，且墨色比屏幕色暗（浅底可读）", () => {
+    const lum = (c: number) => ((c >> 16) & 255) * 0.299 + ((c >> 8) & 255) * 0.587 + (c & 255) * 0.114;
+    for (const a of AXIS_CONFIG) {
+      expect(typeof a.paperInk).toBe("number");
+      expect(a.paperInk).toBeGreaterThanOrEqual(0);
+      expect(a.paperInk).toBeLessThanOrEqual(0xffffff);
+      expect(lum(a.paperInk)).toBeLessThan(lum(a.color) * 0.6);
+    }
+    // 色相不串：红轴墨色仍是红主导、绿轴绿主导、蓝轴蓝主导
+    const dom = (c: number) => {
+      const r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
+      return r >= g && r >= b ? "r" : g >= b ? "g" : "b";
+    };
+    expect(AXIS_CONFIG.map((a) => dom(a.paperInk))).toEqual(["r", "g", "b"]);
+  });
 });

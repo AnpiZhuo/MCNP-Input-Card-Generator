@@ -235,9 +235,9 @@ export default function ResultWindow() {
     locked: c.mat === "0",
   }));
 
-  /** 出图：3D 体积视图 + 材料图例 + 色阶（当前能量/时间帧与屏幕上一致） */
+  /** 出图：3D 体积视图 + 材料图例 + 色阶（当前能量/时间帧与屏幕上一致；**透明底**） */
   const buildExport = () => {
-    const canvas = rendererRef.current?.renderNow();
+    const canvas = rendererRef.current?.renderTransparentNow();
     const seen = new Set<string>();
     const legend: { color: string; label: string }[] = [];
     for (const c of data.cells) {
