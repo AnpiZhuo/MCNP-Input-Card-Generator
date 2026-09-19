@@ -210,17 +210,27 @@ export function renderFigure(spec: FigureSpec, opts: { background?: string | nul
   });
 
   const contentW = measured.reduce((s, m) => s + m.w, 0) + gap * Math.max(0, measured.length - 1);
-  const headH = spec.title ? theme.page.titleSize + 10 + (spec.subtitle ? theme.page.labelSize + 8 : 0) : 0;
   const width = Math.max(320, Math.round(contentW + pad * 2));
 
-  // 脚注可能很长：先按可用宽度折行，再据实际行数算高度（原先单行直接画出边界外）
-  const capLines: string[] = [];
-  if (spec.caption) {
+  /**
+   * ── 图下区（2026-09-19 按中文期刊规范调整版式）──
+   *
+   * 规范：**图序与图题排在图的下方、居中**（GB/T 7713 系列学位论文/学术论文编写规则）；
+   * 参数、来源等说明性文字作小字图注放在图下**左侧**。
+   * 调整前是"标题在上、脚注在下"——那不符合图的编号与位置惯例。
+   *
+   * 版面自上而下：内容行 → 居中图题（= 原 `title`）→ 左对齐图注
+   * （= 原 `subtitle` 与 `caption` 合并，逐行折行）。
+   */
+  const noteTexts = [spec.subtitle, spec.caption].filter((t): t is string => !!t && String(t) !== "");
+  const noteLines: string[] = [];
+  for (const t of noteTexts) {
     ctxProbe.font = `${theme.page.captionSize}px ${theme.fontFamily}`;
-    capLines.push(...wrapText(ctxProbe, spec.caption, width - pad * 2));
+    noteLines.push(...wrapText(ctxProbe, t, width - pad * 2));
   }
-  const capH = capLines.length ? capLines.length * (theme.page.captionSize + 4) + 8 : 0;
-  const height = Math.round(pad + headH + contentH + capH + pad);
+  const titleH = spec.title ? theme.page.titleSize + 8 : 0;
+  const noteH = noteLines.length ? noteLines.length * (theme.page.captionSize + 4) + 8 : 0;
+  const height = Math.round(pad + contentH + titleH + noteH + pad);
 
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -233,25 +243,8 @@ export function renderFigure(spec: FigureSpec, opts: { background?: string | nul
     ctx.fillRect(0, 0, width, height);
   }
 
-  let y = pad;
-  // ── 标题 / 副标题 ──
-  if (spec.title) {
-    ctx.fillStyle = theme.text;
-    ctx.font = `600 ${theme.page.titleSize}px ${theme.fontFamily}`;
-    ctx.textAlign = "left";
-    ctx.textBaseline = "top";
-    ctx.fillText(spec.title, pad, y);
-    y += theme.page.titleSize + 10;
-    if (spec.subtitle) {
-      ctx.fillStyle = theme.textMuted;
-      ctx.font = `${theme.page.labelSize}px ${theme.fontFamily}`;
-      ctx.fillText(spec.subtitle, pad, y);
-      y += theme.page.labelSize + 8;
-    }
-  }
-
-  // ── 内容行：逐面板绘制 ──
-  const contentTop = y;
+  const contentTop = pad;
+  let y = contentTop;
   let x = pad;
   measured.forEach((m, i) => {
     if (i > 0) {
@@ -269,16 +262,23 @@ export function renderFigure(spec: FigureSpec, opts: { background?: string | nul
     x += m.w + gap;
   });
 
-  // ── 脚注（可多行；行数在量测阶段已经算出） ──
-  if (capLines.length) {
+  // ── 图下区：居中图题（图序 图题）→ 左对齐图注（参数/来源） ──
+  let below = contentTop + contentH;
+  if (spec.title) {
+    ctx.fillStyle = theme.text;
+    ctx.font = `600 ${theme.page.titleSize}px ${theme.fontFamily}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillText(spec.title, width / 2, below + 4);   // 居中（规范：图题在图下居中）
+    below += titleH;
+  }
+  if (noteLines.length) {
     ctx.fillStyle = theme.caption;
     ctx.font = `${theme.page.captionSize}px ${theme.fontFamily}`;
     ctx.textAlign = "left";
-    ctx.textBaseline = "bottom";
+    ctx.textBaseline = "top";
     const lineH = theme.page.captionSize + 4;
-    capLines.forEach((line, i) => {
-      ctx.fillText(line, pad, height - pad - (capLines.length - 1 - i) * lineH);
-    });
+    noteLines.forEach((line, i) => ctx.fillText(line, pad, below + 4 + i * lineH));
   }
 
   return { canvas, width, height };

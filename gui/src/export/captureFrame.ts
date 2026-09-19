@@ -234,6 +234,95 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
+/* ───────────────────────── PNG 物理尺寸元数据 ───────────────────────── */
+
+/**
+ * 给 PNG 补 `pHYs` 块（物理像素尺寸），单位：像素/米。
+ *
+ * ## 为什么必须做这一步
+ * **PNG 没有分辨率概念**——它只有像素。一张 1890 px 宽的图是"600 dpi 的 80 mm"还是
+ * "300 dpi 的 160 mm"，完全取决于排版软件怎么缩放它。期刊要求"线条图 ≥600 dpi"，
+ * 如果图里不写物理尺寸，这条要求**在文件层面无从判定**，作者与编辑只能靠猜。
+ * 写上 `pHYs` 之后，Word/LaTeX 插进来时能显示"这张图 1890 px @ 600 dpi = 80 mm 宽"。
+ *
+ * ## 实现要点
+ * - PNG 结构是 `签名(8B)` + 若干块；`pHYs` 必须**紧跟 `IHDR`**（规范建议，兼容性最好）；
+ * - 每块 = `长度(4, BE)` + `类型(4)` + `数据` + `CRC32(4)`，CRC 覆盖"类型+数据"；
+ * - 已有的 `pHYs` 先删掉再插（避免出现两个）；
+ * - 任何一步不成立（不是 PNG / 结构异常）就**原样返回**，绝不因为"想写元数据"把图弄坏。
+ *
+ * @param dpi 目标分辨率（px/inch）
+ */
+export function withPngDpi(bytes: Uint8Array, dpi: number): Uint8Array {
+  try {
+    if (!Number.isFinite(dpi) || dpi <= 0) return bytes;
+    if (bytes.length < 33) return bytes;
+    // PNG 签名
+    const SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    for (let i = 0; i < 8; i++) if (bytes[i] !== SIG[i]) return bytes;
+    if (String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]) !== "IHDR") return bytes;
+
+    const ppx = Math.round(dpi / 0.0254); // px / m
+    const phys = new Uint8Array(9);
+    const dv = new DataView(phys.buffer);
+    dv.setUint32(0, ppx, false);
+    dv.setUint32(4, ppx, false);
+    phys[8] = 1; // 单位 = 米
+
+    const chunks: Uint8Array[] = [bytes.subarray(0, 8), bytes.subarray(8, 33)]; // 签名 + IHDR
+    chunks.push(makeChunk("pHYs", phys));
+    // 其余块原样搬（跳过可能已存在的 pHYs）
+    let off = 33;
+    while (off + 8 <= bytes.length) {
+      const len = new DataView(bytes.buffer, bytes.byteOffset + off, 4).getUint32(0, false);
+      const end = off + 12 + len;
+      if (end > bytes.length) break;
+      const type = String.fromCharCode(bytes[off + 4], bytes[off + 5], bytes[off + 6], bytes[off + 7]);
+      if (type !== "pHYs") chunks.push(bytes.subarray(off, end));
+      off = end;
+    }
+    const total = chunks.reduce((s, c) => s + c.length, 0);
+    const out = new Uint8Array(total);
+    let p = 0;
+    for (const c of chunks) { out.set(c, p); p += c.length; }
+    // 结构自检：结尾必须是 IEND，否则不冒险替换
+    if (String.fromCharCode(out[out.length - 8], out[out.length - 7], out[out.length - 6], out[out.length - 5]) !== "IEND") {
+      return bytes;
+    }
+    return out;
+  } catch {
+    return bytes;
+  }
+}
+
+/** 组装一个 PNG 块（含 CRC32） */
+function makeChunk(type: string, data: Uint8Array): Uint8Array {
+  const body = new Uint8Array(4 + data.length);
+  for (let i = 0; i < 4; i++) body[i] = type.charCodeAt(i);
+  body.set(data, 4);
+  const out = new Uint8Array(12 + data.length);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, data.length, false);
+  out.set(body, 4);
+  dv.setUint32(8 + data.length, crc32(body), false);
+  return out;
+}
+
+let crcTable: Uint32Array | null = null;
+function crc32(buf: Uint8Array): number {
+  if (!crcTable) {
+    crcTable = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      crcTable[n] = c >>> 0;
+    }
+  }
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) c = crcTable[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
 /**
  * 需要在导出时"钉死"成内联样式的属性（SVG 出图后没有 CSS 环境，全靠内联）。
  * ⚠️ 只对**子节点**内联：根节点的 style 稍后会被整体清掉（去掉屏幕定位样式），

@@ -29,24 +29,48 @@ def _require_module():
 
 # ── 1. 锚点（§4.3.1 单一事实来源）───────────────────────────────
 def test_weather_stops_anchor_positions():
-    """锚点位置 0.00/0.33/0.55/0.75/1.00，alpha 全 255。"""
+    """锚点位置 0.00/0.14/0.29/0.43/0.57/0.71/0.86/1.00（viridis 8 锚点），alpha 全 255。"""
     _require_module()
     positions = [p for p, _ in WEATHER_STOPS]
-    assert positions == pytest.approx([0.00, 0.33, 0.55, 0.75, 1.00])
+    assert positions == pytest.approx([0.00, 0.14, 0.29, 0.43, 0.57, 0.71, 0.86, 1.00])
     for p, rgba in WEATHER_STOPS:
         assert rgba[3] == 255
         assert all(0 <= c <= 255 for c in rgba[:3])
 
 
 def test_weather_stops_anchor_colors():
-    """锚点颜色（#3B4CC0 蓝 / #00E5FF 青 / #FDE047 黄 / #F97316 橙 / #DC2626 红）。"""
+    """锚点颜色 = viridis 官方 8 点（深紫 → 亮黄）。"""
     _require_module()
     by_pos = {round(p, 2): rgba for p, rgba in WEATHER_STOPS}
-    assert by_pos[0.00][:3] == (0x3B, 0x4C, 0xC0)   # 蓝
-    assert by_pos[0.33][:3] == (0x00, 0xE5, 0xFF)   # 青
-    assert by_pos[0.55][:3] == (0xFD, 0xE0, 0x47)   # 黄
-    assert by_pos[0.75][:3] == (0xF9, 0x73, 0x16)   # 橙
-    assert by_pos[1.00][:3] == (0xDC, 0x26, 0x26)   # 红
+    assert by_pos[0.00][:3] == (0x44, 0x01, 0x54)   # 深紫
+    assert by_pos[0.14][:3] == (0x41, 0x44, 0x87)
+    assert by_pos[0.29][:3] == (0x2A, 0x78, 0x8E)
+    assert by_pos[0.43][:3] == (0x22, 0xA8, 0x84)
+    assert by_pos[0.57][:3] == (0x55, 0xC6, 0x67)
+    assert by_pos[0.71][:3] == (0xA5, 0xDB, 0x37)
+    assert by_pos[0.86][:3] == (0xDF, 0xE3, 0x18)
+    assert by_pos[1.00][:3] == (0xFD, 0xE7, 0x25)   # 亮黄
+
+
+def _rel_luminance(rgb):
+    """sRGB 相对亮度（WCAG 同口径）。"""
+    def lin(c):
+        c = c / 255.0
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2])
+
+
+def test_weather_stops_luminance_monotonic():
+    """★ 换表的**目的判据**：亮度沿 t 单调递增 ⇒ 黑白打印仍能读出高低。
+
+    旧表（蓝→青→黄→橙→红）在 t≈0.75 之后亮度**回落**，灰度下红与蓝几乎同灰；
+    viridis 单调递增。本用例锁死这条性质 —— 谁换回非单调色表就会红。
+    """
+    _require_module()
+    lums = [_rel_luminance(rgba[:3]) for _, rgba in WEATHER_STOPS]
+    for i in range(1, len(lums)):
+        assert lums[i] > lums[i - 1], f"锚点 {i} 亮度未递增：{lums[i-1]:.4f} → {lums[i]:.4f}"
+    assert lums[-1] - lums[0] > 0.5
 
 
 # ── 2. weather_lut ──────────────────────────────────────────────
@@ -60,19 +84,19 @@ def test_weather_lut_length_and_shape():
 
 
 def test_weather_lut_endpoints():
-    """LUT 端点：lut[0]=蓝 #3B4CC0、lut[-1]=红 #DC2626。"""
+    """LUT 端点：lut[0]=深紫 #440154、lut[-1]=亮黄 #FDE725。"""
     _require_module()
     lut = weather_lut()
-    assert lut[0][:3] == (0x3B, 0x4C, 0xC0)
-    assert lut[-1][:3] == (0xDC, 0x26, 0x26)
+    assert lut[0][:3] == (0x44, 0x01, 0x54)
+    assert lut[-1][:3] == (0xFD, 0xE7, 0x25)
 
 
 def test_weather_lut_midpoints():
-    """LUT 中间值：t≈0.33 → 青、t≈0.75 → 橙（锚点区间内线性插值）。"""
+    """LUT 中间值：i=74 → 青绿 (42,120,142)、i=181 → 黄绿 (165,219,55)（锚点区间内线性插值）。"""
     _require_module()
     lut = weather_lut(256)
-    assert lut[84][:3] == (0x00, 0xE5, 0xFF)        # i=84, t≈0.33 青
-    assert lut[191][:3] == (0xF9, 0x74, 0x16)        # i=191, t≈0.75 橙（PM 仲裁：与 golden t-space 插值一致）
+    assert lut[74][:3] == (42, 120, 142)     # t≈0.29 附近
+    assert lut[181][:3] == (165, 219, 55)    # t≈0.71 附近
 
 
 # ── 3. map_value 色阶下限 = 显示阈值 ────────────────────────────
@@ -126,4 +150,4 @@ def test_golden_lut_sha256():
     lut = weather_lut(256)
     flat = bytes(v for px in lut for v in px)
     digest = hashlib.sha256(flat).hexdigest()
-    assert digest == "36770ae2b9cd2a2ac3b6e6a08de45d522261dfced960c0c1db49bc515358c038"
+    assert digest == "446949045f119ffa16f5e836cd39c400cd67836db0d5e17cb4b66af18ea74cdc"

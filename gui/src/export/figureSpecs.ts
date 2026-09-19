@@ -14,6 +14,17 @@ export function subtitleOf(parts: (string | number | undefined | null)[]): strin
   return parts.filter((p) => p !== undefined && p !== null && String(p) !== "").map(String).join(" · ");
 }
 
+/**
+ * ⚠️ **出图不带图序（用户 2026-09-19 裁决）**。
+ *
+ * 规范要求"图题带图序（图1、图2…）"，但**图序属于正文语境**：
+ * 同一份文稿里哪个图排第几，只有作者知道；程序每次导出都写"图1"反而是错的
+ * （第二张图也会印成"图1"）。所以这里只画**纯标题**，编号由作者在 Word 里自己打
+ * —— 国标要求的是"图题不得省略图序"，并不要求"图序必须印在图内"。
+ *
+ * 曾短暂实现过 `figureTitle()` 自动加 `图N` 前缀，**已按用户裁决撤除**，别再加回来。
+ */
+
 /** 材料图例条目：色块用 `getMatColor` 的口径（与屏幕、截面、3D 完全一致） */
 export function materialLegendItems(entries: { mat: string; label?: string; color: string }[]): LegendItem[] {
   return entries.map((e) => ({ color: e.color, label: e.mat === "0" ? "M0 真空" : `M${e.mat}${e.label ? " " + e.label : ""}` }));
@@ -66,7 +77,7 @@ export interface TwoDExportInput {
   trailing?: { svg: string; width: number; heading?: string };
 }
 
-/** 2D 类视图（截面 / tally 曲线 / 切面）的出图描述：先做矢量合成，再按 2× 栅格成 PNG */
+/** 2D 类视图（截面 / tally 曲线 / 切面）的出图描述：先做矢量合成，再按目标 dpi 栅格成 PNG */
 export function build2dSpec(input: TwoDExportInput): VectorFigureSpec {
   return {
     title: input.title,

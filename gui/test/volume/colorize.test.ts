@@ -8,29 +8,29 @@ import {
  * 色阶映射（契约 meshtal-visualization.md §4.3 / §4.3.1 / §12 A2.2）
  *
  * golden sha256 跨语言防漂移：TS `weatherLut()` 256 项 RGBA 拼连的 sha256
- * **必须等于** `36770ae2b9cd2a2ac3b6e6a08de45d522261dfced960c0c1db49bc515358c038`
+ * **必须等于** `446949045f119ffa16f5e836cd39c400cd67836db0d5e17cb4b66af18ea74cdc`
  * （与后端 `app/meshtal/colormap.py::weather_lut()` 逐字节一致）。
  */
 
 describe("weatherLut golden（跨语言防漂移）", () => {
-  it("sha256 == golden 36770ae2…（与后端 colormap 逐字节一致）", () => {
+  it("sha256 == golden 44694904…（与后端 colormap 逐字节一致）", () => {
     const lut = weatherLut(256);
     expect(lut.length).toBe(256 * 4);
     const digest = createHash("sha256").update(lut).digest("hex");
-    expect(digest).toBe("36770ae2b9cd2a2ac3b6e6a08de45d522261dfced960c0c1db49bc515358c038");
+    expect(digest).toBe("446949045f119ffa16f5e836cd39c400cd67836db0d5e17cb4b66af18ea74cdc");
   });
 
-  it("锚点：lut[0]=蓝 #3B4CC0、lut[-1]=红 #DC2626（§4.3.1）", () => {
+  it("锚点：lut[0]=深紫 #440154、lut[-1]=亮黄 #FDE725（§4.3.1）", () => {
     const lut = weatherLut(256);
-    expect([lut[0], lut[1], lut[2], lut[3]]).toEqual([0x3b, 0x4c, 0xc0, 255]);
+    expect([lut[0], lut[1], lut[2], lut[3]]).toEqual([0x44, 0x01, 0x54, 255]);
     const last = (lut.length / 4) - 1;
-    expect([lut[last * 4], lut[last * 4 + 1], lut[last * 4 + 2]]).toEqual([0xdc, 0x26, 0x26]);
+    expect([lut[last * 4], lut[last * 4 + 1], lut[last * 4 + 2]]).toEqual([0xfd, 0xe7, 0x25]);
   });
 
-  it("锚点区间插值：i=84 青 #00E5FF、i=191 橙 (249,116,22)（PM 仲裁 t-space）", () => {
+  it("锚点区间插值：i=74 青绿 (42,120,142)、i=181 黄绿 (165,219,55)（t-space）", () => {
     const lut = weatherLut(256);
-    expect([lut[84 * 4], lut[84 * 4 + 1], lut[84 * 4 + 2]]).toEqual([0x00, 0xe5, 0xff]);
-    expect([lut[191 * 4], lut[191 * 4 + 1], lut[191 * 4 + 2]]).toEqual([249, 116, 22]);
+    expect([lut[74 * 4], lut[74 * 4 + 1], lut[74 * 4 + 2]]).toEqual([42, 120, 142]);
+    expect([lut[181 * 4], lut[181 * 4 + 1], lut[181 * 4 + 2]]).toEqual([165, 219, 55]);
   });
 
   it("roundHalfEven：Python round 语义（half-to-even）", () => {
@@ -40,11 +40,32 @@ describe("weatherLut golden（跨语言防漂移）", () => {
     expect(roundHalfEven(112.5)).toBe(112);
   });
 
-  it("WEATHER_STOPS 锚点位置/颜色单一事实来源", () => {
+  /**
+   * ★ 换表的**目的判据**（2026-09-19）：黑白打印要能读出高低。
+   * 锁"亮度沿 t 单调递增"这条**性质**，不锁具体颜色 ——
+   * 以后谁再换回"蓝→青→黄→橙→红"那类非单调色表，这条会红。
+   */
+  it("★ viridis 亮度单调：粗粒度序列严格递增，且整体亮度跨度够大", () => {
+    const lut = weatherLut(256);
+    const lum = (i: number) => {
+      const lin = (c: number) => {
+        const x = c / 255;
+        return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+      };
+      return 0.2126 * lin(lut[i * 4]) + 0.7152 * lin(lut[i * 4 + 1]) + 0.0722 * lin(lut[i * 4 + 2]);
+    };
+    const coarse = Array.from({ length: 9 }, (_, k) => lum(k * 31));
+    for (let i = 1; i < coarse.length; i++) {
+      expect(coarse[i]).toBeGreaterThan(coarse[i - 1]);
+    }
+    expect(coarse[coarse.length - 1] - coarse[0]).toBeGreaterThan(0.5);
+  });
+
+  it("WEATHER_STOPS 锚点位置/颜色单一事实来源（viridis 8 锚点）", () => {
     const positions = WEATHER_STOPS.map(([p]) => p);
-    expect(positions).toEqual([0.0, 0.33, 0.55, 0.75, 1.0]);
-    expect(WEATHER_STOPS[0][1][0]).toBe(0x3b); // 蓝
-    expect(WEATHER_STOPS[WEATHER_STOPS.length - 1][1][0]).toBe(0xdc); // 红
+    expect(positions).toEqual([0.0, 0.14, 0.29, 0.43, 0.57, 0.71, 0.86, 1.0]);
+    expect(WEATHER_STOPS[0][1].slice(0, 3)).toEqual([0x44, 0x01, 0x54]); // 深紫
+    expect(WEATHER_STOPS[WEATHER_STOPS.length - 1][1].slice(0, 3)).toEqual([0xfd, 0xe7, 0x25]); // 亮黄
   });
 });
 

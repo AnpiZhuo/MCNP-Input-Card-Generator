@@ -2,24 +2,31 @@
  * colorize — 天气图式色阶 LUT + CPU 上色（契约 meshtal-visualization.md §4.3 / §4.3.1 / §12 A2.2）
  *
  * 与后端 `app/meshtal/colormap.py` 逐字节一致：
- * - WEATHER_STOPS 锚点单一事实来源（蓝→青→黄→橙→红）
+ * - WEATHER_STOPS 锚点单一事实来源（**viridis 8 锚点**：深紫→蓝→青绿→黄绿→亮黄）
  * - `weatherLut()` 256 项 RGBA 的 sha256 **必须等于**
- *   `36770ae2b9cd2a2ac3b6e6a08de45d522261dfced960c0c1db49bc515358c038`
+ *   `446949045f119ffa16f5e836cd39c400cd67836db0d5e17cb4b66af18ea74cdc`
  *   （跨语言防漂移，t=i/(n-1) 线性插值，round-half-even）
  * - `colorizeScalar`：v < displayMin（色阶下限=显示阈值）→ alpha 0；线性映射到 LUT
+ *
+ * ⚠️ **2026-09-19 换表**：原"蓝→青→黄→橙→红"在**黑白打印下会塌**（蓝与红亮度接近）。
+ * 现用 **viridis**（感知均匀、色盲友好）：亮度沿 t 单调递增（0.019→0.782，灰阶 42→228），
+ * 打印/复印后仍能读高低；换表连带改了 python 端与两个 golden sha256。
  *
  * 标量帧来自后端 `frame.dataBase64`（Uint8 归一化 [0,255]，numpy (x,y,z) 扁平），
  * 输出 RGBA 保持同一布局（上传时由 VolumeRenderer 按 DataTexture3D dims 处理）。
  */
 export type RGBA = [number, number, number, number];
 
-/** §4.3.1 配色锚点（python colormap.WEATHER_STOPS 镜像，禁止漂移） */
+/** §4.3.1 配色锚点（python colormap.WEATHER_STOPS 镜像，禁止漂移；viridis，亮度单调） */
 export const WEATHER_STOPS: [number, RGBA][] = [
-  [0.0, [0x3b, 0x4c, 0xc0, 255]], // 蓝
-  [0.33, [0x00, 0xe5, 0xff, 255]], // 青
-  [0.55, [0xfd, 0xe0, 0x47, 255]], // 黄
-  [0.75, [0xf9, 0x73, 0x16, 255]], // 橙
-  [1.0, [0xdc, 0x26, 0x26, 255]], // 红
+  [0.0, [0x44, 0x01, 0x54, 255]], // 深紫
+  [0.14, [0x41, 0x44, 0x87, 255]],
+  [0.29, [0x2a, 0x78, 0x8e, 255]],
+  [0.43, [0x22, 0xa8, 0x84, 255]],
+  [0.57, [0x55, 0xc6, 0x67, 255]],
+  [0.71, [0xa5, 0xdb, 0x37, 255]],
+  [0.86, [0xdf, 0xe3, 0x18, 255]],
+  [1.0, [0xfd, 0xe7, 0x25, 255]], // 亮黄
 ];
 
 /** Python round() 语义（round-half-even），JS Math.round 是 round-half-away，必须自实现 */

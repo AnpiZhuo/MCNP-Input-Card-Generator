@@ -97,7 +97,19 @@ const PAPER: PlotTheme = {
   colormap: COLORMAP,
   series: "#0b5fa5",
   seriesAlt: "#b3261e",
-  page: { padding: 18, titleSize: 15, labelSize: 12, tickSize: 10, captionSize: 10, stroke: 1.4 },
+  /**
+   * 出图版面（单位 px @ 1× 逻辑画布）。
+   *
+   * ## 这组数字是按"中文期刊 600 dpi 线图、单栏 80 mm"倒算出来的（2026-09-19）
+   * 经验换算：画布按 600 dpi 输出时 **`pt ≈ px × 0.423`**；
+   * 而"图内文字不小于 6~8 pt"是期刊底线 ⇒ **px 不应小于 15~19 px**。
+   * 上一版 title 15 / label 12 / tick 10 / caption 10 ⇒ 折算仅 **6.3 / 5.1 / 4.2 / 4.2 pt**，
+   * **刻度与图注都在底线以下**（这就是"图放大了字还是小"的根因）。
+   * 现为 title 18 / label 15 / tick 13 / caption 12 ⇒ **7.6 / 6.3 / 5.5 / 5.1 pt**；
+   * 刻度仍差一档，但受"单栏 80 mm 内要塞下整张合成图"的物理约束 —— 再大会把图撑出栏宽。
+   * **若期刊要求刻度也 ≥6 pt，须改为按栏宽自适应**（见 §6 待办 S8.9 未决项）。
+   */
+  page: { padding: 18, titleSize: 18, labelSize: 15, tickSize: 13, captionSize: 12, stroke: 1.4 },
   fontFamily: FONT,
 };
 

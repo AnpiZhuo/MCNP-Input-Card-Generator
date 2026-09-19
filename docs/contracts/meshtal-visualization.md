@@ -209,18 +209,27 @@ pymcnp 严格 header 正则（`Meshtal._REGEX`）拒收时，轻量解析：
 ### 4.3 `app/meshtal/colormap.py`（新，纯 stdlib）
 | 接口 | 实现 | 测试面 |
 | :--- | :--- | :--- |
-| `WEATHER_STOPS: list[tuple[float, tuple[int,int,int,int]]]` | 蓝→黄→橙→红阶梯渐变锚点（见 §4.3.1 定锚） | pytest 单测 |
+| `WEATHER_STOPS: list[tuple[float, tuple[int,int,int,int]]]` | **viridis 8 锚点**（深紫→蓝→青绿→黄绿→亮黄，**亮度单调递增**，见 §4.3.1 定锚） | pytest 单测 |
 | `weather_lut(n: int = 256) -> list[tuple[int,int,int,int]]` | 锚点间线性插值 → RGBA LUT | 同上 + 跨语言 golden 对照 |
 | `map_value(v: float, lo: float, hi: float, lut) -> tuple[int,int,int,int]` | v≤lo→alpha 0（显示阈值=色阶下限）；线性映射 | 同上 |
 
 **4.3.1 配色锚点（单一事实来源，python 与 TS 必须一致）**
+
+> ⚠️ **2026-09-19 换表**（用户按"中文期刊黑白打印可辨"要求驱动）：原表"蓝→青→黄→橙→红"在
+> **t≈0.75 之后亮度回落**，灰度下红与蓝几乎同灰 ⇒ 打印/复印后读不出高低。现用 **viridis**
+> （感知均匀、色盲友好，业界为灰度打印设计的标准色表）：亮度沿 t **单调递增**。
+> 换表连带改了 TS 端与两个 golden sha256。
+
 ```
-0.00  #3B4CC0 (蓝)    0.33  #00E5FF (青)    0.55  #FDE047 (黄)
-0.75  #F97316 (橙)    1.00  #DC2626 (红)
+0.00  #440154 (深紫)   0.14  #414487        0.29  #2A788E        0.43  #22A884
+0.57  #55C667          0.71  #A5DB37        0.86  #DFE318        1.00  #FDE725 (亮黄)
 alpha：v < displayMin（=色阶下限）→ 0；否则 255
 ```
+- **亮度单调（本表的唯一理由）**：相对亮度 0.019 → 0.782（灰阶 42 → 228）；
+  两侧测试都锁这条**性质**（`test_weather_stops_luminance_monotonic` /
+  `colorize.test.ts` 的"★ viridis 亮度单调"），**不是为了好看**。
 - **色阶下限=显示阈值（低于不显示）**：`displayMin` 是用户可改的「下限」；默认 = 自适应 `scalarRange.min`。
-- **跨语言防漂移**：python `weather_lut()` 与 TS `colorize.weatherLut()` 各自实现；`tests/unit/test_meshtal_colormap.py::golden_lut` 把 python 256 项 LUT 的 sha256 写成固定 golden，`gui/test/volume/colorize.test.ts::lut_matches_golden` 断言 TS 端 sha256 相等。锚点改动 → 两侧同时改 + golden 重算。
+- **跨语言防漂移**：python `weather_lut()` 与 TS `colorize.weatherLut()` 各自实现；`tests/unit/test_meshtal_colormap.py::golden_lut` 把 python 256 项 LUT 的 sha256 写成固定 golden，`gui/test/volume/colorize.test.ts` 断言 TS 端 sha256 相等。锚点改动 → 两侧同时改 + golden 重算。
 
 ### 4.4 `app/meshtal/downsample_plan.py`（新，纯 stdlib）+ `app/meshtal/meshtal_cache.py`（新，stdlib）
 ```python
