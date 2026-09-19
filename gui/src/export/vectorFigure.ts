@@ -20,6 +20,7 @@
  * `needsRaster` 会明确告知），绝不静默产出"中文全空白"的 PDF。
  */
 import { themeFor, type PlotTheme } from "./plotTheme";
+import { figureTextBlocks, layoutFigure } from "./figureLayout";
 
 /** 矢量面板：内联进版面的一段 SVG（自带坐标与样式） */
 export interface VectorPanel {
@@ -52,6 +53,12 @@ export interface VectorFigureSpec {
    * 有颜色填充的图（热图、色块、地图式等值线）**必须**白底，否则透出底色后颜色与色阶对不上。
    */
   background?: string | null;
+  /**
+   * 材料图例（带色块）。几何面板本身是矢量色块图，"哪个颜色是哪种材料"必须能在图里查到
+   * —— 这是期刊硬要求（图内符号必须有说明），也是黑白打印下唯一还能读懂的线索。
+   * 排在图右侧、与几何面板同高，与栅格版 `FigurePanel.legend` 同口径。
+   */
+  legend?: { color: string; label: string }[];
   /**
    * 追加到面板**右侧**的矢量片段（如色带图例），随内容高度对齐。
    * 为什么要这个：有颜色填充的图**必须带色阶刻度**，否则读者无法把颜色换算成数值
@@ -146,6 +153,32 @@ export function estimateTextWidth(text: string, fontSize: number): number {
   return w;
 }
 
+/**
+ * SVG 文本折行（与栅格版 `figureCanvas.wrapText` 同口径）。
+ *
+ * 为什么矢量侧单独一份而不是共用：栅格版要 `CanvasRenderingContext2D.measureText`
+ * （精确但依赖 DOM），矢量侧只该依赖 `estimateTextWidth`（纯函数、可离线测）；
+ * 强行共用会让矢量合成在无 DOM 环境（单测/PDF 生成）里挂掉。
+ * **两份必须同口径**（中文按字断、ASCII 按词断），改一处要同步另一处。
+ */
+export function wrapSvgText(text: string, maxWidth: number, fontSize: number): string[] {
+  if (!text) return [];
+  if (maxWidth <= 0 || estimateTextWidth(text, fontSize) <= maxWidth) return [text];
+  const lines: string[] = [];
+  let line = "";
+  const tokens = String(text).match(/[\u2E80-\u9FFF\uFF00-\uFFEF]|[^\s\u2E80-\u9FFF\uFF00-\uFFEF]+|\s+/g) ?? [];
+  for (const token of tokens) {
+    if (estimateTextWidth(line + token, fontSize) <= maxWidth || !line) {
+      line += token;
+      continue;
+    }
+    if (line) lines.push(line);
+    line = token.replace(/^\s+/, "");
+  }
+  if (line) lines.push(line);
+  return lines.length ? lines : [text];
+}
+
 /** 色带刻度：等距 n+1 个（与 `ColorLegend.legendTicks` 同口径） */
 export function vectorTicks(min: number, max: number, n = 4): number[] {
   const count = Math.max(1, Math.floor(n));
@@ -191,36 +224,43 @@ export function buildVectorFigure(spec: VectorFigureSpec): VectorFigure {
 
   const sized = measured.map((m) => ({ ...m, w: Math.max(40, Math.round(contentH * m.ar)), h: contentH }));
 
+  /** 图例面板宽度：按最长标签估（与栅格版 `legendMetrics` 同口径，单列竖排、上限 260） */
+  const legendItems = spec.legend ?? [];
+  const legendW = legendItems.length
+    ? Math.round(Math.max(120, Math.min(260, 10 + 4 + legendItems.reduce((m, it) => Math.max(m, estimateTextWidth(it.label, theme.page.tickSize)), 0) + 12)))
+    : 0;
+
   const contentW = sized.reduce((s, m) => s + m.w, 0) + GAP * Math.max(0, sized.length - 1)
+    + (legendW ? legendW + GAP : 0)
     + (spec.trailing ? spec.trailing.width + GAP : 0);
-  const headH = spec.title ? theme.page.titleSize + 12 + (spec.subtitle ? theme.page.labelSize + 8 : 0) : 0;
-  const capH = spec.caption ? theme.page.captionSize + 12 : 0;
   const width = Math.max(320, Math.round(contentW + pad * 2));
-  const height = Math.round(pad + headH + contentH + capH + pad);
+
+  /**
+   * ── 图下区（版面规则见 `figureLayout` 模块说明）──
+   * **图题在图的下方居中、图注在左下**：顺序与间距由公用模块算出，本渲染器只画。
+   * 原先本文件自己算了一份（而且**标题还画在图上方**，与栅格版不一致 —— 用户实机看到的就是这种）。
+   */
+  const noteTexts = [spec.subtitle, spec.caption].filter((t): t is string => !!t && String(t) !== "");
+  const noteLines: string[] = [];
+  for (const t of noteTexts) noteLines.push(...wrapSvgText(t, width - pad * 2, theme.page.captionSize));
+  const sizing = layoutFigure({
+    theme,
+    contentHeight: contentH,
+    hasTitle: !!spec.title,
+    noteLineCount: noteLines.length,
+  });
+  const height = sizing.height;
 
   // 底色（缺省透明）：铺在**最底层**，让所有面板叠在它上面
   if (spec.background) {
     parts.push(`<rect x="0" y="0" width="${width}" height="${height}" fill="${spec.background}"/>`);
   }
 
-  let y = pad;
-  if (spec.title) {
-    // ⚠️ 标题**不加 font-weight="600"**：PDF 里只注册了 normal 字重，
-    // svg2pdf 遇到 600 会去找 '600normal' 字体并告警（"Unable to look up font label"），
-    // 中文环境下还可能导致该行落回缺中文字形的标准字体。宁可少一个粗细层次。
-    parts.push(
-      `<text x="${pad}" y="${y + theme.page.titleSize}" font-family="${esc(theme.fontFamily)}" font-size="${theme.page.titleSize}" fill="${theme.text}">${esc(spec.title)}</text>`,
-    );
-    y += theme.page.titleSize + 12;
-    if (spec.subtitle) {
-      parts.push(
-        `<text x="${pad}" y="${y + theme.page.labelSize}" font-family="${esc(theme.fontFamily)}" font-size="${theme.page.labelSize}" fill="${theme.textMuted}">${esc(spec.subtitle)}</text>`,
-      );
-      y += theme.page.labelSize + 8;
-    }
-  }
+  /** 图下区起点（内容行之后），供标题/图注共用 */
+  const belowTop = sizing.belowTop;
 
-  const contentTop = y;
+  // 内容行从顶部开始（标题已移到图下，见上方说明）
+  const contentTop = sizing.contentTop;
   let x = pad;
   sized.forEach((m, i) => {
     if (i > 0) {
@@ -245,6 +285,24 @@ export function buildVectorFigure(spec: VectorFigureSpec): VectorFigure {
     x += m.w + GAP;
   });
 
+  // ── 材料图例（带色块，单列竖排；与栅格版 `drawLegend` 同口径）──
+  if (legendItems.length) {
+    const lx = x;
+    parts.push(
+      `<line x1="${lx - GAP / 2}" y1="${contentTop + 6}" x2="${lx - GAP / 2}" y2="${contentTop + contentH - 6}" stroke="${theme.border}" stroke-width="1"/>`,
+    );
+    const ROW = 22;
+    const SW = 10;
+    legendItems.slice(0, 14).forEach((it, i) => {
+      const cy = contentTop + 6 + i * ROW + ROW / 2;
+      parts.push(
+        `<rect x="${lx}" y="${round(cy - SW / 2)}" width="${SW}" height="${SW}" fill="${it.color}" stroke="${theme.border}" stroke-width="1"/>`,
+        `<text x="${lx + SW + 4}" y="${round(cy + theme.page.tickSize / 3)}" font-family="${esc(theme.fontFamily)}" font-size="${theme.page.tickSize}" fill="${theme.text}">${esc(it.label)}</text>`,
+      );
+    });
+    x += legendW + GAP;
+  }
+
   // 尾随片段（色带图例）：与内容同高、贴右，独立不参与面板等比缩放（色带是标尺，不该被拉伸）
   if (spec.trailing) {
     const t = spec.trailing;
@@ -263,9 +321,15 @@ export function buildVectorFigure(spec: VectorFigureSpec): VectorFigure {
     parts.push(`<g transform="translate(${round(x)},${round(top)})">${inner.inner}</g>`);
   }
 
-  if (spec.caption) {
+  // ── 图下区：居中图题 → 左对齐图注（坐标全部来自公用版面模块 figureLayout）──
+  for (const b of figureTextBlocks({ theme, sizing, width, title: spec.title, noteLines })) {
+    // ⚠️ 图题**不加 font-weight="600"**：PDF 里只注册了 normal 字重，
+    // svg2pdf 遇到 600 会去找 '600normal' 字体并告警（"Unable to look up font label"），
+    // 中文环境下还可能导致该行落回缺中文字形的标准字体。宁可少一个粗细层次。
+    const weight = b.kind === "title" ? "" : "";
+    const anchor = b.align === "center" ? ` text-anchor="middle"` : "";
     parts.push(
-      `<text x="${pad}" y="${height - pad}" font-family="${esc(theme.fontFamily)}" font-size="${theme.page.captionSize}" fill="${theme.caption}">${esc(spec.caption)}</text>`,
+      `<text x="${round(b.x)}" y="${round(b.y)}"${anchor} font-family="${esc(theme.fontFamily)}" font-size="${b.size}"${weight} fill="${b.color}">${esc(b.text)}</text>`,
     );
   }
 

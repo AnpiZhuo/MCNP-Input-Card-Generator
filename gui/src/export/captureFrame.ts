@@ -346,7 +346,7 @@ const SVG_STYLE_PROPS = [
  * @param el 目标 `<svg>`（一般是 `svgRef.current`）
  * @param stripSelector 额外要剔除的元素选择器（如悬停提示层）
  */
-export function snapshotSvg(el: SVGSVGElement | null | undefined, opts: { stripSelector?: string; background?: string | null } = {}): string | null {
+export function snapshotSvg(el: SVGSVGElement | null | undefined, opts: { stripSelector?: string; background?: string | null; strokeScale?: number } = {}): string | null {
   if (!el || typeof window === "undefined") return null;
   try {
     const clone = el.cloneNode(true) as SVGSVGElement;
@@ -403,6 +403,34 @@ export function snapshotSvg(el: SVGSVGElement | null | undefined, opts: { stripS
     if (!clone.getAttribute("width") && rect.width) clone.setAttribute("width", String(Math.round(rect.width)));
     if (!clone.getAttribute("height") && rect.height) clone.setAttribute("height", String(Math.round(rect.height)));
     if (!vb && rect.width && rect.height) clone.setAttribute("viewBox", `0 0 ${Math.round(rect.width)} ${Math.round(rect.height)}`);
+
+    /**
+     * ── `vector-effect="non-scaling-stroke"` 的导出换算（2026-09-19）──
+     *
+     * 屏幕上用该属性把描边锚在**屏幕像素**上是对的（缩放时线宽不漂移，见 `CrossSectionView`
+     * 的描边注释）。但**它出了文档就没意义**：等值线/截面多边形被合成进版面时会再缩放一次，
+     * 而 `non-scaling-stroke` 在部分渲染路径（含 svg→canvas 的光栅化）根本不生效
+     * ⇒ 描边被当成**用户单位**直接乘以缩放比，导出图里边界比屏幕上重得多（用户实测到过）。
+     *
+     * 所以导出时**摘掉该属性，并把线宽换算成用户坐标**：`新宽度 = 原宽度 / strokeScale`，
+     * 其中 `strokeScale` = 面板在版面里的显示尺寸 / 屏幕像素尺寸。换算后，
+     * 无论面板被缩放到多大，边界线**始终是 1.2px 的细线**。
+     *
+     * 不传 `strokeScale`（默认）＝保持原样：本函数对"没有该属性"的 SVG 完全无影响。
+     */
+    if (opts.strokeScale && opts.strokeScale > 0) {
+      const targets: Element[] = [clone, ...Array.from(clone.querySelectorAll("*"))];
+      for (const t of targets) {
+        const effect = t.getAttribute("vector-effect");
+        if (!effect || !/non-scaling-stroke/i.test(effect)) continue;
+        t.removeAttribute("vector-effect");
+        const w = parseFloat(t.getAttribute("stroke-width") ?? "");
+        if (Number.isFinite(w) && w > 0) {
+          t.setAttribute("stroke-width", String(Math.round((w / opts.strokeScale) * 1000) / 1000));
+        }
+      }
+    }
+
     clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
     clone.removeAttribute("style"); // 去掉屏幕定位样式（position/inset 等对导出无意义）
     const inner = new XMLSerializer().serializeToString(clone);

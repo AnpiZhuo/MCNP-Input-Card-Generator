@@ -16,6 +16,7 @@
 import { themeFor, rgbOf, type PlotTheme } from "./plotTheme";
 import { svgToRaster } from "./captureFrame";
 import { splitSvg } from "./vectorFigure";
+import { figureTextBlocks, layoutFigure } from "./figureLayout";
 
 /** 一个图例条目（材料图例 / 迹线说明） */
 export interface LegendItem {
@@ -213,14 +214,10 @@ export function renderFigure(spec: FigureSpec, opts: { background?: string | nul
   const width = Math.max(320, Math.round(contentW + pad * 2));
 
   /**
-   * ── 图下区（2026-09-19 按中文期刊规范调整版式）──
-   *
-   * 规范：**图序与图题排在图的下方、居中**（GB/T 7713 系列学位论文/学术论文编写规则）；
-   * 参数、来源等说明性文字作小字图注放在图下**左侧**。
-   * 调整前是"标题在上、脚注在下"——那不符合图的编号与位置惯例。
-   *
-   * 版面自上而下：内容行 → 居中图题（= 原 `title`）→ 左对齐图注
-   * （= 原 `subtitle` 与 `caption` 合并，逐行折行）。
+   * ── 图下区（版面规则见 `figureLayout` 模块说明）──
+   * **图题在图的下方居中、图注在左下**，顺序与间距由公用模块算出，
+   * 本渲染器只负责"把字画上去"。原先这段规则在本文件里自己写了一份，
+   * 与矢量版 `vectorFigure` 各写一份 ⇒ 漂移成"栅格版图题在下、矢量版还在上"。
    */
   const noteTexts = [spec.subtitle, spec.caption].filter((t): t is string => !!t && String(t) !== "");
   const noteLines: string[] = [];
@@ -228,9 +225,14 @@ export function renderFigure(spec: FigureSpec, opts: { background?: string | nul
     ctxProbe.font = `${theme.page.captionSize}px ${theme.fontFamily}`;
     noteLines.push(...wrapText(ctxProbe, t, width - pad * 2));
   }
-  const titleH = spec.title ? theme.page.titleSize + 8 : 0;
-  const noteH = noteLines.length ? noteLines.length * (theme.page.captionSize + 4) + 8 : 0;
-  const height = Math.round(pad + contentH + titleH + noteH + pad);
+  const sizing = layoutFigure({
+    theme,
+    contentHeight: contentH,
+    hasTitle: !!spec.title,
+    noteLineCount: noteLines.length,
+  });
+  const titleH = sizing.titleH;
+  const height = sizing.height;
 
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -262,23 +264,13 @@ export function renderFigure(spec: FigureSpec, opts: { background?: string | nul
     x += m.w + gap;
   });
 
-  // ── 图下区：居中图题（图序 图题）→ 左对齐图注（参数/来源） ──
-  let below = contentTop + contentH;
-  if (spec.title) {
-    ctx.fillStyle = theme.text;
-    ctx.font = `600 ${theme.page.titleSize}px ${theme.fontFamily}`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-    ctx.fillText(spec.title, width / 2, below + 4);   // 居中（规范：图题在图下居中）
-    below += titleH;
-  }
-  if (noteLines.length) {
-    ctx.fillStyle = theme.caption;
-    ctx.font = `${theme.page.captionSize}px ${theme.fontFamily}`;
-    ctx.textAlign = "left";
-    ctx.textBaseline = "top";
-    const lineH = theme.page.captionSize + 4;
-    noteLines.forEach((line, i) => ctx.fillText(line, pad, below + 4 + i * lineH));
+  // ── 图下区：居中图题 → 左对齐图注（坐标全部来自公用版面模块 figureLayout）──
+  for (const b of figureTextBlocks({ theme, sizing, width, title: spec.title, noteLines })) {
+    ctx.fillStyle = b.color;
+    ctx.font = `${b.weight ? b.weight + " " : ""}${b.size}px ${theme.fontFamily}`;
+    ctx.textAlign = b.align;
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(b.text, b.x, b.y);
   }
 
   return { canvas, width, height };

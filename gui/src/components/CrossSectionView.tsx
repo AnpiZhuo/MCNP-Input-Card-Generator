@@ -224,12 +224,40 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
    * 不内联样式会整片变黑），配材料图例，组合后出**透明底 PNG**。
    */
   const buildExport = () => {
-    const svg = snapshotSvg(svgRef.current, { stripSelector: '[data-export-strip="1"]' });
+    /**
+     * 描边换算比：**导出面板的显示宽度 / 屏幕上的像素宽度**。
+     *
+     * 为什么要在导出时手动换算：屏幕上的描边靠 `vector-effect="non-scaling-stroke"`
+     * 锚在屏幕像素上，而该属性出了文档（被合成进版面、再光栅化）不保证生效
+     * —— 那样描边会被当成用户单位乘以面板缩放比，导出图里的材料边界就比屏幕重。
+     * 这里把比例交给 `snapshotSvg({ strokeScale })`，由它摘掉该属性并把线宽换成用户坐标。
+     * `panelWidth` 用导出时的印张基准（与 `vectorFigure` 的 `PRINT_MAX_PANEL_SIDE` 同口径）。
+     */
+    const screenRect = svgRef.current?.getBoundingClientRect();
+    const panelW = Math.min(640, Math.round(screenRect?.width ?? 640)) || 640;
+    const strokeScale = screenRect && screenRect.width > 0 ? panelW / screenRect.width : 1;
+    const svg = snapshotSvg(svgRef.current, {
+      stripSelector: '[data-export-strip="1"]',
+      strokeScale,
+    });
     const legend = materialLegendEntries(
       cellData.map((cd) => cd.material),
       materials ?? (deck as any)?.materials,
     ).map((e) => ({ color: matColor(e.mat), label: `M${e.mat}${e.comment ? " " + e.comment : ""}` }));
-    const panels = svg ? [{ svg, heading: `截面 ${planeLabel}` }] : [];
+    /**
+     * ⚠️ **不再给面板加 heading**（2026-09-19 用户实测：导出图里"面板标题 + 下划线"
+     * 与副标题叠在一起）。
+     * 原因：副标题已写"切割平面 0X+0Y+1Z=0"，heading 又写一遍同一个方程，
+     * 而 heading 的强调线正好落在副标题的基线高度上 ⇒ 叠字 + 多一条红线。
+     * 平面方程与栅元/多边形计数属**图注**信息，留在 subtitle 一处即可。
+     */
+    const panels = svg ? [{ svg }] : [];
+    /**
+     * 材料图例：**带色块的图例**，不是一行材料名清单。
+     * 原来只把材料名拼进 caption ⇒ 黑白打印后读者无法把图里的颜色对应到材料，
+     * 而"图内符号必须有说明"是期刊硬要求。
+     * 几何面板保持**矢量**（截面本来就是多边形，栅格化会把文字与轮廓糊掉）。
+     */
     return {
       view: "截面",
       nameParts: [`${plane.A}/${plane.B}/${plane.C}`, plane.D],
@@ -237,7 +265,8 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
         title: "二维截面",
         subtitle: subtitleOf([`切割平面 ${planeLabel}`, `栅元 ${cellData.length} 个 / 多边形 ${totalPolys} 个`]),
         panels,
-        caption: legend.length ? `材料：${legend.map((l) => l.label).join("、")}` : undefined,
+        legend: legend.length ? legend : undefined,
+        caption: "材料配色与屏幕一致；同一平面内重叠区按先声明者占有显示",
       }),
     };
   };
@@ -301,8 +330,24 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
                 fill: cd.color,
                 fillOpacity: 0.45,
                 stroke: cd.color,
-                strokeWidth: 1.5 / zoom,
-                strokeOpacity: 0.9,
+                /**
+                 * ── 描边为什么这么定（2026-09-19 用户实测"材料边界描边还是太重"）──
+                 *
+                 * 旧实现 `1.5 / zoom`：数值**写在用户坐标里**，于是
+                 *   ① 视图缩放到 0.9 时线反而**变粗**（1.5/0.9 = 1.67 用户单位）；
+                 *   ② 滚轮拉近（zoom→1.5）线**变细**；拉远（zoom→0.2）线粗到 6.5 用户单位
+                 *      —— **缩放时线宽自己乱变**，这是当初"加粗"观感的来源。
+                 *   ③ 导出到矢量面板时，整张 SVG 还要被 `panelTransform` 缩放，
+                 *      描边**再被放大一次** ⇒ 导出图里的边界比屏幕上更重（用户这次报的就是它）。
+                 *
+                 * 现在：**屏幕空间恒定** —— 用 `vector-effect="non-scaling-stroke"` 把线宽锚在
+                 * 屏幕像素上（1.2px，细而清楚），缩放时线宽不再漂移；
+                 * 导出时 `snapshotSvg({ strokeScale })` 会把该属性摘掉并**换算成用户坐标**
+                 * （`1.2 / strokeScale`），保证导出图里边界同样是 1.2px 的细线。
+                 */
+                strokeWidth: 1.2,
+                vectorEffect: "non-scaling-stroke",
+                strokeOpacity: 0.85,
               })
             )
           ),
@@ -318,9 +363,16 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
       /* 右侧控制面板 */
       React.createElement("div", {
         style: {
-          width: 220, borderLeft: "1px solid rgba(255,255,255,0.08)",
+          /**
+           * 宽度 220 → **280**（2026-09-19 用户实测"截面界面排版有问题"）。
+           * 根因：共享控件 `PlaneControls` 在 `showStepButtons` 打开时，步长那行要
+           * 4 个按钮 + 1 个输入框（实测 **274px**），而 220 的面板减去左右 padding 只剩 ~190px
+           * ⇒ 横向溢出、面板底部出现横向滚动条、控件被切掉。
+           * 修法两条一起上：**面板加宽** + `PlaneControls` 传 `stacked`（拆成三行，每行只需 ~148px）。
+           */
+          width: 280, borderLeft: "1px solid rgba(255,255,255,0.08)",
           background: "rgba(10,10,30,0.6)", display: "flex", flexDirection: "column",
-          flexShrink: 0, padding: "12px 14px", gap: 4, overflow: "auto",
+          flexShrink: 0, padding: "12px 14px", gap: 4, overflowY: "auto", overflowX: "hidden",
         } as React.CSSProperties,
       },
         /* 材料颜色对照（与 3D 预览同一共享组件）：注释**只**取材料页，栅元注释留在栅元列表 */
@@ -330,19 +382,21 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
             materials ?? (deck as any)?.materials,
           ),
         }),
-        /* 平面 + 步进（共享控件：方程解析/步长语义与 3D 预览、切面面板完全一致） */
+        /* 平面 + 步进（共享控件：方程解析/步长语义与 3D 预览、切面面板完全一致）
+           stacked：本栏窄，步长与步进拆成上下两行，避免 274px 的行宽撑破 280px 的面板 */
         React.createElement(PlaneControls, {
           plane: plane,
           onPlaneChange: (p) => { if (onPlaneChange) onPlaneChange(p); },
           step: step,
           onStepChange: setStep,
           showStepButtons: !!onPlaneChange,
+          stacked: true,
           onStepMove: (p) => { if (onPlaneChange) onPlaneChange(p); },
           stepTitle: "沿法向平移一个步长并重新切",
         }),
-        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, margin: "8px 0 4px" } as React.CSSProperties },
-          React.createElement("span", { style: { fontSize: 11, color: "var(--text-secondary)", flex: 1 } }, "🔄 旋转"),
-          React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: () => setRotation(r => r - 15), style: { fontSize: 10 } }, "◀"),
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, margin: "8px 0 4px", minWidth: 0 } as React.CSSProperties },
+          React.createElement("span", { style: { fontSize: 11, color: "var(--text-secondary)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "🔄 旋转"),
+          React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: () => setRotation(r => r - 15), style: { fontSize: 10, flexShrink: 0 } }, "◀"),
           React.createElement("input", {
             type: "text",
             value: `${rotation}°`,
@@ -350,10 +404,10 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
               const v = parseInt(e.target.value.replace(/[°]/g, ""));
               if (!isNaN(v)) setRotation(v);
             },
-            style: { width: 40, height: 20, fontSize: 10, textAlign: "center", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-primary)", borderRadius: 3, outline: "none" } as React.CSSProperties,
+            style: { width: 40, height: 20, fontSize: 10, textAlign: "center", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-primary)", borderRadius: 3, outline: "none", flexShrink: 0 } as React.CSSProperties,
           }),
-          React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: () => setRotation(r => r + 15), style: { fontSize: 10 } }, "▶"),
-          React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: () => setRotation(0), style: { fontSize: 9 } }, "复位"),
+          React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: () => setRotation(r => r + 15), style: { fontSize: 10, flexShrink: 0 } }, "▶"),
+          React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: () => setRotation(0), style: { fontSize: 9, flexShrink: 0 } }, "复位"),
         ),
         React.createElement("hr", { style: { width: "100%", border: "none", borderTop: "1px solid rgba(255,255,255,0.06)", margin: "8px 0" } }),
         React.createElement("span", { style: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 4 } }, "栅元列表"),

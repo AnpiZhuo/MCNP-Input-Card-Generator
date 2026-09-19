@@ -27,6 +27,14 @@ export interface PlaneControlsProps {
   onSubmitPlane?: (plane: PlaneEq) => void;
   /** 紧凑模式（体积窗口右栏窄，用更小字号） */
   compact?: boolean;
+  /**
+   * 堆叠模式：**窄栏专用**，把「步长」与「步进」拆成上下两行。
+   *
+   * 为什么需要：`showStepButtons` 打开后，步长那一行要塞 4 个按钮 + 1 个输入框，
+   * 实测宽 **274 px**；截面窗口右栏只有 ~190 px 可用 ⇒ 横向溢出、出现横向滚动条、控件被切。
+   * 堆叠后每行只需要 ~148 px。（3D 预览侧栏 300 px 够宽，用默认单行即可。）
+   */
+  stacked?: boolean;
   /** 步进按钮的提示（不同窗口语义不同） */
   stepTitle?: string;
   /** 注入到方程行下方的附加控件（如体积窗口的「轴 + 层号」滑块） */
@@ -35,7 +43,7 @@ export interface PlaneControlsProps {
 
 export function PlaneControls({
   plane, onPlaneChange, step, onStepChange,
-  showStepButtons = false, onStepMove, onSubmitPlane, compact = false, stepTitle, extra,
+  showStepButtons = false, onStepMove, onSubmitPlane, compact = false, stacked = false, stepTitle, extra,
 }: PlaneControlsProps) {
   const [text, setText] = useState(() => planeToStr(plane));
   const fs = compact ? 10 : 11;
@@ -68,49 +76,90 @@ export function PlaneControls({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-        <span style={{ fontSize: fs, color: "var(--text-secondary)", flexShrink: 0 }}>平面</span>
-        <input
-          type="text"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onBlur={submit}
-          onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
-          placeholder="X + Y + Z = 0"
-          title="切割平面方程 AX + BY + CZ = D，例如 Z = 12.5 或 X + Y = 0"
-          style={inputStyle}
-        />
-      </div>
-      {extra}
+      {stacked ? (
+        <>
+          {/* 窄栏：标签占固定一列，控件独占其余宽度，保证输入框不会挤到 0 */}
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: fs, color: "var(--text-secondary)", flexShrink: 0, width: 28 }}>平面</span>
+            <input
+              type="text"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onBlur={submit}
+              onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+              placeholder="X + Y + Z = 0"
+              title="切割平面方程 AX + BY + CZ = D，例如 Z = 12.5 或 X + Y = 0"
+              style={inputStyle}
+            />
+          </div>
+          {extra}
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: fs, color: "var(--text-secondary)", flexShrink: 0, width: 28 }}>步长</span>
+            <input
+              type="text"
+              value={String(step)}
+              onChange={(e) => { const v = parseFloat(e.target.value); if (isFinite(v) && v > 0) onStepChange(v); }}
+              title="沿法向每次移动的 D 增量"
+              style={{ flex: 1, minWidth: 0, padding: "2px 4px", fontSize: fs, textAlign: "center", background: "var(--bg-input)", border: "1px solid var(--border-glass)", color: "var(--text-primary)", borderRadius: 4 }}
+            />
+            <button className="btn btn-ghost btn-xs" onClick={() => onStepChange(halveStep(step))} style={{ fontSize: fs, flexShrink: 0 }} title="步长减半">÷2</button>
+            <button className="btn btn-ghost btn-xs" onClick={() => onStepChange(doubleStep(step))} style={{ fontSize: fs, flexShrink: 0 }} title="步长加倍">×2</button>
+          </div>
+          {showStepButtons && (
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ fontSize: fs, color: "var(--text-secondary)", flexShrink: 0, width: 28 }}>步进</span>
+              <button className="btn btn-ghost btn-xs" onClick={() => move(-1)} style={{ flex: 1, fontSize: fs, minWidth: 0 }} title={stepTitle ?? "沿法向后退一个步长"}>◀ 退</button>
+              <button className="btn btn-ghost btn-xs" onClick={() => move(1)} style={{ flex: 1, fontSize: fs, minWidth: 0 }} title={stepTitle ?? "沿法向前进一个步长"}>进 ▶</button>
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+            <span style={{ fontSize: fs, color: "var(--text-secondary)", flexShrink: 0 }}>平面</span>
+            <input
+              type="text"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onBlur={submit}
+              onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+              placeholder="X + Y + Z = 0"
+              title="切割平面方程 AX + BY + CZ = D，例如 Z = 12.5 或 X + Y = 0"
+              style={inputStyle}
+            />
+          </div>
+          {extra}
 
-      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-        <span style={{ fontSize: fs, color: "var(--text-secondary)", flexShrink: 0 }}>步长</span>
-        <button
-          className="btn btn-ghost btn-xs"
-          onClick={() => onStepChange(halveStep(step))}
-          style={{ fontSize: fs }}
-          title="步长减半"
-        >◀</button>
-        <input
-          type="text"
-          value={String(step)}
-          onChange={(e) => { const v = parseFloat(e.target.value); if (isFinite(v) && v > 0) onStepChange(v); }}
-          title="沿法向每次移动的 D 增量"
-          style={{ width: 56, padding: "2px 4px", fontSize: fs, textAlign: "center", background: "var(--bg-input)", border: "1px solid var(--border-glass)", color: "var(--text-primary)", borderRadius: 4 }}
-        />
-        <button
-          className="btn btn-ghost btn-xs"
-          onClick={() => onStepChange(doubleStep(step))}
-          style={{ fontSize: fs }}
-          title="步长加倍"
-        >▶</button>
-        {showStepButtons && (
-          <>
-            <button className="btn btn-ghost btn-xs" onClick={() => move(-1)} style={{ fontSize: fs }} title={stepTitle ?? "沿法向后退一个步长"}>◀ 退</button>
-            <button className="btn btn-ghost btn-xs" onClick={() => move(1)} style={{ fontSize: fs }} title={stepTitle ?? "沿法向前进一个步长"}>进 ▶</button>
-          </>
-        )}
-      </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: fs, color: "var(--text-secondary)", flexShrink: 0 }}>步长</span>
+            <button
+              className="btn btn-ghost btn-xs"
+              onClick={() => onStepChange(halveStep(step))}
+              style={{ fontSize: fs }}
+              title="步长减半"
+            >◀</button>
+            <input
+              type="text"
+              value={String(step)}
+              onChange={(e) => { const v = parseFloat(e.target.value); if (isFinite(v) && v > 0) onStepChange(v); }}
+              title="沿法向每次移动的 D 增量"
+              style={{ width: 56, padding: "2px 4px", fontSize: fs, textAlign: "center", background: "var(--bg-input)", border: "1px solid var(--border-glass)", color: "var(--text-primary)", borderRadius: 4 }}
+            />
+            <button
+              className="btn btn-ghost btn-xs"
+              onClick={() => onStepChange(doubleStep(step))}
+              style={{ fontSize: fs }}
+              title="步长加倍"
+            >▶</button>
+            {showStepButtons && (
+              <>
+                <button className="btn btn-ghost btn-xs" onClick={() => move(-1)} style={{ fontSize: fs }} title={stepTitle ?? "沿法向后退一个步长"}>◀ 退</button>
+                <button className="btn btn-ghost btn-xs" onClick={() => move(1)} style={{ fontSize: fs }} title={stepTitle ?? "沿法向前进一个步长"}>进 ▶</button>
+              </>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -71,6 +71,8 @@ export interface TwoDExportInput {
   subtitle?: string;
   /** 主图（矢量 SVG 文本） */
   panels: VectorPanel[];
+  /** 材料图例（带色块）：矢量侧同样要求"图内颜色可查"，见 `VectorFigureSpec.legend` */
+  legend?: { color: string; label: string }[];
   caption?: string;
   contentHeight?: number;
   /** 追加在右侧的矢量片段（色带图例等）；有颜色填充的图必须给，否则颜色无刻度可读 */
@@ -83,6 +85,7 @@ export function build2dSpec(input: TwoDExportInput): VectorFigureSpec {
     title: input.title,
     subtitle: input.subtitle,
     panels: input.panels,
+    legend: input.legend,
     caption: input.caption,
     theme: "paper",
     contentHeight: input.contentHeight ?? 360,
