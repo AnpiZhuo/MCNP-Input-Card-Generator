@@ -259,7 +259,34 @@ MD5 一致（`2B47458F…`）；**`sync-sidecar` 再次自报"陈旧"并自动�
 **门禁（实跑）**：pytest `tests/unit tests/parser` = **882 passed / 1 failed**（既有 GBK 环境失败
 `test_meshtal_worker::test_worker_spawn_dev_mode_bad_tally_error`，与本次无关）；
 vitest **94 files / 781 passed**（+24）；tsc 两档 **0**。
-**④⑤ 只在出图与配色层，不动后端接口**；但 viridis 属**跨语言契约变更**，`_internal` 里的 `colormap.py` 会随之重打包。
+
+### S8.10 S8.9 的提交与打包（2026-09-19 同日，**版本仍 1.7.6**）
+
+**提交**：`1b78ac1 feat(export): 按中文期刊要求整改出图（量单位标注 / 图题在图下 / PNG 物理尺寸 / viridis 色表）`
+（14 文件：2 个新模块/新测试 + 三处色表契约 + 两个 golden）。
+
+**打包（`node scripts/build-release.mjs`，381 s / EXIT 0）**：
+- 轮 `tauri build` 40.59 s；PyInstaller 产物 `python.exe` **32,514,579 B** / `_internal` 7867；
+- **6.2 坑这次把差异点名了**（本批的价值体现）：`sync-sidecar` 报
+  `大小不符 1 个，如：app/meshtal/colormap.py (src 3231 B / dst 2484 B)` 并**自动覆盖 + 复核一致**
+  —— **色表改动确实进了包**（这条比"报个大小不符"有用得多，是脚本升级后的产物）；
+- 备份 `D:\MCNP\_backup_1.7.6_20260919_185826`（7877 文件）→ 部署 `D:\MCNP\MCNP输入卡生成器`：
+  exe **6,607,872 B** / `python.exe` **32,514,579 B** / `colormap.py` **3231 B**（= 新版大小）/ 总 7871 文件。
+
+**部署验证（这次两条都是"文件级"硬证据，不靠猜）**：
+1. **exe 内前端 bundle 指纹** = `index-BPp0bFCS.js`，且**不含**上一版的 `index-BZkpsDuI.js` ⇒ 前端改动进了交付产物；
+2. **在部署目录上复算 colormap 的 golden sha256** = `44694904…`（与新 golden **逐位一致**）⇒ 色表改动进了 sidecar。
+
+**冒烟（部署版 sidecar，临时副本起）**：`xsdir-check` / `mcnp-detect` / `diff-inp` 全 **ok**；
+`meshtal-texture`（走 `_meshtal_worker` 子进程，**正是 colormap 所在的链路**）**status=ok**，
+返回 `scalarRange 1.24e-5~1.52e-5` + 帧字段齐；`preview-3d` **ok**（3 个 STL）。
+> 冒烟笔记：`tests/fixtures/real_meshtal_jk.meshtal` 的 tally 号是 **14**（记忆里早先记过这条），
+> 用 4 会得到 `KeyError: tally number 4 不存在` —— **那是夹具的计数号不对，不是缺陷**。
+
+**⚠️ 待用户目视确认（本批两次改动都只有实机能判）**：① 出图是否为"轴线带量名称/单位、图题在图下居中、白底、
+文字明显变大"；② **viridis 低值端很暗**，在深色屏幕上看低值结构可能比原来的亮蓝"显得更少"，
+这是色表取舍（打印可辨 ↔ 屏幕亮底可辨）的必然后果 —— 如果观感不能接受，可只在**出图**用 viridis、
+屏幕保留亮色表（代价：屏幕与出图配色不再一一对应，需用户拍板）。
 
 ## S7（上一批次）格阵编辑器「改范围就乱序」（2026-09-15，**纯前端 · 版本仍 1.7.6 · 未重打包**）
 
