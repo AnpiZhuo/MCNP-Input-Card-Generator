@@ -642,9 +642,20 @@ class DistributionSampler:
             return si_vals[idx]
 
         if si_type == "A":
-            # A 型（概率密度点）没有分箱概率，SB 表对它的偏倚语义不成立（C810 3-63：
-            # SB 的第一形态与 SP 同规则，而 A 的 SP 是**密度值**不是概率）⇒ 不补偿。
-            return self._sample_A(si_vals, self._floats(sp.get("values")), rng)
+            # A 型（概率密度定义点）：SP 给的是**概率密度**（C810 p.3-63 SP 第一形态：
+            # 「omitted—… **Probability density for an A distribution on SI card**」，
+            # 锚点 #C810-3-63-SP-OPTIONS）；SB 存在时它同样是**偏倚密度**（p.3-64：
+            # 「All rules that apply to the first form of the SP card apply to the SB card.」，
+            # 锚点 #C810-3-64-SB-RULES）⇒ 按偏倚密度抽样、权重 = 真密度/偏倚密度（各自归一化）。
+            #
+            # 旧实现这里是「A 型没有分箱概率 ⇒ SB 语义不成立 ⇒ 不补偿」——错在把 A 的
+            # SP 当成"概率"看；实测官方 photon_kerma 的 `biased interpolated distribution`
+            # 就是「A 型 + SB + weight multiplier 列」，权重恒 1.0 属缺陷（S6）。
+            return self._sample_A(si_vals, self._floats(sp.get("values")), rng,
+                                  sb_vals=(self._floats(sb.get("values"))
+                                           if sb and not (sb.get("fnCode") or "").strip()
+                                           else None),
+                                  corr=corr)
 
         raise SourceSamplingError(f"SI 类型 {si_type or '空'} 无效（MCNP 仅支持 H/L/A/S）")
 
@@ -746,7 +757,32 @@ class DistributionSampler:
         raise SourceSamplingError(f"SP 概率个数（{len(vals)}）与 SI 值个数不匹配（需 {n}）")
 
     # ── SI A 概率密度点（线性插值逆 CDF）────────────────────
-    def _sample_A(self, xs, densities, rng):
+    def _sample_A(self, xs, densities, rng, sb_vals=None, corr=None):
+        """SI `A` 型（概率密度定义点）抽样 —— 密度在 SI 点上**线性插值**。
+
+        依据（C810 p.3-63，锚点 ``#C810-3-63-SP-OPTIONS``）：
+
+        * 「``SPn`` — omitted—… **Probability density for an A distribution on SI card**」
+          ⇒ A 型时 SP 的每一项是**该 SI 点上的概率密度**（官方 .out 的表头也直接写
+          ``probability density`` 一列，实测 photon_kerma 的 ``sp2 0 .006858 .012192 …``
+          与表里那一列逐位相同）；
+        * ``SB`` 存在时，「All rules that apply to the first form of the SP card apply to
+          the SB card」(p.3-64，锚点 ``#C810-3-64-SB-RULES``) ⇒ SB 给的是**偏倚密度**，
+          抽样按偏倚密度、权重补偿回真密度。
+
+        权重补偿（官方的 ``weight multiplier`` 列就是它，实测逐位吻合）::
+
+            w(x) = (d_true(x)/Z_true) / (d_bias(x)/Z_bias)
+                 = d_true(x)·Z_bias / (d_bias(x)·Z_true)
+
+        两个归一化常数 Z 是**各自密度在支撑上的梯形积分**。这一步**不能省**：手册给的 SP/SB
+        是"概率密度"（未归一），而官方 ``range of sampled source weights`` 报的是归一化后的
+        数字（实测 photon_kerma：``Z_true = 5e5``、``Z_bias = 6.393e5``，两者都要除）。
+
+        ``sb_vals`` 为空/``None`` ⇒ **逐位保持旧行为**（只按 SP 密度抽样、不补偿）：
+        随机数调用序列完全不变（同样是"一次 ``rng.uniform(0,total)`` 选段 +
+        段内一次 ``rng.uniform``"）。
+        """
         k = len(xs)
         if k < 2:
             raise SourceSamplingError("SI A 概率密度点不足（需 ≥2）")
@@ -755,6 +791,7 @@ class DistributionSampler:
         for i in range(1, k):
             if xs[i] < xs[i - 1]:
                 raise SourceSamplingError("SI A 密度点非单调递增")
+        # 密度必须非负（负密度无概率意义；官方也会拒收）
         masses = []
         total = 0.0
         for i in range(k - 1):
@@ -765,22 +802,93 @@ class DistributionSampler:
             total += m
         if total <= 0:
             raise SourceSamplingError("SI A 概率密度积分为零，无法抽样")
-        r = rng.uniform(0.0, total)
+
+        bias_dens = self._density_tab(sb_vals, k, "SB")
+        bias_masses = None
+        bias_total = 0.0
+        if bias_dens is not None:
+            bias_masses = [(bias_dens[i] + bias_dens[i + 1]) * 0.5 * (xs[i + 1] - xs[i])
+                           for i in range(k - 1)]
+            bias_total = sum(bias_masses)
+            if bias_total <= 0:
+                raise SourceSamplingError(
+                    "SB 偏倚密度在 SI 支撑上积分为零，无法按偏倚抽样"
+                    "（C810 p.3-64：SB 的第一形态规则同 SP，密度须非负且积分不为零）")
+
+        r = rng.uniform(0.0, total if bias_masses is None else bias_total)
+        seg = k - 2
+        acc = 0.0
         for i in range(k - 1):
-            if r < masses[i]:
-                x0, x1 = xs[i], xs[i + 1]
-                d0, d1 = densities[i], densities[i + 1]
-                dx = x1 - x0
-                s = (d1 - d0) / dx if dx > 0 else 0.0
-                # 解 s/2 t² + d0 t - r = 0（段内累积质量 = r）
-                if abs(s) < 1e-15:
-                    t = r / d0 if d0 > 0 else 0.0
-                else:
-                    disc = d0 * d0 + 2.0 * s * r
-                    t = (-d0 + math.sqrt(max(0.0, disc))) / s
-                return x0 + min(max(t, 0.0), dx)
-            r -= masses[i]
-        return xs[k - 1]
+            w = masses[i] if bias_masses is None else bias_masses[i]
+            if r < acc + w:
+                seg = i
+                break
+            acc += w
+        x0, x1 = xs[seg], xs[seg + 1]
+        dx = x1 - x0
+        # 段内逆 CDF 用的 d0/d1 **必须与选段用的是同一张密度表**：
+        # 偏倚抽样时选段由 SB 质量决定，段内必须按 SB 密度的线性插值反解，
+        # 否则会得到"选对了段、值却按真密度摆"的混合分布（旧代码这里残留着
+        # `densities[seg]`，把 SB 抽样整体带偏 —— 实测 photon_kerma D2 的箱
+        # [200,1000] 频率 0.0436（应为 0.2190）而 [1000,3000] 0.6885（应为 0.5005），
+        # 两个箱的质量被对调了）。
+        d0, d1 = (densities[seg], densities[seg + 1]) if bias_masses is None else \
+            (bias_dens[seg], bias_dens[seg + 1])
+        if dx <= 0:
+            x = x0
+        else:
+            # 段内按**线性密度**逆 CDF：解 (s/2)t² + d0·t = r'（r' = r − acc 是段内已累积质量）
+            rr = r - acc
+            s = (d1 - d0) / dx
+            if abs(s) < 1e-15:
+                t = rr / d0 if d0 > 0 else 0.0
+            else:
+                disc = d0 * d0 + 2.0 * s * rr
+                t = (-d0 + math.sqrt(max(0.0, disc))) / s
+            x = x0 + min(max(t, 0.0), dx)
+
+        if bias_masses is not None and corr is not None:
+            # 权重 = 真密度/偏倚密度（各自按自己的归一化常数）
+            d_true = self._lin(xs, densities, x)
+            d_bias = self._lin(xs, bias_dens, x)
+            if d_bias > 0:
+                corr["w"] *= (d_true / total) / (d_bias / bias_total)
+            else:
+                # 偏倚密度为 0 的点本不该被抽到（质量为零）；真按数值落到这里 ⇒ 因子 0，
+                # 与"真概率为 0 的档被抽中"同一口径（§ _bias_factor）
+                corr["w"] *= 0.0
+        return x
+
+    @staticmethod
+    def _density_tab(vals, k, card) -> list[float] | None:
+        """密度表校验（``None``/空 ⇒ 无该卡）；长度不符或为负 ⇒ 报错（不静默补齐）。"""
+        if not vals:
+            return None
+        out = [float(v) for v in vals]
+        if len(out) != k:
+            raise SourceSamplingError(
+                f"{card} 密度点数（{len(out)}）与 SI 点数（{k}）不匹配"
+                "（C810 p.3-63/3-64：SP/SB 在 A 型 SI 上给出的是各 SI 点的概率密度）")
+        for v in out:
+            if v < 0:
+                raise SourceSamplingError(f"{card} 密度出现负值（{v}），概率密度不能为负")
+        return out
+
+    @staticmethod
+    def _lin(xs, ys, x) -> float:
+        """点 ``x`` 处的线性插值（表外按端点值外推 —— 抽样值必落在表内，这里只作保险）。"""
+        if x <= xs[0]:
+            return float(ys[0])
+        if x >= xs[-1]:
+            return float(ys[-1])
+        for i in range(len(xs) - 1):
+            if xs[i] <= x <= xs[i + 1]:
+                span = xs[i + 1] - xs[i]
+                if span <= 0:
+                    return float(ys[i])
+                f = (x - xs[i]) / span
+                return float(ys[i]) + f * (float(ys[i + 1]) - float(ys[i]))
+        return float(ys[-1])
 
     # ── SP V 校验 / 分布号解析 / 变量默认值 ──────────────────
     #: SP V（按体积加权）只在源变量是 CEL 时有意义（C810 3-64）

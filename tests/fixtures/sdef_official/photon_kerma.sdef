@@ -1,0 +1,22 @@
+sdef  sur=1 dir= d3 rad=d2 erg=d1
+si3   h      -1      1
+sp3   d       0.0    1.0
+si1  l 1.1725  1.33
+sp1  d   1.0     1.0
+c          source biasing:  the source was broken into seventeen concentric
+c     rings for statistical biasing.  the two inner rings were chosen to
+c     match the first two cosine bins for the kerma tally to improve their
+c     statistics.  the biases themselves were chosen originally according
+c     to a 1/r distribution and then softened by trial and error.
+si2  a 0 68.58 121.92 200 1000 3000 4000 5e3 1e4 2e4 3e4 4e4 5e4
+       6e4 7e4 8e4 9e4 1e5
+sp2  0 .006858 .012192 .02 .10 .3 .4 .5 1 2 3 4 5 6 7 8 9 10
+sb2  0 70 100 150 200 120 32 8 3.3 1.3 .4 .28 .11 .060 .023
+     .013 .00075 .0004
+c         a point detector was placed 91 cm(3 ft) above the ground
+c    at the origin-its tally was then multiplied by an fm card as
+c    shown to obtain the dose absorbed there.  this was done to obtain
+c    the dose buildup factor.
+c    The fm5 multiplier card had a multiplier of 5.20704e-5. This was
+c    multiplied by 1 / uncollided flux. This made the collided flux equal
+c    to the build up rate, and the uncollided flux should now equal 1.

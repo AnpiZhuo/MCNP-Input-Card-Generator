@@ -1,0 +1,143 @@
+{
+  "_source": "官方 mcnp6.exe 输出（tools/extract_sdef_official_expected.py 生成，禁手改）",
+  "_notes": [
+    "kind/mean/wmult_range 逐字来自 .out 的 'probability distribution N for source variable X' 表与 'the mean of source distribution N is …' 行；",
+    "kind == 'from deck' 表示官方 .out 的 print 选择**没有**打印该分布表（lps_water 的 `print -10 -30 -110`），var 由 .sdef 卡片块推出，数字一律缺省；",
+    "freq 逐字来自打印表 170 的 expected / expected weight 两列；官方对该分布不打表时该 id 缺席（缺席 ≠ 0）。"
+  ],
+  "distributions": {
+    "1": {
+      "var": "erg",
+      "kind": "unbiased discrete  distribution",
+      "mean": 1.2513,
+      "wmult_range": null
+    },
+    "2": {
+      "var": "rad",
+      "kind": "biased interpolated distribution",
+      "mean": 66667.0,
+      "wmult_range": [
+        0.000125269,
+        31965.69
+      ]
+    },
+    "3": {
+      "var": "dir",
+      "kind": "unbiased histogram distribution",
+      "mean": null,
+      "wmult_range": null
+    }
+  },
+  "freq": {
+    "1": [
+      {
+        "value": 1.1725,
+        "expected_prob": 0.5,
+        "expected_weight": 0.5
+      },
+      {
+        "value": 1.33,
+        "expected_prob": 0.5,
+        "expected_weight": 0.5
+      }
+    ],
+    "2": [
+      {
+        "value": 68.58,
+        "expected_prob": 0.0037545,
+        "expected_weight": 4.7032e-07
+      },
+      {
+        "value": 121.92,
+        "expected_prob": 0.0070918,
+        "expected_weight": 1.0161e-06
+      },
+      {
+        "value": 200.0,
+        "expected_prob": 0.015266,
+        "expected_weight": 2.5136e-06
+      },
+      {
+        "value": 1000.0,
+        "expected_prob": 0.21898,
+        "expected_weight": 9.6e-05
+      },
+      {
+        "value": 3000.0,
+        "expected_prob": 0.50054,
+        "expected_weight": 0.0008
+      },
+      {
+        "value": 4000.0,
+        "expected_prob": 0.11888,
+        "expected_weight": 0.0007
+      },
+      {
+        "value": 5000.0,
+        "expected_prob": 0.031284,
+        "expected_weight": 0.0009
+      },
+      {
+        "value": 10000.0,
+        "expected_prob": 0.044188,
+        "expected_weight": 0.0075
+      },
+      {
+        "value": 20000.0,
+        "expected_prob": 0.035976,
+        "expected_weight": 0.03
+      },
+      {
+        "value": 30000.0,
+        "expected_prob": 0.013296,
+        "expected_weight": 0.05
+      },
+      {
+        "value": 40000.0,
+        "expected_prob": 0.0053182,
+        "expected_weight": 0.07
+      },
+      {
+        "value": 50000.0,
+        "expected_prob": 0.0030501,
+        "expected_weight": 0.09
+      },
+      {
+        "value": 60000.0,
+        "expected_prob": 0.0013296,
+        "expected_weight": 0.11
+      },
+      {
+        "value": 70000.0,
+        "expected_prob": 0.00064913,
+        "expected_weight": 0.13
+      },
+      {
+        "value": 80000.0,
+        "expected_prob": 0.00028155,
+        "expected_weight": 0.15
+      },
+      {
+        "value": 90000.0,
+        "expected_prob": 0.00010754,
+        "expected_weight": 0.17
+      },
+      {
+        "value": 100000.0,
+        "expected_prob": 8.994e-06,
+        "expected_weight": 0.19
+      }
+    ],
+    "3": [
+      {
+        "value": 1.0,
+        "expected_prob": 1.0,
+        "expected_weight": 1.0
+      }
+    ]
+  },
+  "weight_range": [
+    0.00012527,
+    945.01
+  ]
+}

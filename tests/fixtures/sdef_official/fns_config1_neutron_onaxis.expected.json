@@ -1,0 +1,684 @@
+{
+  "_source": "官方 mcnp6.exe 输出（tools/extract_sdef_official_expected.py 生成，禁手改）",
+  "_notes": [
+    "kind/mean/wmult_range 逐字来自 .out 的 'probability distribution N for source variable X' 表与 'the mean of source distribution N is …' 行；",
+    "kind == 'from deck' 表示官方 .out 的 print 选择**没有**打印该分布表（lps_water 的 `print -10 -30 -110`），var 由 .sdef 卡片块推出，数字一律缺省；",
+    "freq 逐字来自打印表 170 的 expected / expected weight 两列；官方对该分布不打表时该 id 缺席（缺席 ≠ 0）。"
+  ],
+  "distributions": {
+    "1": {
+      "var": "dir",
+      "kind": "unbiased interpolated distribution",
+      "mean": 0.022533,
+      "wmult_range": null
+    },
+    "2": {
+      "var": "erg",
+      "kind": "distribution is dependent on dir",
+      "mean": null,
+      "wmult_range": null
+    },
+    "3": {
+      "var": "rad",
+      "kind": "power law 21 k=1.0000E+00",
+      "mean": null,
+      "wmult_range": null
+    },
+    "5": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 15.108,
+      "wmult_range": null
+    },
+    "10": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 15.101,
+      "wmult_range": null
+    },
+    "15": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 15.085,
+      "wmult_range": null
+    },
+    "20": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 15.062,
+      "wmult_range": null
+    },
+    "25": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 15.032,
+      "wmult_range": null
+    },
+    "30": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 14.995,
+      "wmult_range": null
+    },
+    "35": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 14.95,
+      "wmult_range": null
+    },
+    "40": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 14.9,
+      "wmult_range": null
+    },
+    "45": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 14.843,
+      "wmult_range": null
+    },
+    "50": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 14.782,
+      "wmult_range": null
+    },
+    "55": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 14.715,
+      "wmult_range": null
+    },
+    "60": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 14.645,
+      "wmult_range": null
+    },
+    "65": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 14.57,
+      "wmult_range": null
+    },
+    "70": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 14.492,
+      "wmult_range": null
+    },
+    "75": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 14.412,
+      "wmult_range": null
+    },
+    "80": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 14.331,
+      "wmult_range": null
+    },
+    "85": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 14.247,
+      "wmult_range": null
+    },
+    "90": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 14.165,
+      "wmult_range": null
+    },
+    "95": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 14.081,
+      "wmult_range": null
+    },
+    "100": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 13.999,
+      "wmult_range": null
+    },
+    "105": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 13.918,
+      "wmult_range": null
+    },
+    "110": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 13.839,
+      "wmult_range": null
+    },
+    "115": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 13.762,
+      "wmult_range": null
+    },
+    "120": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 13.689,
+      "wmult_range": null
+    },
+    "125": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 13.62,
+      "wmult_range": null
+    },
+    "130": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 13.554,
+      "wmult_range": null
+    },
+    "135": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 13.493,
+      "wmult_range": null
+    },
+    "140": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 13.437,
+      "wmult_range": null
+    },
+    "145": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 13.386,
+      "wmult_range": null
+    },
+    "150": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 13.341,
+      "wmult_range": null
+    },
+    "155": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 13.302,
+      "wmult_range": null
+    },
+    "160": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 13.269,
+      "wmult_range": null
+    },
+    "165": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 13.242,
+      "wmult_range": null
+    },
+    "170": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 13.222,
+      "wmult_range": null
+    },
+    "175": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 13.209,
+      "wmult_range": null
+    },
+    "180": {
+      "var": "erg",
+      "kind": "unbiased histogram distribution",
+      "mean": 13.201,
+      "wmult_range": null
+    }
+  },
+  "freq": {
+    "1": [
+      {
+        "value": -0.99619,
+        "expected_prob": 0.0017793,
+        "expected_weight": 0.0017793
+      },
+      {
+        "value": -0.98481,
+        "expected_prob": 0.0053177,
+        "expected_weight": 0.0053177
+      },
+      {
+        "value": -0.96593,
+        "expected_prob": 0.0088324,
+        "expected_weight": 0.0088324
+      },
+      {
+        "value": -0.93969,
+        "expected_prob": 0.01229,
+        "expected_weight": 0.01229
+      },
+      {
+        "value": -0.90631,
+        "expected_prob": 0.01566,
+        "expected_weight": 0.01566
+      },
+      {
+        "value": -0.86603,
+        "expected_prob": 0.018951,
+        "expected_weight": 0.018951
+      },
+      {
+        "value": -0.81915,
+        "expected_prob": 0.022119,
+        "expected_weight": 0.022119
+      },
+      {
+        "value": -0.76604,
+        "expected_prob": 0.025144,
+        "expected_weight": 0.025144
+      },
+      {
+        "value": -0.70711,
+        "expected_prob": 0.028009,
+        "expected_weight": 0.028009
+      },
+      {
+        "value": -0.64279,
+        "expected_prob": 0.030691,
+        "expected_weight": 0.030691
+      },
+      {
+        "value": -0.57358,
+        "expected_prob": 0.033173,
+        "expected_weight": 0.033173
+      },
+      {
+        "value": -0.5,
+        "expected_prob": 0.035444,
+        "expected_weight": 0.035444
+      },
+      {
+        "value": -0.42262,
+        "expected_prob": 0.037481,
+        "expected_weight": 0.037481
+      },
+      {
+        "value": -0.34202,
+        "expected_prob": 0.039257,
+        "expected_weight": 0.039257
+      },
+      {
+        "value": -0.25882,
+        "expected_prob": 0.040745,
+        "expected_weight": 0.040745
+      },
+      {
+        "value": -0.17365,
+        "expected_prob": 0.041937,
+        "expected_weight": 0.041937
+      },
+      {
+        "value": -0.08716,
+        "expected_prob": 0.042842,
+        "expected_weight": 0.042842
+      },
+      {
+        "value": 0.0,
+        "expected_prob": 0.04343,
+        "expected_weight": 0.04343
+      },
+      {
+        "value": 0.08716,
+        "expected_prob": 0.043686,
+        "expected_weight": 0.043686
+      },
+      {
+        "value": 0.17365,
+        "expected_prob": 0.043604,
+        "expected_weight": 0.043604
+      },
+      {
+        "value": 0.25882,
+        "expected_prob": 0.043189,
+        "expected_weight": 0.043189
+      },
+      {
+        "value": 0.34202,
+        "expected_prob": 0.042435,
+        "expected_weight": 0.042435
+      },
+      {
+        "value": 0.42262,
+        "expected_prob": 0.041324,
+        "expected_weight": 0.041324
+      },
+      {
+        "value": 0.5,
+        "expected_prob": 0.03988,
+        "expected_weight": 0.03988
+      },
+      {
+        "value": 0.57358,
+        "expected_prob": 0.038118,
+        "expected_weight": 0.038118
+      },
+      {
+        "value": 0.64279,
+        "expected_prob": 0.03602,
+        "expected_weight": 0.03602
+      },
+      {
+        "value": 0.70711,
+        "expected_prob": 0.03363,
+        "expected_weight": 0.03363
+      },
+      {
+        "value": 0.76604,
+        "expected_prob": 0.030954,
+        "expected_weight": 0.030954
+      },
+      {
+        "value": 0.81915,
+        "expected_prob": 0.027996,
+        "expected_weight": 0.027996
+      },
+      {
+        "value": 0.86603,
+        "expected_prob": 0.024787,
+        "expected_weight": 0.024787
+      },
+      {
+        "value": 0.90631,
+        "expected_prob": 0.021362,
+        "expected_weight": 0.021362
+      },
+      {
+        "value": 0.93969,
+        "expected_prob": 0.017747,
+        "expected_weight": 0.017747
+      },
+      {
+        "value": 0.96593,
+        "expected_prob": 0.013979,
+        "expected_weight": 0.013979
+      },
+      {
+        "value": 0.98481,
+        "expected_prob": 0.010073,
+        "expected_weight": 0.010073
+      },
+      {
+        "value": 0.99619,
+        "expected_prob": 0.0060778,
+        "expected_weight": 0.0060778
+      },
+      {
+        "value": 1.0,
+        "expected_prob": 0.0020358,
+        "expected_weight": 0.0020358
+      }
+    ],
+    "5": [
+      {
+        "value": 15.11,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "10": [
+      {
+        "value": 15.106,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "15": [
+      {
+        "value": 15.095,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "20": [
+      {
+        "value": 15.075,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "25": [
+      {
+        "value": 15.049,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "30": [
+      {
+        "value": 15.015,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "35": [
+      {
+        "value": 14.974,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "40": [
+      {
+        "value": 14.927,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "45": [
+      {
+        "value": 14.873,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "50": [
+      {
+        "value": 14.814,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "55": [
+      {
+        "value": 14.75,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "60": [
+      {
+        "value": 14.681,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "65": [
+      {
+        "value": 14.608,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "70": [
+      {
+        "value": 14.532,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "75": [
+      {
+        "value": 14.453,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "80": [
+      {
+        "value": 14.372,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "85": [
+      {
+        "value": 14.289,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "90": [
+      {
+        "value": 14.206,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "95": [
+      {
+        "value": 14.123,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "100": [
+      {
+        "value": 14.04,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "105": [
+      {
+        "value": 13.958,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "110": [
+      {
+        "value": 13.878,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "115": [
+      {
+        "value": 13.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "120": [
+      {
+        "value": 13.725,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "125": [
+      {
+        "value": 13.654,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "130": [
+      {
+        "value": 13.586,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "135": [
+      {
+        "value": 13.522,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "140": [
+      {
+        "value": 13.464,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "145": [
+      {
+        "value": 13.41,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "150": [
+      {
+        "value": 13.362,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "155": [
+      {
+        "value": 13.32,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "160": [
+      {
+        "value": 13.284,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "165": [
+      {
+        "value": 13.254,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "170": [
+      {
+        "value": 13.23,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "175": [
+      {
+        "value": 13.214,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "180": [
+      {
+        "value": 13.203,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ]
+  },
+  "weight_range": [
+    1.0,
+    1.0
+  ]
+}

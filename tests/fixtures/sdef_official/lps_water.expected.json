@@ -1,0 +1,1485 @@
+{
+  "_source": "官方 mcnp6.exe 输出（tools/extract_sdef_official_expected.py 生成，禁手改）",
+  "_notes": [
+    "kind/mean/wmult_range 逐字来自 .out 的 'probability distribution N for source variable X' 表与 'the mean of source distribution N is …' 行；",
+    "kind == 'from deck' 表示官方 .out 的 print 选择**没有**打印该分布表（lps_water 的 `print -10 -30 -110`），var 由 .sdef 卡片块推出，数字一律缺省；",
+    "freq 逐字来自打印表 170 的 expected / expected weight 两列；官方对该分布不打表时该 id 缺席（缺席 ≠ 0）。"
+  ],
+  "distributions": {
+    "1": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "2": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "3": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "4": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "5": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "6": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "7": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "8": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "9": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "10": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "11": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "12": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "13": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "14": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "15": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "16": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "17": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "18": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "19": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "20": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "21": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "100": {
+      "var": "dir",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "200": {
+      "var": "erg",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "300": {
+      "var": "rad",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    },
+    "400": {
+      "var": "tme",
+      "kind": "from deck",
+      "mean": null,
+      "wmult_range": null
+    }
+  },
+  "freq": {
+    "1": [
+      {
+        "value": 14.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.6,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.6,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "2": [
+      {
+        "value": 14.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.6,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "3": [
+      {
+        "value": 14.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.6,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "4": [
+      {
+        "value": 14.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.6,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "5": [
+      {
+        "value": 14.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.6,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "6": [
+      {
+        "value": 14.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.6,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "7": [
+      {
+        "value": 14.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.6,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 15.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "8": [
+      {
+        "value": 14.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.6,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "9": [
+      {
+        "value": 13.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.6,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "10": [
+      {
+        "value": 13.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.6,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "11": [
+      {
+        "value": 13.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "12": [
+      {
+        "value": 13.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "13": [
+      {
+        "value": 13.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "14": [
+      {
+        "value": 13.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "15": [
+      {
+        "value": 13.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.6,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "16": [
+      {
+        "value": 13.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.6,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "17": [
+      {
+        "value": 13.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.6,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "18": [
+      {
+        "value": 12.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.6,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 14.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "19": [
+      {
+        "value": 12.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.6,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "20": [
+      {
+        "value": 12.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.6,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "21": [
+      {
+        "value": 12.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.0,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.1,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.2,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.3,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.4,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.5,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.6,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.7,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.8,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      },
+      {
+        "value": 13.9,
+        "expected_prob": 0.0,
+        "expected_weight": 0.0
+      }
+    ],
+    "100": [
+      {
+        "value": -0.9,
+        "expected_prob": 0.047604,
+        "expected_weight": 0.047604
+      },
+      {
+        "value": -0.8,
+        "expected_prob": 0.047867,
+        "expected_weight": 0.047867
+      },
+      {
+        "value": -0.7,
+        "expected_prob": 0.048129,
+        "expected_weight": 0.048129
+      },
+      {
+        "value": -0.6,
+        "expected_prob": 0.04834,
+        "expected_weight": 0.04834
+      },
+      {
+        "value": -0.5,
+        "expected_prob": 0.048602,
+        "expected_weight": 0.048602
+      },
+      {
+        "value": -0.4,
+        "expected_prob": 0.048865,
+        "expected_weight": 0.048865
+      },
+      {
+        "value": -0.3,
+        "expected_prob": 0.049128,
+        "expected_weight": 0.049128
+      },
+      {
+        "value": -0.2,
+        "expected_prob": 0.049391,
+        "expected_weight": 0.049391
+      },
+      {
+        "value": -0.1,
+        "expected_prob": 0.049601,
+        "expected_weight": 0.049601
+      },
+      {
+        "value": 0.0,
+        "expected_prob": 0.049863,
+        "expected_weight": 0.049863
+      },
+      {
+        "value": 0.1,
+        "expected_prob": 0.050126,
+        "expected_weight": 0.050126
+      },
+      {
+        "value": 0.2,
+        "expected_prob": 0.050389,
+        "expected_weight": 0.050389
+      },
+      {
+        "value": 0.3,
+        "expected_prob": 0.050652,
+        "expected_weight": 0.050652
+      },
+      {
+        "value": 0.4,
+        "expected_prob": 0.050862,
+        "expected_weight": 0.050862
+      },
+      {
+        "value": 0.5,
+        "expected_prob": 0.051124,
+        "expected_weight": 0.051124
+      },
+      {
+        "value": 0.6,
+        "expected_prob": 0.051387,
+        "expected_weight": 0.051387
+      },
+      {
+        "value": 0.7,
+        "expected_prob": 0.05165,
+        "expected_weight": 0.05165
+      },
+      {
+        "value": 0.8,
+        "expected_prob": 0.051913,
+        "expected_weight": 0.051913
+      },
+      {
+        "value": 0.9,
+        "expected_prob": 0.052123,
+        "expected_weight": 0.052123
+      },
+      {
+        "value": 1.0,
+        "expected_prob": 0.052385,
+        "expected_weight": 0.052385
+      }
+    ]
+  },
+  "weight_range": [
+    1.0,
+    1.0
+  ]
+}
