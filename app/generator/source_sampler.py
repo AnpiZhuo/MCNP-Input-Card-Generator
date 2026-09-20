@@ -478,7 +478,8 @@ class _Engine:
 
         索引口径（旧实现只对 POS/DIR 各写一套，现在统一）：
         ``SI L`` → 档位下标；``SI H/A`` 等其他类型 → 用分布**自身的编码**去
-        ``DistributionSampler.weight_factor`` 反查档位（H 型靠箱边界、A 型靠密度点），
+        ``DistributionSampler._bias_factor`` 按**本次抽中的档位**算补偿（H 型靠箱号、
+        A 型靠密度段），
         查不到就给 ``None``（下游 ``ERG=FPOS Dn`` 会因此拿到明确错误而不是 0）。
         """
         # 「一个分布只能服务一个变量」（p.3-55 锚点 #C810-3-55-ONE-LEVEL）：

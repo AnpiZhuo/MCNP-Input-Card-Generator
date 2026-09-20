@@ -462,7 +462,8 @@ class DistributionSampler:
 
     抽样覆盖（C810 §3.3.2 SI/SP/SB/DS）：
         SI H（默认）/L/A/S；SP D/C/内置函数（-2~-6/-21/-31/-41）；
-        SB 表概率偏倚（权重补偿经 ``weight_factor``）；DS H/L/S/T/Q。
+        SB 表概率偏倚（权重补偿经 ``sample_with_corrections`` 回传的 `_bias_factor`）；
+        DS H/L/S/T/Q。
     """
 
     def __init__(self, entries):
@@ -497,11 +498,13 @@ class DistributionSampler:
         C810 3-64）与 ``SP V``（概率 ∝ 栅元体积，C810 3-64）使用；缺省则按"拿不到就
         明确报错/退回等概率"，不静默给错值。
 
-        ⚠ 需要**权重补偿**（SB 偏倚 / 内置函数被 SI 截断）时请用
-        ``sample_with_corrections``：本方法只返回值，补偿因子会被丢掉。
+        ⚠ **编排层必须用 ``sample_with_corrections``**：本方法只返回值，SB 偏倚与
+        SI 截断的补偿因子会被丢掉（2026-09-20 起本方法内部就是它的薄包装，只为
+        "只看值"的单测/无偏倚场景保留 —— 两条入口共用同一实现，不会再漂）。
         """  # noqa: D401
-        return self._sample_entry(self._entry(eid), rng, 0, var=var, cel=cel, axs=axs,
-                                  sdef_fields=sdef_fields, cell_volumes=cell_volumes)
+        return self.sample_with_corrections(
+            eid, rng, var=var, cel=cel, axs=axs, sdef_fields=sdef_fields,
+            cell_volumes=cell_volumes)[0]
 
     def sample_with_corrections(self, eid, rng: random.Random, var: str = "",
                                 cel: bool = False, axs: bool = False,
@@ -540,28 +543,6 @@ class DistributionSampler:
         if not ds:
             return {"default": True}
         return self._resolve_ds(ds, float(parent_value), parent_si)
-
-    def weight_factor(self, eid, value) -> float:
-        """SB 偏倚的权重补偿（真概率 / 偏倚概率）。无 SB → 1.0。"""
-        e = self._entry(eid)
-        sb = e.get("sb")
-        if not sb:
-            return 1.0
-        sp = e.get("sp") or {}
-        if (sp.get("fnCode") or "").strip() or (sb.get("fnCode") or "").strip():
-            return 1.0  # 内置函数偏倚（罕见）不补偿
-        si = e.get("si") or {}
-        si_type = (si.get("type") or "").strip().upper()
-        si_vals = self._floats(si.get("values"))
-        n = len(si_vals) - 1 if si_type in ("", "H") else len(si_vals)
-        p_true = self._probs_of(sp, n)
-        p_bias = self._probs_of(sb, n)
-        i = self._index_of(value, si_type, si_vals)
-        if i is None:
-            return 1.0
-        if p_bias[i] <= 0:
-            return 1.0
-        return p_true[i] / p_bias[i] if p_true[i] > 0 else 1.0
 
     # ── 内部：单条目抽样 ────────────────────────────────────
     def _sample_entry(self, e, rng, depth, var="", cel=False, axs=False,
@@ -893,9 +874,9 @@ class DistributionSampler:
     # ── SP V 校验 / 分布号解析 / 变量默认值 ──────────────────
     #: SP V（按体积加权）只在源变量是 CEL 时有意义（C810 3-64）
     _V_ONLY_VARS = ("CEL",)
-    #: 变量默认值（C810 Table 3.3）：SI S 里分布号 0 时使用
-    _VAR_DEFAULTS = {"ERG": 14.0, "TME": 0.0, "WGT": 1.0, "RAD": 0.0, "EXT": 0.0,
-                     "DIR": 0.0, "XYZ": 0.0, "CEL": 1.0}
+    #: ⚠ 2026-09-20 删除旧的 `_VAR_DEFAULTS` 表：它和**模型层** `source_spec.VAR_SPEC`
+    #: 是同一语义的两处实现（"全量改用新引擎"批次清掉的最后一处旧接缝）。
+    #: 静态默认值现在只从 `VAR_SPEC` 取，未决变量（`anchor=None`）显式报错、不许猜。
 
     @staticmethod
     def _check_sp_v(sp, sb, var, cel=False) -> None:
@@ -935,7 +916,17 @@ class DistributionSampler:
                     pass
         if key in ("X", "Y", "Z"):
             return 0.0
-        return DistributionSampler._VAR_DEFAULTS.get(key, 0.0)
+        # 静态默认值取**模型层唯一权威** `source_spec.VAR_SPEC`（C810 Table 3.3，逐条挂锚点）。
+        # 延迟导入避免与 source_spec → distributions 的异常类型互相 import 成环。
+        from .source_spec import VAR_SPEC
+        spec = VAR_SPEC.get(key)
+        if spec is not None and spec.default is not None:
+            return float(spec.default)
+        if spec is not None:
+            raise SourceSamplingError(
+                f"SI S 里出现分布号 0（= 变量 {key} 的默认值，C810 3-64），但该变量在 C810 "
+                "Table 3.3 里没有可锚定的默认值（未决变量）—— 请显式给出该变量的值")
+        return 0.0
 
     def _dist_ref(self, tok, e) -> int:
         """SI S 的分布号 token → int；**D 前缀可选**（C810 3-64）。"""
