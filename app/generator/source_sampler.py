@@ -75,11 +75,20 @@ _NON_VARIABLE_FIELDS = frozenset({
 #: VAR_SPEC 里有声明、但本引擎**尚未实现**的源变量（Table 3.3 有它，位置/方向层没做）。
 #: 非空时必须**明确报错**而不是静默忽略：CCC 是 cookie-cutter（C810 p.3-58/3-59
 #: 「positions are sampled only within the cookie-cutter cell」，会改变位置语义），
-#: ARA 只服务于点探测器的直接贡献（p.3-56），本引擎不算 tally ⇒ 认了它也没意义。
+#: ARA 只服务于点探测器的直接贡献（p.3-56），本引擎不算 tally ⇒ 认了它也不影响起始状态。
 _UNSUPPORTED_VARS = {
     "CCC": "cookie-cutter 栅元（C810 p.3-58/3-59：位置必须限制在裁剪栅元内）",
-    "ARA": "面源面积（C810 Table 3.3 p.3-56：只用于点探测器的直接贡献，本引擎不算 tally）",
     "RATE": "RATE（未在 C810 Table 3.3 的印刷行中找到；Table 3.3 的默认值清单不含它）",
+}
+
+#: Table 3.3 里有声明、但**不改变粒子起始状态**的变量：**接受它**（不报错），只在返回的
+#: ``warnings`` 里说明本引擎不使用。⚠ 2026-09-20 修（抽样检测实测）：官方
+#: VALIDATION_SHIELDING 的 **6 个 duct 算例**全都带 ``ara= <面积>``，原先按"未实现即报错"
+#: 处理 ⇒ 它们的源演示**一个都开不出来**（连 100 颗粒子都拿不到）；而 ARA（面源面积）只用于
+#: 点探测器直接贡献的归一化（C810 Table 3.3 p.3-56），与 x/y/z、dx/dy/dz、E、W **完全无关**
+#: ⇒ 报错属口径过严。CCC **不在此列**（它真的改变位置分布，必须报错）。
+_IGNORED_VARS = {
+    "ARA": "面源面积（C810 Table 3.3 p.3-56：只用于点探测器直接贡献的归一化）",
 }
 
 
@@ -228,6 +237,16 @@ class _Engine:
         for var in self._order:
             if var in self._VECTOR_VARS:
                 raw = self._raw(var)
+                # ⚠ 2026-09-20（真实 deck preview_inp09_m27 的 `vec fpos d2` 触发）：
+                # 三分量变量的**依赖写法**（C810 p.3-55 第三种形态 `Var Fvar′ Dn`）本引擎尚未
+                # 实现；若放任它落到通用 resolve，会拿一个 L 型分布当标量抽，报出
+                # 「SP 概率个数（21）与 SI 值个数不匹配（需 63）」这种**指向错误**的信息。
+                # 按契约 §4「认不出就明确报错、不许静默」在这里点名。
+                if raw and re.fullmatch(r"(?i)\s*f[A-Za-z]+\s*=?\s*d\d+\s*", raw):
+                    raise SourceSamplingError(
+                        f"SDEF {var}={raw}：三分量变量（VEC/AXS）的**依赖写法**"
+                        "（C810 p.3-55 的 `Var Fvar′ Dn`）本引擎尚未实现 —— "
+                        "目前支持三分量字面值（`0 1 0`）或整分量 `Dn`")
                 if raw and not re.search(r"(?i)\bd\d+\b", raw):
                     self._vec(var)
                 continue
@@ -235,6 +254,11 @@ class _Engine:
                 continue
             raw = self._field(var)
             if not raw:
+                continue
+            if var == "PAR":
+                # PAR 的取值域是**粒子类型**（`_PAR_GROUP`：n/p/e/h/a/s 或 1/2/3…）或 Dn，
+                # 不是通用的三种变量形态 ⇒ 不能过 `parse_var_ref`（实测 preview_inp09_m27
+                # 的 `par = h` 就卡在这里被判"非法值"）。合法性由 `_par()` 判。
                 continue
             ref = parse_var_ref(raw)
             if ref["kind"] == "const":
@@ -1015,6 +1039,14 @@ class _Engine:
                     raise SourceSamplingError(
                         f"SDEF {name} 暂不支持：本引擎还没实现{why}"
                         "（它在 C810 Table 3.3 里有声明，但静默忽略会让用户以为生效了）")
+        # 不影响起始状态的变量（ARA）：**接受 + 记 warnings** —— 既不静默，也不误伤
+        # （官方 6 个 duct 算例全带 ara=，见 _IGNORED_VARS 注释）
+        for name, why in _IGNORED_VARS.items():
+            for key in spec_for(name).field_keys:
+                if str(self.f.get(key) or "").strip():
+                    self.warnings.append(
+                        f"SDEF {name} 本引擎不参与抽样：{why}；"
+                        "起始状态（位置/方向/能量/权重）不受影响")
 
 
 def _isotropic(rng) -> tuple:

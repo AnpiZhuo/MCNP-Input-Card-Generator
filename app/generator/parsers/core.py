@@ -632,8 +632,17 @@ def parse_sdef_fields(parts: list[str]) -> dict:
                     pos_parts = [val]
                     ti += 1
                     cont = _collect_multi_val(tokens, ti)
-                    pos_parts.extend(cont)
-                    ti += len(cont)
+                    # ⚠ 2026-09-20 修（真实 deck preview_inp09_m27）：
+                    # `pos=d1 vec fpos d2` —— POS 续值收集会把后面的**裸 key**（vec/axs/dir…）
+                    # 也当成分量吃进来 ⇒ pos_y='vec'、pos_z='fpos'，真 VEC 整段丢失、引擎报
+                    # 「源变量值 'vec' 非法」。这里遇到已知 SDEF key 就停（与下面 F-keyword 同规则）。
+                    real_cont = []
+                    for c in cont:
+                        if c.upper() in field_map or c.upper() in ("EFF", "POS"):
+                            break
+                        real_cont.append(c)
+                    pos_parts.extend(real_cont)
+                    ti += len(real_cont)
                     if len(pos_parts) >= 1: result["sdef_pos_x"] = pos_parts[0]
                     if len(pos_parts) >= 2: result["sdef_pos_y"] = pos_parts[1]
                     if len(pos_parts) >= 3: result["sdef_pos_z"] = pos_parts[2]
@@ -712,10 +721,16 @@ def parse_sdef_fields(parts: list[str]) -> dict:
             if upper == "POS":
                 ti += 1
                 vals = _collect_multi_val(tokens, ti)
-                if len(vals) >= 1: result["sdef_pos_x"] = vals[0]
-                if len(vals) >= 2: result["sdef_pos_y"] = vals[1]
-                if len(vals) >= 3: result["sdef_pos_z"] = vals[2]
-                ti += len(vals)
+                # 同 POS= 分支：遇到已知 SDEF key（裸写法 vec/axs/dir…）就停，别把它当分量
+                real_vals = []
+                for c in vals[:3]:
+                    if c.upper() in field_map or c.upper() in ("EFF", "POS"):
+                        break
+                    real_vals.append(c)
+                if len(real_vals) >= 1: result["sdef_pos_x"] = real_vals[0]
+                if len(real_vals) >= 2: result["sdef_pos_y"] = real_vals[1]
+                if len(real_vals) >= 3: result["sdef_pos_z"] = real_vals[2]
+                ti += len(real_vals)
                 continue
             elif upper in ("X", "Y", "Z"):
                 # 裸 X/Y/Z：1~3 值或 D 引用（inp02.i `x d1` 实卡）——遇已知 SDEF 关键字停靠
@@ -731,11 +746,33 @@ def parse_sdef_fields(parts: list[str]) -> dict:
                     ti += len(real)
                 continue
             elif upper in ("PAR", "SUR", "NRM", "TR", "CCC", "ARA", "RATE",
-                           "CEL", "ERG", "WGT", "DIR", "TME", "RAD", "EXT"):
+                           "CEL", "ERG", "WGT", "DIR", "TME", "RAD", "EXT",
+                           "VEC", "AXS"):
+                # ⚠ 2026-09-20 修（真实 deck preview_inp09_m27 触发）：
+                # ① 旧白名单**漏了 VEC/AXS** ⇒ 无等号写法 `vec 0 1 0` / `axs 0 1 -1`
+                #    整段被当未知 token 丢掉（官方 duct 算例就写 `axs= 0 1 -1` / `vec= 0 1 -1`）；
+                # ② 依赖写法 `vec fpos d2` / `dir fpos d2` 旧实现**只吃一个 token** ⇒
+                #    存成 'fpos'，Dn 被丢。现在：F父 + Dn 连吃两个；三分量变量再续吃数值。
                 ti += 1
                 if ti < len(tokens) and upper in field_map:
-                    result[field_map[upper]] = tokens[ti]
+                    val = tokens[ti]
                     ti += 1
+                    nxt = tokens[ti] if ti < len(tokens) else ""
+                    if (re.fullmatch(r"(?i)f[A-Za-z]+", val)
+                            and re.fullmatch(r"(?i)d\d+", nxt)):
+                        result[field_map[upper]] = f"{val} {nxt}"      # Fvar′ Dn 两 token
+                        ti += 1
+                    elif upper in ("VEC", "AXS") and re.fullmatch(
+                            r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?", val):
+                        comps = [val]
+                        while (ti < len(tokens) and len(comps) < 3
+                               and re.fullmatch(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?",
+                                                tokens[ti])):
+                            comps.append(tokens[ti])
+                            ti += 1
+                        result[field_map[upper]] = " ".join(comps)
+                    else:
+                        result[field_map[upper]] = val
                     continue
             ti += 1
     # POS=Dn（矢量分布）→ 三个分量同引用（否则再生成会退化成 X=D1 丢失三元组语义）
@@ -749,8 +786,10 @@ def parse_sdef_fields(parts: list[str]) -> dict:
     # "fdir=d2" ⇒ 抽样侧既认不出父变量也不报错，**静默取默认值**（每颗粒子 14 MeV，
     # 而官方是 13.2~15.11 MeV 随 DIR 变化）。这里统一成空格分隔的规范形态，抽样与
     # 生成两侧都只认这一种。
+    # ⚠ 2026-09-20：VEC/AXS 也要归一化（`vec=fpos=d2` ⇒ `VEC FPOS D2`）—— 真实 deck 会用
+    # 依赖写法给方向参考轴，漏了它们新引擎会因"认不出写法"而明确报错（旧引擎则静默吞掉）。
     for _k in ("sdef_erg", "sdef_dir", "sdef_wgt", "sdef_par", "sdef_tme",
-               "sdef_pos_x", "sdef_pos_y", "sdef_pos_z"):
+               "sdef_pos_x", "sdef_pos_y", "sdef_pos_z", "sdef_vec", "sdef_axs"):
         _v = (result.get(_k) or "").strip()
         if not _v:
             continue
