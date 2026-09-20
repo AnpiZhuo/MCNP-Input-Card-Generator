@@ -19,6 +19,17 @@
 
 ## 1. MCNP 的模型（唯一依据，C810 页码为证）
 
+> **锚点索引**（原文逐字 + 关键短语见 `docs/authority/c810-sdef.md`，由 `tools/c810_extract.py`
+> 从 `C810.pdf` 脚本生成、`--check` 可复核；`tests/unit/test_c810_anchors.py` 断言本文引用的每个 id
+> 都在锚点表里且原文含关键短语）：
+> §1.1 `#C810-3-55-VAR-FORMS` `#C810-3-55-SAMPLING-ORDER` `#C810-3-55-ONE-LEVEL`；
+> §1.2 `#C810-3-63-SI-OPTIONS` `#C810-3-63-SP-OPTIONS` `#C810-3-63-H-FIRST-ZERO`
+> `#C810-3-64-BUILTIN-FORM` `#C810-3-64-SB-RULES` `#C810-3-64-SI-S` `#C810-3-64-SP-V`
+> `#C810-3-66-DS-CARD`；§1.3 `#C810-3-65-TABLE-3-4` `#C810-3-66-BUILTIN-VARS`
+> `#C810-3-66-TRUNC-WEIGHT` `#C810-3-66-SPECIAL-DEFAULTS`；§1.4 `#C810-3-56-TABLE-3-3`；
+> §1.5 卡格式 `#C810-3-4-COMMENTS` `#C810-3-4-CONTINUATION`。
+> **纪律：本文任何一句语义若找不到锚点，就不许留在文中**（宁可标"未决"）。
+
 ### 1.1 三种变量形态（p.3-55）
 
 ```
@@ -55,8 +66,13 @@
 ### 1.4 变量默认值（Table 3.3，p.3-55~3-57）
 
 每个变量的默认值/默认分布由表 3.3 给定（ERG=14、TME=0、WGT=1、DIR=体源各向同性/面源余弦、
-RAD/EXT/POS/XYZ=0、CEL 由位置定、VEC=面法线（面源）、NRM=+1、EFF=.01、PAR 由 MODE 定、
-AXS/CCC/ARA/BEM/BAP/LOC/DAT/TR/RATE=0）。**默认值必须在 VAR_SPEC 表里声明，不允许散落在各分支。**
+RAD/EXT/POS/XYZ=0、CEL 由位置定、VEC=面法线（面源）、NRM=+1、EFF=.01、PAR 由 MODE 定）。
+**默认值必须在 `VAR_SPEC` 表里声明并挂 C810 锚点，不允许散落在各分支。**
+
+> ⚠ **本契约 v1 曾在此处凭印象写出 `RATE=0 / JSU=0 / BEM/BAP/LOC/DAT=0`——已删除**：这些值没有
+> 逐条对过 Table 3.3 原文，正是本契约要防的"AI 转述"。实现侧（`source_spec.py`）对 RATE/JSU 一律
+> `default=None, anchor=None` + notes 记「未决」，等有人把锚点钉上再说。**未决不等于可以猜**：
+> 未决变量在抽样路径上出现时按 C810 语义报错，而不是取一个数。
 
 ## 2. 目标结构
 
@@ -112,3 +128,53 @@ app/generator/distributions.py   ← 分布抽样器（保留，仅补差异）
 
 - 不实现 −7 spare；不做内置函数在 SB 上的"分箱近似"（p.3-66），该组合显式报错；
 - 不做时间轴/运输；`TME` 只作为变量参与抽样与权重，不进粒子记录（前端不显示）。
+
+## 7. 实现约定（2026-09-20 与引擎层实现者对账后冻结）
+
+1. **`VarSpec.parents` 的语义** = 「该变量**允许**出现在 `Fvar' Dn` 的父位置上」；
+   它**不是**抽样依赖图。真正的硬依赖边只有手册明写的那三条：
+   `POS→RAD/EXT`、`VEC/AXS→DIR`、`DIR→ERG`（p.3-55/3-56 的默认值与依赖描述）。
+   抽样序 = 分层（位置层 POS/X/Y/Z/CEL/SUR/RAD/EXT/AXS → 方向层 DIR/VEC →
+   能量层 ERG → 独立层 TME/WGT/NRM/EFF/PAR）+ 层内稳定序 + 上列硬边 + 环检测（成环即报错）。
+2. **`VAR_SPEC` 是变量登记表，不等于依赖图**：`JSU`（Table 3.3 无此变量，仅 p.3-55 变量清单与
+   p.3-66 条件里出现）在表里以 `default=None, anchor=None, field_keys=()` 登记为**未决**，
+   但**不进**依赖表、不要求 SDEF 字段。`RATE` 同理（Table 3.3 印刷行只到 `TR`）。
+3. **`PAR` 缺省**：Table 3.3 说"由 MODE 卡最低的那一种"定，而 `sample_source` 只拿到 SDEF 字段
+   ⇒ 缺省按中子 `n`（既有口径，不伪装成"从 VAR_SPEC 读到"）。需要别的粒子类型时由调用方显式给
+   `sdef_par`。要把 MODE 接进来属于**入口签名变更**，需另行批准。
+4. **返回字典允许的附加键**：`particles` / `energyRange` / `bounds` / `status` / `error` 之外的
+   `warnings` 是**允许的加法**（只放"降级/近似"类提示，例如"`DIR=Dn` 但没有 VEC/面法线可作参考轴
+   ⇒ 按体源各向同性处理"）。**粒子字段与主键不得增删改名**。
+5. **未实现变量一律显式报错**（契约 §4），当前清单：`CCC`（cookie-cutter cell）、`ARA`、
+   `RATE`（三者 Table 3.3 有声明的语义本程序未实现）。报错文案必须说明"本程序未实现"并指路
+   （用 `SUR`/`CEL` 表达或到 MCNP 里加），不得静默忽略。前端若允许填这些字段，用户会看到该报错——
+   这是有意的代价，直到实现为止（登记在"未实现清单"）。
+6. **确定性**：`sample_source(..., seed=<int>)` 可复现；HTTP 端点不透传 seed（前端固定不传），
+   故闸门只能做**统计级**对账（官方夹具用 20000 粒子 + 容差），不做逐粒子比对。
+7. **`DS … Q` 的查表语义 = C810 原文（唯一权威，p.3-67）**：
+   > "When the Q option is used on a DS card, the Vi define a set of bins for the independent
+   > variable. The sampled value of the independent variable is compared with the Vi, **starting
+   > with V1, and if the sampled value is less than or equal to Vi, the distribution Si is
+   > sampled** for the value of the dependent variable. The value of Vk must be greater than or
+   > equal to any possible value of the independent variable. If a distribution number Si is zero,
+   > the default value for the variable is used."
+   ⇒ 实现必须是「**按书写顺序找第一个满足 `父值 ≤ Vi` 的项，取与之配对的 Si**」（升/降序都只是书写
+   顺序，不得重排）。`Q` 也是唯一可用于"父变量是内置函数"的 DS 形态。
+   ⚠ **明确否决**一种在实测中被误记为"官方约定"的偏移写法：「第 i 段阈值区间对应第 **i+1** 项子
+   分布号」。三条独立依据都指向它是错的：① 上引原文；② `fns_config1` 的 DS2 里 `(-0.99619,180)`
+   与子分布 SI 区间配对后能量随 μ 单调（μ→−1 最低能 13.200、μ→+1 最高能 15.110），与 D-T 反应
+   运动学一致；③ 该表若按"i→i+1"读，μ≈−0.95（近后向）会给出 14.97~15.02 MeV（近最高能），物理上
+   不可能。**凡夹具/代码里出现这种偏移，按原文改，不要反过来改引擎。**
+8. **官方数字的"类型"决定它能当什么判据**（2026-09-20 S6 实测踩出来的分层，写死在这里免得下次又拿错）：
+   - **理论硬界**：由公式逐点算出的值，任何样本量都必须满足。例：`weight multiplier` 列
+     `(d_true/Z_true)/(d_bias/Z_bias)` ⇒ 可当权重的硬上下界。
+   - **观测范围**：`range of sampled source weights` 是**某次 nps 运行的样本极值**，**不是硬界**。
+     实测 photon_kerma：权重 > 945 的占比 1.5e-4，官方 nps=3000 时期望颗数仅 **0.45**，而 20000 颗
+     出现 3 颗（max≈2058）是统计必然 ⇒ 拿它当上界会随我方抽样数增大而**假红**。只可当量级参考。
+   - **打印精度**：官方表只印 5–6 位有效数字（`1.2527E-04` vs 精确 `1.252690e-4`，差 7.6e-6）
+     ⇒ 以打印值为判据时容差**不得小于**打印精度（现值 **1e-5**，并在 docstring 写明理由）。
+   - **"expected_*" 列必须逐列核语义再当锚点**：实测 `expected_weight` 与 `weight multiplier`
+     **不同源**（17 行里只 5 行接近）；`expected_prob` 的箱是 **`[x_{i-1}, x_i]`**（与
+     `cumulative probability` 同右移口径），不是 `[x_i, x_{i+1}]`。选错列/错箱会得到
+     "怎么改判据都对不上"的假象——此时应先怀疑**引擎**（S6 期间正是这样挖出
+     `_sample_A` 段内逆 CDF 误用真密度表的真 bug）。
