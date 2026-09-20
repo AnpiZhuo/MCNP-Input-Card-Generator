@@ -1161,57 +1161,38 @@ def _deck_snapshot(surfs, cells_data, tr_cards) -> dict:
 
 # ===== JSON → Dataclass 转换 =====
 
-def _find_mcnp_exe() -> str:
-    """查找 MCNP 可执行文件，返回第一个找到的完整路径（未找到返回空串）"""
+def _find_mcnp_exe(hint: str = "") -> str:
+    """定位**要跑**的 MCNP：前端传的 > 用户在下拉里选的 > 自动检测第一个。
+
+    检测与选择逻辑全在 `app/mcnp_locator.py` —— 本文件不能被 pytest import
+    （模块级 FreeCAD/pyvista 探测），要单测的逻辑必须先搬出去；这里只负责接线。
+    """
     try:
-        import os, winreg
-        found = []; seen = set()
-        def _add(p):
-            if p and p not in seen: seen.add(p); found.append(p)
-        # System PATH from registry
-        system_paths = set()
-        try:
-            h = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")
-            system_paths.update(winreg.QueryValueEx(h, "Path")[0].split(";"))
-            winreg.CloseKey(h)
-            try:
-                h = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment")
-                up = winreg.QueryValueEx(h, "Path")[0]
-                if up: system_paths.update(up.split(";"))
-                winreg.CloseKey(h)
-            except: pass
-        except: pass
-        # Search all PATH dirs
-        all_paths = set()
-        for p in os.environ.get("PATH","").split(os.pathsep):
-            all_paths.add(p.strip().strip('"'))
-        all_paths.update(p.strip().strip('"') for p in system_paths if p.strip())
-        for d in all_paths:
-            if not d or not os.path.isdir(d): continue
-            for f in os.listdir(d):
-                if f.lower() in ("mcnp6.exe","mcnp5.exe","mcnp6","mcnp5"): _add(os.path.join(d, f))
-        # Registry
-        try:
-            for key in [winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER]:
-                for subkey in [r"SOFTWARE\MCNP", r"SOFTWARE\Wow6432Node\MCNP"]:
-                    try:
-                        h = winreg.OpenKey(key, subkey)
-                        pv = winreg.QueryValueEx(h, "InstallPath")[0]
-                        for r, dd, ff in os.walk(pv):
-                            for fn in ff:
-                                if fn.lower() in ("mcnp6.exe","mcnp5.exe"): _add(os.path.join(r, fn))
-                        winreg.CloseKey(h)
-                    except: pass
-        except: pass
-        # Recursive search
-        for base in ["D:/MCNP", "C:/Program Files/MCNP", "C:/MCNP"]:
-            if base and os.path.isdir(base):
-                for r, dd, ff in os.walk(base):
-                    for fn in ff:
-                        if fn.lower() in ("mcnp6.exe","mcnp5.exe","mcnp6","mcnp5"): _add(os.path.join(r, fn))
-        return found[0] if found else ""
+        return _import_app("mcnp_locator").resolve(hint) or ""
     except Exception:
         return ""
+
+
+def _load_saved_mcnp_xsdir() -> bool:
+    """按用户选定的 MCNP 载入**它自带的** xsdir（载入成功返回 True）。
+
+    MCNP5 与 MCNP6 的 xsdir 互不通用，所以"选哪个版本"必须能带出"用哪个库"。
+
+    只在用户**显式选过版本**时生效：没选过的老用户仍走原来的
+    「环境变量 XSDIR/DATAPATH → 常见路径」顺序，行为不变。
+    """
+    try:
+        loc = _import_app("mcnp_locator")
+        sel = loc.saved()
+        if not sel:
+            return False
+        p = loc.xsdir_for(sel)
+        if p and os.path.isfile(p):
+            xsdir_db.load(p)
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def _open_in_explorer(path: str) -> None:
@@ -1578,6 +1559,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
             "/api/xsdir-check": self._handle_xsdir_check,
             "/api/import-step": self._handle_import_step,
             "/api/mcnp-detect": self._handle_mcnp_detect,
+            "/api/set-mcnp-exe": self._handle_set_mcnp_exe,
+            "/api/choose-mcnp-exe": self._handle_choose_mcnp_exe,
             "/api/check-freecad": self._handle_check_freecad,
             "/api/set-freecad-path": self._handle_set_freecad_path,
             "/api/choose-freecad-path": self._handle_choose_freecad_path,
@@ -2577,11 +2560,12 @@ class MCNPHandler(BaseHTTPRequestHandler):
             if not inp_text.strip():
                 raise ValueError("INP 内容为空")
             os.makedirs(output_dir, exist_ok=True)
-            # 定位 MCNP 可执行文件（前端传的 > 自动检测）
-            if not exe or not os.path.isfile(exe):
-                exe = _find_mcnp_exe()
-            if not exe or not os.path.isfile(exe):
-                raise FileNotFoundError("未找到 mcnp6.exe，请检查 MCNP 安装或手动配置")
+            # 定位 MCNP 可执行文件（前端传的 > 顶栏下拉里选的 > 自动检测）
+            exe = _find_mcnp_exe(exe)
+            if not exe:
+                raise FileNotFoundError(
+                    "未找到 MCNP 可执行文件（mcnp5.exe / mcnp6.exe），"
+                    "请在顶栏 MCNP 下拉里选择，或检查 MCNP 安装")
             # 保存 inp 和 run.bat（临时，跑完自动删除）
             inp_path = os.path.join(output_dir, filename)
             base = filename.rsplit(".", 1)[0]
@@ -2635,24 +2619,27 @@ class MCNPHandler(BaseHTTPRequestHandler):
     def _handle_xsdir_check(self):
         try:
             if not xsdir_db.loaded:
-                # Priority 1: environment variables (XSDIR, DATAPATH)
-                env_path = ""
-                for _var in ("XSDIR", "xsdir"):
-                    _val = os.environ.get(_var, "")
-                    if _val and os.path.isfile(_val):
-                        env_path = _val; break
-                if not env_path:
-                    _dp = os.environ.get("DATAPATH", "")
-                    if _dp:
-                        _cand = os.path.join(_dp, "xsdir")
-                        if os.path.isfile(_cand): env_path = _cand
-                if env_path:
-                    xsdir_db.load(env_path)
-                else:
-                    # Priority 2: hardcoded common paths
-                    found = xsdir_db.find_xsdir()
-                    if found:
-                        xsdir_db.load(found)
+                # Priority 0: 用户在顶栏选定的那个 MCNP 自带的 xsdir
+                # （选过才有；没选过的老用户直接落到下面的原优先级，行为不变）
+                if not _load_saved_mcnp_xsdir():
+                    # Priority 1: environment variables (XSDIR, DATAPATH)
+                    env_path = ""
+                    for _var in ("XSDIR", "xsdir"):
+                        _val = os.environ.get(_var, "")
+                        if _val and os.path.isfile(_val):
+                            env_path = _val; break
+                    if not env_path:
+                        _dp = os.environ.get("DATAPATH", "")
+                        if _dp:
+                            _cand = os.path.join(_dp, "xsdir")
+                            if os.path.isfile(_cand): env_path = _cand
+                    if env_path:
+                        xsdir_db.load(env_path)
+                    else:
+                        # Priority 2: hardcoded common paths
+                        found = xsdir_db.find_xsdir()
+                        if found:
+                            xsdir_db.load(found)
             count = xsdir_db.count() if hasattr(xsdir_db, 'count') else 0
             self._ok({"loaded": xsdir_db.loaded, "count": count, "path": getattr(xsdir_db, 'path', None)})
         except Exception as e:
@@ -2990,13 +2977,55 @@ class MCNPHandler(BaseHTTPRequestHandler):
             self._err(str(e))
 
     def _handle_mcnp_detect(self):
+        """列出这台机器上**全部** MCNP —— MCNP5 与 MCNP6 同时装了必须都能选。
+
+        响应在旧契约（found/exe/label）之上**只增字段**：candidates 是全部候选、
+        selected 是当前选中的那个，旧前端读旧字段照旧能用。
+        """
         try:
-            exe = _find_mcnp_exe()
-            label = "MCNP6"
-            if exe and "5" in os.path.basename(exe).lower(): label = "MCNP5"
-            self._ok({"found": bool(exe), "exe": exe, "label": label if exe else "MCNP?"})
+            loc = _import_app("mcnp_locator")
+            cands = loc.detect_all()
+            sel = loc.selected() or ""
+            self._ok({
+                "found": bool(sel),
+                "exe": sel,
+                "label": loc.label_for(sel) if sel else "MCNP?",
+                "selected": sel,
+                "candidates": cands,
+            })
         except Exception as e:
-            self._ok({"found": False, "exe": "", "label": "MCNP?", "error": str(e)})
+            self._ok({"found": False, "exe": "", "label": "MCNP?", "selected": "",
+                      "candidates": [], "error": str(e)})
+
+    def _handle_set_mcnp_exe(self):
+        """用户在下拉里选定 MCNP → 持久化 + 立刻按该版本自带的 xsdir 重载截面库。
+
+        为什么必须重载：MCNP5 与 MCNP6 的 xsdir **互不通用**，只换 exe 不换库，
+        ZAID 校验与材料库会继续按上一个版本作答（"界面换了、数据没换"）。
+
+        传空串 = 清除选择、回到自动检测（此时不动已加载的 xsdir）。
+        """
+        try:
+            data = self._read_body() or {}
+            exe = str(data.get("exe") or "").strip().strip('"')
+            loc = _import_app("mcnp_locator")
+            if exe and not os.path.isfile(exe):
+                self._ok({"status": "error", "message": "文件不存在"})
+                return
+            loc.save(exe)
+            xsdir = (loc.xsdir_for(exe) or "") if exe else ""
+            if xsdir:
+                xsdir_db.load(xsdir, force=True)
+            self._ok({
+                "status": "ok",
+                "exe": exe,
+                "label": loc.label_for(exe) if exe else "MCNP?",
+                "xsdir": xsdir,
+                "xsdirLoaded": bool(xsdir_db.loaded),
+                "xsdirCount": xsdir_db.count() if xsdir_db.loaded else 0,
+            })
+        except Exception as e:
+            self._ok({"status": "error", "message": str(e)})
 
     # ── FreeCAD 检测（统一走 freecad_locator seam）──
 
@@ -3038,6 +3067,57 @@ class MCNPHandler(BaseHTTPRequestHandler):
             self._ok({"path": path, "cancelled": False})
         except Exception as e:
             self._ok({"path": "", "cancelled": True, "error": str(e)})
+
+    def _handle_choose_mcnp_exe(self):
+        """弹原生文件选择窗口手动指定 MCNP 可执行文件 → 选定即持久化并按它自带 xsdir 重载截面库。
+
+        给"自动检测找不到 / MCNP 装在非常规目录"的用户兜底；与"下拉里选一个已检测到的
+        版本"走**同一条落地路径**（save + xsdir 重载）—— 否则手动指定的那个与选出来的
+        那个行为会不一致（一个换库、一个不换），而 MCNP5/MCNP6 的 xsdir 互不通用。
+
+        取消返回 ``{cancelled:true}``；选中返回 ``{cancelled:false, exe, label, xsdir, …}``。
+        """
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            spec = _import_app("file_dialog").dialog_spec({"kind": "mcnp_exe"})
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            try:
+                path = filedialog.askopenfilename(
+                    title=spec["title"],
+                    filetypes=[tuple(ft) for ft in spec["filetypes"]],
+                )
+            finally:
+                root.destroy()
+            if not path:
+                self._ok({"cancelled": True})
+                return
+            if not os.path.isfile(path):
+                self._ok({"cancelled": True, "error": "文件不存在"})
+                return
+            loc = _import_app("mcnp_locator")
+            loc.save(path)
+            label = loc.label_for(path)
+            xsdir = loc.xsdir_for(path) or ""
+            if xsdir:
+                xsdir_db.load(xsdir, force=True)
+            out = {
+                "cancelled": False,
+                "exe": path,
+                "label": label,
+                "xsdir": xsdir,
+                "xsdirLoaded": bool(xsdir_db.loaded),
+                "xsdirCount": xsdir_db.count() if xsdir_db.loaded else 0,
+            }
+            # 用户有权选任意 exe，但文件名不含 5/6 时大概率选错了 —— 明说，别让他
+            # 拿着一份"下拉里显示 MCNP?"的困惑去猜。
+            if label == "MCNP?":
+                out["warning"] = "该文件名不含 5/6，版本无法判定；已按你的选择记住"
+            self._ok(out)
+        except Exception as e:
+            self._ok({"cancelled": True, "error": str(e)})
 
     def _handle_check_freecad(self):
         """重新定位 FreeCAD（清缓存后完整搜索），返回 {found, path}"""

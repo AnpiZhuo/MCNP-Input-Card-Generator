@@ -19,11 +19,17 @@ FreeCAD 定位模块 — 唯一负责「找到 FreeCAD」的地方。
     reset_cache()  -> None         清除进程内缓存（保存新路径后调用）
 """
 
-import json as _json
 import glob
 import os
 import winreg
 from typing import Optional
+
+# 两种导入路径都得活：api_server 把 app/ 直接挂 sys.path（顶层名），
+# 单测/打包走包路径（app.freecad_locator）—— 见 app/step_importer.py 的同款写法。
+try:
+    import user_config
+except ImportError:  # pragma: no cover - 取决于调用方怎么挂 sys.path
+    from app import user_config
 
 _EXE_NAMES = ("freecad.exe", "freecadcmd.exe")
 
@@ -34,31 +40,17 @@ def _is_freecad_exe(p: str) -> bool:
 
 
 # ===================================================================
-# 持久化：config.json（唯一存储，web 路径）
+# 持久化：config.json（唯一存储，读写口在 app/user_config.py）
 # ===================================================================
 
 def _config_path() -> str:
-    base = os.environ.get("APPDATA") or os.path.expanduser("~")
-    d = os.path.join(base, "mcnp_generator")
-    try:
-        os.makedirs(d, exist_ok=True)
-    except Exception:
-        pass
-    return os.path.join(d, "config.json")
+    """历史接口，转发到唯一读写口（保留是因为它在文档/工具里被引用过）。"""
+    return user_config.path()
 
 
 def _from_config_json() -> Optional[str]:
-    try:
-        p = _config_path()
-        if os.path.isfile(p):
-            with open(p, "r", encoding="utf-8") as f:
-                data = _json.load(f)
-            path = (data.get("freecad_path") or "").strip().strip('"')
-            if _is_freecad_exe(path):
-                return path
-    except Exception:
-        pass
-    return None
+    path = user_config._value("freecad_path")
+    return path if _is_freecad_exe(path or "") else None
 
 
 def saved() -> Optional[str]:
@@ -67,9 +59,12 @@ def saved() -> Optional[str]:
 
 
 def save(path: str) -> None:
-    """持久化用户手动指定的 FreeCAD.exe 路径（config.json + 清缓存）。"""
-    with open(_config_path(), "w", encoding="utf-8") as f:
-        _json.dump({"freecad_path": path}, f)
+    """持久化用户手动指定的 FreeCAD.exe 路径（config.json + 清缓存）。
+
+    **必须读-改-写**：config.json 是共享文件（还有 `mcnp_exe` 等键），
+    整体覆盖会把别人的键抹掉 —— 实测路径：先选 FreeCAD、再在顶栏选 MCNP 版本。
+    """
+    user_config.set_values(freecad_path=path)
     reset_cache()
 
 

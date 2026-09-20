@@ -174,6 +174,79 @@ def _post(base: str, path: str, payload: dict) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+# ── MCNP 版本检测/选择（顶栏下拉）────────────────────────
+MCNP_SET_PATH = "/api/set-mcnp-exe"
+MCNP_CHOOSE_PATH = "/api/choose-mcnp-exe"
+
+
+def test_contract_mcnp_endpoints_operation_ids():
+    """两个 MCNP 端点必须在 api.yaml 里登记（漂移闸门之外的定点锚，防 operationId 被改）。"""
+    yaml_ops = _yaml_paths_operation_ids()
+    assert yaml_ops.get(MCNP_SET_PATH) == "setMcnpExe", yaml_ops.get(MCNP_SET_PATH)
+    assert yaml_ops.get(MCNP_CHOOSE_PATH) == "chooseMcnpExe", yaml_ops.get(MCNP_CHOOSE_PATH)
+
+
+def test_http_mcnp_detect_lists_all_candidates(backend_base_url):
+    """`/api/mcnp-detect`：MCNP5 与 MCNP6 都装时要**全部**列出（改造前只回第一个）。
+
+    在没装 MCNP 的机器上 candidates 合法地为空 —— 所以断言的是**契约形状**：
+    `candidates` 恒为数组、每项四字段齐、`label` 取值受控、`selected/exe` 自洽。
+    """
+    resp = _post(backend_base_url, "/api/mcnp-detect", {})
+    assert resp.get("status") == "ok", resp
+    cands = resp.get("candidates")
+    assert isinstance(cands, list), resp
+    assert "selected" in resp, resp
+    for c in cands:
+        assert set(c) >= {"exe", "label", "source", "xsdir"}, c
+        assert c["label"] in ("MCNP5", "MCNP6", "MCNP?"), c
+    if cands:
+        exes = [c["exe"] for c in cands]
+        assert resp["found"] is True, resp
+        assert resp["selected"] == resp["exe"] in exes, resp
+        assert resp["label"] in ("MCNP5", "MCNP6"), resp
+    else:
+        assert resp["found"] is False and resp["selected"] == "", resp
+
+
+def test_http_set_mcnp_exe_rejects_missing_file(backend_base_url):
+    """`/api/set-mcnp-exe` 校验存在性：路径不存在 ⇒ **error 信封**（HTTP 200）且不落盘。
+
+    注：这里不是 500 —— 错误分支走 `_ok({"status":"error",…})`，信封 status 被覆盖成 error，
+    与 `/api/set-freecad-path` 同一约定（既有端点先例）。
+    """
+    before = _post(backend_base_url, "/api/mcnp-detect", {})
+    resp = _post(backend_base_url, MCNP_SET_PATH, {"exe": r"Z:\definitely\not\here\mcnp6.exe"})
+    assert resp.get("status") == "error", resp
+    assert resp.get("message") == "文件不存在", resp
+    after = _post(backend_base_url, "/api/mcnp-detect", {})
+    assert after.get("selected") == before.get("selected"), (before, after)
+
+
+def test_http_set_mcnp_exe_persists_and_shows_as_candidate(backend_base_url, tmp_path):
+    """成功分支：选定一个真实存在的 exe ⇒ 落盘，且**立刻作为候选**出现在 detect 里。
+
+    为什么这条重要：手动指定的那个必须能被下拉看到（来源标"用户选择"），
+    否则用户选完发现"列表里没它"，会以为没生效。config.json 由 conftest 隔离到临时 APPDATA。
+    """
+    fake = tmp_path / "mcnp6.exe"
+    fake.write_text("", encoding="utf-8")
+
+    resp = _post(backend_base_url, MCNP_SET_PATH, {"exe": str(fake)})
+    assert resp.get("status") == "ok" and resp.get("exe") == str(fake), resp
+    assert resp.get("label") == "MCNP6", resp
+
+    d = _post(backend_base_url, "/api/mcnp-detect", {})
+    assert d.get("selected") == str(fake), d
+    assert d.get("exe") == str(fake), d
+    assert any(c["exe"] == str(fake) and c["source"] == "用户选择"
+               for c in d.get("candidates", [])), d
+
+    # 清除选择 ⇒ 回到自动检测（不留 "mcnp_exe" 假值）
+    assert _post(backend_base_url, MCNP_SET_PATH, {"exe": ""}).get("status") == "ok"
+    assert _post(backend_base_url, "/api/mcnp-detect", {}).get("selected") != str(fake)
+
+
 def test_http_generate(backend_base_url):
     """/api/generate：最小 deck → status ok + inp 非空。"""
     resp = _post(backend_base_url, "/api/generate", MINIMAL_DECK)

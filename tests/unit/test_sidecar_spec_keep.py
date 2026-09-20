@@ -169,6 +169,50 @@ def test_every_dynamic_import_is_reachable_in_frozen_sidecar():
         "（历史先例：material_library.py / gpu_pref.py / diff_inp.py）")
 
 
+def test_keep_py_transitive_sibling_imports_are_registered():
+    """**传递闭包闸门**：`_keep_py` 里的模块，其顶层兄弟 import 也必须在 `_keep_py` 里。
+
+    为什么需要它（本条是 2026-09-20 加 MCNP 版本检测时踩出来的）：
+    `_keep_py` 里的文件是以**数据**形式拷进 `_internal/app/` 的，再由 `_import_app("x")`
+    以**源码**形式 import —— PyInstaller 的静态分析**看不到**这些边（它们不是 PYZ 模块）。
+    于是"A 登记了、A 里 `import b` 的兄弟 B 没登记"⇒ 冻结版 import A 时 ImportError、
+    端点 500，而 dev 模式与上面那条闸门（只看 `_import_app` 的直接实参）**都看不见**。
+
+    实测先例：这次新增 `app/mcnp_locator.py`，它顶层 `import user_config` ——
+    上面那条闸门查的是 `_import_app("mcnp_locator")`，对 `user_config` 一无所知。
+
+    只查**顶层名**形态（`import b` / `from b import …`）：`from app import b` 走的是
+    `_internal/app/__init__.py` 这个包（`_MEIPASS` 在 sys.path 上），不需要逐文件登记。
+    """
+    spec_text = SPEC_PATH.read_text(encoding="utf-8")
+    keep_py = {f[:-3] for f in _parse_keep_py(spec_text) if f.endswith(".py")}
+    app_src = PROJECT_DIR / "app"
+
+    missing: dict[str, list[str]] = {}
+    for name in sorted(keep_py):
+        f = app_src / f"{name}.py"
+        if not f.is_file():
+            continue
+        deps: set[str] = set()
+        for node in ast.parse(f.read_text(encoding="utf-8")).body:   # 只看模块级
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    deps.add(a.name.split(".")[0])
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                deps.add(node.module.split(".")[0])
+        for d in sorted(deps):
+            if (app_src / f"{d}.py").is_file() and d not in keep_py:
+                missing.setdefault(name, []).append(d)
+
+    assert not missing, (
+        "以下 `_keep_py` 模块顶层 import 了**未登记的兄弟模块** ⇒ 冻结包里它必然 "
+        "ImportError（而 dev 模式永不复现）：\n"
+        f"  {missing}\n"
+        f"  _keep_py（去 .py）= {sorted(keep_py)}\n"
+        "修法：把缺的那个也加进 gui/mcnp_sidecar.spec 的 `_keep_py`"
+        "（先例：mcnp_locator.py → user_config.py）")
+
+
 def test_no_keep_py_entry_is_missing_on_disk():
     """反向方向：`_keep_py` 里每一项都要真的存在，否则 spec 悄悄失效（打进去一个不存在的东西）。"""
     app_src = PROJECT_DIR / "app"

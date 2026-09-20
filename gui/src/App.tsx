@@ -17,8 +17,12 @@ import AiAccessPanel from "./components/AiAccessPanel";
 import { normalizeImportedMaterials } from "./components/MaterialEditDialog";
 import { buildGridsFromTally, buildTallyFromGrids } from "./utils/gridState";
 import { buildFmeshPayload, fmeshDefsToRows } from "./volume/fmeshState";
-import { startPythonBackend, stopPythonBackend } from "./utils/backend";
-import { apiUrl } from "./utils/api";
+import { startPythonBackend, stopPythonBackend, describeBackendFailure } from "./utils/backend";
+import { apiUrl, chooseMcnpExe, mcnpDetect, setMcnpExe } from "./utils/api";
+import {
+  BROWSE_VALUE, EMPTY_MCNP_STATE, applyMcnpSelection, mcnpOptions, mcnpTooltip,
+  normalizeMcnpDetect, upsertCandidate, type McnpState,
+} from "./utils/mcnpSelect";
 import { buildRawOverrides } from "./utils/rawOverrides";
 import { canonicalSourceMode } from "./utils/sourceAdv";
 import AppScaleProvider from "./utils/appScale";
@@ -58,16 +62,67 @@ function AppInner() {
   const [suffix, setSuffix] = useState(".i");
   const [dragOver, setDragOver] = useState(false);
   const [pendingCell, setPendingCell] = useState(0);
-  const [mcnpInfo, setMcnpInfo] = useState({found:false, exe:"", label:"MCNP?"});
+  const [mcnpInfo, setMcnpInfo] = useState<McnpState>(EMPTY_MCNP_STATE);
   const [backendState, setBackendState] = useState<"connecting" | "ready" | "offline">("connecting");
+  /** 后端起不来时的**原因**（归因 + 退出码 + 子进程输出尾巴），点"详情"看全文 */
+  const [backendNote, setBackendNote] = useState("");
 
   // MCNP 检测：后端就绪后才查（否则 mount 时 5001 未起 → 图标永远不更新）
+  // 回来的 candidates 是**全部**版本（装了 MCNP5 + MCNP6 就有两条），顶栏下拉里选。
   useEffect(() => {
     if (backendState !== "ready") return;
-    fetch(apiUrl("/api/mcnp-detect"), {method:"POST"})
-      .then(r => r.json()).then(j => { if (j.status === "ok") setMcnpInfo(j); })
+    let stopped = false;
+    mcnpDetect()
+      .then(j => { if (!stopped) setMcnpInfo(normalizeMcnpDetect(j)); })
       .catch(() => {});
+    return () => { stopped = true; };
   }, [backendState]);
+
+  /** 顶栏切换 MCNP 版本：本地立即跟手 + 后端持久化（并按该版本的 xsdir 重载截面库）。 */
+  const handleMcnpSelect = (value: string) => {
+    if (value === BROWSE_VALUE) { void handleMcnpBrowse(); return; }
+    setMcnpInfo(prev => applyMcnpSelection(prev, value));
+    setMcnpExe(value)
+      .then(j => {
+        if (j.status === "ok") {
+          setMcnpInfo(prev => applyMcnpSelection(
+            prev, j.exe || value,
+            j.xsdir ? `截面库已切到 ${j.xsdir}（${j.xsdirCount ?? 0} 条）`
+                    : "该版本未找到自带 xsdir，截面库沿用当前",
+          ));
+        } else {
+          setMcnpInfo(prev => ({ ...prev, note: `保存失败：${j.message || "未知原因"}` }));
+        }
+      })
+      // 保存失败**不回滚**：localStorage/界面上选中的那个仍会被 run-mcnp 优先使用，
+      // 回滚反而会让用户以为"点了没反应"（后端不可用时连界面都不该变）。
+      .catch(() => setMcnpInfo(prev => ({ ...prev, note: "后端不可用，选择未持久化" })));
+  };
+
+  /** 手动指定 MCNP 可执行文件（自动检测不到时的唯一出路；后端弹原生窗口选）。 */
+  const handleMcnpBrowse = async () => {
+    try {
+      const j = await chooseMcnpExe();
+      if (j.cancelled) {
+        // 取消是常态（用户点开又关掉）：只在有 error/warning 时才提示，
+        // 否则每次取消都写一句 note 会让人以为出了问题。
+        if (j.error) setMcnpInfo(prev => ({ ...prev, note: `选择失败：${j.error}` }));
+        return;
+      }
+      const exe = j.exe || "";
+      if (!exe) return;
+      const note = j.warning
+        || (j.xsdir ? `截面库已切到 ${j.xsdir}（${j.xsdirCount ?? 0} 条）`
+                    : "该安装未找到自带 xsdir，截面库沿用当前");
+      setMcnpInfo(prev => applyMcnpSelection(
+        { ...prev, candidates: upsertCandidate(prev.candidates,
+            { exe, label: j.label || "MCNP?", source: "手动指定", xsdir: j.xsdir || "" }) },
+        exe, note,
+      ));
+    } catch {
+      setMcnpInfo(prev => ({ ...prev, note: "后端不可用，无法打开文件选择窗口" }));
+    }
+  };
 
   // 后端连接状态轮询：sidecar 启动需要时间（首次 Defender 扫描），就绪前提示用户
   useEffect(() => {
@@ -80,7 +135,10 @@ function AppInner() {
         } catch { /* 未就绪，继续等 */ }
         await new Promise(res => setTimeout(res, 2000));
       }
-      if (!stopped) setBackendState("offline");
+      if (!stopped) {
+        setBackendState("offline");
+        setBackendNote(describeBackendFailure());   // 轮询判死时也把原因取回来
+      }
     };
     poll();
     return () => { stopped = true; };
@@ -101,8 +159,13 @@ function AppInner() {
   useEffect(() => { try { localStorage.setItem(THEME_KEY, theme); } catch {} }, [theme]);
 
   // 打包后自动启动 Python 后端（浏览器模式自动失效）；卸载/关闭时一起关
+  // 秒退/拉不起来时**立刻**把原因挂到顶栏（不等 3 分钟轮询超时）
   useEffect(() => {
-    startPythonBackend();
+    startPythonBackend((d) => {
+      if (d.state === "exited" || d.state === "spawn-failed") {
+        setBackendNote(describeBackendFailure());
+      }
+    });
     return () => { stopPythonBackend(); };
   }, []);
 
@@ -414,10 +477,33 @@ function AppInner() {
               <option>.i</option><option>.inp</option><option>.txt</option>
             </select>
             <span className="status-dot" />
-            <span style={{ fontSize: 11, color: mcnpInfo.found ? "#2e7d32" : "#c62828", whiteSpace: "nowrap" }}>{mcnpInfo.label}</span>
+            {/* MCNP 版本：装了两个版本就能在这里选跑哪个（选中即持久化，run-mcnp 用它）；
+                末尾永远有"手动指定…" —— 自动检测不到时那是唯一出路，故**不置灰**。 */}
+            <select
+              className="form-select"
+              aria-label="MCNP 版本"
+              value={mcnpInfo.exe}
+              onChange={e => handleMcnpSelect(e.target.value)}
+              title={mcnpTooltip(mcnpInfo)}
+              style={{
+                width: 150, height: 28, fontSize: 11,
+                color: mcnpInfo.found ? "#2e7d32" : "#c62828",
+              }}
+            >
+              {mcnpOptions(mcnpInfo).map(o => (
+                <option key={o.value} value={o.value}>{o.text}</option>
+              ))}
+            </select>
             <span style={{ fontSize: 11, color: backendState === "ready" ? "#2e7d32" : backendState === "connecting" ? "#f9a825" : "#c62828", whiteSpace: "nowrap" }}>
               {backendState === "ready" ? "后端已连接" : backendState === "connecting" ? "后端启动中…" : "后端不可用"}
             </span>
+            {/* 起不来的原因就地可查：以前只有 console.warn，用户只能看到"后端不可用"四个字 */}
+            {!!backendNote && backendState !== "ready" && (
+              <button className="btn btn-ghost btn-xs"
+                title={backendNote}
+                onClick={() => alert(backendNote)}
+                style={{ color: "#c62828" }}>⚠ 详情</button>
+            )}
           </div>
           <div className="topbar-right">
             <button className="btn btn-ghost btn-sm" onClick={() => setAiOpen(true)}

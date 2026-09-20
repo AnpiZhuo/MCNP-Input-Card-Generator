@@ -417,8 +417,11 @@ paths:
     post:
       operationId: mcnpDetect
       tags: [system]
-      summary: 检测 MCNP 可执行文件
-      description: 无 body 键；异常回退 {found:false,…} 于 200（api_server.py:1142-1149）。
+      summary: 检测 MCNP 可执行文件（MCNP5 / MCNP6 全部列出）
+      description: >-
+        无 body 键；异常回退 {found:false,…} 于 200（api_server.py:1142-1149）。
+        `candidates` 是这台机器上检测到的**全部**候选（MCNP5 与 MCNP6 同时安装时都在），
+        `selected` 是当前要跑的那个（用户选定的 > 自动检测第一个）。
       responses:
         '200':
           description: 检测结果
@@ -432,7 +435,82 @@ paths:
                       found: { type: boolean }
                       exe: { type: string }
                       label: { type: string, description: 'MCNP6 / MCNP5 / MCNP?' }
+                      selected: { type: string, description: 当前选中的 exe（无候选时为空串） }
+                      candidates:
+                        type: array
+                        description: 全部候选（MCNP6 在前、同版本按路径排序）
+                        items:
+                          type: object
+                          properties:
+                            exe: { type: string }
+                            label: { type: string, description: 'MCNP5 / MCNP6 / MCNP?' }
+                            source: { type: string, description: '用户选择 / PATH / 注册表 / 常见目录' }
+                            xsdir: { type: string, description: 该安装自带的 xsdir（推断不到为空串） }
                       error: { type: string, description: 异常分支出现 }
+
+  /api/set-mcnp-exe:
+    post:
+      operationId: setMcnpExe
+      tags: [system]
+      summary: 选定要跑的 MCNP（并按其自带 xsdir 重载截面库）
+      description: >-
+        body `{exe}`；空串 = 清除选择、回到自动检测（此时不动已加载的 xsdir）。
+        exe 不存在 → `{status:"error",message:"文件不存在"}`。
+        MCNP5 与 MCNP6 的 xsdir 互不通用，故选定后立刻用该版本的 xsdir 重载截面库
+        （重载不到就保持原库，并在 xsdir 回空串）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                exe: { type: string, description: MCNP 可执行文件完整路径；空串 = 清除选择 }
+      responses:
+        '200':
+          description: 选择结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      exe: { type: string }
+                      label: { type: string, description: 'MCNP5 / MCNP6 / MCNP?' }
+                      xsdir: { type: string, description: 该版本自带 xsdir（推断不到为空串） }
+                      xsdirLoaded: { type: boolean }
+                      xsdirCount: { type: integer }
+                      message: { type: string, description: 失败分支出现 }
+
+  /api/choose-mcnp-exe:
+    post:
+      operationId: chooseMcnpExe
+      tags: [system]
+      summary: 弹原生文件选择窗口手动指定 MCNP 可执行文件
+      description: >-
+        无 body 键。给"自动检测找不到 / MCNP 装在非常规目录"的用户兜底；
+        选定后与 /api/set-mcnp-exe 同一落地路径（持久化 + 按该 exe 自带 xsdir 重载截面库）。
+        取消返回 `{cancelled:true}`（异常分支也回 cancelled:true + error，不抛 500）。
+        文件名不含 5/6 时额外回 `warning`（版本无法判定，但仍按用户选择记住）。
+      responses:
+        '200':
+          description: 选择结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/OkEnvelope' }
+                  - type: object
+                    properties:
+                      cancelled: { type: boolean }
+                      exe: { type: string }
+                      label: { type: string, description: 'MCNP5 / MCNP6 / MCNP?' }
+                      xsdir: { type: string }
+                      xsdirLoaded: { type: boolean }
+                      xsdirCount: { type: integer }
+                      warning: { type: string, description: 文件名判不出版本时出现 }
+                      error: { type: string, description: 失败/异常分支出现 }
 
   /api/check-freecad:
     post:

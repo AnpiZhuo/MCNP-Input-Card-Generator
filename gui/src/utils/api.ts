@@ -10,6 +10,63 @@ export const API_BASE = "http://127.0.0.1:5001";
 /** 拼后端接口路径：apiUrl("/api/preview-3d") => "http://127.0.0.1:5001/api/preview-3d" */
 export const apiUrl = (p: string): string => API_BASE + p;
 
+/* ── MCNP 版本检测 / 选择（顶栏下拉）── */
+
+/** 一个候选 MCNP 可执行文件（`source` 是它在哪条搜索路上被找到的） */
+export interface McnpCandidate {
+  exe: string;
+  label: string;
+  source?: string;
+  /** 该安装自带的 xsdir（推断不到为空串） */
+  xsdir?: string;
+}
+
+export interface McnpDetectResult {
+  status?: string;
+  found: boolean;
+  exe: string;
+  label: string;
+  selected?: string;
+  candidates?: McnpCandidate[];
+  error?: string;
+}
+
+export interface SetMcnpExeResult {
+  status: "ok" | "error";
+  exe?: string;
+  label?: string;
+  xsdir?: string;
+  xsdirLoaded?: boolean;
+  xsdirCount?: number;
+  message?: string;
+}
+
+/** POST /api/mcnp-detect：列出这台机器上**全部** MCNP（MCNP5/MCNP6 都装了就都在） */
+export async function mcnpDetect(): Promise<McnpDetectResult> {
+  return postJson<McnpDetectResult>("/api/mcnp-detect", {});
+}
+
+export interface ChooseMcnpExeResult {
+  cancelled: boolean;
+  exe?: string;
+  label?: string;
+  xsdir?: string;
+  xsdirLoaded?: boolean;
+  xsdirCount?: number;
+  warning?: string;
+  error?: string;
+}
+
+/** POST /api/set-mcnp-exe：选定要跑的 MCNP（后端顺带按该版本的 xsdir 重载截面库） */
+export async function setMcnpExe(exe: string): Promise<SetMcnpExeResult> {
+  return postJson<SetMcnpExeResult>("/api/set-mcnp-exe", { exe });
+}
+
+/** POST /api/choose-mcnp-exe：弹原生窗口**手动指定** MCNP 可执行文件（取消回 cancelled:true） */
+export async function chooseMcnpExe(): Promise<ChooseMcnpExeResult> {
+  return postJson<ChooseMcnpExeResult>("/api/choose-mcnp-exe", {});
+}
+
 /* ── meshtal 网格计数（契约 meshtal-visualization.md §3，F4 hint 优先）── */
 
 /** F4：错误响应优先显示 hint（友好中文），其次 message（原始异常） */

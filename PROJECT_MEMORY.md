@@ -1,6 +1,29 @@
 # 项目记忆文档（AI 速查手册）
 
-> 最后更新时间：2026-09-20（**S9 全链已提交 ✅ / 已打包部署 ✅ · 版本仍 1.7.6**：
+> 最后更新时间：2026-09-20（**MCNP5/6 全量检测 + 顶栏版本下拉 + 用户自助自检，已提交 ✅／版本仍 1.7.6、未重打包**：
+> 起因是用户反馈「后端没拉起来、手动点 `python.exe` 一闪就没」。**实测定位**：缺 `_internal` 时进程只活
+> **263 ms**、错误只写在 stderr（`Failed to load Python DLL ...\_internal\python313.dll`）⇒ 窗口来不及画字就销毁，
+> 肉眼即"空白一闪"；而健康包 **1.9 s** 绑上 5001 并常驻。**关键缺口是"静默"**：后端只由前端 JS 拉起
+> （`src-tauri/src/main.rs` 无任何 spawn），失败被 `catch` 吞成一句 `console.warn` ⇒ 用户只看到"后端不可用"四个字。
+> **治理三件**：① `自检.bat`（新增，随包落到 exe 同级；`[RESULT]` 四态分流：`PKG-INCOMPLETE-OR-BLOCKED` /
+> `PKG-INCOMPLETE` / `PACKAGE-OK-BACKEND-NOT-UP` / `BACKEND-RUNNING`，且判据全走 ASCII 标记，
+> 不依赖中文能否显示——实测 `PYTHONIOENCODING` 对冻结版**无效**）；② `gui/src/utils/backend.ts` 把拉起失败/秒退的
+> **归因 + 退出码 + stderr 尾巴**带到界面（顶栏 ⚠ 详情，秒退后几秒可见，不再等 3 分钟轮询）；
+> ③ 打包链路新增 `gui/scripts/stage-selftest.mjs`（`build:app` / `build-release` 收尾各挂一步，缺失即非零退出）
+> ＋ 手册第 7 步改「四件套 + README + AI接入.md」。
+> **MCNP5/6 全量检测 + 顶栏下拉**（新增 `app/mcnp_locator.py` 深模块、`app/user_config.py`）：改造前
+> `_find_mcnp_exe()` 找到第一个就 `return` ⇒ 同时装 MCNP5 与 MCNP6 的用户**永远只看到一个**、版本标签还靠
+> "文件名里有 5"猜；现在枚举**全部**候选（PATH／注册表 InstallPath／常见目录，去重 + 稳定排序 MCNP6 在前）、
+> **逐候选推断自带 xsdir**（MCNP6 `<root>\MCNP_CODE\bin`、MCNP5 `<root>\bin`+`DATA` 两种真实布局实测支持），
+> 新增 `/api/set-mcnp-exe`（选定即按该版本自带 xsdir **重载截面库**——MCNP5/6 的 xsdir 互不通用）与
+> `/api/choose-mcnp-exe`（原生窗口手动指定，自动检测不到时的唯一出路）；`/api/mcnp-detect` 加性返回
+> `candidates/selected`。**顺带修 3 处真缺陷**：① `freecad_locator.save()` **整份覆盖** config.json
+> （再加第二个设置就互抹）⇒ 收敛到 `user_config.py` 读-改-写；② 集成测试会写到开发机**真实** config
+> （`backend_proc` 的 `APPDATA` 已隔离到临时目录）；③ TD-34 白名单闸门缺**传递闭包**
+> （`_keep_py` 内模块的顶层兄弟 import 未登记 ⇒ 冻结包必 ImportError、dev 永不复现；本批
+> `mcnp_locator → user_config` 正是踩中它）。门禁 pytest **1049 passed** / vitest **828 passed / 98 files** /
+> tsc 两档 0 / vite build 0；另：**`ded1998` 已单独在临时 worktree 验证 820 passed**。详见 `docs/CHANGELOG.md`）。
+> 此前（2026-09-20，**S9 全链已提交 ✅ / 已打包部署 ✅ · 版本仍 1.7.6**：
 > **真实 MCNP 结果的 keff 解析**（用户「程序解析不到 keff 序列」，打包版实测 HTTP 500 同文案）：`app/mctal_parser.py`
 > 原先只认 **OWEN 简化夹具**（`k eff (c) <mean> <std>` 行 + `combined keff = ...`），**真实 MCNP6 mctal 里这些字段名一个都没有** ——
 > KCODE 结果在**文末** `kcode <总周期> <跳过> <每周期值数>` 之后的**裸数值块**（实测 600×19、无字段名，按列定位：

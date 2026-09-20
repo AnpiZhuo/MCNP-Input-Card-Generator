@@ -13,7 +13,9 @@
 
 - ``inp``（默认，兼容老调用）：MCNP 输入卡 `*.inp *.i *.txt`；
 - ``mctal``：**默认无后缀**（首项过滤 = `*`，不加任何扩展名约束）；
-- ``outp``：MCNP 输出文件 `*.o *.outp *.out`。
+- ``outp``：MCNP 输出文件 `*.o *.outp *.out`；
+- ``mcnp_exe``：MCNP 可执行文件（`*.exe`）—— 顶栏 MCNP 下拉的"手动指定…"用，
+  覆盖"自动检测找不到/装在非常规目录"的用户（MCNP5、MCNP6 的自定义安装路径）。
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from __future__ import annotations
 KIND_INP = "inp"
 KIND_MCTAL = "mctal"
 KIND_OUTP = "outp"
+KIND_MCNP_EXE = "mcnp_exe"
 
 DEFAULT_KIND = KIND_INP
 
@@ -37,6 +40,10 @@ _SPECS: dict[str, dict] = {
     KIND_OUTP: {
         "title": "选择 MCNP 输出文件（.o / .outp / .out）",
         "filetypes": [("MCNP 输出文件", "*.o *.outp *.out"), ("所有文件", "*.*")],
+    },
+    KIND_MCNP_EXE: {
+        "title": "选择 MCNP 可执行文件（mcnp5.exe / mcnp6.exe）",
+        "filetypes": [("MCNP 可执行文件", "*.exe"), ("所有文件", "*.*")],
     },
 }
 
@@ -63,4 +70,5 @@ def dialog_spec(data: dict | None = None) -> dict:
     }
 
 
-__all__ = ["dialog_spec", "KIND_INP", "KIND_MCTAL", "KIND_OUTP", "DEFAULT_KIND"]
+__all__ = ["dialog_spec", "KIND_INP", "KIND_MCTAL", "KIND_OUTP", "KIND_MCNP_EXE",
+           "DEFAULT_KIND"]

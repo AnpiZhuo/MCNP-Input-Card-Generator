@@ -67,9 +67,22 @@ def test_spec_is_a_copy_not_the_constant():
     assert dialog_spec({"kind": "outp"})["filetypes"][0][1] == "*.o *.outp *.out"
 
 
+def test_mcnp_exe_kind_filters_exe():
+    """mcnp_exe：默认 ``*.exe``（顶栏 MCNP 下拉的"手动指定…"用）。
+
+    自动检测不到 MCNP 时这是唯一出路，所以过滤必须**能看见 exe**；
+    同时标题要说清是选可执行文件，免得用户在这里挑 INP。
+    """
+    spec = dialog_spec({"kind": "mcnp_exe"})
+    assert spec["kind"] == "mcnp_exe"
+    label, pattern = spec["filetypes"][0]
+    assert pattern == "*.exe"
+    assert "MCNP" in spec["title"] and "可执行" in spec["title"]
+
+
 def test_every_kind_has_a_fallback_entry():
     """每种 kind 都要有兜底"所有文件"，免得过滤写错时用户彻底选不到文件。"""
-    for kind in ("inp", "mctal", "outp"):
+    for kind in ("inp", "mctal", "outp", "mcnp_exe"):
         fts = dialog_spec({"kind": kind})["filetypes"]
         assert len(fts) >= 2
         assert any(p == "*.*" for _, p in fts), f"{kind} 缺「所有文件」兜底项"

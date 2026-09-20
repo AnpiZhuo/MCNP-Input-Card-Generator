@@ -79,8 +79,16 @@ cpSync(builtInternal, join(BINARIES, "_internal"), { recursive: true });
 run("sync-sidecar（镜像 binaries → target/release）", process.execPath, ["scripts/sync-sidecar.mjs"]);
 run("sync-sidecar --require-target（构建后严格自检）", process.execPath, ["scripts/sync-sidecar.mjs", "--check", "--require-target"]);
 
+// ⑤ 用户自助诊断脚本 `自检.bat` 落到 target/release（与 exe 同级）
+//    —— 第 7 步手工拷贝时它自然跟着走；漏了它，用户就只剩"python.exe 一闪就没"可看。
+//    **顺序铁律：先写、后查。** 反过来（先 --check）在干净/首次构建上必报"缺失"
+//    并 process.exit(1) 中止整条链路 —— 那时 target/release 里还没有它（实测：本批
+//    第一次接线就踩了，只因先前手工铺过一次才没暴露）。
+run("stage-selftest（写入并复核）", process.execPath, ["scripts/stage-selftest.mjs"]);
+run("stage-selftest --check（收尾自检）", process.execPath, ["scripts/stage-selftest.mjs", "--check"]);
+
 console.log(`\n[build-release] ✅ 完成（${Math.round((Date.now() - t0) / 1000)} s）`);
-console.log("[build-release] 产物：gui/src-tauri/target/release/（exe + python.exe + _internal）");
-console.log("[build-release] 部署按 docs/手动打包方法.md 第 7 步：**只拷三件套 + README + AI接入.md**，");
+console.log("[build-release] 产物：gui/src-tauri/target/release/（exe + python.exe + _internal + 自检.bat）");
+console.log("[build-release] 部署按 docs/手动打包方法.md 第 7 步：**只拷四件套 + README + AI接入.md**，");
 console.log("                 不要 robocopy /MIR 整个 target/release（会把 deps/.fingerprint/mcnp_ui.pdb");
 console.log("                 等 Rust 构建中间物灌进交付目录，且会覆盖掉 AI接入.md）。");
