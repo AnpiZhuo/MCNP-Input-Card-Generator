@@ -50,6 +50,16 @@ _SI_LETTERS = ("L", "H", "A", "S")
 _SP_LETTERS = ("D", "C", "V")
 _DS_LETTERS = ("H", "L", "S", "T", "Q")
 _SB_FN_CODES = ("-21", "-31")
+# C810 p.3-65/3-66 Table 3.4：内置函数**各自允许作用在哪些源变量**上
+# （−21→DIR/RAD/EXT；−31→DIR/EXT；−41→TME/X/Y/Z；能量谱→ERG）。
+# 「The built-in functions can be used only for the variables shown in Table 3.3」——
+# 配对错必须报错，否则会静默产出一个无意义的分布。
+# 注：−7（Spare energy spectrum）按手册原文是"留给你自己加谱的框架"，本程序显式不支持。
+_BUILTIN_VARS = {
+    "-2": ("ERG",), "-3": ("ERG",), "-4": ("ERG",), "-5": ("ERG",), "-6": ("ERG",),
+    "-21": ("DIR", "RAD", "EXT"), "-31": ("DIR", "EXT"),
+    "-41": ("TME", "X", "Y", "Z"),
+}
 _KIND_RE = re.compile(r"^(SI|SP|SB|DS|SC)(\d+)")
 
 
@@ -762,6 +772,19 @@ class DistributionSampler:
     # ── 内置函数（C810 Table 3.4）───────────────────────────
     def _sample_builtin(self, fn, sp, si_vals, rng, var="", axs=False):
         params = self._floats(sp.get("fnParams") or [])
+        # C810 p.3-66：「The built-in functions can be used **only for the variables shown**
+        # in Table 3.3/3.4」—— 配对错了必须在**抽样前**报错，否则会静默给出无意义分布。
+        if var and fn in _BUILTIN_VARS and var not in _BUILTIN_VARS[fn]:
+            raise SourceSamplingError(
+                f"内置函数 {fn} 只能用于 {sorted(_BUILTIN_VARS[fn])}（C810 Table 3.4），"
+                f"不能用于 {var}")
+        if fn == "-7":
+            # Table 3.4 有 `-7 Spare energy spectrum`，但手册原文说它是
+            # 「basic framework for another energy spectrum… to make it easier for a user to
+            # add a spectrum of his own」⇒ 正经用法不存在，本程序**显式不支持**（而不是含糊报错）。
+            raise SourceSamplingError(
+                "内置函数 -7 是 MCNP 的 spare（留给你自己加谱的框架），本程序不支持；"
+                "请改用 -2/-3/-4/-5/-6 或 SI/SP 表")
         if fn == "-2":
             self._need(params, 0, 1, "-2")
             a = params[0] if params else 1.2895

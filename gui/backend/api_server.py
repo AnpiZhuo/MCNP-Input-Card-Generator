@@ -211,14 +211,22 @@ def _plane_coeff_to_points(A: float, B: float, C: float, D: float) -> list:
     return pts
 
 
-def parse_surfaces(text: str) -> list:
-    """将 MCNP 曲面文本解析为 pymcnp 表面对象列表（支持 TR 引用号）"""
+def parse_surfaces(text: str, errors: list | None = None) -> list:
+    """将 MCNP 曲面文本解析为 pymcnp 表面对象列表（支持 TR 引用号）。
+
+    ``errors`` 非 None 时，把**每一行没能解析的曲面**追加进去（含行号与原因）。
+    为什么必须可见：pymcnp 拒收一行时旧实现是静默 `continue` ⇒ 该曲面凭空消失 ⇒ 用户随后
+    只看到「CEL=n 引用的栅元不存在或无法判定」/「SUR=n 引用的曲面未定义」，**真因（那一行
+    写法没被接受）完全看不到**。2026-09-20 实测：`1 so 0 0 0 5`（SO 卡项只有 R）就是这么被
+    丢的，报错指向了别处。注意"本程序未能解析"≠"MCNP 一定非法"，故文案只陈述事实并给行号。
+    """
     import re
     from freecad_preview import (cone_card_missing_sheet,
                                  box_card_missing_vector)  # 可选尾项判定（纯文本）
     surfs = []
     _cls_map = _surf_classes()  # 惰性构建 pymcnp 曲面类表（拖慢启动的重型 import 只在此触发一次）
-    for _line in text.strip().splitlines():
+    _lines = text.strip().splitlines()
+    for _lineno, _line in enumerate(_lines, 1):
         _l = _line.strip()
         if not _l or _l.startswith("C") or _l.startswith("c"): continue
         _l = _l.split("$")[0].strip()  # 去掉行内注释
@@ -264,14 +272,20 @@ def parse_surfaces(text: str) -> list:
             _l = _l + " 0 0 0"
             _p = _l.split()
         _cls = _cls_map.get(_p[_kw_idx].upper())
-        if _cls is None: continue
+        if _cls is None:
+            if errors is not None:
+                errors.append(
+                    f"曲面对第 {_lineno} 行未能解析：「{_l}」—— 未知曲面助记符 {_kw}"
+                    "（C810 Table 3.1；这一行被整行忽略，引用它的栅元会报「引用未定义曲面」）")
+            continue
         try:
             _s = _cls.from_mcnp(_l)
             if tr_num is not None:
                 _s.transform = tr_num
             surfs.append(_s)
-        except Exception:
+        except Exception as _e:
             # P A B C D 系数形式：pymcnp 的 P 只支持三点定义，转一下再试
+            _ok_retry = False
             if _p[_kw_idx].upper() == "P" and len(_p) == 6:
                 try:
                     pts = _plane_coeff_to_points(float(_p[2]), float(_p[3]), float(_p[4]), float(_p[5]))
@@ -280,8 +294,13 @@ def parse_surfaces(text: str) -> list:
                     if tr_num is not None:
                         _s.transform = tr_num
                     surfs.append(_s)
+                    _ok_retry = True
                 except Exception:
-                    pass
+                    _ok_retry = False
+            if errors is not None and not _ok_retry:
+                errors.append(
+                    f"曲面对第 {_lineno} 行未能解析：「{_l}」—— {type(_e).__name__}: {_e}"
+                    "（该行被整行忽略；C810 Table 3.1 给出各曲面卡的卡项个数，可据此核对）")
     return surfs
 
 def _model_box_from_cells_surfaces(data: dict):
@@ -3338,10 +3357,12 @@ class MCNPHandler(BaseHTTPRequestHandler):
                                      _pymcnp_surf_to_dict, _geometry_ast_to_json)
         from pymcnp.types.Geometry import Geometry
 
-        surfs = parse_surfaces(surf_text)
+        _source_geometry_errors: list[str] = []
+        # 把"哪些曲面行没能解析"一并交上来（行号 + 原因）：不交的话，用户只会看到下游的
+        # 「引用的曲面未定义」，而真因在那一行写法上（2026-09-20 实测的 SO 卡就是如此）。
+        surfs = parse_surfaces(surf_text, _source_geometry_errors)
         tr_cards = parse_tr_cards(tr_text)
         surfaces = {}
-        _source_geometry_errors: list[str] = []
         for s in surfs:
             try:
                 d = _pymcnp_surf_to_dict(s)

@@ -46,8 +46,10 @@
   - 方向 `(dx,dy,dz)` 是单位矢量；`particle` ∈ {n,p,e,h,a,s,other}（PAR 1/2/3/H/A/S 映射）。
   - `particles` 恒 500 条（除非报错）；`id` 1..500。
   - 位置分四路（互斥，按 MCNP 语义）：**① 面源 SUR** / **② 栅元均匀 CEL** / **③ 笛卡尔 X/Y/Z** / **④ 柱坐标 POS+RAD+EXT+AXS**。
-  - **面源（①）语义（C810 3-58 ~ 3-59 + Table 3.3）**：只支持**平面**（P/PX/PY/PZ）、**球面**（SO/S/SPH/SX/SY/SZ）、**椭球面**（GQ/SQ，近似）；柱面/锥面/环面按 MCNP 语义**明确报错**并提示改用退化体源（原文：Cylindrical surface sources must be specified as degenerate volume sources）。
+  - **面源（①）语义（C810 3-58 ~ 3-59 + Table 3.3）**：只支持**平面**（P/PX/PY/PZ）、**球面**（SO/S/SPH/SX/SY/SZ）、**椭球面**（GQ/SQ 的**轴平行**椭球，位置按**面积均匀** —— 拉伸回单位球后加权拒绝采样，不是旧实现的"体内近似撒点"）；柱面/锥面/环面、以及**斜置 GQ / 非椭球二次曲面**按 MCNP 语义**明确报错**并提示改用退化体源（原文：Cylindrical surface sources must be specified as degenerate volume sources）。
     - 平面：位置 = `POS + RAD·(面内单位矢量)`（RAD 缺省幂律 a=1 ⇒ 面内均匀），位置恒在面上；球面：位置按面积均匀。
+      **球面 + AXS（C810 3-58）**：指定 AXS 时，`EXT` 的抽样值 = 「AXS 与球心→位置矢量」夹角的余弦
+      （µ），方位角仍 0~360° 均匀；未给 AXS 才按面积均匀。故球面源的 µ 分布由 EXT 的 SI/SP 决定。
     - **方向参考轴**：显式 `VEC` 优先；面源缺 `VEC` ⇒ **面法线**（球面 = 径向、带 `NRM` 符号）；`DIR` 缺省 ⇒ 余弦分布 `p(μ)=2μ`。`NRM` 只影响面法线符号。
     - `SDEF TR=n`（整数编号）或 **`TR=Dn`（变换分布：`SI L` 列 TR 号 + `SP` 给概率，C810 3-64/3-66）**：对抽出的**位置与方向**都作用一次（约定 `p_global = Rᵀ·p + o`，与 `_freecad_csg_worker.apply_trn` 一致）；TR 卡取不到时按"未变换"处理并走既有告警口径。
   - 纯 stdlib + numpy + `random.Random(seed)`；无 FreeCAD（几何判定走 voxel_csg，见模块 C）。
@@ -101,8 +103,43 @@
 8. 概率和为零（多源）。
 9. 内置函数参数个数错误（如 Watt 需 2 参）。
 10. `SP V`（体积加权）出现在非 CEL 场景。
+11. **CEL 的栅元紧盒算不出来**（栅元含无界曲面或未支持的几何）⇒ 无法做栅元均匀抽样，提示改用面源或退化体源。
+    （旧实现退回 ±1e3 大盒硬撞 10 万次，只会给出一句误导性的「包围盒可能退化」。）
+12. **CEL 拒绝采样效率过低**（C810 3-59 判据 `MAX(成功数,10) < EFF×尝试数`，EFF 默认 0.01）⇒
+    明确报「效率过低」并指路；`sdef_eff` 可覆盖 EFF（C810 Table 3.3）。
+13. **面源只允许 平面/球面/椭球面**（C810 3-58）：柱面/锥面/环面、**斜置 GQ（有 xy/yz/zx 交叉项）**、
+    双曲面/抛物面一律报错并提示改用退化体源。
+14. **内置函数与源变量配对错误**（C810 Table 3.4：−21→DIR/RAD/EXT、−31→DIR/EXT、−41→TME/X/Y/Z、
+    能量谱→ERG）；`−7`（spare）显式不支持。
 
 **不报错**（正常做）：含 `#` 补集的 cell、GQ/SQ 曲面、全部宏体、带 TR 变换、DS 依赖链、多源概率链。
+
+## 4.1 CEL 的采样区域来源（相对 C810 的**有意扩展**）
+
+C810 p.3-57 原文：CEL 拒绝采样要由**用户**给一个"完全包含该栅元"的区域（笛卡尔 X/Y/Z、
+球 POS+RAD、柱 POS+AXS+RAD+EXT），并原话提醒「you must make sure that the sampling region
+really does contain every part of the cell because **MCNP has no way of checking this**」。
+
+本程序：**只给 `CEL=n` 时代码自己用栅元紧盒（`voxel_csg.cell_aabb`）当区域** —— SDEF 表单里
+"只给 CEL"是最常见用法，让用户自己算盒不现实。代价是盒必须正确，故 2026-09-20 补齐了
+**全部 10 类宏体**的紧盒（`voxel_csg._macrobody_aabb`，依据 C810 p.3-21/3-22），并删掉
+"盒算不出来就退回 ±1e3 大盒"的旧兜底（那是接受率 ~1e-8 的硬撞）。
+
+**已知差异 L1**：用户显式给了 X/Y/Z 或 POS+RAD/EXT 时，本程序**仍按紧盒**采样，不像 C810
+那样把它们当作采样区域做拒绝（`CEL` 在位置分派里优先于 RAD/EXT）。影响：`CEL=n + RAD=0.5`
+这类"把球壳限制在栅元内"的写法，本程序画成"整个栅元均匀"。待办（未做）。
+
+## 4.2 已知差异（C810 有明文、本程序暂未对齐）
+
+| # | 项 | C810 依据 | 现状 |
+|---|---|---|---|
+| **O6** | 内置函数被 SI **截断**时的**权重补偿** | p.3-66：「**Unless the function is −21 or −31**, the weight of the source particle is adjusted to compensate for truncation of the function by the entries on the SI card」 | **未实现**（`_wgt` 只认显式值/Dn；`si_vals` 只当抽样区间）。⇒ 用 −2…−6/−41 + SI 截断的卡，界面 WGT 偏小 |
+| **R1** | `RHP/HEX` 的 `r` 语义 | p.3-21：r = 「vector from the axis to the **middle of the first facet**」（边心距） | 现行 `surface_fn` 把 r 当**顶点矢量**（`base = v±r1±r2±r3`）⇒ 同卡六边形小 1/cos30°；改动波及 UI 六棱柱快捷卡与 hex 格阵预览 ⇒ **待产品裁决**（`tests/unit/test_voxel_csg_macrobody_aabb.py` 有 xfail 留档） |
+| **O7** | `−7`（Spare energy spectrum） | p.3-65 Table 3.4 | **显式不支持**（报错说明它是"留给你自己加谱的框架"） |
+
+> **权威出处**（本次用作依据的是 CCC-810 原文，不是二手摘要）：
+> Table 3.1 曲面卡（p.3-13）、宏体清单与卡项（p.3-20~3-22）、SDEF/Table 3.3（p.3-55~3-57）、
+> 源分布与面源（p.3-57~3-59）、EFF 判据（p.3-59）、Table 3.4 内置函数与特殊默认（p.3-65~3-66）。
 
 ## 5. 前端
 

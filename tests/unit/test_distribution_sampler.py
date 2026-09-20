@@ -175,9 +175,14 @@ def test_builtin_single_si_ext_is_symmetric():
     vals = [s.sample(1, rng, var="EXT") for _ in range(4000)]
     assert min(vals) < 0.0, "EXT 的 SI 单值必须按对称区间 [−5,5] 抽样"
     assert max(vals) <= 5.0
-    # 对照：RAD 同写法是 [0, x]（规则 4），不得出现负值
+    # 对照：RAD 同写法是 [0, x]（规则 4），不得出现负值。
+    # ⚠ 规则 4 针对的是 **SP −21**（Table 3.4：−31 只允许 DIR/EXT，配 RAD 属非法配对，
+    # 2026-09-20 起会被 `_BUILTIN_VARS` 拒绝）—— 故这里另建一张 −21 的卡来对照。
+    s21 = DistributionSampler([{"id": 1, "si": {"type": "", "values": ["5"]},
+                                "sp": {"type": "", "values": [], "fnCode": "-21",
+                                       "fnParams": ["1"]}}])
     rng = _rng(3)
-    rad = [s.sample(1, rng, var="RAD") for _ in range(2000)]
+    rad = [s21.sample(1, rng, var="RAD") for _ in range(2000)]
     assert min(rad) >= 0.0 and max(rad) <= 5.0
 
 
@@ -367,3 +372,36 @@ def test_error_zero_probability():
 def test_error_invalid_si_type():
     with pytest.raises(SourceSamplingError, match="SI 类型"):
         DistributionSampler([{"id": 1, "si": {"type": "Q", "values": ["1", "2"]}, "sp": None}]).sample(1, _rng())
+
+
+# ── 内置函数 ↔ 源变量配对（C810 p.3-66 Table 3.4）────────────
+
+def test_builtin_is_restricted_to_its_variables():
+    """C810 Table 3.4 的配对表：−41 只能用于 TME/X/Y/Z。
+
+    用在 RAD 上必须**抽样前**报错 —— 旧实现只校验参数个数，配错就静默产出一个
+    无意义的"高斯径向分布"，比报错难查得多。
+    """
+    s = DistributionSampler([{"id": 1, "si": None,
+                              "sp": {"fnCode": "-41", "fnParams": ["0.1", "0.0"]}}])
+    with pytest.raises(SourceSamplingError, match="Table 3.4"):
+        s.sample(1, _rng(), var="RAD")
+    assert isinstance(s.sample(1, _rng(), var="TME"), float)      # 用在该用的变量上正常
+    assert isinstance(s.sample(1, _rng(), var="Z"), float)
+
+
+def test_energy_spectrum_builtin_is_rejected_for_direction():
+    """能量谱（−2…−6）只能给 ERG；给 DIR 必须报错。"""
+    s = DistributionSampler([{"id": 1, "si": None,
+                              "sp": {"fnCode": "-2", "fnParams": []}}])
+    with pytest.raises(SourceSamplingError, match="Table 3.4"):
+        s.sample(1, _rng(), var="DIR")
+    assert s.sample(1, _rng(), var="ERG") >= 0.0
+
+
+def test_builtin_minus7_spare_is_explicitly_unsupported():
+    """C810 Table 3.4 的 −7 是「framework … to add a spectrum of his own」⇒ 显式不支持。"""
+    s = DistributionSampler([{"id": 1, "si": None,
+                              "sp": {"fnCode": "-7", "fnParams": ["1", "1"]}}])
+    with pytest.raises(SourceSamplingError, match="spare"):
+        s.sample(1, _rng(), var="ERG")

@@ -430,6 +430,143 @@ def _ast_surf_nums(ast):
     return nums
 
 
+# C810 p.3-21「The following geometry bodies are available」的全部宏体（HEX 是 RHP 同义词）。
+# 宏体的**内部**对其 master 曲面为负侧 ⇒ 与球/柱等封闭曲面同列"负侧有界"。
+_MACROBODY_TYPES = ("BOX", "RCC", "RHP", "HEX", "REC", "TRC", "ELL", "WED", "ARB")
+_CLOSED_SURFACE_TYPES = ("SO", "SX", "SY", "SZ", "S", "CX", "CY", "CZ",
+                         "C/X", "C/Y", "C/Z", "RPP", "SPH", "TX", "TY", "TZ",
+                         ) + _MACROBODY_TYPES
+
+
+def _macrobody_aabb(t: str, p: list):
+    """宏体紧盒 —— C810（CCC-810）p.3-21/3-22 的 8 类几何体。
+
+    为什么必须补：`cell_aabb` 对「`-宏体`」栅元返回 None 时，源抽样
+    （`source_sampler.sample_cell`）会退回 **±1e3 大盒**做拒绝采样 ⇒ 接受率 ~1e-8
+    ⇒ `SDEF CEL=n` 必然报「拒绝采样失败」。实测（2026-09-20）：只有 SPH/RPP 有盒。
+
+    **参数规整一律复用 `quadric` 的 `box_params` / `rec_params` / `rhp_params`**：紧盒必须
+    与 `surface_fn` 建出的**同一个实心**一致（否则盒与场互相矛盾，采样又会塌）。
+    沿用 `(lo, hi, axes)` 三轴有界标志；无法确定（退化/不支持的项数）由调用方保守回 None。
+    """
+    import math as _m
+
+    def _disc_extent(R, u):
+        """半径 R、法向 u 的**圆盘**逐轴半宽 = R·√(1−u_i²)（不是球！）。"""
+        return [abs(R) * _m.sqrt(max(0.0, 1.0 - u[i] ** 2)) for i in range(3)]
+
+    def _ell_extent(a, u, b):
+        """沿 u 半轴 a、垂直方向半轴 b 的**椭球**逐轴半宽。"""
+        return [_m.sqrt((a * u[i]) ** 2 + b * b * (1.0 - u[i] ** 2)) for i in range(3)]
+
+    def _unit(v):
+        n = _m.sqrt(v[0] ** 2 + v[1] ** 2 + v[2] ** 2)
+        return (None if n < 1e-12 else (v[0] / n, v[1] / n, v[2] / n)), n
+
+    if t == "BOX":
+        pp, infinite = box_params(p)
+        v, a1, a2, a3 = pp[0:3], pp[3:6], pp[6:9], pp[9:12]
+        corners = [tuple(v[i] + ia * a1[i] + ja * a2[i] + ka * a3[i] for i in range(3))
+                   for ia in (0, 1) for ja in (0, 1) for ka in (0, 1)]
+        lo = [min(q[i] for q in corners) for i in range(3)]
+        hi = [max(q[i] for q in corners) for i in range(3)]
+        axes = [True, True, True]
+        if infinite:
+            # C810 p.3-22：某维无限 ⇒ 沿 A1×A2 方向延伸；凡该方向分量非零的轴都无界
+            n = (a1[1] * a2[2] - a1[2] * a2[1],
+                 a1[2] * a2[0] - a1[0] * a2[2],
+                 a1[0] * a2[1] - a1[1] * a2[0])
+            for i in range(3):
+                if abs(n[i]) > 1e-12:
+                    axes[i] = False
+                    lo[i] = -_AABB_UNBOUNDED
+                    hi[i] = _AABB_UNBOUNDED
+        return tuple(lo), tuple(hi), tuple(axes)
+
+    if t in ("RCC", "TRC"):
+        v, h = p[0:3], p[3:6]
+        u, _n = _unit(h)
+        if u is None:
+            return None                          # 零高：轴向不定，保守回全盒
+        if t == "RCC":
+            r1 = r2 = p[6]
+        else:
+            r1, r2 = p[6], p[7]
+        e1, e2 = _disc_extent(r1, u), _disc_extent(r2, u)
+        lo = [min(v[i] - e1[i], v[i] + h[i] - e2[i]) for i in range(3)]
+        hi = [max(v[i] + e1[i], v[i] + h[i] + e2[i]) for i in range(3)]
+        return tuple(lo), tuple(hi), (True, True, True)
+
+    if t in ("RHP", "HEX"):
+        pp = rhp_params(p)                       # 9/12 → 15（与 surface_fn 同一入口）
+        v, h = pp[0:3], pp[3:6]
+        r1, r2, r3 = pp[6:9], pp[9:12], pp[12:15]
+        # 与 surface_fn 同构造：六个顶点 = v ± r1、v ± r2、v ± r3（**r 是顶点矢量**，
+        # 不是 C810 p.3-21 说的 facet 中心 —— 该偏差另案，见 tests 里的 xfail 留档）
+        base = []
+        for a in (r1, r2, r3):
+            base.append(tuple(v[i] + a[i] for i in range(3)))
+            base.append(tuple(v[i] - a[i] for i in range(3)))
+        verts = base + [tuple(q[i] + h[i] for i in range(3)) for q in base]
+        lo = [min(q[i] for q in verts) for i in range(3)]
+        hi = [max(q[i] for q in verts) for i in range(3)]
+        return tuple(lo), tuple(hi), (True, True, True)
+
+    if t == "REC":
+        pp = rec_params(p)                       # 10 项（第 10 项短轴半径）→ 12
+        v, h, v1, v2 = pp[0:3], pp[3:6], pp[6:9], pp[9:12]
+        ext = [_m.sqrt(v1[i] ** 2 + v2[i] ** 2) for i in range(3)]   # 椭圆逐轴半宽
+        lo = [min(v[i], v[i] + h[i]) - ext[i] for i in range(3)]
+        hi = [max(v[i], v[i] + h[i]) + ext[i] for i in range(3)]
+        return tuple(lo), tuple(hi), (True, True, True)
+
+    if t == "ELL":
+        rm = p[6]
+        if rm > 0:
+            # C810 p.3-20：Rm>0 ⇒ V1/V2 是**两焦点**、Rm 是**长轴长**
+            f1, f2 = p[0:3], p[3:6]
+            ctr = [(f1[i] + f2[i]) / 2.0 for i in range(3)]
+            u, dn = _unit((f2[0] - f1[0], f2[1] - f1[1], f2[2] - f1[2]))
+            a = rm / 2.0
+            if u is None:
+                u, b = (0.0, 0.0, 1.0), a
+            else:
+                b = _m.sqrt(max(0.0, a * a - (dn / 2.0) ** 2))
+        else:
+            # C810 p.3-20：Rm<0 ⇒ V1 是中心、V2 是长轴矢量（长度 = 长半径）、|Rm| 是短半径
+            ctr = p[0:3]
+            u, a = _unit(p[3:6])
+            if u is None:
+                return None
+            b = abs(rm)
+        e = _ell_extent(a, u, b)
+        return (tuple(ctr[i] - e[i] for i in range(3)),
+                tuple(ctr[i] + e[i] for i in range(3)), (True, True, True))
+
+    if t == "WED":
+        v, v1, v2, v3 = p[0:3], p[3:6], p[6:9], p[9:12]
+        verts = []
+        for base in ((0, 0, 0), (1, 0, 0), (0, 1, 0)):          # 底直角三角形的三个顶点
+            for top in (0, 1):
+                verts.append(tuple(v[i] + base[0] * v1[i] + base[1] * v2[i] + top * v3[i]
+                                   for i in range(3)))
+        lo = [min(q[i] for q in verts) for i in range(3)]
+        hi = [max(q[i] for q in verts) for i in range(3)]
+        return tuple(lo), tuple(hi), (True, True, True)
+
+    if t == "ARB":
+        # C810 p.3-21：8 个角点三元组（**未用的以零三元组占位**）+ 6 个四位面号
+        pts = [tuple(p[3 * i:3 * i + 3]) for i in range(8)]
+        used = [q for q in pts if any(abs(x) > 1e-12 for x in q)]
+        if len(used) < 3:
+            return None
+        lo = [min(q[i] for q in used) for i in range(3)]
+        hi = [max(q[i] for q in used) for i in range(3)]
+        return tuple(lo), tuple(hi), (True, True, True)
+
+    return None
+
+
 def surface_aabb(surf_type: str, params: list, transform=None):
     """单曲面有界范围。返回 (lo3, hi3, (bx,by,bz)) 或 None（无界/不支持）。
 
@@ -444,6 +581,13 @@ def surface_aabb(surf_type: str, params: list, transform=None):
         return (-1e300, -1e300, -1e300), (1e300, 1e300, 1e300), (True, True, True)
     t = (surf_type or "").upper()
     p = [float(v) for v in params]
+    if t in _MACROBODY_TYPES:
+        try:
+            return _macrobody_aabb(t, p)
+        except Exception:
+            # 参数不合法/退化（如零高、项数不支持）⇒ **保守回 None**，
+            # 与改造前"宏体一律 None"的行为一致，不至于把预览/切片带崩。
+            return None
     if t == "PX":
         return (p[0], -1e300, -1e300), (p[0], 1e300, 1e300), (True, False, False)
     if t == "PY":
@@ -501,7 +645,7 @@ def surface_aabb(surf_type: str, params: list, transform=None):
             lo, hi, axes = aabb
             return lo, hi, axes
         return None
-    return None  # 平面 P/P_1、锥 K*、点定义 X/Y/Z、其余宏体 → 无界/不支持
+    return None  # 平面 P/P_1、锥 K*、点定义 X/Y/Z → 无界/不支持（宏体已在上面按 _MACROBODY_TYPES 处理）
 
 
 def _surface_negative_aabb(surf_type: str, params: list, transform=None):
@@ -524,8 +668,7 @@ def _surface_negative_aabb(surf_type: str, params: list, transform=None):
         if t == "PY":
             return (-1e300, -1e300, -1e300), (1e300, p[0], 1e300), (False, True, False)
         return (-1e300, -1e300, -1e300), (1e300, 1e300, p[0]), (False, False, True)
-    if t in ("SO", "SX", "SY", "SZ", "S", "CX", "CY", "CZ",
-             "C/X", "C/Y", "C/Z", "RPP", "SPH", "TX", "TY", "TZ"):
+    if t in _CLOSED_SURFACE_TYPES:
         return surface_aabb(t, p, None)
     if t in ("GQ", "SQ"):
         if t == "SQ":

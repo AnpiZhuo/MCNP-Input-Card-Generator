@@ -372,3 +372,46 @@ def test_error_undefined_distribution():
                        "sdef_erg": "D7"}, [], n_particles=10, seed=1)
     assert r["status"] == "error"
     assert "D7" in r["error"]
+
+
+# ── 球面面源 + AXS/EXT 极角偏置（C810 p.3-58）────────────────
+
+def test_sphere_surface_source_with_axs_uses_ext_as_cosine():
+    """C810 p.3-58：「If AXS is specified, the sampled value of EXT is used for the cosine of
+    the angle between AXS and the vector from the center to the position point」。
+
+    EXT 给常数 0.5 ⇒ 每颗粒子的 z/R 必须恒 = 0.5（且仍在球面上、方位角任意）。
+    旧实现忽略 AXS/EXT 只按面积均匀撒点 —— 这条它会红。
+    """
+    r = _ok(sample_source({"sdef_sur": "6", "sdef_axs": "0 0 1", "sdef_ext": "0.5",
+                           "sdef_erg": "14"}, [], geometry=_sphere_geom(),
+                          n_particles=200, seed=1))
+    for p in r["particles"]:
+        d = math.sqrt(p["x"] ** 2 + p["y"] ** 2 + p["z"] ** 2)
+        assert abs(d - 10.0) < 1e-6, "位置必须仍在球面上"
+        assert abs(p["z"] / 10.0 - 0.5) < 1e-9, f"μ 应恒为 EXT=0.5，实得 {p['z'] / 10.0}"
+        assert abs((p["x"] ** 2 + p["y"] ** 2) - (100.0 - 25.0)) < 1e-6, "赤道半径应为 √75"
+
+
+def test_sphere_surface_source_without_axs_is_area_uniform():
+    """不给 AXS ⇒ 仍按面积均匀（μ 覆盖 −1..1、均值≈0）—— 与上一条互为对照。"""
+    r = _ok(sample_source({"sdef_sur": "6", "sdef_erg": "14"}, [], geometry=_sphere_geom(),
+                          n_particles=2000, seed=2))
+    mus = [p["z"] / 10.0 for p in r["particles"]]
+    assert min(mus) < -0.9 and max(mus) > 0.9, "未给 AXS 时不应被限制在局部"
+    assert abs(sum(mus) / len(mus)) < 0.06, f"面积均匀的 μ 均值应≈0，实得 {sum(mus) / len(mus):.3f}"
+
+
+def test_sphere_surface_source_axs_with_ext_distribution():
+    """EXT 走分布时 μ 跟着走：`SI 1` + `SP −21`（C810 规则 5 ⇒ EXT 按 `SI −1 1`；
+    Table 3.4 的 −21 对 EXT 默认 a=0 ⇒ **μ 均匀** ⇒ 面积均匀）。"""
+    dists = [{"id": 1, "si": {"type": "", "values": ["1"]},
+              "sp": {"type": "", "values": [], "fnCode": "-21", "fnParams": []}}]
+    r = _ok(sample_source({"sdef_sur": "6", "sdef_axs": "0 0 1", "sdef_ext": "D1"},
+                          dists, geometry=_sphere_geom(), n_particles=1000, seed=3))
+    mus = [p["z"] / 10.0 for p in r["particles"]]
+    assert min(mus) < -0.8 and max(mus) > 0.8, "EXT=D1 应覆盖整个 [−1,1]"
+    assert abs(sum(mus) / len(mus)) < 0.06, "μ 均匀 ⇒ 均值≈0"
+    for p in r["particles"]:
+        d = math.sqrt(p["x"] ** 2 + p["y"] ** 2 + p["z"] ** 2)
+        assert abs(d - 10.0) < 1e-6, "位置必须仍在球面上"

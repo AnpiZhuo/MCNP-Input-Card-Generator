@@ -107,7 +107,8 @@ export default function SourceDemoWindow() {
         nParticles: 500,
       });
       if (res.status === "error" || !res.particles) {
-        setError(res.error || "抽样失败");
+        // 后端 500 的信封只有 `message`（无 `error`）⇒ 不兜底就把真实原因吞成一句"抽样失败"
+        setError(res.error || res.message || "抽样失败");
       } else {
         setCount(res.particles.length);
         setEnergyRange(res.energyRange || { min: 0, max: 1 });

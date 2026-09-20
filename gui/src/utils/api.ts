@@ -204,6 +204,10 @@ export interface SourceDemoResult {
   energyRange?: { min: number; max: number };
   bounds?: { min: [number, number, number]; max: [number, number, number] };
   error?: string;
+  /** 后端 500 信封（`_err`）只给 `message`+`traceback`，没有 `error` —— 前端必须兜底读它 */
+  message?: string;
+  /** 几何解析类告警（曲面行未解析、栅元未解析）——非阻断，界面以警示条展示 */
+  geometryWarnings?: string[];
 }
 
 /** POST /api/source-demo-sample：SDEF 源粒子抽样（演示源） */

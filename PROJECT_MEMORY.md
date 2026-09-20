@@ -1,6 +1,32 @@
 # 项目记忆文档（AI 速查手册）
 
-> 最后更新时间：2026-09-20（**MCNP5/6 全量检测 + 顶栏版本下拉 + 用户自助自检，已提交 ✅ / 已打包部署 ✅ · 版本仍 1.7.6**：
+> 最后更新时间：2026-09-20（**源演示「有时候返回失败」修复 —— 按 CCC-810 原文逐条对照后修 F1–F8**：
+> **根因（最小复现）**：`SDEF CEL=n` 的栅元若用**宏体**界定 ⇒ `voxel_csg.cell_aabb` 返回 None
+> （`_surface_negative_aabb` 只认 SPH/RPP，其余 8 类宏体无实现）⇒ 旧 `sample_cell` 退回 **±1e3 大盒**做拒绝采样
+> ⇒ 接受率 ~1e-8 ⇒ 必报「CEL=n 拒绝采样失败（栅元包围盒可能退化）」；另一条独立病因：GQ/SQ 面源的 `_quadric_pt`
+> 把 `gq_aabb()` 的**三元组**解包成 2 个 ⇒ 必抛 `too many values to unpack`。两条都是"**某些卡必失败**"
+> （用户感知即"有时候"），且旧报错**指向错处**。
+> **按 C810 修的 8 项**：① `voxel_csg._macrobody_aabb` 补全 **C810 p.3-21 的 10 类宏体**紧盒（含 BOX/RPP 某维无限、
+> RHP 轴向无限的逐轴有界标志；参数规整复用 `quadric` 的 box/rec/rhp_params，保证"盒与 `surface_fn` 同实心"）；
+> ② `sample_cell` 删掉 ±1e3 兜底，改为"算不出盒 / 有无界轴"就明确报错；③ 实现 **EFF 判据**（C810 p.3-59
+> `MAX(成功数,10) < EFF×尝试数`，默认 0.01，`sdef_eff` 可覆盖）；④ 失败语义改成 C810 口径（效率过低／无界盒）；
+> ⑤ GQ/SQ 面源改为**面上面积均匀**（拉伸回单位球的加权拒绝采样），且只接受**轴平行椭球**（斜置 GQ／双曲面／
+> 抛物面按 p.3-58 明确报错并指路）；⑥ 球面面源 + `AXS` 时 **EXT = 夹角余弦**（p.3-58）；⑦ 内置函数↔源变量
+> **配对校验**（Table 3.4；−7 spare 显式不支持）；⑧ 曲面行未解析时回传**行号 + 原因**（走既有 geometryWarnings）
+> ＋ 前端兜底读 `message`（后端 500 只给 message，旧前端会把它吞成一句"源抽样失败"）。
+> **测试**：新增 `tests/unit/test_voxel_csg_macrobody_aabb.py`（36 例：紧盒逐轴比对独立解析期望 + MC 体积 vs 解析
+> + 紧度比 ≤5 + 正侧仍无界 + BOX 无限维）、`tests/integration/test_source_demo_matrix.py`（28 例：10 宏体 CEL
+> 每颗粒子用**独立解析判据**验在体内、面源允许/禁止类型、面均匀统计检验、EFF 触发与 `sdef_eff` 覆盖、
+> 未解析行点名）；并修正一处**既有用例编码了非法配对**的问题（旧 `test_builtin_single_si_ext_is_symmetric`
+> 拿 −31 配 RAD，而 Table 3.4 只允许 DIR/EXT）。
+> 门禁 **pytest 1118 passed + 1 xfailed** / vitest **828** / tsc 两档 0 / vite build 0；**R1 差分**（HEAD vs 现在，
+> 5 张宏体卡打 `/api/preview-3d`）STL **逐字节一致** ⇒ 预览/网格零影响。
+> **登记 3 处「C810 有明文但本批未做」**（已写进契约 §4.1/§4.2）：**L1** CEL 采样区域仍用自算紧盒（C810 要求用户给
+> 区域，本程序为便利而扩展）；**O6** 内置函数被 SI 截断时的**权重补偿**未实现；**R1** **RHP 的 r 语义**（现行当
+> 顶点矢量、C810 说边心距，波及 UI 六棱柱快捷卡与 hex 格阵预览 ⇒ 待裁决，已用 xfail 留档）。
+> 另记一条环境坑：shell 里设 `PYTHONIOENCODING=utf-8` 会让 `test_meshtal_worker` 的 spawn 用例
+> `subprocess.run(text=True)` 按 GBK 解码崩成 `stdout=None`（本机实测；跑 pytest 前须 unset）。
+> 此前（2026-09-20，**MCNP5/6 全量检测 + 顶栏版本下拉 + 用户自助自检，已提交 ✅ / 已打包部署 ✅ · 版本仍 1.7.6**：
 > 起因是用户反馈「后端没拉起来、手动点 `python.exe` 一闪就没」。**实测定位**：缺 `_internal` 时进程只活
 > **263 ms**、错误只写在 stderr（`Failed to load Python DLL ...\_internal\python313.dll`）⇒ 窗口来不及画字就销毁，
 > 肉眼即"空白一闪"；而健康包 **1.9 s** 绑上 5001 并常驻。**关键缺口是"静默"**：后端只由前端 JS 拉起

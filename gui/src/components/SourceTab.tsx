@@ -170,7 +170,8 @@ export default function SourceTab() {
         nParticles: 500,
       });
       if (res.status === "error" || !res.particles) {
-        setDemoError(res.error || "源抽样失败");
+        // 后端 500 的信封只有 `message`（无 `error`）⇒ 不兜底就把真实原因吞成一句"源抽样失败"
+        setDemoError(res.error || res.message || "源抽样失败");
         return;
       }
       // 几何部分失败时给出警告（非阻断）：后端只在栅元解析失败时返回该字段

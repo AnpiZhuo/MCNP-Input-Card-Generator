@@ -370,12 +370,29 @@ class _Context:
         return self._geom_helper
 
     def _sample_cell(self, cell_num, rng):
-        return self._helper().sample_cell(cell_num, rng)
+        return self._helper().sample_cell(cell_num, rng, eff=self._eff())
+
+    def _eff(self) -> float:
+        """C810 Table 3.3 的 `EFF`（拒绝采样效率判据，默认 .01）；`sdef_eff` 可覆盖。
+
+        原文另注「The specification of WGT, EFF and PAR must be only an explicit value」，
+        故这里只认显式数值，取不到/非法一律回落默认。
+        """
+        try:
+            e = float(self._v("sdef_eff") or 0.01)
+        except (TypeError, ValueError):
+            e = 0.01
+        return e if 0.0 < e <= 1.0 else 0.01
 
     def _sample_surface(self, surf_num, rng, px, py, pz, rad):
         """面源位置 + 法线；法线写入 `self._surface_normal` 供方向抽样使用。"""
-        pos, normal = self._helper().sample_surface(surf_num, rng, px, py, pz, rad,
-                                                    nrm=self._v("sdef_nrm"))
+        # C810 p.3-58（球面源）：指定 AXS 时，**EXT 的抽样值就是**「AXS 与
+        # 球心→位置矢量」夹角的余弦；不指定 AXS 才是按面积均匀。故这里把 AXS 与
+        # 每粒子抽出的 EXT 一起传下去（EXT 默认 0 ⇒ 赤道圈，与 Table 3.3 的默认值一致）。
+        pos, normal = self._helper().sample_surface(
+            surf_num, rng, px, py, pz, rad, nrm=self._v("sdef_nrm"),
+            axs=self._v("sdef_axs"),
+            ext=self._axial_value(self._v("sdef_ext"), rng))
         self._surface_normal = normal
         return pos
 
@@ -412,35 +429,83 @@ class _GeometryHelper:
         g = geometry or {}
         # geometry 由 api_server 层准备（复用其 parse_surfaces/Geometry.from_mcnp/
         # resolve_cell_complements/voxel_csg 构造 field 函数）：
-        #   {"cells": {num: {"field": fn, "aabb": (lo3, hi3)}},
+        #   {"cells": {num: {"field": fn, "aabb": (lo3, hi3[, axes3])}},
+        #    （axes3 逐轴有界标志：`voxel_csg.cell_aabb` 给三元组；早期夹具给二元组，两者都吃）
         #    "surfaces": {num: {"type": str, "params": list, "field": fn,
         #                       "rotate": 3×3 | None, "origin": (3,)}}}
         self.cells = g.get("cells", {}) or {}
         self.surfs = g.get("surfaces", {}) or {}
         self.sampler = sampler
+        # CEL 拒绝采样的累计计数：C810 p.3-59 的效率判据是**全栅元级**的
+        # （MAX(成功数,10) < EFF×尝试数），故跨粒子累计，不能只看单个粒子。
+        self._cel_tries = 0
+        self._cel_hits = 0
 
-    def sample_cell(self, cell_num, rng):
+    def sample_cell(self, cell_num, rng, eff=0.01):
+        """CEL 拒绝采样（C810 p.3-57 正文 + p.3-59 的 EFF 判据）。
+
+        **区域来源（相对 C810 的有意扩展）**：C810 p.3-57 要求由**用户**给一个完全包含该栅元的
+        区域（X/Y/Z 笛卡尔 / POS+RAD 球 / POS+AXS+RAD+EXT 柱），并原话提醒「you must make sure
+        that the sampling region really does contain every part of the cell because MCNP has no
+        way of checking this」。本程序的 SDEF 表单里"只给 CEL"是最常见用法，故**用栅元紧盒
+        （`voxel_csg.cell_aabb`）当区域**——这样用户不必自己算盒；代价是盒错则采样必错，
+        所以紧盒必须对（宏体紧盒 2026-09-20 补齐，见 `voxel_csg._macrobody_aabb`）。
+
+        **判死口径（C810 p.3-59 原文）**：「If in any source cell or cookie-cutter cell the
+        acceptance rate is too low, the problem is terminated for inefficiency. The criterion
+        for termination is ``MAX(number of successes, 10) < EFF * number of tries``」。
+        我们照此判据**明确报错**；EFF 默认 0.01（Table 3.3），可用 `sdef_eff` 覆盖。
+
+        **删掉了旧的 ±1e3 大盒兜底**：紧盒缺失时那是接受率 ~1e-8 的硬撞，只会给出一句
+        误导性的「包围盒可能退化」——现在直接说清"算不出包围盒"。
+        """
         info = self.cells.get(cell_num)
         if info is None:
             raise SourceSamplingError(f"CEL={cell_num} 引用的栅元不存在或无法判定")
-        field = info.get("field")
         aabb = info.get("aabb")
-        lo = list(aabb[0]) if aabb else [-1e3, -1e3, -1e3]
-        hi = list(aabb[1]) if aabb else [1e3, 1e3, 1e3]
-        lo = [max(-1e6, x) for x in lo]
-        hi = [min(1e6, x) for x in hi]
+        if not aabb:
+            raise SourceSamplingError(
+                f"CEL={cell_num} 无法确定栅元包围盒（该栅元含无界曲面或未支持的几何）⇒ "
+                "无法做栅元均匀抽样。请改用面源（SUR），或改用退化体源"
+                "（POS + AXS + RAD + EXT）自己指定采样范围")
+        # aabb 两种形态都接受：`(lo3, hi3)`（早期契约/单测夹具）与
+        # `(lo3, hi3, axes3)`（`voxel_csg.cell_aabb` 的真实返回，带逐轴有界标志）。
+        bounded = aabb[2] if len(aabb) > 2 else (True, True, True)
+        if not all(bounded):
+            raise SourceSamplingError(
+                f"CEL={cell_num} 的包围盒有**无界轴**（该栅元在某个方向上延伸到无穷）⇒ "
+                "无法做栅元均匀抽样。请改用面源（SUR），或改用退化体源自己指定采样范围")
+        field = info.get("field")
+        lo = [max(-1e6, x) for x in aabb[0]]
+        hi = [min(1e6, x) for x in aabb[1]]
+        if any(hi[i] <= lo[i] for i in range(3)):
+            raise SourceSamplingError(f"CEL={cell_num} 包围盒退化（{lo} → {hi}）")
         import numpy as np
         for _ in range(100000):
             p = [rng.uniform(lo[i], hi[i]) for i in range(3)]
+            self._cel_tries += 1
             try:
                 inside = field(np.asarray([p[0]]), np.asarray([p[1]]), np.asarray([p[2]]))
             except Exception:
                 continue
             if inside is not None and bool(np.asarray(inside).ravel()[0]):
+                self._cel_hits += 1
+                # C810 p.3-59：MAX(成功数,10) < EFF×尝试数 ⇒ 效率过低（MCNP 会终止问题）
+                if max(self._cel_hits, 10) < eff * self._cel_tries:
+                    raise SourceSamplingError(
+                        f"CEL={cell_num} 拒绝采样效率过低：{self._cel_tries} 次尝试只接受 "
+                        f"{self._cel_hits} 次（低于 EFF={eff:g}；C810 3-59 的判据 "
+                        "MAX(成功数,10) < EFF×尝试数 会直接终止问题）。"
+                        "通常意味着采样区域远大于栅元 —— 若该栅元几何特殊（宏体/补集/退化盒），"
+                        "请改用退化体源自己指定采样范围")
                 return (p[0], p[1], p[2])
-        raise SourceSamplingError(f"CEL={cell_num} 拒绝采样失败（栅元包围盒可能退化）")
+        raise SourceSamplingError(
+            f"CEL={cell_num} 拒绝采样失败：100000 次尝试无一命中（EFF={eff:g}；"
+            f"包围盒 {['%.4g' % x for x in lo]} → {['%.4g' % x for x in hi]}）。"
+            "该栅元在这套几何下几乎是空集，或包围盒远大于实心")
 
-    def sample_surface(self, surf_num, rng, px="", py="", pz="", rad="", nrm=""):
+    def sample_surface(self, surf_num, rng, px="", py="", pz="", rad="", nrm="",
+                       axs="", ext=None):
         """面源位置 + 面法线（C810 3-58 / Table 3.3）。
 
         - **平面**：位置 = POS + RAD·(面内单位矢量)；RAD 的默认分布是 a=1 的幂律
@@ -486,7 +551,26 @@ class _GeometryHelper:
                 c = {"SX": (params[0], 0.0, 0.0), "SY": (0.0, params[0], 0.0),
                      "SZ": (0.0, 0.0, params[0])}[typ]
                 rr = params[1]
-            d = _Context._isotropic(rng)
+            axis = None
+            axs_txt = str(axs or "").replace(",", " ").split()
+            if len(axs_txt) >= 3:
+                try:
+                    v = [float(axs_txt[i]) for i in range(3)]
+                    n = math.sqrt(sum(x * x for x in v))
+                    axis = None if n < 1e-12 else [x / n for x in v]
+                except ValueError:
+                    axis = None
+            if axis is None:
+                d = _Context._isotropic(rng)          # 未给 AXS ⇒ 按面积均匀（C810 p.3-58）
+            else:
+                # 给了 AXS ⇒ μ = EXT（cos of angle from AXS），方位角 0~360° 均匀
+                mu = max(-1.0, min(1.0, _num(ext, 0.0)))
+                t1, t2 = self._tangents(tuple(axis))
+                phi = rng.uniform(0.0, 2.0 * math.pi)
+                s = math.sqrt(max(0.0, 1.0 - mu * mu))
+                d = (mu * axis[0] + s * (math.cos(phi) * t1[0] + math.sin(phi) * t2[0]),
+                     mu * axis[1] + s * (math.cos(phi) * t1[1] + math.sin(phi) * t2[1]),
+                     mu * axis[2] + s * (math.cos(phi) * t1[2] + math.sin(phi) * t2[2]))
             p_local = (c[0] + rr * d[0], c[1] + rr * d[1], c[2] + rr * d[2])
             n_local = self._norm3((p_local[0] - c[0], p_local[1] - c[1], p_local[2] - c[2]))
             return (self._to_world(p_local, origin, rotate),
@@ -590,34 +674,60 @@ class _GeometryHelper:
         return (c[0] + r * dx, c[1] + r * dy, c[2] + r * dz)
 
     def _quadric_pt(self, s, rng):
-        """GQ/SQ 面源采样：保守盒内**在内侧**拒绝采样（f≥0，与曲面正侧一致）。
+        """GQ/SQ 面源：按 C810 p.3-58 在**面上面积均匀**取点，并返回**向外**法线。
 
-        返回 (局部点, 局部法线 ∇f)。⚠️ 抽样在**体内均匀**而非面上均匀（旧实现 |f|<tol
-        命中率极低且会静默失败）；对 C810 允许的椭球面源，法线方向与「向外」语义
-        一致，位置分布是面积均匀的近似（已在 errors/文档中标注为近似，不静默）。
+        C810 p.3-58 原文两句话是本实现的全部依据：
+          ① 「If the value of SUR is the name of a spheroidal surface, the position of the
+             particle is sampled **uniformly in area on the surface**」；
+          ② 「A spheroid for this purpose **must have its axis parallel to one of the
+             coordinate axes**」。
+        所以：**只接受轴平行椭球**；斜置 GQ（有 D/E/F 交叉项）与双曲面/抛物面/柱面按原文
+        明确报错，引导改用退化体源 —— 不再"在体内近似撒点"（旧实现如此，且它的解包与
+        `gq_aabb` 的三元组返回不匹配 ⇒ 一律抛 `too many values to unpack`）。
+
+        采样法（严格面积均匀）：把椭球按半轴拉回单位球，单位球上的均匀方向 n 对应的面元
+        ``dS ∝ √((bc·n_x)² + (ac·n_y)² + (ab·n_z)²)``，以该权重做拒绝采样即得面均匀。
         """
-        import numpy as np
-        from app.quadric import gq_aabb, gq_gradient_fn, sq_to_gq
-        coeffs = s["params"]
+        import math as _m
+
+        from app.quadric import sq_to_gq
+        coeffs = [float(v) for v in s["params"]]
         if s["type"] == "SQ":
             coeffs = sq_to_gq(coeffs)
-        aabb = gq_aabb(coeffs)
-        if not aabb:
-            raise SourceSamplingError(f"SUR 面采样：{s['type']} 包围盒无法确定（无界曲面）")
-        lo, hi = aabb
-        try:
-            grad = gq_gradient_fn(coeffs)
-        except Exception:  # noqa: BLE001
-            grad = None
-        for _ in range(20000):
-            p = (rng.uniform(lo[0], hi[0]), rng.uniform(lo[1], hi[1]), rng.uniform(lo[2], hi[2]))
-            f = float(s["field"](np.asarray([p[0]]), np.asarray([p[1]]), np.asarray([p[2]]))[0])
-            if f >= 0.0:
-                if grad is None:
-                    raise SourceSamplingError(f"SUR 面采样：{s['type']} 缺少梯度实现")
-                g = grad(p[0], p[1], p[2])
-                return p, self._norm3(tuple(float(x) for x in g))
-        raise SourceSamplingError(f"SUR 面采样：{s['type']} 内点拒绝采样失败（包围盒可能退化）")
+
+        # GQ 形式：A x²+B y²+C z²+D xy+E yz+F zx+G x+H y+J z+K = 0（quadric.py 模块约定）
+        A, B, C, D, E, F, G, H, J, K = coeffs
+        scale = max(abs(A), abs(B), abs(C), 1e-30)
+        if max(abs(D), abs(E), abs(F)) > 1e-9 * scale:
+            raise SourceSamplingError(
+                f"SUR 面采样：{s['type']} 是**斜置**二次曲面（含 xy/yz/zx 交叉项），"
+                "C810 3-58 规定面源只能是轴平行椭球（spheroid）⇒ 请改用退化体源"
+                "（POS + AXS + RAD + EXT）")
+        if not (A * B > 0 and B * C > 0):
+            raise SourceSamplingError(
+                f"SUR 面采样：{s['type']} 不是椭球（A/B/C 不同号 ⇒ 双曲面/抛物面/柱面），"
+                "C810 3-58 的面源只支持平面、球面、椭球面 ⇒ 请改用退化体源")
+
+        ctr = (-G / (2 * A), -H / (2 * B), -J / (2 * C))
+        fc = A * ctr[0] ** 2 + B * ctr[1] ** 2 + C * ctr[2] ** 2 + G * ctr[0] + H * ctr[1] + J * ctr[2] + K
+        semis = []
+        for coef in (A, B, C):
+            v = -fc / coef
+            if v <= 0:
+                raise SourceSamplingError(
+                    f"SUR 面采样：{s['type']} 退化（半轴² = {v:.3g} ≤ 0），无法确定椭球面")
+            semis.append(_m.sqrt(v))
+        a, b, c = semis
+        w_max = max(b * c, a * c, a * b)
+        for _ in range(5000):
+            nx, ny, nz = _Context._isotropic(rng)
+            w = _m.sqrt((b * c * nx) ** 2 + (a * c * ny) ** 2 + (a * b * nz) ** 2)
+            if w_max > 0 and rng.uniform(0.0, 1.0) <= w / w_max:
+                d = (a * nx, b * ny, c * nz)
+                pt = (ctr[0] + d[0], ctr[1] + d[1], ctr[2] + d[2])
+                # 椭球在 p 处的外法向 ∝ (dx/a², dy/b², dz/c²)（与系数整体符号无关，恒向外）
+                return pt, self._norm3((d[0] / (a * a), d[1] / (b * b), d[2] / (c * c)))
+        raise SourceSamplingError(f"SUR 面采样：{s['type']} 面均匀拒绝采样失败（椭球过扁？）")
 
 
 def sample_source(sdef_fields, distributions, geometry=None, *, n_particles=500, seed=None) -> dict:
