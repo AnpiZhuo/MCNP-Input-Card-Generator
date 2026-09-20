@@ -35,6 +35,7 @@ from __future__ import annotations
 import math
 import random
 import re
+from statistics import NormalDist
 from typing import Any
 
 import numpy as np
@@ -482,9 +483,32 @@ class DistributionSampler:
         ``sdef_fields`` / ``cell_volumes``：分别供 ``SI S`` 里分布号 0（= 该变量默认值，
         C810 3-64）与 ``SP V``（概率 ∝ 栅元体积，C810 3-64）使用；缺省则按"拿不到就
         明确报错/退回等概率"，不静默给错值。
+
+        ⚠ 需要**权重补偿**（SB 偏倚 / 内置函数被 SI 截断）时请用
+        ``sample_with_corrections``：本方法只返回值，补偿因子会被丢掉。
         """  # noqa: D401
         return self._sample_entry(self._entry(eid), rng, 0, var=var, cel=cel, axs=axs,
                                   sdef_fields=sdef_fields, cell_volumes=cell_volumes)
+
+    def sample_with_corrections(self, eid, rng: random.Random, var: str = "",
+                                cel: bool = False, axs: bool = False,
+                                sdef_fields: dict | None = None,
+                                cell_volumes: dict | None = None) -> tuple[float, float]:
+        """抽一个标量并返回 ``(值, 权重补偿因子)`` —— 源抽样编排层的唯一入口。
+
+        因子 = 本次抽样**实际走过的路径**上所有补偿之积：
+          - SB 表偏倚：真概率/偏倚概率（C810 p.3-64「The weight of each source particle is
+            adjusted to compensate for the bias.」）；
+          - 内置函数被 SI 表**截断**：``P(I1 ≤ x ≤ I2)``（C810 p.3-66「Unless the function
+            is −21 or −31, the weight of the source particle is adjusted to compensate for
+            truncation of the function by the entries on the SI card.」）。
+        ``SI S`` 递归到子分布时，子分布自身的补偿也算进来（沿路径相乘）。
+        """
+        corr = {"w": 1.0}
+        val = self._sample_entry(self._entry(eid), rng, 0, var=var, cel=cel, axs=axs,
+                                 sdef_fields=sdef_fields, cell_volumes=cell_volumes,
+                                 corr=corr)
+        return val, corr["w"]
 
     @staticmethod
     def _default_power(var, axs: bool = False) -> float:
@@ -528,7 +552,7 @@ class DistributionSampler:
 
     # ── 内部：单条目抽样 ────────────────────────────────────
     def _sample_entry(self, e, rng, depth, var="", cel=False, axs=False,
-                      sdef_fields=None, cell_volumes=None):
+                      sdef_fields=None, cell_volumes=None, corr=None):
         if depth > 20:
             raise SourceSamplingError("SI S 嵌套深度超限（MCNP 上限约 20）")
         si = e.get("si") or {}
@@ -541,9 +565,13 @@ class DistributionSampler:
         fn = (sp.get("fnCode") or "").strip()
         has_axs = bool(axs or e.get("_axs"))
         self._check_sp_v(sp, sb, var, cel)
+        # 传给 `_bias_factor` 的公共实参（si_vals / allow_leading_zero 由各分支按语义显式给，
+        # 因为 S 分支的 si_vals 是**分布号**、H 分支要带 allow_leading_zero）
+        kw = dict(var=var, cel=cel, sdef_fields=sdef_fields, cell_volumes=cell_volumes)
 
         if fn:
-            return self._sample_builtin(fn, sp, si_vals, rng, var=var, axs=has_axs)
+            return self._sample_builtin(fn, sp, si_vals, rng, var=var, axs=has_axs,
+                                        corr=corr)
 
         if si_type == "S":
             # C810 3-64：S 选项的每个分布号**可带 D 前缀**（D 可省）——
@@ -556,40 +584,70 @@ class DistributionSampler:
                                 si_vals=ids, cel=cel, sdef_fields=sdef_fields,
                                 cell_volumes=cell_volumes)
             idx = _pick(probs, rng)
+            # SB 偏倚补偿（真概率/偏倚概率，C810 3-64）——按**抽中的档位**算，不按值反查
+            if corr is not None:
+                corr["w"] *= self._bias_factor(
+                    sp_type, sp_vals, len(ids), sb, idx, si_vals=ids, **kw)
             if ids[idx] == 0:
                 # C810 3-64：分布号为 0 ⇒ 该变量用**默认值**（按 SDEF 卡上的写法定，
                 # 见 `_var_default`）——不是"报错"也不是"给 0"。
                 return self._var_default(var, e, sdef_fields)
             return self._sample_entry(self._entry(ids[idx]), rng, depth + 1, var=var,
                                       cel=cel, axs=axs, sdef_fields=sdef_fields,
-                                      cell_volumes=cell_volumes)
+                                      cell_volumes=cell_volumes, corr=corr)
 
         if si_type in ("", "H"):
             if len(si_vals) < 2:
                 raise SourceSamplingError(f"分布 D{e.get('id')} 直方图边界不足（需 ≥2）")
             n_bins = len(si_vals) - 1
-            probs = self._probs((sp.get("type") or "D").strip().upper() or "D",
-                                self._floats(sp.get("values")), n_bins, sb,
+            sp_type = (sp.get("type") or "D").strip().upper() or "D"
+            sp_vals = self._floats(sp.get("values"))
+            probs = self._probs(sp_type, sp_vals, n_bins, sb,
                                 allow_leading_zero=True, var=var, si_vals=si_vals,
                                 cel=cel, sdef_fields=sdef_fields,
                                 cell_volumes=cell_volumes)
             idx = _pick(probs, rng)
+            if corr is not None:
+                corr["w"] *= self._bias_factor(
+                    sp_type, sp_vals, n_bins, sb, idx, allow_leading_zero=True,
+                    si_vals=si_vals, **kw)
             lo, hi = si_vals[idx], si_vals[idx + 1]
             if hi < lo:
                 raise SourceSamplingError(f"分布 D{e.get('id')} 直方图边界非单调递增")
             return lo + rng.uniform(0.0, 1.0) * (hi - lo)
 
         if si_type == "L":
-            probs = self._probs((sp.get("type") or "D").strip().upper() or "D",
-                                self._floats(sp.get("values")), len(si_vals), sb,
+            sp_type = (sp.get("type") or "D").strip().upper() or "D"
+            sp_vals = self._floats(sp.get("values"))
+            probs = self._probs(sp_type, sp_vals, len(si_vals), sb,
                                 var=var, si_vals=si_vals, cel=cel,
                                 sdef_fields=sdef_fields, cell_volumes=cell_volumes)
-            return si_vals[_pick(probs, rng)]
+            idx = _pick(probs, rng)
+            if corr is not None:
+                corr["w"] *= self._bias_factor(sp_type, sp_vals, len(si_vals), sb, idx,
+                                               si_vals=si_vals, **kw)
+            return si_vals[idx]
 
         if si_type == "A":
+            # A 型（概率密度点）没有分箱概率，SB 表对它的偏倚语义不成立（C810 3-63：
+            # SB 的第一形态与 SP 同规则，而 A 的 SP 是**密度值**不是概率）⇒ 不补偿。
             return self._sample_A(si_vals, self._floats(sp.get("values")), rng)
 
         raise SourceSamplingError(f"SI 类型 {si_type or '空'} 无效（MCNP 仅支持 H/L/A/S）")
+
+    def _bias_factor(self, sp_type, sp_vals, n, sb, idx, **kw) -> float:
+        """SB 表偏倚的权重补偿 = 真概率(SP)/偏倚概率(SB)，取**被抽中的那一档**（C810 p.3-64）。
+
+        无 SB、SB 是内置函数（`SB f` 的函数偏倚本程序未实现）或档位越界 → 1.0。
+        真概率为 0 的档被偏倚抽中 ⇒ 因子 0（该粒子代表零概率事件，MCNP 同样算出 0 权重）。
+        """
+        if not sb or (sb.get("fnCode") or "").strip():
+            return 1.0
+        p_bias = self._probs(sp_type, sp_vals, n, sb, **kw)
+        p_true = self._probs(sp_type, sp_vals, n, None, **kw)
+        if idx >= len(p_bias) or idx >= len(p_true) or p_bias[idx] <= 0:
+            return 1.0
+        return max(0.0, p_true[idx]) / p_bias[idx]
 
     # ── 概率解析 ────────────────────────────────────────────
     @staticmethod
@@ -770,7 +828,20 @@ class DistributionSampler:
                 f"SI S 的分布号 {tok!r} 无法解析为整数（C810 3-64：分布号可带 D 前缀或省略）")
 
     # ── 内置函数（C810 Table 3.4）───────────────────────────
-    def _sample_builtin(self, fn, sp, si_vals, rng, var="", axs=False):
+    #: 被 SI 表**截断**时需要权重补偿的内置函数（C810 p.3-66 原文：
+    #: 「**Unless the function is −21 or −31**, the weight of the source particle is adjusted
+    #: to compensate for truncation of the function by the entries on the SI card.」）。
+    #: −21（p=c|x|^a）/ −31（p=ce^{aµ}）的定义本身就是在 SI 区间上归一化的 ⇒ 不补偿。
+    _TRUNCATING_FNS = ("-2", "-3", "-4", "-5", "-6", "-41")
+    #: 自然支撑的尾部截断倍数（尾部质量 < 1e-16；只用来把数值网格限制在函数有意义的范围）
+    _TAIL_SCALE = 40.0       # 幂律/蒸发谱：e^{−40} ≈ 4e-18
+    _TAIL_SIGMA = 10.0       # 高斯类：±10σ
+
+    #: 各内置函数的合法参数个数（含省略 → 取默认值；C810 Table 3.4）
+    _FN_ARITY = {"-2": (0, 1), "-3": (0, 2), "-4": (0, 2), "-5": (0, 1), "-6": (0, 2),
+                 "-21": (0, 1), "-31": (0, 1), "-41": (2, 2)}
+
+    def _sample_builtin(self, fn, sp, si_vals, rng, var="", axs=False, corr=None):
         params = self._floats(sp.get("fnParams") or [])
         # C810 p.3-66：「The built-in functions can be used **only for the variables shown**
         # in Table 3.3/3.4」—— 配对错了必须在**抽样前**报错，否则会静默给出无意义分布。
@@ -785,53 +856,214 @@ class DistributionSampler:
             raise SourceSamplingError(
                 "内置函数 -7 是 MCNP 的 spare（留给你自己加谱的框架），本程序不支持；"
                 "请改用 -2/-3/-4/-5/-6 或 SI/SP 表")
+        if fn not in self._FN_ARITY:
+            raise SourceSamplingError(f"内置函数 {fn} 不支持抽样")
+        lo_n, hi_n = self._FN_ARITY[fn]
+        self._need(params, lo_n, hi_n, fn)
+        a, b = self._builtin_params(fn, params, var=var, axs=axs)
+        # SI 表把内置函数**截断**到 [I1,I2]（C810 p.3-66：「can be biased or truncated or
+        # both by a table on SI and SB cards」）；无 SI ⇒ 用函数自身的完整分布（不截断）。
+        win = self._trunc_window(fn, si_vals, (a,) if b is None else (a, b), var=var)
+        # 权重补偿（C810 p.3-66：**−21/−31 之外**的内置函数被 SI 截断要补偿）——
+        # 一次算清、只在这里落账，避免各分支漏乘。
+        if corr is not None and win is not None:
+            corr["w"] *= self._truncation_weight(fn, params, win, var=var, axs=axs)
+
         if fn == "-2":
-            self._need(params, 0, 1, "-2")
-            a = params[0] if params else 1.2895
-            return a * (-math.log(rng.uniform(1e-15, 1.0)) + 0.5 * rng.gauss(0, 1) ** 2)
+            if win is None:
+                return a * (-math.log(rng.uniform(1e-15, 1.0)) + 0.5 * rng.gauss(0, 1) ** 2)
+            win_ = win
+            return self._inverse_cdf(lambda E: math.sqrt(max(E, 0.0)) * math.exp(-E / a),
+                                     win_[0], win_[1], rng, key=("maxwell", a, win_))
         if fn == "-5":
-            self._need(params, 0, 1, "-5")
-            a = params[0] if params else 1.2895
-            return -a * math.log(rng.uniform(1e-15, 1.0) * rng.uniform(1e-15, 1.0))
+            if win is None:
+                return -a * math.log(rng.uniform(1e-15, 1.0) * rng.uniform(1e-15, 1.0))
+            win_ = win
+            return self._inverse_cdf(lambda E: max(E, 0.0) * math.exp(-E / a),
+                                     win_[0], win_[1], rng, key=("evap", a, win_))
         if fn == "-3":
-            self._need(params, 0, 2, "-3")
-            a = params[0] if len(params) > 0 else 0.965
-            b = params[1] if len(params) > 1 else 2.29
+            lo, hi = win if win is not None else (0.0, max(20.0, 12.0 * a))
             return self._inverse_cdf(lambda E: math.exp(-E / a) * math.sinh(math.sqrt(b * E)),
-                                     lo=0.0, hi=max(20.0, 12.0 * a), rng=rng,
-                                     key=("watt", float(a), float(b)))
+                                     lo=lo, hi=hi, rng=rng,
+                                     key=("watt", a, b, lo, hi))
         if fn == "-4":
-            self._need(params, 0, 2, "-4")
-            a = abs(params[0]) if params else 0.01
-            b = params[1] if len(params) > 1 else -1
-            b = self._fusion_energy(b)
-            return self._trunc_gauss(b, a / math.sqrt(2.0), rng)
+            sigma = a / math.sqrt(2.0)
+            if win is None:
+                return self._trunc_gauss(b, sigma, rng)
+            # 能量 ≥ 0（旧行为：拒绝抽样掉负能量）⇒ 截断区间下界也抬到 0
+            return self._trunc_normal(b, sigma, max(win[0], 0.0), win[1], rng)
         if fn == "-6":
-            self._need(params, 0, 2, "-6")
-            a = abs(params[0]) if params else 0.01
-            b = params[1] if len(params) > 1 else -1
-            b = self._fusion_energy(b)
-            v = rng.gauss(math.sqrt(max(b, 0.0)), a / math.sqrt(2.0))
-            return max(0.0, v) ** 2
+            sigma = a / math.sqrt(2.0)
+            mean = math.sqrt(max(b, 0.0))
+            if win is None:
+                v = rng.gauss(mean, sigma)
+                return max(0.0, v) ** 2
+            # E = v²，v ~ N(√b, σ)：E ∈ [I1,I2] ⇔ |v| ∈ [√I1, √I2]（折叠正态）
+            return self._sample_muir(mean, sigma, win[0], win[1], rng)
         if fn == "-21":
             # C810 3-66：`Default depends on the variable. For DIR, a = 1. For RAD, a = 2,
             # **unless AXS is defined or JSU ≠ 0**, in which case a = 1. For EXT, a = 0.`
-            self._need(params, 0, 1, "-21")
-            a = params[0] if params else self._default_power(var, axs=bool(axs))
             lo, hi = self._range(si_vals, (0.0, 1.0), var)
             return self._power_law(a, lo, hi, rng)
         if fn == "-31":
             # C810 3-66：指数分布默认 a = 0（退化为区间内均匀）
-            self._need(params, 0, 1, "-31")
-            a = params[0] if params else 0.0
             lo, hi = self._range(si_vals, (-1.0, 1.0), var)
             return self._exponential(a, lo, hi, rng)
-        if fn == "-41":
-            self._need(params, 2, 2, "-41")
-            a, b = params[0], params[1]
-            sigma = a / math.sqrt(8.0 * math.log(2.0))
+        # fn == "-41"：a = FWHM、b = 均值（Table 3.4）
+        sigma = a / math.sqrt(8.0 * math.log(2.0))
+        if win is None:
             return rng.gauss(b, sigma)
-        raise SourceSamplingError(f"内置函数 {fn} 不支持抽样")
+        return self._trunc_normal(b, sigma, win[0], win[1], rng)
+
+    @staticmethod
+    def _builtin_params(fn, params, var="", axs=False):
+        """内置函数参数规整（含 C810 Table 3.4 的默认值）→ ``(a, b)``；``b=None`` 表示无第二参数。
+
+        **抽样与权重补偿共用这一处**，避免两条路径对 a/b 的默认值理解不一致
+        （例如 −4/−6 的 ``b=−1/−2`` 要先换成 D-T/D-D 聚变能）。
+        """
+        p = [float(x) for x in (params or [])]
+        if fn in ("-2", "-5"):
+            return (p[0] if p else 1.2895), None
+        if fn == "-3":
+            return (p[0] if len(p) > 0 else 0.965), (p[1] if len(p) > 1 else 2.29)
+        if fn in ("-4", "-6"):
+            a = abs(p[0]) if p else 0.01
+            b = DistributionSampler._fusion_energy(p[1] if len(p) > 1 else -1)
+            return a, b
+        if fn == "-21":
+            return (p[0] if p else DistributionSampler._default_power(var, axs=axs)), None
+        if fn == "-31":
+            return (p[0] if p else 0.0), None
+        if fn == "-41":
+            return p[0], p[1]
+        return None, None
+
+    def _builtin_support(self, fn, params, var="", axs=False):
+        """内置函数的**未截断**自然支撑 ``(lo, hi)``（C810 Table 3.4 的定义域 + 可忽略尾部）。
+
+        用途：① 把 SI 截断区间夹进支撑内（用户给 ``SI1 0 1e6`` 时不会拉出 1e6 宽的数值网格）；
+        ② 权重补偿的分母（P 相对**完整函数**算，而不是相对被截断的那一段）。
+        """
+        a, b = self._builtin_params(fn, params, var=var, axs=axs)
+        if fn in ("-2", "-5"):
+            return 0.0, self._TAIL_SCALE * a
+        if fn == "-3":
+            return 0.0, max(20.0, 12.0 * a)
+        if fn == "-4":
+            return max(0.0, b - self._TAIL_SIGMA * a / math.sqrt(2.0)), \
+                b + self._TAIL_SIGMA * a / math.sqrt(2.0)
+        if fn == "-6":
+            return 0.0, (math.sqrt(max(b, 0.0)) + self._TAIL_SIGMA * a / math.sqrt(2.0)) ** 2
+        if fn == "-41":
+            s = a / math.sqrt(8.0 * math.log(2.0))
+            return b - self._TAIL_SIGMA * s, b + self._TAIL_SIGMA * s
+        return None, None
+
+    def _trunc_window(self, fn, si_vals, params, var=""):
+        """SI 表给出的**截断区间** ``(lo, hi)``；函数不被 SI 截断（−21/−31 或无 SI）→ None。
+
+        口径（与 ``_range`` 同源，C810 p.3-66 特殊默认 3/4/5）：
+        无 SI → 不截断；SI 单值 x → DIR/EXT 取 ``[−x,x]``、其余取 ``[0,x]``；SI ≥2 值 → ``[I1,I2]``。
+        区间再与函数的自然支撑求交（``SI1 0 1e6`` 这类写法不会把数值网格拉爆）。
+        """
+        if fn not in self._TRUNCATING_FNS:
+            return None
+        vals = list(si_vals or [])
+        if not vals:
+            return None
+        sup = self._builtin_support(fn, params, var=var)
+        lo, hi = self._range(vals, sup, var)
+        if sup[0] is not None:
+            lo, hi = max(lo, sup[0]), min(hi, sup[1])
+        if hi <= lo:
+            raise SourceSamplingError(
+                f"内置函数 {fn} 的 SI 截断区间无效（[{lo:g}, {hi:g}]，函数支撑 [{sup[0]:g}, {sup[1]:g}]）")
+        return lo, hi
+
+    def _truncation_weight(self, fn, params, win, var="", axs=False) -> float:
+        """C810 p.3-66 的截断权重补偿 = ``P(I1 ≤ x ≤ I2)``（对**未截断**的函数密度算）。
+
+        「Unless the function is −21 or −31, the weight of the source particle is adjusted to
+        compensate for truncation of the function by the entries on the SI card.」——
+        采样现在抽的是**条件分布**（x 落在 [I1,I2] 内），要乘回该区间的真实概率，
+        粒子才仍代表原来那一份源。
+        """
+        if fn not in self._TRUNCATING_FNS or win is None:
+            return 1.0
+        sup = self._builtin_support(fn, params, var=var, axs=axs)
+        if sup[0] is None:
+            return 1.0
+        a, b = self._builtin_params(fn, params, var=var, axs=axs)
+        if fn in ("-2", "-3", "-5"):
+            def pdf(E):
+                if fn == "-2":
+                    return math.sqrt(max(E, 0.0)) * math.exp(-E / a)
+                if fn == "-5":
+                    return max(E, 0.0) * math.exp(-E / a)
+                return math.exp(-E / a) * math.sinh(math.sqrt(b * E))
+            return self._mass_fraction(pdf, win, sup, key=("mass", fn, a, b, sup))
+        if fn == "-4":
+            # 能量 ≥ 0（与抽样侧 `max(win[0], 0)` 的抬升一致）
+            nd = NormalDist(b, a / math.sqrt(2.0))
+            return ((nd.cdf(win[1]) - nd.cdf(max(win[0], 0.0)))
+                    / (nd.cdf(sup[1]) - nd.cdf(sup[0])))
+        if fn == "-6":
+            mean = math.sqrt(max(b, 0.0))
+            sigma = a / math.sqrt(2.0)
+            nd = NormalDist(mean, sigma)
+
+            def folded(x):
+                return nd.cdf(math.sqrt(max(x, 0.0))) - nd.cdf(-math.sqrt(max(x, 0.0)))
+            return (folded(win[1]) - folded(win[0])) / (folded(sup[1]) - folded(sup[0]))
+        # fn == "-41"
+        nd = NormalDist(b, a / math.sqrt(8.0 * math.log(2.0)))
+        return (nd.cdf(win[1]) - nd.cdf(win[0])) / (nd.cdf(sup[1]) - nd.cdf(sup[0]))
+
+    def _mass_fraction(self, pdf, win, sup, key) -> float:
+        """``∫_win pdf / ∫_sup pdf``（同一套梯形网格；网格按 key 缓存，与 ``_inverse_cdf`` 共用）。"""
+        xs, cdf, total = self._cdf_grid(pdf, sup[0], sup[1], key)
+        if total <= 0:
+            return 1.0
+        mass = float(np.interp(win[1], xs, cdf)) - float(np.interp(win[0], xs, cdf))
+        return max(0.0, min(1.0, mass / total))
+
+    @staticmethod
+    def _sample_muir(mean, sigma, lo, hi, rng) -> float:
+        """Muir 速度高斯谱（−6）在 ``E ∈ [lo, hi]`` 上的条件抽样。
+
+        ``E = v²``、``v ~ N(√b, σ)`` ⇒ ``E ∈ [lo,hi] ⇔ |v| ∈ [√lo, √hi]``（**折叠**正态：
+        密度 = φ((t−m)/σ) + φ((−t−m)/σ)）。取 ``t = |v|`` 的逆 CDF（二分，单调）再平方。
+        """
+        nd = NormalDist(mean, sigma)
+
+        def folded(t):
+            return nd.cdf(t) - nd.cdf(-t)
+
+        t_lo, t_hi = math.sqrt(max(lo, 0.0)), math.sqrt(max(hi, 0.0))
+        f_lo, f_hi = folded(t_lo), folded(t_hi)
+        if f_hi - f_lo <= 0:
+            raise SourceSamplingError("−6 的 SI 截断区间概率为零")
+        target = f_lo + rng.uniform(0.0, 1.0) * (f_hi - f_lo)
+        u, v = t_lo, t_hi
+        for _ in range(80):
+            m = 0.5 * (u + v)
+            if folded(m) < target:
+                u = m
+            else:
+                v = m
+            if v - u < 1e-12 * max(1.0, v):
+                break
+        return (0.5 * (u + v)) ** 2
+
+    @staticmethod
+    def _trunc_normal(mu, sigma, lo, hi, rng) -> float:
+        """``N(mu, sigma)`` 在 ``[lo, hi]`` 上的条件分布（精确逆 CDF；``statistics`` 是 stdlib）。"""
+        nd = NormalDist(mu, sigma)
+        p_lo, p_hi = nd.cdf(lo), nd.cdf(hi)
+        if p_hi - p_lo <= 0:
+            raise SourceSamplingError(f"截断区间 [{lo:g}, {hi:g}] 在正态分布下概率为零")
+        return nd.inv_cdf(p_lo + rng.uniform(0.0, 1.0) * (p_hi - p_lo))
 
     @staticmethod
     def _need(params, lo, hi, fn):
@@ -902,8 +1134,12 @@ class DistributionSampler:
     _CDF_CACHE: dict = {}
 
     @staticmethod
-    def _inverse_cdf(pdf, lo, hi, rng, n=4096, key=None):
-        """数值逆 CDF：pdf 在 [lo,hi] 上梯形积分 → 查表线性插值（网格按 ``key`` 缓存）。"""
+    def _cdf_grid(pdf, lo, hi, key, n=4096):
+        """``(xs, cdf, total)``：pdf 在 [lo,hi] 上的梯形积分网格（按 ``key`` 缓存）。
+
+        `_inverse_cdf`（抽样）与 `_mass_fraction`（截断权重）**共用**同一张网格 ⇒
+        权重里的 P 与抽样用的分布严格自洽。
+        """
         cache_key = key if key is not None else (id(pdf), float(lo), float(hi), int(n))
         entry = DistributionSampler._CDF_CACHE.get(cache_key)
         if entry is None:
@@ -919,7 +1155,12 @@ class DistributionSampler:
                 DistributionSampler._CDF_CACHE.clear()
             entry = (xs, cdf, total)
             DistributionSampler._CDF_CACHE[cache_key] = entry
-        xs, cdf, total = entry
+        return entry
+
+    @staticmethod
+    def _inverse_cdf(pdf, lo, hi, rng, n=4096, key=None):
+        """数值逆 CDF：pdf 在 [lo,hi] 上梯形积分 → 查表线性插值（网格按 ``key`` 缓存）。"""
+        xs, cdf, total = DistributionSampler._cdf_grid(pdf, lo, hi, key, n)
 
         def draw():
             u = rng.uniform(0.0, total)

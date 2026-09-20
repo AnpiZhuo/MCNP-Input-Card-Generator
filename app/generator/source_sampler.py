@@ -56,6 +56,8 @@ class _Context:
         self._surface_normal = None
         # 本次抽样是否为 CEL 源（SP V 合法性判定用；C810 3-64）
         self.cel_source = False
+        # 本粒子的权重补偿累加器（每次 sample_one 开头重置；见 sample_one/_smp）
+        self._w_corr = 1.0
 
     # ── 字段读取 ─────────────────────────────────────────────
     def _v(self, key) -> str:
@@ -99,6 +101,9 @@ class _Context:
 
     # ── 单粒子 ───────────────────────────────────────────────
     def sample_one(self, rng, i: int) -> dict:
+        # 权重补偿累加器（C810 p.3-64 SB 偏倚 / p.3-66 内置函数被 SI 截断）：
+        # 本粒子抽到的每个带补偿的分布都乘进来，最后并入 WGT。
+        self._w_corr = 1.0
         par = self._par(rng)
         pos, pos_index = self._position(rng)
         cel = self.cel_source
@@ -107,7 +112,7 @@ class _Context:
         # 符号由 NRM 定；平面源的 RAD 沿切向量、法线方向不动）
         normal = self._surface_normal
         dirv = self._direction(rng, pos, normal)
-        wgt = self._wgt(rng, cel=cel)
+        wgt = self._wgt(rng, cel=cel) * self._w_corr
         # SDEF TR=n / TR=Dn（源坐标变换 / 变换分布）：位置与方向都要变换
         trn = self._sdef_trn(rng)
         if trn is not None:
@@ -166,10 +171,14 @@ class _Context:
         """统一的分布抽样入口：自动带上本源的 SDEF 字段与栅元体积。
 
         这两样分别支撑 `SI S` 的分布号 0（= 该变量默认值）与 `SP V`（概率 ∝ 栅元体积）。
+        返回值同时把**权重补偿因子**并入本粒子的 `_w_corr`（C810 p.3-64 SB 偏倚 /
+        p.3-66 内置函数被 SI 截断）——`sample_with_corrections` 返回的就是路径上所有补偿之积。
         """
         kw.setdefault("cel", self.cel_source)
-        return self.s.sample(eid, rng, sdef_fields=self.f,
-                             cell_volumes=self.cell_volumes, **kw)
+        val, corr = self.s.sample_with_corrections(
+            eid, rng, sdef_fields=self.f, cell_volumes=self.cell_volumes, **kw)
+        self._w_corr *= corr
+        return val
 
     @property
     def cell_volumes(self) -> dict:
@@ -287,7 +296,11 @@ class _Context:
         return (0.0, 0.0, 0.0), None
 
     def _sample_pos_dist(self, did, rng, cel=False, axs=False):
-        """POS=Dn 多点源：SI 值每 3 个一组 = 一个位置，SP 概率选位置组。"""
+        """POS=Dn 多点源：SI 值每 3 个一组 = 一个位置，SP 概率选位置组。
+
+        与 H/L/S 分支同规则：SB 存在时**按 SB 偏倚抽样**并补偿权重（C810 p.3-64）——
+        旧实现连 SB 都没看（偏倚被静默忽略，位置仍按 SP 分布）。
+        """
         e = self.s._entry(did)
         si = e.get("si") or {}
         si_vals = self.s._floats(si.get("values"))
@@ -295,9 +308,13 @@ class _Context:
             raise SourceSamplingError(f"POS=D{did} 的位置值个数（{len(si_vals)}）不是 3 的倍数")
         n_pos = len(si_vals) // 3
         sp = e.get("sp") or {}
+        sb = e.get("sb")
         sp_type = (sp.get("type") or "D").strip().upper() or "D"
-        probs = self.s._probs(sp_type, self.s._floats(sp.get("values")), n_pos)
+        sp_vals = self.s._floats(sp.get("values"))
+        probs = self.s._probs(sp_type, sp_vals, n_pos, sb, var="POS", cel=cel)
         idx = _pick(probs, rng)
+        self._w_corr *= self.s._bias_factor(sp_type, sp_vals, n_pos, sb, idx, var="POS",
+                                            cel=cel)
         return tuple(si_vals[idx * 3:idx * 3 + 3]), idx
 
     def _sample_cartesian(self, px, py, pz, rng):
@@ -339,17 +356,24 @@ class _Context:
         ``axs=True``（定义了 AXS）时，C810 3-66 规定 `SP −21` 的默认 a 从 2 变成 1。
         """
         if _is_d_ref(rad):
-            return _default_power_law(self.s, int(rad[1:]), rng, power, "RAD",
-                                      cel=self.cel_source, axs=bool(self._v("sdef_axs")),
-                                      sdef_fields=self.f, cell_volumes=self.cell_volumes)
+            val, corr = _default_power_law(self.s, int(rad[1:]), rng, power, "RAD",
+                                           cel=self.cel_source,
+                                           axs=bool(self._v("sdef_axs")),
+                                           sdef_fields=self.f,
+                                           cell_volumes=self.cell_volumes)
+            self._w_corr *= corr
+            return val
         return _num(rad, 0.0)
 
     def _axial_value(self, ext, rng) -> float:
         """EXT 值（沿轴距离）。SI 无 SP → 默认幂律 a=0（均匀）。"""
         if _is_d_ref(ext):
-            return _default_power_law(self.s, int(ext[1:]), rng, 0.0, "EXT",
-                                      cel=self.cel_source,
-                                      sdef_fields=self.f, cell_volumes=self.cell_volumes)
+            val, corr = _default_power_law(self.s, int(ext[1:]), rng, 0.0, "EXT",
+                                           cel=self.cel_source,
+                                           sdef_fields=self.f,
+                                           cell_volumes=self.cell_volumes)
+            self._w_corr *= corr
+            return val
         return _num(ext, 0.0)
 
     @staticmethod
@@ -393,28 +417,35 @@ class _Context:
             surf_num, rng, px, py, pz, rad, nrm=self._v("sdef_nrm"),
             axs=self._v("sdef_axs"),
             ext=self._axial_value(self._v("sdef_ext"), rng))
+        # 面源 RAD=Dn 走 `_GeometryHelper._radial_at`，其权重补偿（若有）随之带出
+        self._w_corr *= self._helper()._w_corr
+        self._helper()._w_corr = 1.0
         self._surface_normal = normal
         return pos
 
 
 def _default_power_law(sampler, did, rng, power, var, cel=False, axs=False,
-                       sdef_fields=None, cell_volumes=None) -> float:
+                       sdef_fields=None, cell_volumes=None) -> tuple:
     """「只有 SI、没有 SP」时 MCNP 自动补的默认幂律（C810 3-66 特殊默认 2/3/4/5）。
 
     - RAD 的 ``SIn`` 给半径范围（``SI 0 5`` 或单值 x ⇒ ``SI 0 x``，a 默认 2；有 AXS 时 1）；
     - EXT 的 ``SIn`` 给轴向范围（单值 x ⇒ ``SI −x x``，a 默认 0）；
     - 只要 SP 存在（哪怕只是 `SP −21`），就交给通用内置函数路径，本函数不介入。
+
+    返回 ``(值, 权重补偿因子)``：走通用路径时把该分布自己的补偿（SB 偏倚 / SI 截断）带出来，
+    默认幂律本身（−21 语义）按 C810 p.3-66 **豁免**截断补偿 ⇒ 因子 1。
     """
     entry = sampler._entry(did)
     sp = entry.get("sp") or {}
     if (sp.get("fnCode") or "").strip() or sp.get("values"):
-        return sampler.sample(did, rng, var=var, cel=cel, axs=axs,
-                              sdef_fields=sdef_fields, cell_volumes=cell_volumes)
+        return sampler.sample_with_corrections(did, rng, var=var, cel=cel, axs=axs,
+                                               sdef_fields=sdef_fields,
+                                               cell_volumes=cell_volumes)
     si_vals = sampler._floats((entry.get("si") or {}).get("values"))
     if not si_vals:
-        return 0.0
+        return 0.0, 1.0
     lo, hi = DistributionSampler._range(si_vals, (0.0, 0.0), var)
-    return _Context._power_law_range(power, lo, hi, rng)
+    return _Context._power_law_range(power, lo, hi, rng), 1.0
 
 
 class _GeometryHelper:
@@ -440,6 +471,9 @@ class _GeometryHelper:
         # （MAX(成功数,10) < EFF×尝试数），故跨粒子累计，不能只看单个粒子。
         self._cel_tries = 0
         self._cel_hits = 0
+        # 权重补偿累加器（面源 RAD 走 `_radial_at` 时可能带出 SB/SI 截断补偿，
+        # 由 `_Context._sample_surface` 取走后重置）
+        self._w_corr = 1.0
 
     def sample_cell(self, cell_num, rng, eff=0.01):
         """CEL 拒绝采样（C810 p.3-57 正文 + p.3-59 的 EFF 判据）。
@@ -593,7 +627,9 @@ class _GeometryHelper:
         """平面源 RAD（面内半径）：走变量名感知的通用路径
         （`SI x` + `SP −21` ⇒ C810 规则 4 的 `SI 0 x`；无 SP ⇒ 默认幂律 a=power）。"""
         if _is_d_ref(rad):
-            return _default_power_law(self.sampler, int(rad[1:]), rng, power, "RAD")
+            val, corr = _default_power_law(self.sampler, int(rad[1:]), rng, power, "RAD")
+            self._w_corr *= corr
+            return val
         return _num(rad, 0.0)
 
     @staticmethod

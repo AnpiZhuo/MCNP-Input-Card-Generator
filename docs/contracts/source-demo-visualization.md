@@ -133,13 +133,45 @@ really does contain every part of the cell because **MCNP has no way of checking
 
 | # | 项 | C810 依据 | 现状 |
 |---|---|---|---|
-| **O6** | 内置函数被 SI **截断**时的**权重补偿** | p.3-66：「**Unless the function is −21 or −31**, the weight of the source particle is adjusted to compensate for truncation of the function by the entries on the SI card」 | **未实现**（`_wgt` 只认显式值/Dn；`si_vals` 只当抽样区间）。⇒ 用 −2…−6/−41 + SI 截断的卡，界面 WGT 偏小 |
-| **R1** | `RHP/HEX` 的 `r` 语义 | p.3-21：r = 「vector from the axis to the **middle of the first facet**」（边心距） | 现行 `surface_fn` 把 r 当**顶点矢量**（`base = v±r1±r2±r3`）⇒ 同卡六边形小 1/cos30°；改动波及 UI 六棱柱快捷卡与 hex 格阵预览 ⇒ **待产品裁决**（`tests/unit/test_voxel_csg_macrobody_aabb.py` 有 xfail 留档） |
 | **O7** | `−7`（Spare energy spectrum） | p.3-65 Table 3.4 | **显式不支持**（报错说明它是"留给你自己加谱的框架"） |
+| **O8** | `SB` 用**内置函数**时对函数的偏倚 | p.3-66：「only −21 and −31 can be used on SB cards… If it is biased, the function is approximated within each bin by n equally probable groups such that the product of n and the number of bins is as large as possible but not over 300」 | **未实现**（`SP f` + `SB f` 的卡本程序按**未偏倚**抽样、权重 1 ⇒ 自洽但不是 MCNP 的行为）。表格式 SB 已实现（见下） |
+
+**已对齐（2026-09-20 修复，原列本表）**：
+
+- **O6 · 内置函数被 SI 截断 + 权重补偿** —— C810 p.3-66 原文：「A built-in function on an SP card
+  can be biased or **truncated** or both by a table on SI and SB cards. … **Unless the function is
+  −21 or −31**, the weight of the source particle is adjusted to compensate for truncation of the
+  function by the entries on the SI card.」
+  修前：`-2/-3/-4/-5/-6/-41` **完全不读 SI**（照完整谱抽，能量可越出用户给的窗口），WGT 恒 1。
+  现在：① 按 SI 给的 `[I1,I2]` 抽**条件分布**（`-2/-5/-3` 走数值逆 CDF；`-4/-41` 走精确截断正态；
+  `-6` 走折叠正态 `E=v²`），② 权重乘 `P(I1≤x≤I2)`（对**未截断**密度算，网格与抽样共用 ⇒ 严格自洽），
+  ③ `-21/-31` 按原文豁免。区间口径与 `_range` 同源（SI 单值：DIR/EXT ⇒ `[−x,x]`、其余 ⇒ `[0,x]`），
+  并夹进函数自然支撑（`SI1 0 1e6` 不会拉出 1e6 宽的数值网格）；窗口与支撑无交集 ⇒ **明确报错**。
+- **O6b（同源发现）· 表格式 `SB` 偏倚的权重补偿** —— C810 p.3-64：「The weight of each source
+  particle is adjusted to compensate for the bias.」修前 `weight_factor()` 写了却**零调用者**
+  ⇒ H/L/S 三个分支按 SB 偏倚抽样、权重却不补（偏倚白做，WGT 恒 1）。现在统一在
+  `DistributionSampler.sample_with_corrections()` 返回路径上的补偿之积（真概率/偏倚概率，按
+  **抽中的档位**算），`_Context` 把它并进每粒子的 WGT；`_sample_pos_dist`（POS=Dn 多点源）
+  原本连 SB 都没读，一并接上。
+- **R1 · `RHP/HEX` 的 `r` 语义** —— C810 p.3-21 明写 r/s/t 是「vector from the axis to the **middle of
+  the first/second/third facet**」= **面心矢量（边心距）**，六个侧顶点须由相邻两面求交得到。
+  本仓库原本并存三种解释（前端生成侧按面心 ✓；`voxel_csg.surface_fn`、`_freecad_csg_worker`、
+  `surfacesAABB.rhpCorners` 把 r 当顶点 ✗；`lattice._rhp_extent` 把面心当极值点 ✗）⇒
+  同一张卡在生成侧与解释侧差 **30° 朝向 + 13.4% 尺寸**（实测卡 `rhp 0 0 -4 0 0 8 0 2 0`：
+  后端旧给 x∈[±1.732]，C810 为 x∈[±2.3094]、y∈[±2]、该面 ⊥ y 于 y=2）。
+  收敛为**唯一实现** `app/quadric.py::rhp_hex_vertices`（数值上与手册例题逐位吻合），
+  全部消费者改为调用它：`voxel_csg.surface_fn`、`voxel_csg._macrobody_aabb`、
+  `_freecad_csg_worker._make_hex_from_params`、`lattice._rhp_extent`、
+  `gui/src/volume/surfacesAABB.ts::rhpCorners`（TS 侧同名规则 + 9/12 项 60° 推断）、
+  以及 `freecad_preview._surface_extent_values`（bound 由撑大 1.7× 收紧为真值）。
+  回归锁：`tests/unit/test_voxel_csg_macrobody_aabb.py`（正例，xfail 留档已转绿）、
+  `tests/integration/test_source_demo_matrix.py`（RHP 判据=30°/90°/150° 三面法向，边心距 2）、
+  `gui/test/volume/surfacesAABB.test.ts`、`tests/unit/test_lattice.py`（hex 紧盒 y=0.5774）。
 
 > **权威出处**（本次用作依据的是 CCC-810 原文，不是二手摘要）：
 > Table 3.1 曲面卡（p.3-13）、宏体清单与卡项（p.3-20~3-22）、SDEF/Table 3.3（p.3-55~3-57）、
-> 源分布与面源（p.3-57~3-59）、EFF 判据（p.3-59）、Table 3.4 内置函数与特殊默认（p.3-65~3-66）。
+> 源分布与面源（p.3-57~3-59）、EFF 判据（p.3-59）、SI/SP/SB 卡与 SB 权重补偿（p.3-63~3-64）、
+> Table 3.4 内置函数与特殊默认、截断权重补偿（p.3-65~3-66）。
 
 ## 5. 前端
 
@@ -158,9 +190,9 @@ really does contain every part of the cell because **MCNP has no way of checking
 | 维度 | 覆盖 |
 |------|------|
 | 位置 | 点源、多点离散（POS=Dn + SI L）、直线（单轴）、盒体（X/Y/Z）、球体/球壳（POS+RAD）、圆柱/圆盘/锥（POS+AXS+RAD+EXT，RAD 依赖 EXT 的 DS 链）、面源（SUR 平面/球面/柱面）、栅元均匀（CEL 拒绝采样） |
-| 能量 | 固定值、SI L 离散谱、SI H/"" 直方图、SI A 密度点、内置 -2/-3/-4/-5/-6 |
+| 能量 | 固定值、SI L 离散谱、SI H/"" 直方图、SI A 密度点、内置 -2/-3/-4/-5/-6/-41（含 **SI 截断区间 + 截断权重补偿**，C810 p.3-66） |
 | 方向 | 各向同性、固定 DIR+VEC、锥形/指数偏倚（-21/-31）、方向 DS 依赖链、面源余弦分布 |
-| 权重 | 固定值、SI/SP 分布、SB 偏倚（权重补偿） |
+| 权重 | 固定值、SI/SP 分布、**SB 偏倚（表格式：抽样按偏倚概率、权重按真/偏补偿，C810 p.3-64）**、**内置函数被 SI 截断的权重补偿（C810 p.3-66）** |
 | 粒子类型 | PAR 固定、PAR=Dn 分布、默认（由 MODE 或 n） |
 | 依赖 | DS 链（Fxxx）、SI S 选分布、多源概率链（SP D1 / POS=F D1） |
 | 变换 | TR 变换（位置采样后变换） |

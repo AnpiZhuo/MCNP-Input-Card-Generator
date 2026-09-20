@@ -3,6 +3,7 @@
 覆盖 SI H（默认）/L/A/S、SP D/C/内置函数（-2~-6/-21/-31/-41）、SB 偏倚、
 DS H/L/S/T/Q 查表，及 MCNP 语义错误（引用不存在/概率不匹配/边界非单调/概率和零）。
 """
+import math
 import random
 
 import pytest
@@ -405,3 +406,139 @@ def test_builtin_minus7_spare_is_explicitly_unsupported():
                               "sp": {"fnCode": "-7", "fnParams": ["1", "1"]}}])
     with pytest.raises(SourceSamplingError, match="spare"):
         s.sample(1, _rng(), var="ERG")
+
+
+# ── O6：内置函数被 SI **截断** + 权重补偿（C810 p.3-66）────────
+#
+# 「A built-in function on an SP card can be biased or truncated or both by a table on SI and
+#   SB cards. … Unless the function is −21 or −31, the weight of the source particle is
+#   adjusted to compensate for truncation of the function by the entries on the SI card.」
+# 修前：−2…−6/−41 **完全不看 SI**（照完整谱抽），WGT 也恒为 1 ⇒ 能量越界 + 权重错。
+
+def _builtin(fn, params, si=None, var_entry_si_type=""):
+    return DistributionSampler([{
+        "id": 1,
+        "si": ({"type": var_entry_si_type, "values": [str(v) for v in si]} if si else None),
+        "sp": {"type": "", "values": [], "fnCode": fn, "fnParams": params},
+        "sb": None,
+    }])
+
+
+def test_builtin_truncated_by_si_stays_inside_window():
+    """−2…−6/−41 被 `SI I1 I2` 截断后，抽样必须**全部落在区间内**。"""
+    cases = [
+        ("-2", [], [1.0, 4.0], "ERG", 1.0, 4.0),
+        ("-3", ["0.965", "2.29"], [2.0, 6.0], "ERG", 2.0, 6.0),
+        ("-4", ["0.5", "14.1"], [13.0, 15.0], "ERG", 13.0, 15.0),
+        ("-5", ["1.0"], [0.5, 3.0], "ERG", 0.5, 3.0),
+        ("-6", ["0.5", "14.1"], [13.0, 15.0], "ERG", 13.0, 15.0),
+        ("-41", ["2", "0"], [-1.0, 1.0], "TME", -1.0, 1.0),
+    ]
+    for fn, params, si, var, lo, hi in cases:
+        s = _builtin(fn, params, si=si)
+        rng = _rng(7)
+        vals = [s.sample_with_corrections(1, rng, var=var)[0] for _ in range(300)]
+        assert all(lo - 1e-9 <= v <= hi + 1e-9 for v in vals), (
+            f"{fn}: SI 截断失效，越界样本 {[v for v in vals if not lo <= v <= hi][:3]}")
+
+
+def test_truncation_weight_matches_analytic_probability():
+    """权重补偿 = P(I1 ≤ x ≤ I2)：用**有解析式的**两个函数对账。"""
+    from statistics import NormalDist
+
+    # ① −5 蒸发谱 p(E) ∝ E·e^{−E/a}：P(0≤E≤x) = 1 − e^{−x/a}(1 + x/a)
+    a, hi = 1.0, 5.0
+    s = _builtin("-5", [str(a)], si=[0.0, hi])
+    _v, w = s.sample_with_corrections(1, _rng(1), var="ERG")
+    analytic = 1.0 - math.exp(-hi / a) * (1.0 + hi / a)
+    assert w == pytest.approx(analytic, rel=1e-5)
+
+    # ② −41 高斯 p(t) ∝ exp[−(1.6651092(t−b)/a)²]，a=FWHM ⇒ σ = a/√(8 ln 2)
+    a41, b41 = 2.0, 0.0
+    nd = NormalDist(b41, a41 / math.sqrt(8.0 * math.log(2.0)))
+    s = _builtin("-41", [str(a41), str(b41)], si=[-1.0, 1.0])
+    _v, w = s.sample_with_corrections(1, _rng(2), var="TME")
+    assert w == pytest.approx(2.0 * nd.cdf(1.0) - 1.0, rel=1e-12)
+
+    # ③ −4 聚变高斯：SI 窗口远宽于 FWHM ⇒ P ≈ 1（不是随手写 1，而是条件概率就是 1）
+    s = _builtin("-4", [], si=[10.0, 18.0])
+    _v, w = s.sample_with_corrections(1, _rng(3), var="ERG")
+    assert w == pytest.approx(1.0, abs=1e-6)
+
+
+def test_minus21_and_minus31_are_exempt_from_truncation_weight():
+    """C810 p.3-66 明文豁免 −21/−31（它们的定义就在 SI 区间上归一化）⇒ 补偿因子恒 1。"""
+    for fn, params, var in (("-21", ["2"], "RAD"), ("-31", ["1.5"], "DIR")):
+        s = _builtin(fn, params, si=[0.0, 1.0])
+        rng = _rng(4)
+        vals = [s.sample_with_corrections(1, rng, var=var) for _ in range(50)]
+        assert all(w == 1.0 for _v, w in vals), fn
+        assert all(0.0 <= v <= 1.0 for v, _w in vals), fn
+
+
+def test_untouched_builtins_keep_full_range_without_si():
+    """没有 SI ⇒ 不截断、不补偿（旧行为逐字保留：完整谱 + 权重 1）。"""
+    s = _builtin("-2", [], si=None)
+    rng = _rng(5)
+    vals = [s.sample_with_corrections(1, rng, var="ERG") for _ in range(200)]
+    assert all(w == 1.0 for _v, w in vals)
+    assert max(v for v, _w in vals) > 5.0      # 完整 Maxwell 能抽到远高于 5 MeV
+    assert all(v >= 0.0 for v, _w in vals)
+
+
+def test_builtin_truncation_window_invalid_reports_error():
+    """SI 窗口与函数支撑**无交集**（DT 聚变谱 14 MeV 却写 SI 0 5）⇒ 明确报错，不静默给空分布。"""
+    s = _builtin("-4", [], si=[0.0, 5.0])
+    with pytest.raises(SourceSamplingError, match="截断区间无效"):
+        s.sample(1, _rng(6), var="ERG")
+
+
+# ── SB 偏倚的权重补偿（C810 p.3-64）────────────────────────
+
+def test_sb_bias_weight_compensation():
+    """C810 p.3-64：「The weight of each source particle is adjusted to compensate for the bias.」
+
+    SI L[A B] / SP 真概率 0.5/0.5 / SB 偏倚概率 0.9/0.1 ⇒ 权重 0.5/0.9 与 0.5/0.1。
+    修前：`weight_factor` 写了却**没有任何调用者**，WGT 恒 1 ⇒ 偏倚白做。
+    """
+    s = DistributionSampler([{
+        "id": 1,
+        "si": {"type": "L", "values": ["1", "2"]},
+        "sp": {"type": "", "values": ["0.5", "0.5"], "fnCode": "", "fnParams": []},
+        "sb": {"type": "D", "values": ["0.9", "0.1"]},
+    }])
+    rng = _rng(9)
+    pairs = [s.sample_with_corrections(1, rng, var="ERG") for _ in range(4000)]
+    w1 = {round(w, 9) for v, w in pairs if v == 1.0}
+    w2 = {round(w, 9) for v, w in pairs if v == 2.0}
+    assert w1 == {round(0.5 / 0.9, 9)}, w1
+    assert w2 == {round(0.5 / 0.1, 9)}, w2
+    # 抽样本身按 SB 偏倚（1 出现得远多于 2），否则"补偿"没有意义
+    n1 = sum(1 for v, _w in pairs if v == 1.0)
+    assert n1 / len(pairs) == pytest.approx(0.9, abs=0.03)
+
+
+def test_no_sb_means_no_weight_change():
+    """无 SB ⇒ 补偿因子 1（抽样按 SP 概率）。"""
+    s = DistributionSampler([{
+        "id": 1,
+        "si": {"type": "L", "values": ["1", "2"]},
+        "sp": {"type": "", "values": ["0.5", "0.5"], "fnCode": "", "fnParams": []},
+        "sb": None,
+    }])
+    assert all(w == 1.0 for _v, w in
+               (s.sample_with_corrections(1, _rng(10), var="ERG") for _ in range(50)))
+
+
+def test_sb_bias_zero_true_probability_gives_zero_weight():
+    """真概率为 0 的档被偏倚抽中 ⇒ 权重 0（该粒子代表零概率事件，MCNP 同样算 0）。"""
+    s = DistributionSampler([{
+        "id": 1,
+        "si": {"type": "L", "values": ["1", "2"]},
+        "sp": {"type": "", "values": ["0", "1"], "fnCode": "", "fnParams": []},
+        "sb": {"type": "D", "values": ["0.5", "0.5"]},
+    }])
+    rng = _rng(11)
+    pairs = [s.sample_with_corrections(1, rng, var="ERG") for _ in range(400)]
+    assert {w for v, w in pairs if v == 1.0} == {0.0}
+    assert {w for v, w in pairs if v == 2.0} == {2.0}

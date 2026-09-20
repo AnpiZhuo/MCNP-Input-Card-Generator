@@ -55,6 +55,25 @@ def test_multi_point_source():
     assert abs(cnt[(10, 10, 10)] / 1000 - 0.7) < 0.05
 
 
+def test_multi_point_source_sb_bias_is_applied_and_compensated():
+    """POS=Dn 上的 SB 偏倚：抽样按偏倚概率（0.9/0.1），权重按真/偏（0.5/0.9 与 0.5/0.1）。
+
+    修前：`_sample_pos_dist` 连 SB 都没读 ⇒ 偏倚被静默忽略、WGT 恒 1。
+    """
+    r = _ok(sample_source(
+        {"sdef_pos_x": "D1", "sdef_pos_y": "D1", "sdef_pos_z": "D1", "sdef_erg": "14"},
+        [{"id": 1, "si": {"type": "L", "values": ["0", "0", "0", "10", "10", "10"]},
+          "sp": {"type": "D", "values": ["0.5", "0.5"]},
+          "sb": {"type": "D", "values": ["0.9", "0.1"]}}],
+        n_particles=1500, seed=4))
+    w_near = {round(p["weight"], 6) for p in r["particles"] if round(p["x"]) == 0}
+    w_far = {round(p["weight"], 6) for p in r["particles"] if round(p["x"]) == 10}
+    assert w_near == {round(0.5 / 0.9, 6)}, w_near
+    assert w_far == {round(0.5 / 0.1, 6)}, w_far
+    n_near = sum(1 for p in r["particles"] if round(p["x"]) == 0)
+    assert n_near / len(r["particles"]) == pytest.approx(0.9, abs=0.03)
+
+
 # ── 笛卡尔盒体 ────────────────────────────────────────────
 
 def test_cartesian_box():
@@ -415,3 +434,47 @@ def test_sphere_surface_source_axs_with_ext_distribution():
     for p in r["particles"]:
         d = math.sqrt(p["x"] ** 2 + p["y"] ** 2 + p["z"] ** 2)
         assert abs(d - 10.0) < 1e-6, "位置必须仍在球面上"
+
+
+# ── 权重补偿端到端（C810 p.3-64 SB 偏倚 / p.3-66 SI 截断）──────
+# 界面 WGT 列直接显示 `p["weight"]`，所以这里断言的是**用户看得见的那一列**。
+
+def test_weight_reflects_si_truncation_of_builtin():
+    """`SDEF ERG=D1` + `SI1 0 5` + `SP1 −5 1`（蒸发谱 a=1）：
+
+    能量必须全在 [0,5] 内，且 WGT = P(0≤E≤5) = 1 − e^{−5}(1+5) ≈ 0.9596（C810 p.3-66）。
+    修前：能量按完整谱抽（可到几十 MeV）、WGT 恒 1。
+    """
+    dists = [{"id": 1, "si": {"type": "", "values": ["0", "5"]},
+              "sp": {"type": "", "values": [], "fnCode": "-5", "fnParams": ["1"]}}]
+    r = _ok(sample_source({"sdef_erg": "D1"}, dists, n_particles=300, seed=7))
+    es = [p["energy"] for p in r["particles"]]
+    assert all(0.0 <= e <= 5.0 for e in es), f"越界能量 {[e for e in es if not 0 <= e <= 5][:3]}"
+    analytic = 1.0 - math.exp(-5.0) * (1.0 + 5.0)
+    for p in r["particles"]:
+        assert p["weight"] == pytest.approx(analytic, rel=1e-5)
+
+
+def test_weight_reflects_sb_bias():
+    """SB 偏倚补偿（C810 p.3-64）：真概率 0.5/0.5、偏倚 0.9/0.1 ⇒ WGT 0.5556 / 5.0。
+
+    抽样本身按偏倚概率（0.9/0.1），权重把它掰回真概率 —— 两者缺一不可。
+    """
+    dists = [{"id": 1, "si": {"type": "L", "values": ["1", "2"]},
+              "sp": {"type": "", "values": ["0.5", "0.5"], "fnCode": "", "fnParams": []},
+              "sb": {"type": "D", "values": ["0.9", "0.1"]}}]
+    r = _ok(sample_source({"sdef_erg": "D1"}, dists, n_particles=2000, seed=3))
+    by_e = {1.0: set(), 2.0: set()}
+    n1 = 0
+    for p in r["particles"]:
+        by_e[p["energy"]].add(round(p["weight"], 6))
+        n1 += (p["energy"] == 1.0)
+    assert by_e[1.0] == {round(0.5 / 0.9, 6)}, by_e[1.0]
+    assert by_e[2.0] == {round(0.5 / 0.1, 6)}, by_e[2.0]
+    assert n1 / len(r["particles"]) == pytest.approx(0.9, abs=0.03)
+
+
+def test_weight_stays_one_without_any_compensation():
+    """既无 SB 也无 SI 截断 ⇒ WGT 保持 SDEF 的字面值 1（不引入任何多余因子）。"""
+    r = _ok(sample_source({"sdef_erg": "14"}, [], n_particles=50, seed=1))
+    assert {p["weight"] for p in r["particles"]} == {1.0}

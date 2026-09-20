@@ -1,6 +1,32 @@
 # 项目记忆文档（AI 速查手册）
 
-> 最后更新时间：2026-09-20（**源演示「有时候返回失败」修复 —— 按 CCC-810 原文逐条对照后修 F1–F8**：
+> 最后更新时间：2026-09-20（**R1 + O6 收官：RHP 的 `r` 语义全仓收敛 + C810 p.3-66 截断权重补偿**
+> ——上一批登记的三项「C810 有明文但未做」里 **R1、O6 已清零**，只剩 **L1**（CEL 采样区域仍用自算紧盒）。
+> ① **R1（RHP/HEX 的 `r` = 面心矢量）**：grep 出**六个**消费者，原本并存**三种**互不相同的解释 ——
+> 前端生成侧按面心 ✓；`voxel_csg.surface_fn`、`_freecad_csg_worker._make_hex_from_params`、
+> `gui/src/volume/surfacesAABB.ts::rhpCorners` 把 `r` 当**顶点** ✗；`lattice._rhp_extent` 把面心当**极值点** ✗。
+> 于是同一张卡「生成侧 vs 解释侧」差 **30° 朝向 + 13.4% 尺寸**（实测 `rhp 0 0 -4 0 0 8 0 2 0`：后端旧给
+> x∈[±1.732]，C810 p.3-21 例题原文「first facet is normal to the y-axis **at y=2**」⇒ 边心距 2、外接半径
+> 4/√3 ⇒ x∈[±2.3094]、y∈[±2]）。收敛为**唯一实现** `app/quadric.py::rhp_hex_vertices`（相邻两面求交
+> `[1 c; c 1][α;β]=[A;B]`；与手册例题逐位吻合），六处全部改调用它；TS 侧同名规则 + 9/12 项 `rot60` 推断
+> （旧 TS 代码读不存在的 `p[9..14]` ⇒ **NaN 盒**）。附带把 `freecad_preview._surface_extent_values`
+> 的预览 bound 由虚胖 1.73× 收紧为真值（该处旧行为是"偏保守"而非错几何，故单独说明）。
+> ② **O6（内置函数被 SI 截断 + 权重补偿）**：修前 `-2/-3/-4/-5/-6/-41` **完全不读 SI**（照完整谱抽，
+> 能量可越出用户窗口）且 WGT 恒 1；现在按 `[I1,I2]` 抽**条件分布**（`-2/-5/-3` 数值逆 CDF、`-4/-41` 精确
+> 截断正态、`-6` 折叠正态 `E=v²`）并乘 `P(I1≤x≤I2)`（对未截断密度算，网格与抽样**共用** ⇒ 严格自洽），
+> `-21/-31` 按原文豁免；区间口径与 `_range` 同源并夹进函数自然支撑，无交集即**明确报错**。
+> ③ **O6b（同源发现，已在契约显式登记）**：表格式 `SB` 偏倚的权重补偿 —— C810 p.3-64「The weight of each
+> source particle is adjusted to compensate for the bias」，而 `weight_factor()` **写了零调用者** ⇒ H/L/S
+> 三路按 SB 抽样却不补权重（偏倚白做），`_sample_pos_dist`（POS=Dn）更进一步**连 SB 都没读**；现统一走
+> `DistributionSampler.sample_with_corrections()`（返回路径上补偿之积，按**抽中的档位**算），`_Context`
+> 并进每粒子 WGT。**新登记** **O8**：`SB` 用内置函数时的**函数偏倚**（p.3-66 的"分箱近似 ≤300 段"）仍未实现
+> （现按未偏倚抽 + 权重 1 ⇒ 自洽，但不是 MCNP 行为）。
+> **测试**：新增 `tests/unit/test_distribution_sampler.py` 12 例（截断区间/解析 P 对账 −5 与 −41/豁免 −21−31/
+> 无 SI 不截断/窗口无交集报错/SB 补偿与零真概率）、`tests/unit/test_source_sampler.py` 4 例（含 POS=Dn 的 SB）、
+> `tests/integration/test_api_contract.py` 1 例（**真实 HTTP** 端到端截断+WGT）、`tests/unit/test_preview_bound.py`
+> 1 例、`gui/test/volume/surfacesAABB.test.ts` 2 例；并把 RHP 的 **xfail 留档转成正例**（删 xfail）。
+> 门禁 **pytest 1133 passed** / vitest **830 passed / 98 files** / tsc 两档 0。
+> 此前（2026-09-20，**源演示「有时候返回失败」修复 —— 按 CCC-810 原文逐条对照后修 F1–F8**：
 > **根因（最小复现）**：`SDEF CEL=n` 的栅元若用**宏体**界定 ⇒ `voxel_csg.cell_aabb` 返回 None
 > （`_surface_negative_aabb` 只认 SPH/RPP，其余 8 类宏体无实现）⇒ 旧 `sample_cell` 退回 **±1e3 大盒**做拒绝采样
 > ⇒ 接受率 ~1e-8 ⇒ 必报「CEL=n 拒绝采样失败（栅元包围盒可能退化）」；另一条独立病因：GQ/SQ 面源的 `_quadric_pt`
@@ -1250,7 +1276,30 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
   中出现的旧式写法均为历史残留**。⚠️ **L1 锁死表曾写错公式 —— 它是跨语言实现依据，写错会污染实现**（审计 TD-29）。
   被反复"根因修复"过的高危公式，改前先查本节。
 
-- **⭐ `QuickCellForm` 版面硬约束（2026-09-19 排版审计立此条目，改它之前先读）**：
+- **⭐ RHP/HEX 的 `r/s/t` = 面心矢量（边心距），不是顶点矢量（2026-09-20 立此条目，改六棱柱几何前先读）**：
+  C810 p.3-21 原文「`r1 r2 r3` = vector from the axis to the **middle of the first facet**」，
+  例题 `RHP 0 0 -4  0 0 8  0 2 0` 亦写「first facet is normal to the y-axis **at y=2**」。
+  ⇒ 边心距 = `|r|`；六个侧顶点 = **相邻两面（法向 ±r,±s,±t，相邻 60°）的交点**，
+  外接半径 = 边心距 / cos30° = `2|r|/√3`；顶点在 30°+k·60°、面法向在 0°/60°/120°（`r` 沿 +x 时）。
+  **唯一实现** = `app/quadric.py::rhp_hex_vertices(r1, r2, r3)`（`[1 c; c 1][α;β]=[A;B]` 解交点，
+  `(r1,r2) (r2,r3) (r3,−r1)` 三对 + 反号，返回**绕轴循环序**）。**六个消费者必须都调它**：
+  `voxel_csg.surface_fn` / `voxel_csg._macrobody_aabb` / `_freecad_csg_worker._make_hex_from_params` /
+  `lattice._rhp_extent` / `freecad_preview._surface_extent_values`（bound）/
+  `gui/src/volume/surfacesAABB.ts::rhpCorners`（TS 侧同名规则；9/12 项要按 `rot60` 推 s/t）。
+  ⛔ 别再写 `v = base ± r1 ± r2 ± r3`（那是"把面心当顶点"，六棱柱转 30° 且小 13.4%），
+  也别把 `±r1,±r2,±(r1−r2)` 当极值点（那是面心本身）。`HEX` 是 `RHP` 同义词，两条路必须同源。
+- **⭐ 源粒子的 WGT 有两类补偿，缺一即错（2026-09-20 立此条目）**：
+  ① **SB 表偏倚**（C810 p.3-64「The weight of each source particle is adjusted to compensate for the
+  bias.」）⇒ 抽样按**偏倚**概率、权重 ×(真概率/偏倚概率)，按**抽中的档位**算（不是按值反查）；
+  ② **内置函数被 SI 截断**（C810 p.3-66「**Unless the function is −21 or −31**, the weight … adjusted to
+  compensate for truncation of the function by the entries on the SI card.」）⇒ 按 `[I1,I2]` 抽条件分布
+  并 × `P(I1≤x≤I2)`（对未截断密度算），`−21/−31` **豁免**。
+  两条都由 `DistributionSampler.sample_with_corrections(eid, rng, …) -> (值, 因子)` 统一产出
+  （`SI S` 递归时沿路径相乘），`source_sampler._Context._smp` 把它并进 `_w_corr` → `sample_one` 末尾并入 WGT。
+  ⚠️ **加新的抽样路径时别再绕过 `_smp`**（历史教训：`_default_power_law` / `_sample_pos_dist` 各自直连
+  sampler，导致补偿在那两条路上被静默丢弃）。
+
+
   每一行是「行首标签列 **64px** + N 个字段列 **70px** + `gap:10`」的**固定像素**排版；
   最宽一行（切面类的"切分 X 份/Y 份/Z 份"）实测需要 **356px** ⇒
   **宿主给它的宽度必须 ≥360px**。当前两个宿主的实测可用宽度：
@@ -1292,6 +1341,19 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 - **GQ/SQ 后续增强 3 连坑（2026-08-22 实测）**：① **凸裁剪盖面**：顶点恰落在裁剪面上（dist≈0）时跨边条件会漏掉该交点 → 盖面缺顶点被丢弃 → 三角形破洞（228 条开放边）；`cut()` 端点贴面返回 `keep()`、盖面收集贴面顶点本身。OWEN 的边链盖面法在细密切线平面下会退化丢面（162 面球只出 35 面），改用 Sutherland–Hodgman + 盖面绕质心极角排序。② **金螺旋方向分布不均**：外接多面体顶点半径到 1.08r+、体积误差 8%+，改二十面体细分（162/642 方向）；162 方向外接误差仍 ~2.1% → 无封口时绕中心体积校正 λ=(V_true/V_mesh)^(1/3)（体积精确）、有封口时用 642 方向（区域体积无法解析）。③ **解析切片 marching squares 16 格表 case 12（{2,3} 上边在内）应为 (1,3) 而非 (0,1)**；`_plane_halfspace` 的 pos/neg sgn 与 surface_fn 正侧约定相反（pos 侧要取 −法向）。
 - **材料库深化 3 坑（2026-08-30 实测）**：① **嵌套浮窗被 `backdrop-filter` 裁剪**——`FloatingDialog` 用 `backdrop-filter: blur(16px)` 会创建 containing block，使嵌套其中 `position:fixed` 的子弹窗相对父定位、被父 `overflow:hidden` 裁剪。修法=子弹窗用 `createPortal` 渲染到 `document.body`（ExamplesDialog/GeometryTab 同法）。② **模块级缓存被 `useMemo` 冻结不刷新**——`useMaterialLibrary` 用 `useMemo(()=>entries,_cache…,[loaded])`，但 `entries` 依赖模块级 `_cache`（不在 deps），save/remove 后 `_cache` 更新 + notify 触发重渲染，`useMemo` 仍返回旧缓存 → 面板不刷新。修法=去掉 `useMemo` 每次读最新 `_cache`。③ **edit 改写 `.ps1` 丢 UTF-8 BOM**——Windows PowerShell 5.1 按 GBK 读无 BOM 的 UTF-8 中文就乱码解析崩溃；修法=用 `[System.Text.UTF8Encoding]::new($true)` 重存为带 BOM。
 
+- **「一个语义、三种解释」+「写了函数没人调用」（2026-09-20 R1+O6 实测，两条通用教训）**：
+  ① **审计"某字段怎么解释"时，不能只查自己以为的那一处，要 grep 语义载体本身**。R1 只 grep 了
+  `rhp / p[6:9] / ±r±s±t` 就翻出 **6 个消费者、3 种互不相同的解释**（前端生成侧一直是对的，后端
+  **解释侧全错**：转 30° 且小 13.4%）——其中 `freecad_preview._surface_extent_values` 连审计清单都没有，
+  是 grep 出来的。**收敛动作**：先立**唯一实现**（`quadric.rhp_hex_vertices`）再逐处改调用，
+  并给"改前/改后"各留一条**数值锚点**测试（手册例题的坐标），否则下次又会漂。
+  ② **"写了函数没人调用" = 功能不存在**。`DistributionSampler.weight_factor()` 有实现、有 docstring、
+  语义正确 —— 但全仓 **0 个调用者**（`grep -rn weight_factor` 只有定义那行），于是"SB 偏倚"在界面上
+  **看起来生效、WGT 恒 1**。⇒ 纪律：**新增"补偿/换算"类函数时必须同时交出调用点**，
+  否则它只是让人以为功能已实现的死代码。
+  ③ 接缝设计推论：`sample()` 只返回**值** ⇒ 抽样的**副产品**（权重补偿）在接缝上必然被丢弃。
+  改成 `sample_with_corrections() -> (值, 因子)` 后，"绕过接缝直连 sampler"变成**显式可见的坏味道**
+  （本次即抓到 2 处：`_default_power_law`、`_sample_pos_dist`）。
 - **OUTP 解析误用 pymcnp 构造函数（2026-08-19 实测）**：`pymcnp.Outp(text)` 是构造函数非解析入口，恒报 TypeError；正确入口 `Outp.from_mcnp(text).to_dataframe()`。且内置 pymcnp 0.9.1 Tally_4 只认 MCNP6.2 布局，MCNP6.1 紧凑两列解析为空 → 需 `app/outp_parser.py` 兜底。
 - **测试笔误陷阱（fixtures 实测）**：① valid_39.meshtal 的 tally number 是 **4 不是 1**（须取自 parse 响应 `tallies[].number`）；② preview-3d 单栅元 material="0" 是 void → `include_void=False` 跳过 → 空 stl_files（冒烟 deck 须用非 0 material）。
 - **❗❗ 编译级缺陷只有"真的跑一次"才能发现（2026-09-10 实证，本项为最高优先级教训）**：一个"97% 修复完成、静态自检全过"的批次里，实测藏着 2 个**编译级**缺陷 ——
@@ -1448,8 +1510,8 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 
 | 门禁 | 命令/位置 | 基线 |
 | :--- | :--- | :--- |
-| pytest | `tests/`（unit + parser + integration，含契约漂移闸门 test_api_contract.py 与真实 HTTP） | **最新实跑（2026-09-11）：900 passed / 0 failed / 0 skipped**。沿革：573(08-22) → … → 765(09-09) → 875(09-10) → **900(09-11，含 +25 例 `test_mcnp_tasks.py`)**。**重跑后请覆盖本行** |
-| vitest | `gui/test/`（**95 个测试文件**；含 jsdom DOM 交互） | **最新实跑（2026-09-19）：95 files / 794 tests passed / 0 skip**。沿革：358(08-22) → … → 625(09-10) → 731(09-17) → 737(09-15，+4 格阵 resize) → 750(09-19，+13 出图出口/版面/刻度主题) → 757(09-19，+7 截面悬停) → 781(09-19，+24 量单位标注 / PNG 物理尺寸 / viridis 单调性) → **794(09-19，+13 出图版面公用模块 / 描边换算)**。**重跑后请覆盖本行** |
+| pytest | `tests/`（unit + parser + integration，含契约漂移闸门 test_api_contract.py 与真实 HTTP） | **最新实跑（2026-09-20，R1+O6 批）：1133 passed / 0 failed / 0 skipped**。沿革：573(08-22) → … → 900(09-11) → 1019(09-20 keff) → 1049(09-20 MCNP 检测) → 1118+1xfail(09-20 源演示 F1–F8) → **1133(09-20 R1+O6)**。**重跑后请覆盖本行**；⚠️ 跑前 **unset `PYTHONIOENCODING`**（见 §6 环境坑） |
+| vitest | `gui/test/`（**98 个测试文件**；含 jsdom DOM 交互） | **最新实跑（2026-09-20，R1+O6 批）：98 files / 830 tests passed / 0 skip**。沿革：358(08-22) → … → 794(09-19) → **828(09-20 源演示批) → 830(09-20 R1+O6，+2 surfacesAABB RHP)**。**重跑后请覆盖本行** |
 | tsc | `gui/` 下 `npm run typecheck`（= `tsc --noEmit && tsc -p tsconfig.test.json --noEmit`） | 两档 **EXIT 0**。**2026-09-10 扩容**：此前只查 `src/`，测试文件不在类型检查内（审计 TD-17） |
 | 漂移闸门 | handlers dict ↔ `docs/contracts/api.yaml` 双向一致；spec `_keep_py` ↔ `_import_app` 双向一致 | **49 端点**；spec 闸门（`test_sidecar_spec_keep.py`）**绿** |
 

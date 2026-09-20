@@ -12,6 +12,7 @@ HTTP 往返用子进程跑 api_server.py，import 发生在独立进程。
 """
 import ast
 import json
+import math
 import re
 import urllib.request
 from pathlib import Path
@@ -715,6 +716,31 @@ def test_http_source_demo_sample_error(backend_base_url):
     })
     assert resp.get("status") == "error", resp
     assert "D7" in resp.get("error", "")
+
+
+def test_http_source_demo_sample_builtin_truncated_by_si(backend_base_url):
+    """真实 HTTP：`SI1 0 5` + `SP1 −5 1`（蒸发谱）⇒ 能量全在窗口内、WGT = P(0≤E≤5)。
+
+    C810 p.3-66 的截断 + 权重补偿在**端到端**（前端→api_server→sampler）这一层也要成立：
+    单测只覆盖 sampler，若 api_server 漏传 sdefDistributions 或吞掉 weight，这里会红。
+    """
+    resp = _post(backend_base_url, "/api/source-demo-sample", {
+        "sdefFields": {"sdef_pos_x": "0", "sdef_pos_y": "0", "sdef_pos_z": "0",
+                       "sdef_erg": "D1"},
+        "sdefDistributions": [{"id": 1, "si": {"type": "", "values": ["0", "5"]},
+                               "sp": {"type": "", "values": [], "fnCode": "-5",
+                                      "fnParams": ["1"]}}],
+        "surfaces": "", "cells": [], "trCards": "",
+        "nParticles": 200,
+    })
+    assert resp.get("status") == "ok", resp
+    particles = resp.get("particles", [])
+    assert len(particles) == 200, resp
+    es = [p["energy"] for p in particles]
+    assert min(es) >= 0.0 and max(es) <= 5.0, f"SI 截断失效：能量范围 {min(es)}~{max(es)}"
+    expected = 1.0 - math.exp(-5.0) * (1.0 + 5.0)
+    assert all(abs(p["weight"] - expected) < 1e-4 for p in particles), \
+        f"WGT 应为 {expected:.6f}，实得 {particles[0]['weight']}"
 
 
 # ── 封闭性状态枚举闸门（TD-08 / t5）────────────────────────
