@@ -1354,6 +1354,15 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
   ③ 接缝设计推论：`sample()` 只返回**值** ⇒ 抽样的**副产品**（权重补偿）在接缝上必然被丢弃。
   改成 `sample_with_corrections() -> (值, 因子)` 后，"绕过接缝直连 sampler"变成**显式可见的坏味道**
   （本次即抓到 2 处：`_default_power_law`、`_sample_pos_dist`）。
+- **❗`MEMORY_DIR` 是硬编码绝对路径 ⇒ preview_cache 跨树/跨版本共享（2026-09-20 R1 差分实测）**：
+  `gui/backend/api_server.py` 里 `MEMORY_DIR = r"D:\MCNP\memory"`（**绝对路径**，不是相对仓库），
+  所以源码树、`git worktree`、装机版**共用同一份 `preview_cache`**（LRU 上限 3）。
+  后果 ①：**做"改前 vs 改后"几何差分时，第二个后端会命中第一个后端写的 STL** ——
+  实测表现为"4 张卡里只有第 1 张看起来变了"（后 3 张被 LRU 里的旧条目命中），
+  必须先清 `D:\MCNP\memory\preview_cache` 再换树，否则结论完全错。
+  后果 ②：**凡改动几何生成算法，必须同时 `PreviewCache.GEOMETRY_CACHE_VERSION += 1`**
+  （`app/preview_cache.py`，注释已写明这条纪律；R1 批从 2 → 3），
+  否则用户装了新包仍看到旧网格，会以为"修复没生效"。
 - **OUTP 解析误用 pymcnp 构造函数（2026-08-19 实测）**：`pymcnp.Outp(text)` 是构造函数非解析入口，恒报 TypeError；正确入口 `Outp.from_mcnp(text).to_dataframe()`。且内置 pymcnp 0.9.1 Tally_4 只认 MCNP6.2 布局，MCNP6.1 紧凑两列解析为空 → 需 `app/outp_parser.py` 兜底。
 - **测试笔误陷阱（fixtures 实测）**：① valid_39.meshtal 的 tally number 是 **4 不是 1**（须取自 parse 响应 `tallies[].number`）；② preview-3d 单栅元 material="0" 是 void → `include_void=False` 跳过 → 空 stl_files（冒烟 deck 须用非 0 material）。
 - **❗❗ 编译级缺陷只有"真的跑一次"才能发现（2026-09-10 实证，本项为最高优先级教训）**：一个"97% 修复完成、静态自检全过"的批次里，实测藏着 2 个**编译级**缺陷 ——
