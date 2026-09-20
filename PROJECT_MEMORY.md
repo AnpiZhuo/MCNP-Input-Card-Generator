@@ -1,5 +1,33 @@
 # 项目记忆文档（AI 速查手册）
 
+> **★ 本批（2026-09-20）源抽样器全量重构（仿 MCNP 模型）+ 官方裁判门禁，已提交 `8a73ea9`/`ce9eb1c`，已打包部署 ✅**
+> **起因**：三个官方算例（`MCNP6\Testing\VALIDATION_SHIELDING\Inputs\{photon_kerma, fns_config1_neutron_onaxis, lps_water}.inp`）
+> 用**官方 `mcnp6.exe` 输出当裁判**（print table 170 + `the mean of source distribution N is …`），暴露 6 项不符：
+> **S1/S2** 数据块里的 C 注释行把 SI/SP/SB/DS 家族扫描截断（photon_kerma 丢 dist2、lps_water 丢 23 个 ⇒ 源演示报
+> 「分布 D2/D300 未定义」+ 重新生成会**抹掉这些卡**；C810 p.3-4「Comment cards can be used **anywhere**」）；
+> **S3** `erg=fdir=d2` 认不出 ⇒ 每颗恒 14 MeV（C810 p.3-55 `Var Fvar′ Dn` + 依赖必须在父变量之后抽）；
+> **S4** `sp3 d -21 1` 被当 D 表 ⇒ RAD 均匀（C810 p.3-63 H 首项必须为 0 + 官方实测 `power law 21 k=1`）；
+> **S5** TME 不抽样（登记，不进粒子记录）；**S6** A 型 SI + SB 未做偏倚密度与权重比（C810 p.3-64 SB 规则）。
+> **重构**：① 模型层 `app/generator/source_spec.py`（`VAR_SPEC` 22 变量逐条挂锚点、三种形态唯一实现、
+> 取消静默兜底）；② 引擎层 `source_sampler.py` 843→1374 行（分层抽样序 + 通用 `resolve` + 权重累乘；
+> 删掉 `_num(v,14.0)` 等**全部**静默兜底）；③ 分布层 S6；④ 官方闸门 `tests/integration/test_sdef_official_gate.py`
+> （18 例，裁判数字由脚本从 `.out` 抽）。
+> **两层防幻觉（本次方法论，已写进契约 §7）**：语义必须挂 **C810 锚点 id**（`docs/authority/c810-sdef.md`
+> 由 `tools/c810_extract.py` 脚本抽 PDF 生成、18 锚点 113 关键短语、篡改必红）＋ 行为必须与**官方程序输出**对账。
+> 期间抓到 3 个"转述错误"（agent 说 RATE 默认 0 实际 None；agent 把 DS Q 的 off-by-one 当"官方约定"；
+> S6 期间"怎么改判据都对不上"实为引擎真 bug：`_sample_A` 段内逆 CDF 误用真密度表）——**外部裁判优先于自洽**。
+> **门禁**：pytest **1280 passed / 11 skipped（0 failed/0 xfail/0 xpass）** / vitest **830 passed / 98 files** /
+> tsc 两档 0 / vite build 0。
+> **部署**：`build:release` **320 s**（期间 `sync-sidecar` 自己逮到 6.2 时效坑：`target/release` 缺
+> `app/generator/source_spec.py`、9 个文件大小不符 ⇒ 已自动覆盖）→ 备份 `_backup_1.7.6_20260920_183501`（7875 文件）
+> → 部署 `D:\MCNP\MCNP输入卡生成器`（exe 6,611,456 B / python.exe 32,593,200 B / `_internal` **7871** / `自检.bat` 9282 B）。
+> **冒烟（部署版真跑）**：后端 **3.35 s** 就绪；官方 photon_kerma 夹具 deck 打 `/api/source-demo-sample` ⇒
+> **分布号 [1,2,3]** ✓、ERG {1.1725, 1.33} ✓、**WGT [1.25269e-4, 1169.41]**（下界=理论值、上界 ≤ 硬界 31965.69）✓；
+> `xsdir-check` loaded/7925、`mcnp-detect` 2 候选、`自检.bat` → `[RESULT] BACKEND-RUNNING`；收尾无残留进程。
+> ⚠️ 打包手册第 4 步的 rust 环境变量**原先写错**：`D:\rust` 下是 `cargo/`+`rustup/` 两个子目录，
+> 必须 `RUSTUP_HOME=D:\rust\rustup`、`CARGO_HOME=D:\rust\cargo`（指错即 `rustup could not choose a version of cargo`，
+> 已修正手册）。
+>
 > 最后更新时间：2026-09-20（**R1 + O6 收官：RHP 的 `r` 语义全仓收敛 + C810 p.3-66 截断权重补偿**
 > ——上一批登记的三项「C810 有明文但未做」里 **R1、O6 已清零**，只剩 **L1**（CEL 采样区域仍用自算紧盒）。
 > ① **R1（RHP/HEX 的 `r` = 面心矢量）**：grep 出**六个**消费者，原本并存**三种**互不相同的解释 ——
@@ -1502,7 +1530,12 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 2. PyInstaller sidecar              （在 gui\ 下跑 gui/mcnp_sidecar.spec，产物名 "python"；
                                     核对 _keep_py / _keep_dirs 清单，如 outp_parser.py/meshtal/ 等新增模块）
 3. 替换 binaries                    （把新 sidecar 的 python.exe + _internal 换进 target\release\）
-4. tauri build                      （需 RUSTUP_HOME/CARGO_HOME=D:\rust；node .\node_modules\@tauri-apps\cli\tauri.js build）
+4. tauri build                      （⚠️ rust 环境变量必须指到**子目录**：`RUSTUP_HOME=D:\rust\rustup`、
+                                    `CARGO_HOME=D:\rust\cargo`、`PATH` 前置 `D:\rust\cargo\bin`
+                                    —— `D:\rust` 下是 `cargo/` + `rustup/` 两个目录，**根目录不是 home**；
+                                    指错会报 `rustup could not choose a version of cargo to run … no default
+                                    is configured`（2026-09-20 实测，构建在 tauri 阶段中止、不产出半成品）。
+                                    命令：node .\node_modules\@tauri-apps\cli\tauri.js build）
 5. ⚠️ 6.2 时效校验（必做）           （tauri 增量编译不刷新 target\release 的 sidecar！
                                     ★ 最快判据：查 target\release\_internal\app\ 里**有没有本批新增模块**
                                       —— 2026-09-11 实测缺 mcnp_tasks.py，一眼看穿"版本号新、后端旧"；
