@@ -4,7 +4,8 @@
 1. AST 读 api_server.py handlers 字典（486-512），断言每个 path 在 api.yaml 有 operationId。
 2. gui/src/utils/contract.ts backend 字段 ⊆ app/models.py 字段。
 3. 三核心端点（/api/generate, /api/parse-inp, /api/validate-inp）真实 HTTP 往返：
-   起本地后端（子进程，端口 5001），POST 断言统一信封 {status:"ok"}。
+   起本地后端（子进程，**空闲端口** + 核对端口归属，见 `conftest.py`），
+   POST 断言统一信封 {status:"ok"}。
 
 铁律：本文件【不 import】gui.backend.api_server（模块级 pyvista/FreeCAD 探测）。
 HTTP 往返用子进程跑 api_server.py，import 发生在独立进程。
@@ -12,10 +13,6 @@ HTTP 往返用子进程跑 api_server.py，import 发生在独立进程。
 import ast
 import json
 import re
-import socket
-import subprocess
-import sys
-import time
 import urllib.request
 from pathlib import Path
 
@@ -143,37 +140,27 @@ def test_contract_backend_fields_subset_of_models():
 
 
 # ── 3. 三核心端点真实 HTTP 往返 ─────────────────────────
-@pytest.fixture(scope="module")
-def backend_base_url():
-    """起 api_server.py 子进程（端口 5001），就绪后返回 base URL。"""
-    proc = subprocess.Popen(
-        [sys.executable, str(API_SERVER)],
-        cwd=str(PROJECT_DIR),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    base = "http://127.0.0.1:5001"
-    try:
-        deadline = time.time() + 15
-        while time.time() < deadline:
-            try:
-                if proc.poll() is not None:
-                    break
-                s = socket.create_connection(("127.0.0.1", 5001), timeout=1)
-                s.close()
-                break
-            except OSError:
-                time.sleep(0.3)
-        if proc.poll() is not None:
-            pytest.skip(f"后端子进程提前退出 (code={proc.returncode})，跳过 HTTP 往返")
-        # 冒烟就绪
-        yield base
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+# 后端子进程 fixture（`backend_base_url` / `backend_proc`）已上收到
+# `tests/integration/conftest.py`：**挑空闲端口 + 核对端口归属**，避免跟常驻的
+# 打包版抢 5001 而"打到别人的后端还报绿"（2026-09-20，见 PROJECT_MEMORY §6 / S9.6）。
+
+
+def test_backend_fixture_is_our_own_child(backend_proc, port_probe):
+    """防假绿闸门：监听端口的必须是本 fixture 起的那个子进程，且它仍活着。
+
+    历史（2026-09-20 前）：四个集成文件各自把端口写死 5001，而装机版常年占着 5001
+    ⇒ 原来的探活 `socket.create_connection(("127.0.0.1", 5001))` **连上别人的后端也 break**，
+    这约 60 条 HTTP 往返用例跑在**旧代码**上照样报绿（只有新端点才会露馅）。
+    本用例把该不变量钉死：子进程存活 + 该端口上**只有**它一个监听者。
+    """
+    assert backend_proc["proc"].poll() is None, (
+        f"后端子进程 PID {backend_proc['pid']} 已退出，前面的 HTTP 往返结果不可信")
+    owners = port_probe.listening_pids(backend_proc["port"])
+    if owners is None:
+        pytest.skip("netstat 探针不可用，无法核对端口归属（降级为「子进程存活」判据）")
+    assert owners == {backend_proc["pid"]}, (
+        f"端口 {backend_proc['port']} 的监听者 PID = {sorted(owners)}，"
+        f"期望只有 {backend_proc['pid']}（SO_REUSEADDR 下多进程可同绑同一端口 ⇒ 请求会被劫持）")
 
 
 def _post(base: str, path: str, payload: dict) -> dict:

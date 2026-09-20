@@ -3744,9 +3744,35 @@ class MCNPHandler(BaseHTTPRequestHandler):
             print(f"[API] {fmt}")
 
 
-def main():
-    server = HTTPServer(("0.0.0.0", PORT), MCNPHandler)
-    print(f"[API] MCNP API 服务启动 → http://localhost:{PORT}/api/generate")
+def _port_from_argv(argv: list[str]) -> int:
+    """``--port N`` / ``--port=N`` → 端口号；缺省/非法一律回落 ``PORT``（5001）。
+
+    只服务**测试与多实例**（`tests/integration/conftest.py` 起子进程时挑空闲端口，
+    免得跟用户机器上常驻的打包版抢 5001 —— 那条路径历史上会让集成用例
+    打到**别人的后端**还报绿）。打包版/前端一律 5001（`gui/src/utils/api.ts` 硬编码），
+    因此**刻意不提供环境变量开关**：免得一个遗留 env 把后端挪走、前端却还找 5001。
+    """
+    raw = None
+    for i, arg in enumerate(argv):
+        if arg == "--port" and i + 1 < len(argv):
+            raw = argv[i + 1]
+            break
+        if arg.startswith("--port="):
+            raw = arg.split("=", 1)[1]
+            break
+    if raw is None:
+        return PORT
+    try:
+        port = int(raw)
+    except (TypeError, ValueError):
+        return PORT
+    return port if 0 < port < 65536 else PORT
+
+
+def main(port: int | None = None):
+    port = _port_from_argv(sys.argv[1:]) if port is None else port
+    server = HTTPServer(("0.0.0.0", port), MCNPHandler)
+    print(f"[API] MCNP API 服务启动 → http://localhost:{port}/api/generate")
     print(f"   Python 后端路径: {APP_DIR}")
     # 后台预热 pymcnp 曲面解析：启动即返回、不阻塞服务，
     # 让第一个曲面请求（preview-3d/export-step/cross-section）不再吃一次 2s 的冷水 import。

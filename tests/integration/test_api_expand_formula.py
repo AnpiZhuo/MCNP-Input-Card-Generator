@@ -15,52 +15,15 @@
   ⑥ 空公式仍走既有错误路径（is_weight 扩展不破坏错误响应）。
 
 铁律：本文件【不 import】gui.backend.api_server（模块级 pyvista/FreeCAD 探测）。
-HTTP 往返用子进程跑 api_server.py（照 test_api_contract.py / test_meshtal_api.py 范式）。
+HTTP 往返用子进程跑 api_server.py，fixture `backend_base_url` 在
+`tests/integration/conftest.py`（**挑空闲端口 + 核对端口归属**：原先各文件写死 5001，
+会跟常驻的打包版抢端口，"连上别人的后端"照样报绿 —— 见 PROJECT_MEMORY §6 / S9.6）。
 """
 import json
-import socket
-import subprocess
-import sys
-import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 import pytest
-
-PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
-API_SERVER = PROJECT_DIR / "gui" / "backend" / "api_server.py"
-
-
-@pytest.fixture(scope="module")
-def backend_base_url():
-    proc = subprocess.Popen(
-        [sys.executable, str(API_SERVER)],
-        cwd=str(PROJECT_DIR),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    base = "http://127.0.0.1:5001"
-    try:
-        deadline = time.time() + 15
-        while time.time() < deadline:
-            try:
-                if proc.poll() is not None:
-                    break
-                s = socket.create_connection(("127.0.0.1", 5001), timeout=1)
-                s.close()
-                break
-            except OSError:
-                time.sleep(0.3)
-        if proc.poll() is not None:
-            pytest.skip(f"后端子进程提前退出 (code={proc.returncode})，跳过 HTTP 往返")
-        yield base
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
 
 
 def _post(base: str, path: str, payload: dict) -> tuple[int, dict]:

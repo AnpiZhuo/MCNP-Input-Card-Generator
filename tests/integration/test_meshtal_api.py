@@ -21,10 +21,6 @@ HTTP 往返用子进程跑 api_server.py（照 test_api_contract.py 范式）。
 import ast
 import json
 import re
-import socket
-import subprocess
-import sys
-import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -116,36 +112,9 @@ def test_err_hint_param_additive_default():
     assert sig["hint"] is not None, "hint 必须是可选参数（带缺省，既有调用不传 hint → 字段不变）"
 
 
-# ── HTTP 子进程后端 fixture（照 test_api_contract.py）────────────
-@pytest.fixture(scope="module")
-def backend_base_url():
-    proc = subprocess.Popen(
-        [sys.executable, str(API_SERVER)],
-        cwd=str(PROJECT_DIR),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    base = "http://127.0.0.1:5001"
-    try:
-        deadline = time.time() + 15
-        while time.time() < deadline:
-            try:
-                if proc.poll() is not None:
-                    break
-                s = socket.create_connection(("127.0.0.1", 5001), timeout=1)
-                s.close()
-                break
-            except OSError:
-                time.sleep(0.3)
-        if proc.poll() is not None:
-            pytest.skip(f"后端子进程提前退出 (code={proc.returncode})，跳过 HTTP 往返")
-        yield base
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+# ── HTTP 子进程后端 fixture ─────────────────────────────────
+# `backend_base_url` 已上收到 `tests/integration/conftest.py`（挑空闲端口 + 核对端口归属：
+# 原先写死 5001 会跟常驻的打包版抢端口，连上别人的后端还报绿 —— 见 PROJECT_MEMORY §6 / S9.6）。
 
 
 def _post(base: str, path: str, payload: dict) -> tuple[int, dict]:
