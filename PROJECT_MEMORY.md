@@ -5,7 +5,10 @@
 > **263 ms**、错误只写在 stderr（`Failed to load Python DLL ...\_internal\python313.dll`）⇒ 窗口来不及画字就销毁，
 > 肉眼即"空白一闪"；而健康包 **1.9 s** 绑上 5001 并常驻。**关键缺口是"静默"**：后端只由前端 JS 拉起
 > （`src-tauri/src/main.rs` 无任何 spawn），失败被 `catch` 吞成一句 `console.warn` ⇒ 用户只看到"后端不可用"四个字。
-> **治理三件**：① `自检.bat`（新增，随包落到 exe 同级；`[RESULT]` 四态分流：`PKG-INCOMPLETE-OR-BLOCKED` /
+> **治理三件**：① `自检.bat`（新增，随包落到 exe 同级；在**自身同目录**产出 `MCNP自检报告.txt` —— 合法 UTF-8 无 BOM、
+> 含系统版本/三件套体积与 mtime/引导判定/端口/后端自述(mcnp-detect+xsdir-check)/config.json/`[RESULT]` 结论，
+> **可直接转发给 AI 读**，避免来回追问；子进程输出按 ANSI 写中文，故报告内先经 PowerShell 转 UTF-8 再落盘；
+> `[RESULT]` 四态分流：`PKG-INCOMPLETE-OR-BLOCKED` /
 > `PKG-INCOMPLETE` / `PACKAGE-OK-BACKEND-NOT-UP` / `BACKEND-RUNNING`，且判据全走 ASCII 标记，
 > 不依赖中文能否显示——实测 `PYTHONIOENCODING` 对冻结版**无效**）；② `gui/src/utils/backend.ts` 把拉起失败/秒退的
 > **归因 + 退出码 + stderr 尾巴**带到界面（顶栏 ⚠ 详情，秒退后几秒可见，不再等 3 分钟轮询）；
