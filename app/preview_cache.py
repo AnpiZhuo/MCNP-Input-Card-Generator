@@ -31,7 +31,9 @@ class PreviewCache:
     # 修复后，预览仍吐旧网格，直到手动清 preview_cache）。
     #   1 = 初版
     #   2 = AABB 标志位合并 + 裸平面半空间 + 顶点投影（GQ 薄片体积 −4.6% → −0.3%）
-    GEOMETRY_CACHE_VERSION = 2
+    #   3 = RHP/HEX 的 r/s/t 改按 C810 p.3-21 的**面心矢量（边心距）**解释
+    #       （顶点由相邻两面求交；同一张卡形状变化：绕轴 30° 朝向 + 边长 1/cos30°）
+    GEOMETRY_CACHE_VERSION = 3
 
     def __init__(self, base_dir=None, max_entries: int = 3, builder=None):
         """
