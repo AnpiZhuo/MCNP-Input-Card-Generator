@@ -486,6 +486,56 @@ def rec_params(params: list) -> list[float]:
     raise ValueError(f"REC 参数个数不支持: {len(p)}（应为 10 或 12）")
 
 
+def rhp_hex_vertices(r1: list, r2: list, r3: list) -> list[tuple]:
+    """RHP/HEX 的**六个侧顶点**（相对底面中心、位于 ⊥H 的平面内）—— C810 p.3-21 语义的唯一实现。
+
+    ## 为什么要有这个函数（2026-09-20 实证）
+    C810 p.3-21 原文明写：``r1 r2 r3 = vector from the axis to the **middle of the first
+    facet**``、``s1 s2 s3 = vector to center of the second facet``、``t1 t2 t3 = … third facet``
+    ⇒ **r/s/t 是"面心矢量"（边心距），不是顶点矢量**。手册例题亦印证：
+    ``RHP 0 0 -4  0 0 8  0 2 0`` = 「first facet is normal to the y-axis **at y=2**」。
+
+    而本仓库曾并存**三种互不相同的解释**：
+      ① 前端生成侧（`quickCell.ts` / `lattice.ts` / `hexPrism.ts`）按 C810 的**面心**发 r ✓
+      ② 后端 `voxel_csg.surface_fn` / `_freecad_csg_worker` / 前端 `surfacesAABB.rhpCorners`
+         把 r 当**顶点**用（``base = v ± r1 ± r2 ± r3``）✗
+      ③ 后端 `lattice._rhp_extent` 把面心直接当**极值点**（``±v1, ±v2, ±(v1-v2)``）✗
+    ⇒ 同一张卡，生成侧与解释侧差 **30° 朝向 + 13.4% 尺寸**（实测：卡 ``rhp 0 0 -4 0 0 8 0 2 0``
+    后端给 x∈[±1.732]，C810 应为 x∈[±2.309]）。本函数是收敛后的**唯一实现**，
+    四个消费者（`surface_fn` / `_macrobody_aabb` / FreeCAD worker / `lattice._rhp_extent`）共用。
+
+    几何：六个侧面的外法向是 ``±r1, ±r2, ±r3``（相邻两面心 60° 间隔）。相邻两面的交点
+    解 ``[1 c; c 1][α;β] = [A;B]``（c = 两面心夹角余弦）⇒ 顶点 = α·â + β·b̂。
+    取相邻三对 ``(r1,r2) (r2,r3) (r3,−r1)`` 得三个顶点，再取反得另外三个；
+    返回顺序即**绕轴循环序**（`surface_fn` 据此建侧面），可直接当六边形顶点序列用。
+    正则情形（A=B=a、θ=60°）退化为 ``(2a/3)(â+b̂)``，模长 ``a/cos30°`` ✓ 正是外接半径。
+    """
+    import math as _m
+
+    def _unit(v):
+        n = _m.sqrt(v[0] ** 2 + v[1] ** 2 + v[2] ** 2)
+        if n < 1e-15:
+            raise ValueError("RHP 面心矢量退化为零向量")
+        return (v[0] / n, v[1] / n, v[2] / n), n
+
+    def _neg(v):
+        return (-v[0], -v[1], -v[2])
+
+    u1, u2, u3 = (_unit([float(x) for x in v]) for v in (r1, r2, r3))
+    neg_u1 = (tuple(-x for x in u1[0]), u1[1])          # −r1：第三对相邻面是 (r3, −r1)
+    pairs = ((u1, u2), (u2, u3), (u3, neg_u1))
+    half = []
+    for (ua, A), (ub, B) in pairs:
+        c = ua[0] * ub[0] + ua[1] * ub[1] + ua[2] * ub[2]
+        det = 1.0 - c * c
+        if abs(det) < 1e-12:
+            raise ValueError("RHP 相邻面心矢量平行，无法定顶点")
+        alpha = (A - c * B) / det
+        beta = (B - c * A) / det
+        half.append(tuple(alpha * ua[k] + beta * ub[k] for k in range(3)))
+    return half + [tuple(-x for x in w) for w in half]
+
+
 def rhp_params(params: list) -> list[float]:
     """RHP/HEX → 统一 15 参数（v h r s t）。
 

@@ -321,6 +321,8 @@ def _surface_extent_values(surf_type: str, params: list) -> list:
     方向向量类（RCC/REC/TRC 的 h、BOX 的 a1/a2/a3、WED 的 v1/v2/v3、
     RHP/HEX 的 r/s/t）**不单独取模**，而与基点合成角点（顶点 = base + Σ向量）
     后参与 max-abs——否则宏体轴长/方向会被当坐标撑大 bound。
+    ⚠ RHP/HEX 的 r/s/t 是**面心矢量（边心距）**，顶点由相邻两面求交（C810 p.3-21，
+    唯一实现 `quadric.rhp_hex_vertices`），不是 `base + Σ(±r±s±t)`。
     GQ/SQ 二次型系数非坐标，由调用方跳过。未知类型保守取全部参数。
     """
     try:
@@ -370,12 +372,23 @@ def _surface_extent_values(surf_type: str, params: list) -> list:
         return list(v) + [v[i] + a1[i] + a2[i] + a3[i] for i in range(3)]
     if surf_type in ("RHP", "HEX"):
         v, h = p[:3], p[3:6]
-        r, s, t = p[6:9], p[9:12], p[12:15]
         vals = list(v) + [v[i] + h[i] for i in range(3)]
-        for sx in (-1, 1):
-            for sy in (-1, 1):
-                for sz in (-1, 1):
-                    vals += [v[i] + sx * r[i] + sy * s[i] + sz * t[i] for i in range(3)]
+        # C810 p.3-21：r/s/t 是**面心矢量（边心距）**，侧顶点 = 相邻两面求交 ——
+        # 旧写法 `v ± r ± s ± t` 把面心当顶点，bound 会被撑大约 1.7 倍（卡
+        # `RHP 0 0 -4 0 0 8 0 2 0` 旧给 4，真值 2.3094）。唯一实现见 quadric.rhp_hex_vertices。
+        try:
+            try:
+                from quadric import rhp_params, rhp_hex_vertices
+            except ImportError:                  # 测试/包导入
+                from app.quadric import rhp_params, rhp_hex_vertices
+            pp = rhp_params(p)                   # 9/12 项 → 15（s/t 绕轴转 60° 推出）
+            verts = rhp_hex_vertices(pp[6:9], pp[9:12], pp[12:15])
+        except Exception:                        # 退化/无法解析 → 退回旧的保守组合
+            q = list(p) + [0.0] * (15 - len(p))
+            verts = [[sx * q[6 + k] + sy * q[9 + k] + sz * q[12 + k] for k in range(3)]
+                     for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)]
+        for w in verts:
+            vals += [v[i] + w[i] for i in range(3)]
         return vals
     return p  # 未知类型保守取全部
 

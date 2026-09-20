@@ -7,6 +7,7 @@
 from_mcnp），仅用 pymcnp 构建表面对象，再经 _pymcnp_surf_to_dict 转 dict——
 测试走的是与生产完全相同的曲面序列化管线。
 """
+import math
 import re
 from pathlib import Path
 
@@ -125,6 +126,23 @@ def test_box_far_corner_composition():
     b = _compute_bound_from_surfaces(dicts)
     # 对角角点 (100,100,100) 不参与 max，max=1000（PZ）→ 1000*1.3+100 = 1400
     assert abs(b - 1400) < 1e-9, f"BOX 方向向量不单独撑 bound，bound={b:.2f} 应=1400"
+
+
+def test_rhp_facet_center_semantics_in_bound():
+    """C810 p.3-21：RHP 的 r/s/t 是**面心矢量（边心距）** ⇒ 顶点 = 相邻两面求交。
+
+    卡 `RHP 0 0 0  0 0 1  0 2 0`（边心距 2、高 1）真实范围 x∈[±4/√3]、y∈[±2]、z∈[0,1]。
+    旧写法 `v ± r ± s ± t`（把面心当顶点）在 y 上可到 2+1+1 = 4 ⇒ bound 被撑到 105.2；
+    修正后取真实顶点 4/√3 ⇒ 103.0。
+    """
+    from app.freecad_preview import _surface_extent_values
+    vs = 4 / math.sqrt(3)
+    vals = _surface_extent_values("RHP", [0, 0, 0, 0, 0, 1, 0, 2, 0])
+    assert abs(max(abs(v) for v in vals) - vs) < 1e-12, f"RHP 顶点范围应={vs}，得到 {max(abs(v) for v in vals)}"
+    dicts = [{"type": "RHP", "number": 1,
+              "params": [0, 0, 0, 0, 0, 1, 0, 2, 0], "transform": None}]
+    b = _compute_bound_from_surfaces(dicts, 0.0)   # default=0 才看得见真实范围（否则 500 兜底）
+    assert abs(b - (vs * 1.3 + 100)) < 1e-9, f"RHP bound={b:.4f} 应={vs * 1.3 + 100:.4f}"
 
 
 # ── GQ/SQ 有界范围（新契约：分类换算真实范围；无界/退化跳过）──

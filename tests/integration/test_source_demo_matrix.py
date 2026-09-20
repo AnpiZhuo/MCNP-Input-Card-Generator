@@ -126,12 +126,18 @@ def test_cel_source_on_every_macrobody(backend_base_url, name, card, expr, pred)
     pts = _pts(j)
     assert len(pts) == 300, name
     if name == "RHP":
-        # 现行 surface_fn 把 r 当顶点矢量（R=|r|=2）⇒ 六边形边心距 √3；见单测里的 C810 偏差留档
-        ap = math.sqrt(3.0)
-        ok = all(abs(p[2]) <= 4 + 1e-6 and abs(p[1]) <= 2 + 1e-6
-                 and abs(-0.5 * p[0] + (math.sqrt(3) / 2) * p[1]) <= ap + 1e-6
-                 and abs(0.5 * p[0] + (math.sqrt(3) / 2) * p[1]) <= ap + 1e-6
-                 and abs(-p[0]) <= ap + 1e-6 for p in pts)
+        # C810 p.3-21：r/s/t 是**面心矢量（边心距）**，两两夹角 120°（题卡 r=(0,2,0) ⇒ 面心在 90°，
+        # s/t 由绕轴 ±60° 旋转推出 ⇒ 30°/150°）。故三条**面法向**为 30°/90°/150°，边心距都是 2；
+        # 顶点在面法向之间（0°/60°/…），外接半径 = 2/cos30° = 4/√3 ⇒ y=0 处 |x| ≤ 4/√3。
+        half3 = math.sqrt(3) / 2
+        ap = 2.0                                   # 边心距（= |r| = |s| = |t|）
+        vs = 4 / math.sqrt(3.0)                     # 外接半径 = 2/cos30°
+        ok = all(abs(p[2]) <= 4 + 1e-6
+                 and abs(p[1]) <= ap + 1e-6
+                 and abs(half3 * p[0] + 0.5 * p[1]) <= ap + 1e-6
+                 and abs(-half3 * p[0] + 0.5 * p[1]) <= ap + 1e-6
+                 and abs(p[0]) <= vs + 1e-6 for p in pts)
+        assert ok, "RHP: 有粒子落在六棱柱外"
         assert ok, "RHP: 有粒子落在六棱柱外"
     else:
         bad = [p for p in pts if not pred(p)]

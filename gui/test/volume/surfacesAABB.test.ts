@@ -93,6 +93,39 @@ describe("computeSurfacesAABB · 宏体", () => {
       min: { x: -4, y: -9, z: -4 }, max: { x: 4, y: 9, z: 4 },
     });
   });
+
+  /**
+   * RHP（C810 p.3-21 例题 `RHP 0 0 -4  0 0 8  0 2 0`）：r/s/t 是**面心矢量（边心距）**
+   * ⇒ 该卡第一面「normal to the y-axis at y=2」，边心距 = 2，外接半径 = 2/cos30° = 4/√3。
+   * 旧实现（r 当顶点）给 x∈[±√3]、y∈[±2]（六边形转 30° 且小 13.4%）。
+   * 与 Python `app/quadric.py::rhp_hex_vertices` 逐位同源（跨语言 L4）。
+   */
+  it("RHP 9 项：r 是面心矢量（边心距），s/t 由绕轴转 60° 推出", () => {
+    const box = computeSurfacesAABB("1 RHP 0 0 -4  0 0 8  0 2 0");
+    expect(box).not.toBeNull();
+    const vs = 4 / Math.sqrt(3);
+    expect(box!.min.x).toBeCloseTo(-vs, 12);
+    expect(box!.max.x).toBeCloseTo(vs, 12);
+    expect(box!.min.y).toBeCloseTo(-2, 12);
+    expect(box!.max.y).toBeCloseTo(2, 12);
+    expect(box!.min.z).toBeCloseTo(-4, 12);
+    expect(box!.max.z).toBeCloseTo(4, 12);
+  });
+
+  it("RHP 12/15 项写法与 9 项同盒（HEX 同义）", () => {
+    const nine = computeSurfacesAABB("1 RHP 0 0 -4  0 0 8  0 2 0")!;
+    // R2 = rot60(R1) = (-√3, 1, 0)，R3 = rot60(R2) = (-√3, -1, 0)（C810 p.3-19 推断规则）
+    const twelve = computeSurfacesAABB(
+      "1 RHP 0 0 -4  0 0 8  0 2 0  -1.7320508075688772 1 0")!;
+    const fifteen = computeSurfacesAABB(
+      "1 HEX 0 0 -4  0 0 8  0 2 0  -1.7320508075688772 1 0  -1.7320508075688772 -1 0")!;
+    for (const other of [twelve, fifteen]) {
+      expect(other.min.x).toBeCloseTo(nine.min.x, 9);
+      expect(other.max.x).toBeCloseTo(nine.max.x, 9);
+      expect(other.min.y).toBeCloseTo(nine.min.y, 9);
+      expect(other.max.y).toBeCloseTo(nine.max.y, 9);
+    }
+  });
 });
 
 describe("computeSurfacesAABB · 混合合并取最大范围", () => {

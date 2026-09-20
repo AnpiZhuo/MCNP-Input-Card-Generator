@@ -787,10 +787,13 @@ def test_rhp_extent_9params_infer():
     assert nine is not None and twelve is not None
     for k in ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max"):
         assert nine[k] == pytest.approx(twelve[k], abs=1e-9), k
-    # 9 参 H⊥ 平面：R1=(0.5,0,0) → 六边形 AABB x∈[-0.5,0.5] y∈[-0.433,0.433] z∈[-1,1]
+    # 9 参 H⊥ 平面：R1=(0.5,0,0) 是**面心矢量（边心距 0.5）** ⇒ 该 facet ⊥ x 于 x=0.5，
+    # 六边形外接半径 = 0.5/cos30° = 1/√3 ≈ 0.5774（顶点在 30°/90°/…）⇒
+    # AABB x∈[−0.5,0.5]（facet 本身）、y∈[−0.5774,0.5774]（顶点）、z∈[−1,1]。
     assert nine["x_min"] == pytest.approx(-0.5)
     assert nine["x_max"] == pytest.approx(0.5)
-    assert nine["y_max"] == pytest.approx(0.433012701892, abs=1e-9)
+    assert nine["y_max"] == pytest.approx(0.5773502691896258, abs=1e-9)  # = 0.5/cos30°
+    assert nine["y_min"] == pytest.approx(-0.5773502691896258, abs=1e-9)
     assert nine["z_min"] == -1.0 and nine["z_max"] == 1.0
 
 

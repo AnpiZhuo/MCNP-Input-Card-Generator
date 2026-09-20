@@ -170,6 +170,19 @@ function add(v: number[], w: number[]): number[] {
   return [v[0] + w[0], v[1] + w[1], v[2] + w[2]];
 }
 
+/** 向量绕单位轴转 60°（Rodrigues），与 Python 侧 `quadric.rot60` / `rhp_params` 同规则 */
+function rot60(v: number[], axis: number[]): number[] {
+  const c = 0.5;
+  const s = Math.sqrt(3) / 2;
+  const dot = v[0] * axis[0] + v[1] * axis[1] + v[2] * axis[2];
+  const cross = [
+    axis[1] * v[2] - axis[2] * v[1],
+    axis[2] * v[0] - axis[0] * v[2],
+    axis[0] * v[1] - axis[1] * v[0],
+  ];
+  return [0, 1, 2].map((i) => v[i] * c + cross[i] * s + axis[i] * dot * (1 - c));
+}
+
 function wedCorners(p: number[]): Vec3[] {
   const v = [p[0], p[1], p[2]];
   const v1 = [p[3], p[4], p[5]];
@@ -197,12 +210,43 @@ function boxCorners(p: number[]): Vec3[] {
 function rhpCorners(p: number[]): Vec3[] {
   const v = [p[0], p[1], p[2]];
   const h = [p[3], p[4], p[5]];
+  // C810 p.3-21：r/s/t 是**面心矢量（边心距）**，不是顶点矢量 ——
+  // 六个侧顶点 = 相邻两面（法向 ±r, ±s, ±t，相邻 60°）的交点。
+  // 唯一权威实现同源：app/quadric.py::rhp_hex_vertices（Python 侧 surface_fn / 宏体紧盒 /
+  // FreeCAD worker / lattice extent 共用）。旧写法 `v ± r ± s ± t` 把面心当顶点
+  // ⇒ 六棱柱绕轴转 30°、尺寸小 13.4%（实测：x 从 1.732 变回 C810 的 2.309）。
+  if (p.length < 9) return [];
+  // 9/12 项写法（C810 p.3-19：只给 r，或给 r+s）⇒ s/t 由 r 绕轴依次转 60° 推出
+  // （与 Python `quadric.rhp_params` 同规则；旧代码直接读 p[9..14] ⇒ undefined ⇒ NaN 盒）
   const r = [p[6], p[7], p[8]];
-  const s = [p[9], p[10], p[11]];
-  const t = [p[12], p[13], p[14]];
+  let s: number[];
+  let t: number[];
+  if (p.length >= 15) {
+    s = [p[9], p[10], p[11]];
+    t = [p[12], p[13], p[14]];
+  } else {
+    const hn = Math.hypot(h[0], h[1], h[2]);
+    if (!(hn > 0)) return [];
+    const axis = [h[0] / hn, h[1] / hn, h[2] / hn];
+    s = p.length >= 12 ? [p[9], p[10], p[11]] : rot60(r, axis);
+    t = rot60(s, axis);
+  }
+  const pairs: [number[], number[]][] = [[r, s], [s, t], [t, r.map((x) => -x)]];
+  const half = pairs.map(([a, b]) => {
+    const A = Math.hypot(a[0], a[1], a[2]);
+    const B = Math.hypot(b[0], b[1], b[2]);
+    const ua = a.map((x) => x / A);
+    const ub = b.map((x) => x / B);
+    const c = ua[0] * ub[0] + ua[1] * ub[1] + ua[2] * ub[2];
+    const det = 1 - c * c;
+    const alpha = (A - c * B) / det;
+    const beta = (B - c * A) / det;
+    return ua.map((x, i) => alpha * x + beta * ub[i]);
+  });
+  const side = [...half, ...half.map((w) => w.map((x) => -x))];
   const pts: number[][] = [];
-  for (const sr of [0, 1]) for (const ss of [0, 1]) for (const st of [0, 1]) {
-    const base = add(add(add(v, r.map((x) => x * (sr ? 1 : -1))), s.map((x) => x * (ss ? 1 : -1))), t.map((x) => x * (st ? 1 : -1)));
+  for (const w of side) {
+    const base = add(v, w);
     pts.push(base, add(base, h));
   }
   return pts.map((q) => ({ x: q[0], y: q[1], z: q[2] }));

@@ -723,13 +723,17 @@ def _rotate_about(v, axis, theta):
 
 
 def _rhp_extent(params):
-    """RHP/HEX 宏体：六棱柱 AABB。h=全高向量（沿 ±h/2），v1/v2=外接半径向量（60° 夹角）。
+    """RHP/HEX 宏体：六棱柱 AABB（C810 p.3-21 语义，与 `quadric.rhp_hex_vertices` 同源）。
 
-    六个侧顶点 = center ± v1, ± v2, ± (v1-v2)。
+    **r/s/t 是"面心矢量"（边心距）**，六个侧顶点由相邻两面求交得出；轴向范围取 V±H/2。
+
+    ⚠ 2026-09-20 修正：旧实现把 ``±v1, ±v2, ±(v1-v2)`` 直接当"六个侧顶点"—— 那六个点其实是
+    **面心**（半径 = 边心距），于是 AABB 的 y 跨度少 25%、极值方向错 30°（x 跨度恰好相同，
+    所以格距 px 一直是对的，问题只在 y 与"谁是最外点"）。统一到唯一实现后与前端生成侧一致。
 
     参数数支持（项4，2026-08-24）：
-      9 参（V+H+R1）→ R2 按 MCNP 语义绕 H 转 60° 推断（Rodrigues）；
-      12/15/18 参原样读取前 12 个（R2 显式给出；R3 冗余于 AABB，无需读取）。
+      9 参（V+H+R1）→ R2 按 MCNP 语义绕 H 转 60° 推断（Rodrigues），R3 同法再转 60°；
+      12/15 参原样读取（R2/R3 显式给出）。
     """
     if len(params) < 9:
         return None
@@ -739,26 +743,29 @@ def _rhp_extent(params):
         v1 = [float(p) for p in params[6:9]]
     except (ValueError, TypeError):
         return None
-    v2 = None
-    if len(params) >= 12:
-        try:
-            v2 = [float(p) for p in params[9:12]]
-        except (ValueError, TypeError):
-            v2 = None
-    if v2 is None:
-        # 9 参：R2 = R1 绕 H 转 60°（MCNP RHP 缺省推断，与 12 参路径 AABB 一致）
-        hnorm = math.sqrt(h[0] * h[0] + h[1] * h[1] + h[2] * h[2])
-        if hnorm <= 1e-12:
+    hnorm = math.sqrt(h[0] * h[0] + h[1] * h[1] + h[2] * h[2])
+    if hnorm <= 1e-12:
+        return None
+    axis = [h[0] / hnorm, h[1] / hnorm, h[2] / hnorm]
+
+    def _explicit(idx):
+        if len(params) < idx + 3:
             return None
-        axis = [h[0] / hnorm, h[1] / hnorm, h[2] / hnorm]
-        v2 = _rotate_about(v1, axis, math.pi / 3.0)
-    dirs = [v1, [-v1[0], -v1[1], -v1[2]],
-            v2, [-v2[0], -v2[1], -v2[2]],
-            [v1[0] - v2[0], v1[1] - v2[1], v1[2] - v2[2]],
-            [v2[0] - v1[0], v2[1] - v1[1], v2[2] - v1[2]]]
-    xs, ys, zs = [], [], []
-    for d in dirs:
-        xs.append(cx + d[0]); ys.append(cy + d[1]); zs.append(cz + d[2])
+        try:
+            return [float(p) for p in params[idx:idx + 3]]
+        except (ValueError, TypeError):
+            return None
+
+    v2 = _explicit(9) or _rotate_about(v1, axis, math.pi / 3.0)
+    v3 = _explicit(12) or _rotate_about(v2, axis, math.pi / 3.0)
+    try:                                          # 冻结包（app/ 在 sys.path 上）
+        from quadric import rhp_hex_vertices
+    except ImportError:                           # 测试/包导入
+        from app.quadric import rhp_hex_vertices
+    verts = rhp_hex_vertices(v1, v2, v3)
+    xs = [cx + w[0] for w in verts]
+    ys = [cy + w[1] for w in verts]
+    zs = [cz + w[2] for w in verts]
     xs.extend([cx - h[0] / 2.0, cx + h[0] / 2.0])
     ys.extend([cy - h[1] / 2.0, cy + h[1] / 2.0])
     zs.extend([cz - h[2] / 2.0, cz + h[2] / 2.0])

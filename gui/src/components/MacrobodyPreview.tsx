@@ -73,7 +73,11 @@ export default function MacrobodyPreview({ lat, surfaceExpr, surfacesText }: Pro
         const e = j.extent as Extent;
         const z0 = e.z_min ?? -0.5;
         const z1 = e.z_max ?? 0.5;
-        // RHP：外接半径 = 顶点-顶点宽 /2（buildHexPrism 顶点朝 +X，与 autoGenMacrobody 一致）
+        // RHP：`buildHexPrism` 收的是**边心距（面心到轴）**，面法向 0°/60°/120°（顶点 30°+k·60°）。
+        // autoGenMacrobody(mode B) 的卡是 R1=(R·cos30°,0,0) ⇒ 面法向沿 x、边心距 = R·cos30°，
+        // 而后端紧盒的 x 跨度恰好 = 2·边心距（面心在 x 极值处）⇒ (x_max−x_min)/2 就是边心距。
+        // ⚠ 本式只对「第一面法向 ∥ x」的卡成立（UI 自动生成的 hex 卡都满足）；R1 沿 y 或
+        // 显式给 12/15 参时这里只是近似预览，真正几何以体素/STL 为准。
         const group = lat === "2"
           ? buildHexPrism((e.x_max - e.x_min) / 2, z1 - z0, LINE_COLOR).group
           : buildBoxWireframe(e.x_min, e.x_max, e.y_min, e.y_max, z0, z1, LINE_COLOR);

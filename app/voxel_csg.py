@@ -28,12 +28,14 @@ try:
     from quadric import (sq_to_gq, gq_aabb, classify_gq, cone_field_fn,
                          plane_field_fn, torus_field_fn, torus_aabb,
                          ellipsoid_field_fn, point_surface_field_fn,
-                         arb_face_indices, rec_params, rhp_params, box_params)
+                         arb_face_indices, rec_params, rhp_params, box_params,
+                         rhp_hex_vertices)
 except ImportError:  # 测试/直接 import app 包时 quadric 在 app/ 下
     from app.quadric import (sq_to_gq, gq_aabb, classify_gq, cone_field_fn,
                              plane_field_fn, torus_field_fn, torus_aabb,
                              ellipsoid_field_fn, point_surface_field_fn,
-                             arb_face_indices, rec_params, rhp_params, box_params)
+                             arb_face_indices, rec_params, rhp_params, box_params,
+                             rhp_hex_vertices)
 
 try:
     from mc import marching_cubes
@@ -387,10 +389,11 @@ def surface_fn(surf_type: str, params: list, transform=None):
         p = rhp_params(p)   # 9/12 项（s/t 由 60° 旋转推出）→ 15 项（C810 3-19）
         v = np.asarray(p[0:3], dtype=float)
         h = np.asarray(p[3:6], dtype=float)
-        r1 = np.asarray(p[6:9], dtype=float)
-        r2 = np.asarray(p[9:12], dtype=float)
-        r3 = np.asarray(p[12:15], dtype=float)
-        base = [v + r1, v + r2, v + r3, v - r1, v - r2, v - r3]
+        # C810 p.3-21：r/s/t 是**面心矢量（边心距）** ⇒ 顶点 = 相邻两面求交。
+        # 唯一实现见 `quadric.rhp_hex_vertices`（旧写法 `v ± r1 ± r2 ± r3` 把面心当顶点
+        # ⇒ 六棱柱绕轴转 30° 且小 13.4%，与前端生成侧/格阵不一致）。
+        base = [v + np.asarray(w, dtype=float)
+                for w in rhp_hex_vertices(p[6:9], p[9:12], p[12:15])]
         top = [q + h for q in base]
         pts = base + top
         faces = [[0, 1, 2, 3, 4, 5], [6, 7, 8, 9, 10, 11]]
@@ -500,14 +503,10 @@ def _macrobody_aabb(t: str, p: list):
     if t in ("RHP", "HEX"):
         pp = rhp_params(p)                       # 9/12 → 15（与 surface_fn 同一入口）
         v, h = pp[0:3], pp[3:6]
-        r1, r2, r3 = pp[6:9], pp[9:12], pp[12:15]
-        # 与 surface_fn 同构造：六个顶点 = v ± r1、v ± r2、v ± r3（**r 是顶点矢量**，
-        # 不是 C810 p.3-21 说的 facet 中心 —— 该偏差另案，见 tests 里的 xfail 留档）
-        base = []
-        for a in (r1, r2, r3):
-            base.append(tuple(v[i] + a[i] for i in range(3)))
-            base.append(tuple(v[i] - a[i] for i in range(3)))
-        verts = base + [tuple(q[i] + h[i] for i in range(3)) for q in base]
+        # 与 surface_fn 共用唯一实现：r/s/t 是**面心矢量**，顶点由相邻两面求交（C810 p.3-21）
+        base = rhp_hex_vertices(pp[6:9], pp[9:12], pp[12:15])
+        verts = [tuple(v[i] + w[i] for i in range(3)) for w in base]
+        verts += [tuple(q[i] + h[i] for i in range(3)) for q in verts]
         lo = [min(q[i] for q in verts) for i in range(3)]
         hi = [max(q[i] for q in verts) for i in range(3)]
         return tuple(lo), tuple(hi), (True, True, True)

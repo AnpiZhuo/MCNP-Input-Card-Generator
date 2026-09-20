@@ -542,8 +542,10 @@ def _make_hex_from_params(params):
     h = _vec(hx, hy, hz)
     if h.Length < 1e-15:
         return None
-    r, s, t = _vec(r1, r2, r3), _vec(s1, s2, s3), _vec(t1, t2, t3)
-    base = [v + r, v + s, v + t, v - r, v - s, v - t]
+    # C810 p.3-21：r/s/t 是**面心矢量（边心距）** ⇒ 顶点由相邻两面求交（唯一实现见 quadric）。
+    from quadric import rhp_hex_vertices
+    verts = rhp_hex_vertices([r1, r2, r3], [s1, s2, s3], [t1, t2, t3])
+    base = [v + _vec(*w) for w in verts]
     pts = base + [base[0]]  # 闭合
     wire = Part.makePolygon(pts)
     face = Part.Face(wire)
