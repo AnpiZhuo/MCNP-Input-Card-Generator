@@ -1,13 +1,20 @@
 @echo off
 chcp 65001 >nul
+title MCNP 输入卡生成器 - 环境自检（跑完自动关闭）
 setlocal enabledelayedexpansion
 set "DIR=%~dp0"
 set "OUT="
 
-rem ── 报告落点：**就是 自检.bat 同目录**（用户在这儿双击的，交代路径最省事）──
-rem 唯一例外：该目录不可写（例如程序被装到 Program Files 下）才退到桌面 / %TEMP%，
-rem 且窗口与报告里都会打印**实际落点** —— 绝不静默换地方。
-rem （为何不用固定 %TEMP%：普通用户根本找不到它，而这份报告的唯一用途就是发回给我们。）
+rem ══════════════════════════════════════════════════════════════════
+rem  设计口径（2026-09-20 定）：
+rem   1) 报告**就放在 自检.bat 同目录**（用户在这儿双击的）；仅当该目录不可写
+rem      （例如装到 Program Files）才退到桌面 / %TEMP%，且报告里写明实际落点。
+rem   2) 窗口**不显示任何内容**，报告写完即自动关闭；只有"报告根本没写出来"
+rem      才出声并停住 —— 那种情况用户必须知道，否则会以为自检跑过了。
+rem   3) 报告必须是**合法 UTF-8 无 BOM**：子进程与部分系统命令按系统 ANSI 码页写中文，
+rem      直接并入会让整份文件不是 UTF-8（实测按 UTF-8 打开会被拒读），故先转码再落盘。
+rem ══════════════════════════════════════════════════════════════════
+
 > "%DIR%__w.tmp" echo x 2>nul
 if exist "%DIR%__w.tmp" set "OUT=%DIR%MCNP自检报告.txt"
 del "%DIR%__w.tmp" >nul 2>&1
@@ -15,19 +22,15 @@ if not defined OUT call :try_desktop
 if not defined OUT set "OUT=%TEMP%\MCNP自检报告.txt"
 
 call :checks > "%OUT%" 2>&1
-type "%OUT%"
 
-echo.
-echo ============================================================
-echo  请把下面这个文件发回（它就是上面这段内容的完整版）：
-echo.
-echo    %OUT%
-echo.
-echo  报告里“程序输出”一节若中文是乱码属正常：子进程按系统 ANSI
-echo  码页写中文。判据看 ASCII 标记即可 ——
-echo    [OK] / [MISS] / [RESULT] / Failed to load Python DLL
-echo ============================================================
-pause
+if not exist "%OUT%" (
+  echo.
+  echo [x] 自检报告没能写出：%OUT%
+  echo     请把本窗口截图发回；或把整个程序目录复制到可写位置后再双击本脚本。
+  echo.
+  pause
+  exit /b 1
+)
 exit /b 0
 
 
@@ -42,14 +45,14 @@ exit /b 0
 :checks
 echo ============================================================
 echo  MCNP 输入卡生成器 — 环境自检报告 / SELF CHECK REPORT
-echo  脚本版本 : v2 2026-09-20
+echo  脚本版本 : v3 2026-09-20
 echo  时间     : %DATE% %TIME%
 echo  交付目录 : %DIR%
 echo  报告文件 : %OUT%
 echo ============================================================
 ver
 echo.
-echo [1/6] 三件套是否同目录在位
+echo [1/7] 三件套是否同目录在位
 call :fileinfo "MCNP 输入卡生成器.exe" "主程序"
 call :fileinfo "python.exe" "后端 sidecar"
 call :fileinfo "自检.bat" "本脚本"
@@ -61,12 +64,12 @@ if exist "%DIR%_internal" (
   echo   [MISS] _internal 目录不存在   ^<== 后端一闪就没的头号原因
 )
 echo.
-echo [2/6] 关键文件
+echo [2/7] 关键文件
 call :musthave "_internal\python313.dll"    "Python 运行时，缺它必报 Failed to load Python DLL"
 call :musthave "_internal\base_library.zip" "标准库归档"
 call :musthave "_internal\app\models.py"    "后端模块"
 echo.
-echo [3/6] 引导自检 - 真实启动一次 sidecar，用完即退，不占端口
+echo [3/7] 引导自检 - 真实启动一次 sidecar，用完即退，不占端口
 set "PROBE=%TEMP%\mcnp_boot_probe.log"
 rem 喂最小载荷验：引导器 + python313.dll + base_library + PYZ 归档。
 rem 验不到 _internal\app 下的 .py 数据文件（PYZ 里另有一份且 FrozenImporter 优先命中）。
@@ -75,10 +78,6 @@ echo {"mode":"parse"}| "%DIR%python.exe" --meshtal-worker > "%PROBE%" 2>&1
 set "RC=!ERRORLEVEL!"
 echo   退出码 = !RC!
 echo   ---- 程序输出 ----
-rem 子进程按**系统 ANSI 码页**写中文（实测 PYTHONIOENCODING/PYTHONUTF8 对冻结版无效），
-rem 若原样并入报告，整份 txt 就不是合法 UTF-8 —— 对方或 AI 打开会乱码甚至读不了（实测踩过）。
-rem 故先用 PowerShell 按 ANSI 读、按 UTF-8 **无 BOM** 写一份再贴进来；
-rem PowerShell 不可用时退回原样（报告可能含非 UTF-8 段，但判据仍是 ASCII 标记）。
 set "PROBE_U8=%TEMP%\mcnp_boot_probe.utf8.txt"
 if exist "%PROBE_U8%" del "%PROBE_U8%" >nul 2>&1
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$t=[IO.File]::ReadAllText('%PROBE%',[Text.Encoding]::Default); [IO.File]::WriteAllText('%PROBE_U8%',$t,(New-Object Text.UTF8Encoding($false)))" >nul 2>&1
@@ -94,13 +93,13 @@ if not errorlevel 1 set "IMPORTBAD=1"
 if "!BOOT!"=="OK" if "!IMPORTBAD!"=="1" set "BOOT=IMPORT-ERR"
 echo   引导判定 = !BOOT!
 echo.
-echo [4/6] 端口与进程
+echo [4/7] 端口与进程
 call :port 5001 "后端 - 主程序启动时会自动拉起"
 call :port 8100 "AI 接入 MCP"
 tasklist /fi "imagename eq python.exe" 2>nul | findstr /i "python.exe" >nul
 if not errorlevel 1 (echo   [OK]   有 python.exe 进程在跑) else (echo   [--]   没有 python.exe 进程在跑)
 echo.
-echo [5/6] 后端自述与用户配置（后端在跑才取得到）
+echo [5/7] 后端自述与用户配置（后端在跑才取得到）
 if "!PT5001!"=="1" (
   where curl >nul 2>&1
   if errorlevel 1 (
@@ -124,7 +123,17 @@ if exist "%APPDATA%\mcnp_generator\config.json" (
   echo   [--]   不存在（从未手动指定过 FreeCAD / MCNP 路径）
 )
 echo.
-echo [6/6] 结论
+echo [6/7] 环境变量
+echo   注：这是**运行本脚本这个窗口**的环境；主程序拉起的 sidecar 继承的是你登录
+echo       会话的环境，两者可能不同（GUI 启动常吃不到新设的变量）—— 对比时注意。
+echo   --- 关键项（诊断最需要的几项，原样保留）---
+set "ENVALL=%TEMP%\mcnp_env_all.txt"
+set > "%ENVALL%" 2>nul
+findstr /b /i /c:"PATH=" /c:"PATHEXT=" /c:"DATAPATH=" /c:"XSDIR=" /c:"xsdir=" /c:"MCNP" /c:"PYTHON" /c:"CUDA_VISIBLE_DEVICES=" /c:"TEMP=" /c:"TMP=" /c:"USERPROFILE=" /c:"APPDATA=" /c:"LOCALAPPDATA=" /c:"COMPUTERNAME=" /c:"PROCESSOR_" /c:"NUMBER_OF_PROCESSORS=" /c:"OS=" "%ENVALL%" 2>nul
+echo   --- 全部环境变量（已滤掉名字或取值里含 KEY/TOKEN/SECRET/PASSWORD 等敏感词的项）---
+findstr /v /i "KEY TOKEN SECRET PASSWORD PASSWD CREDENTIAL COOKIE AUTH" "%ENVALL%" 2>nul
+echo.
+echo [7/7] 结论
 
 set "VERDICT="
 if "!BOOT!"=="FAIL" set "VERDICT=PKG-INCOMPLETE-OR-BLOCKED"

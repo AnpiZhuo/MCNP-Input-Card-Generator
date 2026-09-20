@@ -8,6 +8,8 @@
 > **治理三件**：① `自检.bat`（新增，随包落到 exe 同级；在**自身同目录**产出 `MCNP自检报告.txt` —— 合法 UTF-8 无 BOM、
 > 含系统版本/三件套体积与 mtime/引导判定/端口/后端自述(mcnp-detect+xsdir-check)/config.json/`[RESULT]` 结论，
 > **可直接转发给 AI 读**，避免来回追问；子进程输出按 ANSI 写中文，故报告内先经 PowerShell 转 UTF-8 再落盘；
+> 另含 **环境变量**（关键项原样 + 全量，敏感词已滤 —— PATH/DATAPATH 正是判"版本装在哪、MCNP 吃哪套库"的关键），
+> 且窗口**不显示任何内容、出报告即自动关闭**（只在报告写不出来时才出声并停住）；
 > `[RESULT]` 四态分流：`PKG-INCOMPLETE-OR-BLOCKED` /
 > `PKG-INCOMPLETE` / `PACKAGE-OK-BACKEND-NOT-UP` / `BACKEND-RUNNING`，且判据全走 ASCII 标记，
 > 不依赖中文能否显示——实测 `PYTHONIOENCODING` 对冻结版**无效**）；② `gui/src/utils/backend.ts` 把拉起失败/秒退的
