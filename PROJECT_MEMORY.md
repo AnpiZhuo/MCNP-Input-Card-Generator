@@ -1,6 +1,6 @@
 # 项目记忆文档（AI 速查手册）
 
-> 最后更新时间：2026-09-20（**MCNP5/6 全量检测 + 顶栏版本下拉 + 用户自助自检，已提交 ✅／版本仍 1.7.6、未重打包**：
+> 最后更新时间：2026-09-20（**MCNP5/6 全量检测 + 顶栏版本下拉 + 用户自助自检，已提交 ✅ / 已打包部署 ✅ · 版本仍 1.7.6**：
 > 起因是用户反馈「后端没拉起来、手动点 `python.exe` 一闪就没」。**实测定位**：缺 `_internal` 时进程只活
 > **263 ms**、错误只写在 stderr（`Failed to load Python DLL ...\_internal\python313.dll`）⇒ 窗口来不及画字就销毁，
 > 肉眼即"空白一闪"；而健康包 **1.9 s** 绑上 5001 并常驻。**关键缺口是"静默"**：后端只由前端 JS 拉起
@@ -22,7 +22,17 @@
 > （`backend_proc` 的 `APPDATA` 已隔离到临时目录）；③ TD-34 白名单闸门缺**传递闭包**
 > （`_keep_py` 内模块的顶层兄弟 import 未登记 ⇒ 冻结包必 ImportError、dev 永不复现；本批
 > `mcnp_locator → user_config` 正是踩中它）。门禁 pytest **1049 passed** / vitest **828 passed / 98 files** /
-> tsc 两档 0 / vite build 0；另：**`ded1998` 已单独在临时 worktree 验证 820 passed**。详见 `docs/CHANGELOG.md`）。
+> tsc 两档 0 / vite build 0；另：**`ded1998` 已单独在临时 worktree 验证 820 passed**。
+> **打包部署（同日）**：`build:release` **428 s**（vite 7.5 s / tauri 2 m 34 s / PyInstaller 218 s）→ 部署
+> `D:\MCNP\MCNP输入卡生成器`（exe **6,614,528 B** / python.exe **32,523,049 B** / `_internal` **7870** 文件 /
+> 含 `自检.bat` 6006 B）；备份 `_backup_1.7.6_20260920_145504`（7875 文件）。
+> **冒烟（部署版真跑）**：后端 **2072 ms** 就绪；`/api/mcnp-detect` 回 **2 个候选且各自带出 xsdir**
+> （⇒ 冻结包内 `_import_app("mcnp_locator")` 与它 `import user_config` 都通，**TD-02 那条路实证打通**）；
+> `xsdir-check` / `diff-inp` 均 ok；`set-mcnp-exe` 错误分支 `status=error/文件不存在` 且不落盘；
+> `自检.bat` 得 `PACKAGE-OK-BACKEND-NOT-UP`（未开主程序时应如此）；收尾 5001 释放、无残留进程。
+> ⚠️ 本批踩到并修掉一个**我自己引入**的顺序坑：`build-release.mjs` 里 `stage-selftest --check` 曾排在写入
+> **之前** ⇒ 干净/首次构建必因"缺失"exit 1 中断整条链路（已改**先写后查** + 单测钉住顺序）。
+> 详见 `docs/CHANGELOG.md`）。
 > 此前（2026-09-20，**S9 全链已提交 ✅ / 已打包部署 ✅ · 版本仍 1.7.6**：
 > **真实 MCNP 结果的 keff 解析**（用户「程序解析不到 keff 序列」，打包版实测 HTTP 500 同文案）：`app/mctal_parser.py`
 > 原先只认 **OWEN 简化夹具**（`k eff (c) <mean> <std>` 行 + `combined keff = ...`），**真实 MCNP6 mctal 里这些字段名一个都没有** ——
