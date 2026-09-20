@@ -56,6 +56,8 @@ class _Context:
         self._surface_normal = None
         # 本次抽样是否为 CEL 源（SP V 合法性判定用；C810 3-64）
         self.cel_source = False
+        # 最近一次方向抽样得到的 μ（相对 VEC/参考轴）；`ERG=FDIR Dn` 的依赖变量值
+        self._last_dir_mu = None
         # 本粒子的权重补偿累加器（每次 sample_one 开头重置；见 sample_one/_smp）
         self._w_corr = 1.0
 
@@ -107,11 +109,19 @@ class _Context:
         par = self._par(rng)
         pos, pos_index = self._position(rng)
         cel = self.cel_source
-        erg = self._erg(rng, pos_index, cel=cel)
         # 面源法线：位置抽样的副产品（C810 3-57~3-59：面源的 VEC 默认 = 面法线，
         # 符号由 NRM 定；平面源的 RAD 沿切向量、法线方向不动）
         normal = self._surface_normal
-        dirv = self._direction(rng, pos, normal)
+        # C810 p.3-55：「Each dependent variable must be sampled **after** the variable it
+        # depends on has been sampled.」⇒ `ERG=FDIR D2` 这类卡必须先抽方向再抽能量
+        # （旧顺序固定先 ERG：认不出 FDIR 时静默取默认 14 MeV，实测官方 fns_config1 /
+        # lps_water 两算例全军覆没）。非依赖卡**保持原顺序**，不改既有抽样序列。
+        if self._erg_parent() == "DIR":
+            dirv = self._direction(rng, pos, normal)
+            erg = self._erg(rng, pos_index, cel=cel)
+        else:
+            erg = self._erg(rng, pos_index, cel=cel)
+            dirv = self._direction(rng, pos, normal)
         wgt = self._wgt(rng, cel=cel) * self._w_corr
         # SDEF TR=n / TR=Dn（源坐标变换 / 变换分布）：位置与方向都要变换
         trn = self._sdef_trn(rng)
@@ -145,18 +155,40 @@ class _Context:
         return "n"  # 默认中子
 
     # ── 能量 ─────────────────────────────────────────────────
+    def _erg_parent(self) -> str:
+        """`SDEF ERG=` 是否写成**依赖变量**（`Fvar' Dn`，C810 p.3-55）→ 父变量名（大写）。
+
+        解析侧已把 `fdir=d2` 归一成 `FDIR D2`；这里只看第一个 token 是否以 F 开头。
+        """
+        toks = self._v("sdef_erg").split()
+        if len(toks) >= 2 and toks[0][:1].upper() == "F":
+            return toks[0][1:].upper()
+        return ""
+
     def _erg(self, rng, pos_index, cel=False) -> float:
         v = self._v("sdef_erg")
         if _is_d_ref(v):
             return self._smp(int(v[1:]), rng, var="ERG")
         toks = v.split()
         if len(toks) >= 2 and toks[0].upper().startswith("F"):
-            # ERG=FPOS Dn：依赖位置索引
+            # C810 p.3-55：`ERG Fvar' Dn` —— 能量取自分布 n，而 n 的选择取决于父变量的
+            # 抽样值。父变量值由本对象在抽样时记下（`_last_dir_mu` / `pos_index`）。
             parent = toks[0][1:].upper()
-            if parent != "POS":
-                raise SourceSamplingError(f"依赖引用 {v} 的父变量 {parent} 仅支持 POS")
+            if not toks[1][:1].upper() == "D" or not toks[1][1:].isdigit():
+                raise SourceSamplingError(f"依赖引用 {v} 的第二项应为分布号（Dn），实为 {toks[1]!r}")
             did = int(toks[1][1:])
-            r = self.s.resolve_ds(did, float(pos_index) if pos_index is not None else 0.0)
+            if parent == "POS":
+                pv = float(pos_index) if pos_index is not None else 0.0
+            elif parent == "DIR":
+                pv = self._last_dir_mu
+                if pv is None:
+                    raise SourceSamplingError(
+                        f"依赖引用 {v} 需要 DIR 的抽样值，但本次方向不是从 DIR 分布抽的"
+                        "（C810 p.3-55：依赖变量必须在其父变量之后抽样）")
+            else:
+                raise SourceSamplingError(
+                    f"依赖引用 {v} 的父变量 {parent} 不支持（仅 POS / DIR）")
+            r = self.s.resolve_ds(did, float(pv))
             return self._ds_value(r, rng, cel=cel)
         return _num(v, 14.0)
 
@@ -205,8 +237,10 @@ class _Context:
         vec = self._vec("sdef_vec")
         # 参考轴：显式 VEC 优先；面源无 VEC 时 = 面法线（C810：VEC 缺省 = 面法线 with NRM sign）
         axis = vec if (vec and any(vec)) else (normal or ())
+        self._last_dir_mu = None      # 供 `ERG=FDIR Dn` 用（C810 p.3-55 依赖变量）
         if _is_d_ref(d):
             mu = self._smp(int(d[1:]), rng, var="DIR", axs=bool(self._v("sdef_axs")))
+            self._last_dir_mu = float(mu)
             return self._dir_from_mu(mu, axis, rng)
         if d:
             # 固定 DIR（方向余弦数值，可多值 u v w）
@@ -215,6 +249,7 @@ class _Context:
                 return tuple(_num(t, 0.0) for t in toks[:3])
             # DIR=1 单值：沿参考轴（VEC / 面法线）
             if axis and any(axis):
+                self._last_dir_mu = 1.0
                 return self._norm(axis)
             raise SourceSamplingError(
                 "SDEF DIR=1（单方向）缺少参考轴：请给 VEC，或把源放在曲面上"
@@ -222,6 +257,7 @@ class _Context:
         # 默认：面源余弦分布 p(DIR)=2·DIR；体源各向同性
         if normal is not None:
             mu = math.sqrt(rng.uniform(0.0, 1.0))
+            self._last_dir_mu = mu
             return self._dir_from_mu(mu, axis, rng)
         return self._isotropic(rng)
 

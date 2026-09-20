@@ -118,11 +118,24 @@ def _parse_si(toks: list[str]) -> dict:
 
 
 def _parse_sp(toks: list[str]) -> dict:
-    """SP 行 → {"type","values","fnCode","fnParams"}。默认 type=""（= MCNP 的 D）。"""
+    """SP 行 → {"type","values","fnCode","fnParams"}。默认 type=""（= MCNP 的 D）。
+
+    ⚠ 2026-09-20 修（官方算例实测）：**第二形态（内置函数）允许前面带一个选项字母**。
+    C810 p.3-63 的 H 选项明写「The ﬁrst numerical entry on the SP card **must be zero**」，
+    所以 `sp3 d -21 1` 若按第一形态读就是非法卡（首项 −21 ≠ 0，且"概率"为负）；而 MCNP
+    自己的输出把它叫 `power law 21: f(x)=c*abs(x)**k  k = 1.0000E+00`（官方
+    VALIDATION_SHIELDING 的 fns_config1 / lps_water 两算例都这么写）。旧实现把 −21 当
+    H 的首项占位**丢掉** ⇒ 静默产出一个"均匀 [0,0.64]"的 RAD 分布（实测均值 0.3195，
+    MCNP 为 0.4267）。⇒ 首项是选项字母、次项是负整数时按内置函数读（与 MCNP 一致）。
+    """
     sp: dict[str, Any] = {"type": "", "values": [], "fnCode": "", "fnParams": []}
     if toks and re.match(r"^-\d+$", toks[0]):
         sp["fnCode"] = toks[0]
         sp["fnParams"] = toks[1:]
+    elif (len(toks) >= 2 and toks[0].upper() in _SP_LETTERS
+          and re.match(r"^-\d+$", toks[1])):
+        sp["fnCode"] = toks[1]
+        sp["fnParams"] = toks[2:]
     elif toks and toks[0].upper() in _SP_LETTERS:
         sp["type"] = toks[0].upper()
         sp["values"] = toks[1:]

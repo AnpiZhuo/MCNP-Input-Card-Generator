@@ -743,6 +743,22 @@ def parse_sdef_fields(parts: list[str]) -> dict:
     if _is_d_ref(_px) and not result.get("sdef_pos_y") and not result.get("sdef_pos_z"):
         result["sdef_pos_y"] = _px
         result["sdef_pos_z"] = _px
+    # 依赖变量写法归一化（C810 p.3-55 第三种形态：`Var Fvar′ Dn`，如 `ERG FDIR D2`）
+    # ⚠ 2026-09-20 修（官方算例实测）：MCNP 官方 deck 把它写成**等号连写** `erg=fdir=d2`
+    # （fns_config1 / lps_water 两份 VALIDATION_SHIELDING 算例），旧实现原样存成
+    # "fdir=d2" ⇒ 抽样侧既认不出父变量也不报错，**静默取默认值**（每颗粒子 14 MeV，
+    # 而官方是 13.2~15.11 MeV 随 DIR 变化）。这里统一成空格分隔的规范形态，抽样与
+    # 生成两侧都只认这一种。
+    for _k in ("sdef_erg", "sdef_dir", "sdef_wgt", "sdef_par", "sdef_tme",
+               "sdef_pos_x", "sdef_pos_y", "sdef_pos_z"):
+        _v = (result.get(_k) or "").strip()
+        if not _v:
+            continue
+        _m = re.fullmatch(r"[Ff]([A-Za-z]+)\s*=\s*([Dd]\d+)", _v)       # fdir=d2
+        if not _m:
+            _m = re.fullmatch(r"[Ff]([A-Za-z]+)\s+([Dd]\d+)", _v)      # fdir d2
+        if _m:
+            result[_k] = f"F{_m.group(1).upper()} {_m.group(2).upper()}"
     return result
 
 
@@ -1136,17 +1152,40 @@ def parse_data_cards(data_lines: list[str]) -> dict:
             sdef_dict = parse_sdef_fields(parts)
             result.update(sdef_dict)
             # 收集后续 SI/SP/SB/DS/SC 行（SCn 源注释卡属于分布家族，不得断链）
+            # ⚠ 2026-09-20 修（官方算例实测）：C810 p.3-4 原文「Comment cards can be used
+            # **anywhere** in the INP file …」⇒ 注释卡不是家族结束符。旧实现遇到 C 注释行
+            # 就 break，于是注释之后的所有分布卡被静默丢弃：
+            #   photon_kerma.inp    官方 3 个分布 → 只解析出 [1,3]，`rad=d2` 未定义 ⇒ 源演示报
+            #                       「分布 D2 未定义」
+            #   lps_water.inp       官方 25 个分布 → 只解析出 [100,200] ⇒ 「分布 D300 未定义」
+            # 且 `sdef_distributions` 是**生成侧的唯一权威** ⇒ 还会把丢掉的那些 SI/SP/SB/DS
+            # 卡从重新生成的输入卡里抹掉（数据丢失）。现跳读注释（原行按序回落 other_cards，
+            # 保持 round-trip 不丢行），只把"非注释且非分布家族"的行当家族结束。
             i += 1
             sisp_lines = []
+            skipped_comments = []
             while i < len(data):
-                next_first = data[i].strip().split()[0].upper() if data[i].strip().split() else ""
+                raw_i = data[i]
+                line_i = strip_comment(raw_i.strip())
+                if not line_i:
+                    i += 1
+                    continue
+                if re.match(r'^C\s', line_i, re.IGNORECASE):
+                    skipped_comments.append(raw_i)   # 见下：分布家族结束后按序回落
+                    i += 1
+                    continue
+                next_first = line_i.split()[0].upper()
                 if (next_first.startswith("SI") or next_first.startswith("SP")
                         or next_first.startswith("SB") or next_first.startswith("DS")
                         or next_first.startswith("SC")):
-                    sisp_lines.append(data[i].strip())
+                    sisp_lines.append(line_i)
                     i += 1
                 else:
                     break
+            if skipped_comments:
+                # 家族内的注释行：内容不参与分布，但**不能丢**（R1 不动点要求数据块注释逐字保留）。
+                # 直接按出现顺序回落 other_cards（生成侧原样输出），位置相对家族前后的其它卡不变。
+                result["other_cards"].extend(skipped_comments)
             if sisp_lines:
                 result["source_mode"] = "distribution"
                 # v2 双态分布（distributions.py）：条目含 editMode=raw + rawText 原文逐字保留，
