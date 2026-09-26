@@ -1,6 +1,6 @@
 # 项目记忆文档（AI 速查手册）
 
-> **★ 本批（2026-09-26）三处用户实测 bug + v1.7.7 打包部署 —— 已改 ✅ / 已提交 ✅（`83c5a20`）/ 已打包部署 ✅ · 版本 1.7.7（用户指定）**
+> **★ 本批（2026-09-26）三处用户实测 bug + 打包链修复 + v1.7.7 打包部署 —— 已改 ✅ / 已提交 ✅（`83c5a20` + `b4d7d05`）/ 已 push ✅（→ `origin/main`）/ 已打包部署 ✅ · 版本 1.7.7（用户指定）**
 > **三条用户原话驱动的修复**（详情见 `## S11` 与 `docs/CHANGELOG.md` 2026-09-26 三条）：
 > ① 「计数卡的前缀，`*`号，解析时无法传入，自己点选后，点生成时也没有」—— 引擎侧本来是对的，漏的是**前后端缝**
 >    （`_deck_to_frontend_dict`/`_tally_from_dict` 都没带 `fn_prefix`/`number_suffix`；前端 `TallyTab` 更把下拉框做成装饰品）；
@@ -189,7 +189,7 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
-## S11（当前批次）计数卡前缀 `*` + 栅元几何 `#` + 截面拖动两坑 + **v1.7.7 发布**（2026-09-26，**已改 ✅ / 已提交 ✅ `83c5a20` / 已打包部署 ✅ · 版本 1.7.7（用户指定）**）
+## S11（当前批次）计数卡前缀 `*` + 栅元几何 `#` + 截面拖动两坑 + 打包链修复 + **v1.7.7 发布**（2026-09-26，**已改 ✅ / 已提交 ✅ `83c5a20`+`b4d7d05` / 已 push ✅ `origin/main` / 已打包部署 ✅ · 版本 1.7.7（用户指定）**）
 
 > **三态**：**已改 ✅ / 已提交 ✅ / 已打包部署 ✅**（手工链：vite → PyInstaller 229 s → binaries → `npm run build:app`；
 > 部署 `D:\MCNP\MCNP输入卡生成器`，7873 文件 / 214,820,150 B）。
@@ -1569,6 +1569,15 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 
 ## §6 踩坑与排雷指南（情景记忆 · 经验教训）
 
+- **❗`git push` 到 github 报 `Could not connect to server`（本机 HTTP/2 直连不稳）—— 加 `-c http.version=HTTP/1.1` 即通（2026-09-26 实测）**：
+  `git push origin main` 失败：`fatal: unable to access 'https://github.com/…': Failed to connect to github.com port 443 after 21148 ms: Could not connect to server`（`PUSH_EXIT=128`），
+  但同一时刻 `Test-NetConnection github.com -Port 443` **可达为 True**、DNS 正常（20.205.243.166，非 hosts 劫持）、无 http(s).proxy 配置、本机也没有常见代理端口在听。
+  换用 **`git -c http.version=HTTP/1.1 push origin main`** 一次成功（`2715a90..b4d7d05  main -> main`，同一会话内 `ls-remote` 也只在此模式下通）。
+  ⇒ **先诊断再重试**：`Test-NetConnection` 通而 git 不通 = 不是网络全断，而是协议栈/链路问题，别急着以为"要挂代理"。
+  常用命令：`git -c http.version=HTTP/1.1 ls-remote --heads origin`（只读探活）→ `git -c http.version=HTTP/1.1 push origin main`。
+  （如需长期生效可 `git config --global http.version HTTP/1.1`，但属改用户全局配置，**先问**。）
+- **❌ 别把个人数据目录留在仓库里（2026-09-26 顺手加固）**：仓库根出现过未跟踪目录 `adobe_signout_backup/`（含 `credentials_list.txt` 与 Adobe 注册表导出），
+  而 `origin` 是**公开** GitHub 仓库 ⇒ 任何一次 `git add -A` 都会泄露。已写进 `.gitignore`（附原因）；**通用纪律：提交前先 `git status --porcelain` 看一眼未跟踪项**。
 - **❗拖入导入覆盖层：内部拖拽也会触发，且"没有 drop"就永久卡死（2026-09-26 真 Chrome 实测 + 用户报"卡死在导入时的粉色页面"）**：
   `dragenter` 是**任何** HTML5 拖拽都会触发的 —— 拖拽起点落在**已选中的文字/可拖元素**上时，浏览器起的是原生拖拽，
   其 `dataTransfer.types` 只有 `text/plain`、**没有 `Files`**。旧 `App.tsx` 对任何 `dragenter` 都点亮全屏覆盖层
@@ -1999,7 +2008,7 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 
 | 版本 | 时间 | 内容 |
 | :--- | :--- | :--- |
-| **v1.7.7** | 2026-09-26 | **计数卡前缀 `*` 全链贯通 + 栅元几何 `#` 判定 + 截面拖动两坑**（**用户指定升版**；本包同时带上 S10 那批未打包改动）：① 缝两端补 `fn_prefix`/`number_suffix` + 新增 `gui/src/utils/tallyBridge.ts` + F5 行环探测器轴控件；② 行首 `#` 按"字母/数字"判性质 + `normalize_geometry_spacing`（`-14#1`→`-14 #1`，挂解析侧与 pymcnp 消费侧）；③ 新增 `dragImport.ts`（只认真拖文件、leave/drop/end 一律熄、`pointerEvents:none`）与 `sectionView.ts`（旋转中心不含 pan，"拖 Δ ⇒ 内容正好移 Δ"由属性测试锁死）。门禁 pytest **1417/0/11**、vitest **104 files / 927 passed**、tsc 两档 0、build 0。手工链打包部署 + 部署版冒烟（见 §2 / S11）。**未 push** |
+| **v1.7.7** | 2026-09-26 | **计数卡前缀 `*` 全链贯通 + 栅元几何 `#` 判定 + 截面拖动两坑**（**用户指定升版**；本包同时带上 S10 那批未打包改动）：① 缝两端补 `fn_prefix`/`number_suffix` + 新增 `gui/src/utils/tallyBridge.ts` + F5 行环探测器轴控件；② 行首 `#` 按"字母/数字"判性质 + `normalize_geometry_spacing`（`-14#1`→`-14 #1`，挂解析侧与 pymcnp 消费侧）；③ 新增 `dragImport.ts`（只认真拖文件、leave/drop/end 一律熄、`pointerEvents:none`）与 `sectionView.ts`（旋转中心不含 pan，"拖 Δ ⇒ 内容正好移 Δ"由属性测试锁死）；④ **打包链修复**：`build-release.mjs` 改 sidecar 先行（旧版在干净工作区必自我中断 —— 实测清空 `dist_sidecar`+两个缓存目录后 **EXIT 0 / 182 s**）+ workpath 口径统一（两个缓存目录都清）+ 四条顺序铁律加源码级回归锁。门禁 pytest **1417/0/11**、vitest **104 files / 928 passed**、tsc 两档 0、build 0。手工链打包部署 + 部署版冒烟（见 §2 / S11）。**已 push `origin/main`**（`main 2715a90..b4d7d05`；⚠️ 默认 HTTP/2 直连报 `Could not connect to server` ⇒ 用 `git -c http.version=HTTP/1.1 push` 才通，见 §6/§9） |
 | **v1.7.6** | 2026-09-11 | **源演示修复二批 + 粒子圆点化 + 一键运行 MCNP 多核 tasks**（**用户指定升版**）：① 源演示"看不见栅元"根因二批 —— 后端补 camelCase 别名时**漏 `mat`** + `SourceTab` 把 **snake_case** `deck.cells` 强断言成 camelCase `LocalCellRow` ⇒ `material=""` ⇒ `getMatColor("")` 返回 `transparent` ⇒ `buildCellMaterial` 判为**真空 M0**（`opacity:0`，13 个外壳全不可见）；且取景误用体积窗口的 `computeFramingBox`（`VOLUME_FRAMING_RATIO=0.25`，源区/热室≈0.057）把外壳挤出视野。② 方向线不可见（世界空间固定长度 1.17 被取景缩成 ~1px）+「方向线长度」滑杆失效（`setDirectionLength` 从不重建几何）⇒ 改**屏幕空间恒定**。③ 粒子圆点化（`Points` 贴图 + `alphaTest`）。④ **一键运行 MCNP 支持多核 `tasks N`**：UI（`PreviewDialog` footer 核数滑杆 + PTRAC/SSW/SSR **选模式即提示**）+ 后端 `app/mcnp_tasks.py` 扫卡强制降级（C810 页 875 排他卡）。**实测 `tasks` 取物理核数而非逻辑核**（8 物理核机上 tasks 8 = 8.36s vs tasks 16 = 15.06s）。门禁 pytest **900** / vitest **625** / tsc 两档 0 / build 0。**已打包部署 + 冒烟通过**（部署版 `diff-inp` 200、`source-demo-sample` 200、5001 + MCP 8100 LISTENING）。commits `48c51ed` / `857aed1` / `b1f0043` / `21d93d0` |
 | **v1.7.5** | 2026-09-04 | **AI 接入 inputcard-mcp（MCP over HTTP）+ 快捷建栅元六棱柱(RHP)/四面体 + 深模块化 + 废弃一键打包**（新功能上线，用户指定/确认升版）：`inputcard_mcp/` 包（6 深工具，统一按语义段读写）；主程序启动自动拉起 `--mcp-http`（本机 8100 `/mcp` + `/workspace`，含「当前工作区」会话 + 前端 AI 面板）；**移除 stdio 旧接入**（`--mcp-server`/注册MCP.bat 删除）；快捷建栅元扩到 HEX/TET + IMP 改数值默认 0；抽出深模块 `useQuickAddOverlap`；删除 `release.bat`/`release.ps1`（一键打包废弃，仅手动）；新增 `AI接入.md`。门禁 vitest 554/0 + tsc EXIT 0。reflog: `.git/logs/HEAD:250-251` |
 | **v1.7.4** | 2026-08-27 | **3D 预览 MCNP 窗口裁剪修复 + U 分组侧边栏**（用户指定新功能上线升版）：① 实体=universe∩格元盒∩容器cell，修超壳/重叠外壳 + 无限水虚假水块（BEAVRS 超壳叶 48→16）；② 3D 预览侧边栏改 U 分组 + 保留未分组栅元；disc 改用容器裁剪 STL、subPitch 半径；版本五处同步。**18-28 追加**：disc STL 键错配修复（燃料 pin 方块→真实圆柱）+ z 居中（燃料棒/围板位置）|
@@ -2071,6 +2080,8 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 
 ### 版本发布纪律
 
+- **推送到远端**：`git push origin main`。⚠️ 本机**默认 HTTP/2 直连 github 常常失败**（`Could not connect to server`，而 `Test-NetConnection` 又是通的）⇒ 改用
+  **`git -c http.version=HTTP/1.1 push origin main`**（2026-09-26 实测：默认失败、HTTP/1.1 成功）。只读探活：`git -c http.version=HTTP/1.1 ls-remote --heads origin`。
 - bug 修复批**默认严禁升版**；升版仅限**上级（用户）指定**——**2026-09-26 例外经用户明确指定升到 1.7.7**（此前 09-12~09-24 一长串 bug 修复批全部恒 1.7.6，纪律不变）。
 - 版本**六处同步、实为 7 个字段**：`tauri.conf.json`（`package.version`）/ `package.json` / **`package-lock.json`（顶层 `version` + `packages[""].version` 两处）** / `Cargo.toml` / `Cargo.lock`（`name="mcnp-ui"`）/ README 徽章；改完**复查零个旧版本号残留**（`Select-String -Pattern '1\.7\.6'` 那六个文件）。
 - 侧边栏版本号来自 `Sidebar.tsx` 直接 `import pkg from "../../package.json"`（单一来源，升版不再破）—— ⚠️ **构建期打进 bundle**，故**升版后必须重新 `vite build`**，否则界面仍显示旧版本。
