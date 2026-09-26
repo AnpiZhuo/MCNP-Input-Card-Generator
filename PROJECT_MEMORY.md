@@ -218,16 +218,22 @@
 - **旋转/平移这类视图变换，用"不变量"当测试**（"内容跟着鼠标走"），而不是断言某个 `transform` 字符串长什么样。
 - **`#` 是 MCNP 几何里唯一"前面要留白"的算子**；行首 `#` 必须按后随字符判"条件行 vs 几何补集"。
 
-### S11.3 打包链实测出的三件事（**下次打包前先看**）
+### S11.3 打包链实测出的三件事（**① ② 已于同日修复并实测，③ 仍开放**）
 
-1. **`npm run build:release` 在干净工作区必失败**（本轮首次即中止）：`scripts/build-release.mjs` 把 `vite build + tauri build`
-   排在 PyInstaller **之前**，而 `tauri.conf.json` 的 `beforeBuildCommand` 含 `sync-sidecar`、正等着 `dist_sidecar/`。
-   实测日志：`[sync-sidecar] ❌ PyInstaller 产物不存在 … 已中止` → `Error beforeBuildCommand … failed` → `build-release ❌`。
-   ⇒ **干净机/首次构建走手册手工顺序**（vite → PyInstaller → binaries → `npm run build:app`），本轮即如此。**该脚本的排序缺陷未修，留待裁决。**
-2. **手册第 4 步的 `--workpath build_sidecar` 与 `build-release.mjs` 清缓存清的 `build/mcnp_sidecar` 不是同一目录**
-   ⇒ "坑 B 清缓存"对不上。本轮用"产物与源码**逐文件哈希对拍** + 端点**功能级冒烟**"独立证明 sidecar 是新版（不依赖清缓存纪律）。
-3. **主程序关闭后 `--mcp-http` 子进程（8100）不会随之终止**（实测残留 PID 仍在跑并占 8100；文档口径写的是"跟随主程序退出"）。
+1. ✅ **已修（2026-09-26 同日）｜`npm run build:release` 在干净工作区必然自我中断**：旧版 `scripts/build-release.mjs` 把
+   `vite build + tauri build` 排在 PyInstaller **之前**，而 `tauri.conf.json` 的 `beforeBuildCommand` 含 `sync-sidecar`、正等着 `dist_sidecar/`
+   （它见产物不存在就按设计 EXIT 1）。实测日志：`[sync-sidecar] ❌ PyInstaller 产物不存在 … 已中止` → `Error beforeBuildCommand … failed` → `build-release ❌`。
+   **修法**：顺序改为 **sidecar → binaries → vite → tauri → 收尾同步 → 自检**（`--distpath dist_sidecar` 早已把 sidecar 与 `dist/` 分开，
+   前置无冲突），文件头写死四条顺序铁律。**红→绿实测（同一命令同一场景）**：清空 `dist_sidecar` + 两个缓存目录后跑
+   `npm run build:release` = **EXIT 0 / 182 s**（`Compiling mcnp-ui v1.7.7` / Finished 14.96 s；收尾 sync-sidecar 自己逮到坑 6.2 并自动覆盖 ✅；stage-selftest 写入+复核 ✅）。
+2. ✅ **已修（2026-09-26 同日）｜手册第 4 步的 `--workpath build_sidecar` 与脚本清缓存清的 `build/mcnp_sidecar` 不是同一目录**：
+   旧脚本跑的是 PyInstaller **默认** workpath 却只清 `build/mcnp_sidecar` ⇒ 两条路线各留各的增量缓存，"坑 B 清缓存"形同虚设。
+   现脚本逐字采用手册那两个路径，并**把 `build_sidecar` 与 `build/mcnp_sidecar` 都清掉**；另补 `mkdirSync(binaries/, recursive)`
+   （该目录被 gitignore，干净检出上不存在 ⇒ 否则 `cpSync` ENOENT）。**新版判据仍以"逐文件哈希对拍 + 端点功能级冒烟"为准**（别只看日期）。
+3. ⚠️ **仍开放｜主程序关闭后 `--mcp-http` 子进程（8100）不会随之终止**（实测残留 PID 仍在跑并占 8100；文档口径写的是"跟随主程序退出"）。
    ⇒ 打包/部署/冒烟前后都先查 **8100**，按 PID 精确清理（勿 `taskkill /im python.exe` 误杀他处 python）。
+   **根治方向**：`mcnp_bridge.py`/`api_server.py` 退出路径杀子进程，或放进 Windows **Job Object**（kill-on-close）—— 属**后端代码改动，需重打包重部署才能生效**，留待裁决。
+
 
 ## S10（上一批次）实体预分解换血 + 三个几何 bug（2026-09-24，**已改 ✅ / 已提交 ✅ / 已随 v1.7.7 再次出包部署 ✅**）
 
@@ -1589,13 +1595,16 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
   ② **行首判性质**：`#` 后是**字母** = MCNP 预处理器 / THTME 表头（`#ifdef`、`#    tmp1 …`）⇒ 续行断点、单独成行；
   `#` 后是**数字/括号** = 几何**补集算子**（`#25`、`#(1 2)`）⇒ **接回上一张几何卡**（用户手工折行时行首正好是 `#`，旧实现整行抛成"条件行"⇒
   栅元 5 的 `surface_expr` 截断在 `#24`、**丢 31 项补集**、`imp` 与 `$` 注释一起丢）。边界：仅当上一行首 token 是**数字**时才强制接回（THTME 表头才不会被误并）。
-- **打包链三个新增实测坑（2026-09-26，打包 v1.7.7 时踩到）**：
-  ① **`npm run build:release` 在干净工作区（无 `dist_sidecar/`）必失败** —— 它把 `vite build + tauri build` 排在 PyInstaller **之前**，
+- **打包链三个新增实测坑（2026-09-26，打包 v1.7.7 时踩到；①②同日修复，③仍开放）**：
+  ① ✅ **`npm run build:release` 在干净工作区必失败** —— 旧版把 `vite build + tauri build` 排在 PyInstaller **之前**，
   而 `tauri.conf.json` 的 `beforeBuildCommand` 含 `sync-sidecar`、正等着 `dist_sidecar/`（实测 `[sync-sidecar] ❌ PyInstaller 产物不存在 … 已中止`
-  → `Error beforeBuildCommand … failed` → `build-release ❌ tauri build`）⇒ **干净机/首次构建走手册手工顺序**（vite → PyInstaller → binaries → `npm run build:app`）。
-  ② 手册第 4 步的 `--workpath build_sidecar` 与 `build-release.mjs` 清缓存清的 `build/mcnp_sidecar` **不是同一个目录** ⇒ "坑 B 清缓存"对不上；
-  可信的新版判据是**哈希对拍 + 端点功能级冒烟**（本轮即用：`_internal\app\**` 松散 `.py` 与源码 sha256 一致 + 部署版打 `/api/parse-inp` 验本批修复）。
-  ③ **主程序关闭后 `--mcp-http` 子进程（8100）不会随之终止**（实测残留 PID 仍跑并占 8100，文档口径写的是"跟随主程序退出"）⇒ 打包/部署/冒烟前后先查 8100，**按 PID 精确清理**（勿 `taskkill /im python.exe` 误杀他处 python）。
+  → `Error beforeBuildCommand … failed` → `build-release ❌ tauri build`）。**已修**：顺序改为 **sidecar → binaries → vite → tauri → 收尾同步 → 自检**，
+  文件头写死四条顺序铁律；**实测清空 `dist_sidecar` + 两个缓存目录后 EXIT 0 / 182 s**。
+  **纪律**：`tauri.conf.json` 的 `beforeBuildCommand` 含 `sync-sidecar` ⇒ **任何把 tauri build 排在 sidecar 生产之前的编排都会自我中断**（手工链也一样）。
+  ② ✅ 手册第 4 步的 `--workpath build_sidecar` 与旧脚本清缓存清的 `build/mcnp_sidecar` **不是同一个目录** ⇒ "坑 B 清缓存"形同虚设。
+  **已修**：脚本逐字采用手册那两个路径并**两个目录都清**；新版判据仍以**哈希对拍 + 端点功能级冒烟**为准（别只看日期）。
+  ③ ⚠️ **主程序关闭后 `--mcp-http` 子进程（8100）不会随之终止**（实测残留 PID 仍跑并占 8100，文档口径写的是"跟随主程序退出"）⇒ 打包/部署/冒烟前后先查 8100，
+  **按 PID 精确清理**（勿 `taskkill /im python.exe` 误杀他处 python）。根治要改后端退出路径（或 Job Object），**需重打包才生效**，留待裁决。
 - **Windows 不能把目录改名到一个**已存在**的目录（EPERM）——测试里的"探测名"会因此把门禁变成永久红（2026-09-26 实测）**：
   `gui/test/syncSidecar.test.ts` 靠"把 `dist_sidecar/python` 改名成 `python_guard_test`"制造"产物缺失"场景，
   但 `finally` 还原一旦失败/进程被杀，探测名就留在盘上 ⇒ 之后**每次运行必 EPERM 红**（实测残留目录 mtime 是**前一天 15:42**，跨会话一路红，
@@ -2017,8 +2026,12 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 1. vite build                       （前端产物，~3-4s；node .\node_modules\vite\bin\vite.js build）
 2. PyInstaller sidecar              （在 gui\ 下跑 gui/mcnp_sidecar.spec，产物名 "python"；
                                      ★ 必须带 --distpath dist_sidecar（默认落 dist/ 会被 vite 清掉）；
-                                     ⚠️ --workpath 用 build_sidecar 时，build-release.mjs 清的
-                                     build/mcnp_sidecar 并不是同一目录（"清缓存"对不上，见 §6）；
+                                     ⚠️ workpath 口径（2026-09-26 已统一）：手册与 build:release 都用
+                                     `--workpath build_sidecar`，且脚本会把 build_sidecar 与
+                                     build/mcnp_sidecar 两个缓存目录都清掉（"坑 B 清缓存"必须清对目录）；
+                                     ★★ 顺序铁律：本步必须早于 tauri build —— beforeBuildCommand 里的
+                                     sync-sidecar 在等 dist_sidecar/，没有它就 EXIT 1（脚本旧版即栽在这，
+                                     2026-09-26 已修：sidecar → binaries → vite → tauri → 收尾同步 → 自检）；
                                      核对 _keep_py / _keep_dirs 清单，如 outp_parser.py/meshtal/ 等新增模块）
 3. 替换 binaries                    （把新 sidecar 的 python.exe + _internal 换进 target\release\；
                                      复制完**双向比对文件数与总字节**——只比 exe 大小不够）
@@ -2028,9 +2041,8 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
                                     指错会报 `rustup could not choose a version of cargo to run … no default
                                     is configured`（2026-09-20 实测，构建在 tauri 阶段中止、不产出半成品）。
                                     ★ 首选 `npm run build:app`（vite → 预同步 → tauri → 后同步+自检）。
-                                    ⚠️ **别在干净工作区跑 `npm run build:release`**：它把 tauri build 排在
-                                    PyInstaller 前，而 beforeBuildCommand 含 sync-sidecar ⇒ 无 dist_sidecar/
-                                    时必中止（2026-09-26 实测，见 §6/S11.3））
+                                    ✅ **`npm run build:release` 现在在干净工作区也能跑通**（2026-09-26 修好顺序自噬后实测
+                                    EXIT 0 / 182 s；它把 sidecar 生产前置，见第 2 步与 §6）；旧版会在此处自我中断）
 5. ⚠️ 6.2 时效校验（必做）           （tauri 增量编译不刷新 target\release 的 sidecar！
                                     ★ 最快判据：查 target\release\_internal\app\ 里**有没有本批新增模块**
                                       —— 2026-09-11 实测缺 mcnp_tasks.py，一眼看穿"版本号新、后端旧"；

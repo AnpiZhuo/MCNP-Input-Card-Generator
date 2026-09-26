@@ -104,6 +104,34 @@ describe("两条构建链路都必须挂上这一步", () => {
     expect(check).toBeGreaterThan(write);
   });
 
+  it("★build:release 必须先生产 sidecar，再 tauri build（2026-09-26 顺序自噬修复的回归锁）", () => {
+    /**
+     * 事故（2026-09-26 打 v1.7.7 实测）：旧版把 `vite build + tauri build` 排在 PyInstaller 之前，
+     * 而 `tauri.conf.json` 的 `beforeBuildCommand` = `npm run build && npm run sync-sidecar`，
+     * 后者见 `dist_sidecar/python` 不存在就**按设计 exit 1** ⇒ 干净工作区上整条 `build-release` 自我中断：
+     *     [sync-sidecar] ❌ PyInstaller 产物不存在 … 已中止
+     *     Error beforeBuildCommand `npm run build && npm run sync-sidecar` failed with exit code 1
+     * 修法是**把 sidecar 生产前置**。本用例锁住四条顺序铁律里与"自我中断/后端旧"直接相关的三条，
+     * 免得日后有人"优化顺序"又把它改回去（第一条铁律：stage-selftest 先写后查，见上一个用例）。
+     */
+    const text = readFileSync(join(GUI, "scripts", "build-release.mjs"), "utf8");
+    const pyi = text.indexOf('"-m", "PyInstaller"');
+    const bins = text.indexOf("cpSync(builtExe");
+    const vite = text.indexOf('["vite", "build"]');
+    const tauri = text.indexOf('["tauri", "build"]');
+    const postCheck = text.indexOf('["scripts/sync-sidecar.mjs", "--check", "--require-target"]');
+    for (const [idx, name] of [[pyi, "PyInstaller"], [bins, "binaries 覆盖"], [vite, "vite build"],
+                               [tauri, "tauri build"], [postCheck, "--require-target"]] as const) {
+      expect(idx, `build-release.mjs 里找不到 ${name}`).toBeGreaterThan(-1);
+    }
+    // ① sidecar 必须先于 tauri build（beforeBuildCommand 里的 sync-sidecar 在等 dist_sidecar/）
+    expect(pyi).toBeLessThan(tauri);
+    // ② binaries 覆盖必须先于 tauri build（tauri 编译期拿它铺 _internal）
+    expect(bins).toBeLessThan(tauri);
+    // ③ 收尾严格自检必须在 tauri build 之后（tauri 只刷新 _internal、不刷新 python.exe）
+    expect(postCheck).toBeGreaterThan(tauri);
+  });
+
   it("build:app 串了 stage-selftest，且**排在 tauri build 之后**", () => {
     const pkg = JSON.parse(readFileSync(join(GUI, "package.json"), "utf8"));
     const chain: string = pkg.scripts["build:app"];
