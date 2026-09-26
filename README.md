@@ -22,7 +22,7 @@ A desktop application for visually creating, editing, and validating **MCNP** in
   <img src="images/tab_006.png" alt="界面 6" width="820"/>
 </div>
 
-![Version](https://img.shields.io/badge/Version-1.7.6-blue)
+![Version](https://img.shields.io/badge/Version-1.7.7-blue)
 ![Frontend](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-teal)
 ![Shell](https://img.shields.io/badge/Shell-Tauri-green)
 ![License](https://img.shields.io/badge/License-MIT-brightgreen)
@@ -173,6 +173,12 @@ python api_server.py
 「几何」标签页 → 「导入 STEP」，经 **GEOUNED**（西班牙 CIEMAT 开发，EUPL-1.2）转换：
 - 随程序打包、无需单独安装；运行时经 FreeCAD Python 调用，**用户仅需另装 FreeCAD**
 - 自动转换并回填曲面/栅元卡，科学计数法自动整理为 3 位小数（GQ/SQ 保留精度）
+- **导入设置分 4 个子页签**（基本 / 常用调节 / 进阶与少见 / 高危 ⚠），共 **40 项 GEOUNED 参数**可调：真空栅元切割（最大曲面数 / 括号上限 / 最小尺寸）、栅元化简、样条曲面处理、几何容差等
+- **留空 = 用 GEOUNED 自己的默认值**（不是传 0）：只有你改过的项才会下发
+- 每个输入框 / 下拉 / 按钮**鼠标停在右侧的 `?` 上即显示中文详细释义**（含对应的 GEOUNED 参数名）
+- **设置会被记住**（存在独立的本地键里）：关掉对话框再打开、甚至点主界面的「🧹 清空」都不影响；「全部恢复默认」是唯一的清除入口
+- **实体预分解**（基本页，默认关）：开启后先用 FreeCAD 把实体按**每块面数上限**切开，再交给 GEOUNED 转换 —— 每个块独立成一个栅元，单栅元的面数大幅下降。实测一个 274 m³ 厂房模型（3 个实体，原面数 27 / 41 / 202）：默认档「适中（30 面）」切成 **18 块**，最终实体栅元最大面数 **146 → 25**、实体面数合计 **1110 → 367**，体积比 **1.0000000**。代价是栅元数变多、MCNP 追踪变慢。切分失败或切不到上限时会**如实报告并回退原文件**，不会中断导入
+  > 纯 FreeCAD/OCC 实现，**不依赖任何外部程序**；切分按结果收敛，块数是算出来的而不是预设的
 
 ---
 
@@ -188,7 +194,7 @@ python api_server.py
 | [PyMCNP](https://github.com/FSIBT/PyMCNP) | MCNP 核心库（几何、生成、解析） | BSD-3-Clause |
 | [FreeCAD](https://www.freecad.org/) | 3D CAD 几何处理（CSG 求值引擎） | LGPL v2+ |
 | [GEOUNED](https://geouned-org.github.io/GEOUNED/) | STEP → MCNP 几何转换引擎（随程序打包） | EUPL-1.2 |
-| [OpenCascade](https://dev.opencascade.org/) | CAD 内核（FreeCAD 依赖） | LGPL v2.1 |
+| [OpenCascade](https://dev.opencascade.org/) | CAD 内核（FreeCAD 依赖；实体预分解直接用它） | LGPL v2.1 |
 | [NumPy](https://numpy.org/) | 科学计算 | BSD-3-Clause |
 
 ---

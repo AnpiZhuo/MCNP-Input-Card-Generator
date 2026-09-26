@@ -41,6 +41,7 @@ import { materialLegendEntries } from "../utils/materialLegend";
 import { PlaneControls } from "./PlaneControls";
 import { snapshotSvg } from "../export/captureFrame";
 import { topMostHit } from "../utils/sectionHit";
+import { panAfterDrag, sliceGroupTransform, sliceViewBoxString } from "../utils/sectionView";
 import { build2dSpec, subtitleOf } from "../export/figureSpecs";
 import type { ExportFigureRequest } from "../export/exportFigure";
 
@@ -159,8 +160,9 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
   };
 
   // 拖拽平移
-  // 屏幕像素 → viewBox 用户单位：viewBox 宽高(w/zoom)映射到 SVG 实际渲染尺寸，
-  // 用 getBoundingClientRect 算出每像素对应的用户单位数，避免"拖 1 步动 2 步"。
+  // ⚠️ 像素↔用户单位的换算与"内容必须跟手"这条不变量都收敛在 utils/sectionView
+  // （纯函数 + 属性测试）。这里曾经就地写 `(viewBox.w/zoom)/r.width` 且旋转中心跟着 pan 走，
+  // 结果"截面转过角度之后拖动就变怪"（详见该模块头注释）。
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     setDragging(true);
@@ -172,20 +174,16 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
     if (!svg) return;
     const r = svg.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return;
-    // 每屏幕像素 = (viewBox.w/zoom) / r.width 用户单位（X 方向同理用 viewBox.h）
-    const kx = (viewBox.w / zoom) / r.width;
-    const ky = (viewBox.h / zoom) / r.height;
-    setPan({
-      x: dragStart.current.px + (e.clientX - dragStart.current.x) * kx,
-      y: dragStart.current.py + (e.clientY - dragStart.current.y) * ky,
-    });
+    setPan(panAfterDrag({ x: dragStart.current.px, y: dragStart.current.py },
+      e.clientX - dragStart.current.x, e.clientY - dragStart.current.y,
+      { viewBox, zoom, pan, rotation }, { width: r.width, height: r.height }));
   };
   const handleMouseUp = () => setDragging(false);
 
-  // SVG viewBox + 旋转中心（以 2D 数据中点为中心旋转）
-  const vb = `${viewBox.x - pan.x} ${viewBox.y - pan.y} ${viewBox.w / zoom} ${viewBox.h / zoom}`;
-  const rotCx = (viewBox.x - pan.x) + (viewBox.w / zoom) / 2;
-  const rotCy = (viewBox.y - pan.y) + (viewBox.h / zoom) / 2;
+  // SVG viewBox + 旋转中心（由 utils/sectionView 单一计算：旋转中心**不含 pan**）
+  const viewState = { viewBox, zoom, pan, rotation };
+  const vb = sliceViewBoxString(viewState);
+  const groupTransform = sliceGroupTransform(viewState);
 
   // 悬停检测：鼠标位置 → 命中多边形 → 3D 坐标
   const handleSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
@@ -321,7 +319,7 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
         onMouseUp: handleMouseUp,
         onMouseLeave: function() { handleMouseUp(); handleSvgMouseLeave(); },
       },
-        React.createElement("g", { ref: groupRef, transform: `scale(1,-1) rotate(${rotation} ${rotCx} ${rotCy})` },
+        React.createElement("g", { ref: groupRef, transform: groupTransform },
           cellData.map(cd =>
             cd.polygons.map((poly, pi) =>
               React.createElement("polygon", {
@@ -399,6 +397,7 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
           React.createElement("button", { className: "btn btn-ghost btn-xs", onClick: () => setRotation(r => r - 15), style: { fontSize: 10, flexShrink: 0 } }, "◀"),
           React.createElement("input", {
             type: "text",
+            "aria-label": "截面旋转角度",
             value: `${rotation}°`,
             onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
               const v = parseInt(e.target.value.replace(/[°]/g, ""));

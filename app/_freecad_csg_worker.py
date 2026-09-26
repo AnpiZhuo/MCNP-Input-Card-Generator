@@ -103,6 +103,19 @@ def _plane_halfspace(normal, point, B: float):
     if n.Length < 1e-15:
         return bb
     p = FreeCAD.Vector(point[0], point[1], point[2])
+    # ⚠️ 把参考点换成**平面上离原点最近的点**（= point 在 n 上的投影）。
+    # 为什么必须换（2026-09-24 实测，块 003 残留 +249% 的真因）：
+    #   厚板是「底面过 p、沿 n 伸出 2B、横向 4B（半宽 2B）」。
+    #   要让它盖住整个 [-B,B]³，需要
+    #       横向半宽 2B  ≥  包围盒角到「过 p 沿 n 的直线」的垂直距离
+    #                    =  √3·B + |p 的垂直分量|
+    #   ⇒ 只有 **p ∥ n**（垂直分量为 0）时 `2B ≥ √3·B` 才成立（2 > 1.732）。
+    #   p 一旦偏离法向（如 P_0 分支原先取 `(D/A, 0, 0)`，D/A 可达数百），板就盖不满
+    #   包围盒 ⇒ `bb.cut(正侧)`（负侧）在没盖到的区域**多留一块** ⇒ 交集漏出包围盒。
+    #   投影后恒有 p ∥ n，覆盖条件与 `|D|`、`A/B/C` 的相对大小都无关。
+    #   （P_1 分支本来就是这么取的 —— 这里是把这个不变量下沉到唯一构造点，
+    #     让所有调用者都安全，而不是逐个调用点去记得投影。）
+    p = n * n.dot(p)
     # 厚板：4B×4B×2B 盒（角在原点，几何中心 (2B,2B,B)），旋转 z→n，底面(z=0)落在平面 p 上
     z = FreeCAD.Vector(0, 0, 1)
     axis = z.cross(n)
@@ -111,10 +124,18 @@ def _plane_halfspace(normal, point, B: float):
     else:
         angle = math.degrees(math.acos(max(-1.0, min(1.0, n.z))))
         rot = FreeCAD.Rotation(axis, angle)
-    slab = Part.makeBox(4 * B, 4 * B, 2 * B)
-    c0 = FreeCAD.Vector(2 * B, 2 * B, B)  # 几何中心（局部）
-    target = p + n * B                      # 盒子中心目标（底面 z=0 → p，顶面 → p+2B·n）
-    base = target - rot.multVec(c0)         # Placement 的 Base
+    # ⚠️ 厚板的**两个尺寸都要够**，缺一个都会让负侧多留一块（2026-09-24 实测两处）：
+    #   ① 横向半宽 2B ≥ 盒角到「过 p 沿 n 的直线」的垂直距离（p ∥ n 时 = √3·B）—— 见上。
+    #   ② **沿 n 的厚度**：板自平面起沿 +n 伸出，而盒内点的 n 分量最高到 +√3·B，
+    #      所以需要 `n·p + 厚度 ≥ √3·B`。厚度只取 2B 时，要求 `n·p ≥ (√3−2)B = −0.268B`；
+    #      实测块 003 的平面 `n·p = −462.8 < −0.268×1242 = −333` ⇒ 仍缺一段
+    #      （症状：实体栅元 +249% → 修横向后降到 +0.49%，状态仍 `semi_infinite`）。
+    #      取 4B 即恒成立：与盒相交的平面必有 `n·p ≥ −√3·B`，而 `−√3B > (√3−4)B = −2.268B`。
+    # 结论：横向 4B（半宽 2B）+ 厚度 4B，对**任何**与包围盒相交的平面都覆盖完整。
+    slab = Part.makeBox(4 * B, 4 * B, 4 * B)
+    c0 = FreeCAD.Vector(2 * B, 2 * B, 2 * B)  # 几何中心（局部）
+    target = p + n * 2 * B                    # 盒子中心目标（底面 z=0 → p，顶面 → p+4B·n）
+    base = target - rot.multVec(c0)           # Placement 的 Base
     slab.Placement = FreeCAD.Placement(base, rot)
     return bb.common(slab)
 

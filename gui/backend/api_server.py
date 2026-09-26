@@ -172,10 +172,30 @@ _SURF_CLASSES_LOCK = threading.Lock()
 
 
 def _surf_classes() -> dict:
-    """惰性构建 {MCNP 曲面关键字: pymcnp 曲面类}。
+    """惰性构建 {MCNP 曲面关键字: [pymcnp 曲面类, ...]}。
 
     仅在解析 MCNP 曲面文本（preview-3d / export-step / cross-section /
     栅元覆盖检测）时首次调用；之后复用缓存。线程安全：多请求并发首拉时只构建一次。
+
+    ⚠️ 值是**列表**，不是一个类（2026-09-24 修正）。pymcnp 把同一种卡的多种**卡项形式**
+    拆成多个类，而它们的 `_KEYWORD` **完全相同**。最要命的是 `P`：
+
+      · ``P_0`` ← ``P A B C D``（四系数。**正侧由写下的系数符号直接决定**，
+        C810 §3-17 的"原点负感度"规则只适用于下面的三点形式）
+      · ``P_1`` ← ``P x1 y1 z1 x2 y2 z2 x3 y3 z3``（三点。按 §3-17「原点负感度」定侧）
+
+    旧实现 `_d[_kw] = _obj` 让 `dir()` 里靠后的那个**覆盖**前面的 ⇒ 只剩一个变体 ⇒
+    另一种形式必然解析失败。当时据此得出"pymcnp 的 P 只支持三点定义"，于是在
+    `parse_surfaces` 里加了"系数 → 三点"兜底 —— **那一步把感度弄丢了**：三点形式
+    下游要走 §3-17 的原点规则，而该规则会**无视点序**、按 D 的符号重新定侧，
+    于是 `D < 0` 的卡整体翻面（旧兜底里"对齐法向"那几行因此毫无作用）。
+
+    实测 GEOUNED 生成的一般平面 **D 大量为负**（118/119/120/121/122 =
+    −197.99 / −32.509 / −19.799 / −19.799 / −197.99）⇒ 含这些面的栅元不再被界定、
+    一路漏到包围盒 ⇒ 3D 预览"体积爆炸、形状全变"（块 002 重建体积达真值的 71 倍）。
+
+    实测这些变体**互斥**（`P_0` 只认 4 项、`P_1` 只认 9 项，错配必 InpError），
+    所以调用方"逐个 try、第一个成功即用"就能选对，不需要自己数项数。
     """
     global _SURF_CLASSES
     if _SURF_CLASSES is None:
@@ -187,28 +207,12 @@ def _surf_classes() -> dict:
                     _obj = getattr(_pi, _name)
                     if hasattr(_obj, '_KEYWORD') and hasattr(_obj, 'from_mcnp') and isinstance(_obj, type):
                         _kw = (_obj._KEYWORD or '').upper()
-                        if _kw: _d[_kw] = _obj
+                        if _kw:
+                            _lst = _d.setdefault(_kw, [])
+                            if _obj not in _lst:
+                                _lst.append(_obj)   # dir() 是字母序 ⇒ P_0 先于 P_1
                 _SURF_CLASSES = _d
     return _SURF_CLASSES
-
-def _plane_coeff_to_points(A: float, B: float, C: float, D: float) -> list:
-    """平面 Ax+By+Cz=D → 3 个非共线点（pymcnp 的 P 类只支持三点定义）。
-
-    校正三点法向与 (A,B,C) 同向，否则正侧会被翻转导致几何方向错误。
-    """
-    if abs(A) >= abs(B) and abs(A) >= abs(C):
-        pts = [D / A, 0, 0, (D - B) / A, 1, 0, (D - C) / A, 0, 1]
-    elif abs(B) >= abs(C):
-        pts = [0, D / B, 0, 1, (D - A) / B, 0, 0, (D - C) / B, 1]
-    else:
-        pts = [0, 0, D / C, 1, 0, (D - A) / C, 0, 1, (D - B) / C]
-    # 三点法向 n=(P2-P1)×(P3-P1)，若与 (A,B,C) 反向则交换 P2/P3 翻转
-    import numpy as np
-    p1, p2, p3 = np.array(pts[0:3]), np.array(pts[3:6]), np.array(pts[6:9])
-    nrm = np.cross(p2 - p1, p3 - p1)
-    if np.dot(nrm, np.array([A, B, C])) < 0:
-        pts[3:6], pts[6:9] = pts[6:9], pts[3:6]
-    return pts
 
 
 def parse_surfaces(text: str, errors: list | None = None) -> list:
@@ -271,36 +275,34 @@ def parse_surfaces(text: str, errors: list | None = None) -> list:
             # BOX 省略第三边向量（9 项）= 某维无限 → 补零向量（quadric.box_params 认无限）
             _l = _l + " 0 0 0"
             _p = _l.split()
-        _cls = _cls_map.get(_p[_kw_idx].upper())
-        if _cls is None:
+        _cls_list = _cls_map.get(_p[_kw_idx].upper())
+        if not _cls_list:
             if errors is not None:
                 errors.append(
                     f"曲面对第 {_lineno} 行未能解析：「{_l}」—— 未知曲面助记符 {_kw}"
                     "（C810 Table 3.1；这一行被整行忽略，引用它的栅元会报「引用未定义曲面」）")
             continue
-        try:
-            _s = _cls.from_mcnp(_l)
+        # 同一 keyword 可能有多种卡项形式（如 P 的四系数 / 三点）⇒ 逐个试，第一个成功即用。
+        # **不要**在这里做"系数 → 三点"的转换去迁就某一个变体：三点形式下游按
+        # C810 §3-17「原点负感度」定侧，转换会丢掉写下的符号，D<0 的平面整体翻面
+        # （详见 _surf_classes 的长注释）。认不出来就如实报错，不静默出错几何。
+        _s = None
+        _err = None
+        for _cls in _cls_list:
+            try:
+                _s = _cls.from_mcnp(_l)
+                break
+            except Exception as _e:
+                _err = _e
+        if _s is not None:
             if tr_num is not None:
                 _s.transform = tr_num
             surfs.append(_s)
-        except Exception as _e:
-            # P A B C D 系数形式：pymcnp 的 P 只支持三点定义，转一下再试
-            _ok_retry = False
-            if _p[_kw_idx].upper() == "P" and len(_p) == 6:
-                try:
-                    pts = _plane_coeff_to_points(float(_p[2]), float(_p[3]), float(_p[4]), float(_p[5]))
-                    _l2 = f"{_p[0]} P " + " ".join(str(v) for v in pts)
-                    _s = _cls.from_mcnp(_l2)
-                    if tr_num is not None:
-                        _s.transform = tr_num
-                    surfs.append(_s)
-                    _ok_retry = True
-                except Exception:
-                    _ok_retry = False
-            if errors is not None and not _ok_retry:
-                errors.append(
-                    f"曲面对第 {_lineno} 行未能解析：「{_l}」—— {type(_e).__name__}: {_e}"
-                    "（该行被整行忽略；C810 Table 3.1 给出各曲面卡的卡项个数，可据此核对）")
+            continue
+        if errors is not None:
+            errors.append(
+                f"曲面对第 {_lineno} 行未能解析：「{_l}」—— {type(_err).__name__}: {_err}"
+                "（该行被整行忽略；C810 Table 3.1 给出各曲面卡的卡项个数，可据此核对）")
     return surfs
 
 def _model_box_from_cells_surfaces(data: dict):
@@ -403,6 +405,12 @@ def build_cells_data(cell_list: list, include_void: bool = True,
         """graveyard 判 0：impN/impP/impE（或 deck 侧 imp_n/imp_p/imp_e）任一非空且
         首个 token 为 "0" → 该粒子重要性 0（MCNP 在该 cell 杀粒子）= graveyard，不渲染。
         MCNP imp 单值语义（每 cell 每粒子一个数字），取首个 token 兼容 "0 0" 等续值。
+
+        ⚠️ 这条**本身是对的** —— GEOUNED 生成的 deck **确实带 imp**
+        （实测 `47 0 277 Vol=1.000 imp:n=0 imp:p=0 $Graveyard`）。
+        它在 STEP 路径上失效的原因是**上游把字段丢了**：`flat_cell_json` 原先不输出
+        `imp_n/imp_p/imp_e`，前端只是原样转发 ⇒ 到 preview-3d 时 imp 已经不存在
+        ⇒ 连 `imp=0` 的真墓地都拦不住（详见 `_is_graveyard` 与 §6 的"序列化口漏字段"）。
         """
         for key in ("imp_n", "impN", "imp_p", "impP", "imp_e", "impE"):
             v = c.get(key)
@@ -412,6 +420,33 @@ def build_cells_data(cell_list: list, include_void: bool = True,
             if s and s.split()[0] == "0":
                 return True
         return False
+
+    def _is_graveyard(c) -> bool:
+        """graveyard 判定 —— **两条并列，任一成立即不渲染**。
+
+        2026-09-24 实测（用户："3D 预览还是一坨"）的准确责任分解：
+
+        | 栅元 | imp 判据 | 注释判据 | `imp:n` | GEOUNED 注释 |
+        |---|---|---|---|---|
+        | 47 | **命中** | 命中 | **0** | `Graveyard`（半径 1049 球**外**）|
+        | 46 | 不命中 | **命中** | **1.000** | `Graveyard_in`（球**内**盒外）|
+
+        · **栅元 47 本来就该被 imp 拦住** —— 失效的原因是上游 `flat_cell_json`
+          没把 `imp_n/imp_p/imp_e` 传下来（见 `_imp_is_zero`），**不是 GEOUNED 没写 imp**。
+        · **栅元 46 的 `imp:n=1` 是 GEOUNED 有意的**：它是"球内、enclosure 盒外"的**真空区**，
+          粒子可以在里面飞，按 MCNP 语义**不是**墓地 ⇒ imp 判据天然拦不住它。
+          但它体积 = 模型的 **1583%**、bbox 2097³，渲染出来一样把模型整个包住
+          ⇒ 需要第二条判据识别 **GEOUNED 的墓区结构**：
+          `void.py:201/208` 把球内/球外写死为 `MatInfo = "Graveyard_in"` / `"Graveyard"`，
+          GEOUNED 自己的 `mcnp_format.py:256` 也是这么认的。
+
+        ⇒ 两条判据**各管一段、缺一不可**：imp 管"重要性为 0 的栅元"（通用 MCNP 语义），
+        注释管"GEOUNED 的边界结构"（imp 不为 0 但同样不该画）。
+        """
+        if _imp_is_zero(c):
+            return True
+        comment = str(c.get("comment", "") or "").strip().lower()
+        return "graveyard" in comment
 
     entries = []  # (number, mat_val, density, ast_node, render, has_fill, has_fill_grid, is_graveyard)
     seen_numbers = set()
@@ -437,7 +472,7 @@ def build_cells_data(cell_list: list, include_void: bool = True,
         render = bool(cell.get("render", True))
         has_fill = bool(str(cell.get("fill", "") or "").strip())
         has_fill_grid = bool(cell.get("fill_grid"))
-        is_graveyard = _imp_is_zero(cell)
+        is_graveyard = _is_graveyard(cell)
         try:
             ast = Geometry.from_mcnp(parenthesize_unions(expr))
             ast_node = ast.ast
@@ -1337,6 +1372,11 @@ def _tally_from_dict(d: dict) -> TallySettings:
             particles=t.get("particles") if isinstance(t.get("particles"), list) else [p.lower().strip() for p in t.get("particle", "n").replace(",", " ").split() if p.strip()], params=t.get("params", ""),
             generate_en=t.get("generate_en", t.get("enableEn", False)), generate_tn=t.get("generate_tn", t.get("enableTn", False)),
             multiplier=t.get("multiplier", ""),
+            # ⚠️ 前缀/后缀必须在这里收下：`*F4`/`+F8`（fn_prefix）与 `F5X`（number_suffix）
+            # 是**卡片身份**的一部分，少了它们生成出来就换了一张卡（能量沉积→通量、
+            # 环探测器→点探测器），且全程无报错（2026-09-26 用户实测）。
+            fn_prefix=str(t.get("fn_prefix", t.get("fnPrefix", "")) or ""),
+            number_suffix=str(t.get("number_suffix", t.get("numberSuffix", "")) or ""),
         ))
     return TallySettings(tallies=tallies,
         fmesh_defs=_fmesh_from_list(d.get("fmesh_defs", [])),
@@ -1520,6 +1560,10 @@ def _deck_to_frontend_dict(deck: DeckData, include_frontend_aliases: bool = Fals
         "enableEn": td.get("generate_en", False),
         "enableTn": td.get("generate_tn", False),
         "multiplier": td.get("multiplier", ""),
+        # 卡片身份字段（前缀 ""/"*"/"+"/"FIP"/"FIR"/"FIC" 与 F5 环探测器轴字母）。
+        # 漏带 ⇒ 前端前缀下拉框永远是"无"，导入 `*F4` 显示成 `F4`（2026-09-26 用户实测）。
+        "fn_prefix": td.get("fn_prefix", ""),
+        "number_suffix": td.get("number_suffix", ""),
     } for td in tally_raw.get("tallies", [])]
     # ⚠️ 前端口径里，计数卡列表**只**在顶层 `tallies`（TallyTab 的单一权威）；
     # `deck.tally` 只装网格/截断/FMESH/PTRAC。后端 DeckData 把两者都放在 tally 子对象里，
@@ -2699,14 +2743,14 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 self._ok({"status": "error", "message": "需要 FreeCAD 才能导入 STEP"})
                 return
 
-            result_path = run_step_converter(
+            result_path, warnings = run_step_converter(
                 "geouned", step_path, material, density, settings, freecad_bin)
             deck = MCNPOutputParser.parse(result_path, post_settings=settings)
             if not deck:
                 self._ok({"status": "error", "message": "GEOUNED 输出无法解析"})
                 return
 
-            self._ok({"status": "ok", "deck": geometry_deck_response(
+            self._ok({"status": "ok", "warnings": warnings, "deck": geometry_deck_response(
                 deck.surfaces, deck.tr_cards, deck.cells)})
         except StepConversionError as e:
             self._ok({"status": "error", "message": str(e)})

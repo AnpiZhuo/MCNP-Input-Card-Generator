@@ -53,6 +53,87 @@ def extract_comment(line: str) -> str:
     return ""
 
 
+_BARE = re.compile(r"[0-9A-Za-z]")
+
+# MCNP 预处理器指令 / THTME 表头行：`#` 之后（允许空白）是**字母**。
+#   `#ifdef` / `#else` / `#endif` / `#define` / `#include`…（宏指令）
+#   `#    tmp1  tmp2 …`（THTME 卡的表头行，列名，见 tests/parser/test_regress_thtme_table.py）
+# 反例（**不是**预处理器行）：`#25#26…` / `# 22` / `#(1 2)` —— 这是 MCNP 几何**补集算子**，
+# `#` 后面跟数字/括号/正负号。2026-09-26 用户实测：栅元卡几何写得很长、手工折行后，
+# 续行行首正好是 `#25…`，被当"条件行"整行吞掉 ⇒ 几何截断到 `#24`、`imp:n/p=1` 一起丢。
+_PREPROCESSOR_RE = re.compile(r"^#\s*[A-Za-z]")
+
+# 栅元/曲面卡（几何卡）首 token：`5 5 -1.2e-3 …` / `-14 …`。用于判断"上一行能不能被续"。
+_GEOM_CARD_RE = re.compile(r"^[+-]?[\d.]")
+
+# `#` 前已存在的合法分隔符：这些字符之后不需要再补空格（补了反而改变 token 形态）。
+_GEOM_BOUNDARY = frozenset(" \t(:,&")
+
+
+def is_preprocessor_line(stripped: str) -> bool:
+    """行首 `#` 是否为 MCNP 预处理器/THTME 表头行（`#` 后是字母）。
+
+    判据只看 `#` 后面第一个非空白字符：字母 ⇒ 指令（断点、单独成行）；
+    数字/括号/正负号 ⇒ 几何补集算子（必须当续行接回上一张卡，见 normalize_lines）。
+    """
+    return bool(_PREPROCESSOR_RE.match(stripped or ""))
+
+
+def normalize_geometry_spacing(expr: str) -> str:
+    """给几何表达式里**缺空格的补集算子** `#` 补一个空格：`-14#1#2` → `-14 #1 #2`。
+
+    为什么必须补（2026-09-26 实测）：`#` 是唯一的"前面必须有空白"的几何算子 ——
+    pymcnp（3D 预览 / 源演示 / 重合检测的几何引擎）对
+        `-14#1#2#3`            → TypesError「MCNP data type not recognized」⇒ AST=None
+        `-14 #1 #2 #3`         → 正常解析
+    而 `:`、`(`、`)` 紧贴都能解析（实测 `1 -2:3` / `(1 -2):(3)` 均 OK），所以只补 `#`。
+    MCNP 自身对 `#` 前有无空白不敏感（几何语义等价），故补空格不改变模型含义；
+    只在确实缺空格时动一个字符，已规范的文本（`# 22`、`#(1 2)`）逐字不变 —— 护住 R1 字节不动点。
+    """
+    if not expr or "#" not in expr:
+        return expr
+    out = []
+    for i, ch in enumerate(expr):
+        if ch == "#" and i > 0 and expr[i - 1] not in _GEOM_BOUNDARY:
+            out.append(" ")
+        out.append(ch)
+    return "".join(out)
+
+
+def _join_continuation(prev: str, cont: str) -> str:
+    """把续行接回当前行 —— **只在断点明显不是 token 边界时才直接相接**。
+
+    背景（2026-09-23 实测）：GEOUNED 按宽度 80 折行；当单个 token 本身超长
+    （几何表达式里 `160:-122:140` 这种紧凑并集链算**一个** token）它会**被迫在 token 中间切**：
+
+        第 409 行: '... (160:-122:140:'       ← 行尾是冒号
+        第 410 行: '           -220:-190) …'  ← 续行接 -220
+
+    旧实现无条件补空格 ⇒ `140: -220` ⇒ pymcnp `_Digit.from_mcnp` 断言失败
+    ⇒ AST=None ⇒ **3D 预览 HTTP 500**。
+
+    **但不能见断点就相接**：MCNP 样例里正常的折行**在 token 边界**（`(9 0 9)` 后接 `1)`），
+    那时原逻辑行**本来就有空格**，相接会破坏 R1 字节不动点
+    （实测：改成"两侧都是词字符才补空格"直接导致 4 failed + 21 errors）。
+    两类断点在文本上无法直接区分，唯一可靠的区分是：
+    **这个断点有没有可能是一个合法 token 边界？**
+
+      · 行尾是 `:` `(` `,` 或正负号/小数点/指数符 ⇒ 单独出现不是合法 token ⇒ 断点在 token 内 ⇒ 直接相接
+      · 行尾是 `#`（`-14#` + `1`）⇒ 补集算子被切开，`# 1` 与 `#1` 等价但**行尾 `#` 单独不是 token**
+        ⇒ 直接相接（再由 normalize_geometry_spacing 在 `#` 前补空格）
+      · 行首是 `:` `)` `,` ⇒ 单独出现不是合法 token 开头 ⇒ 直接相接
+      · 其余（数字/字母/右括号 对 数字/字母）⇒ 可能是合法边界 ⇒ **补空格**（保持旧行为，护住 R1）
+    """
+    if not prev:
+        return cont or ""
+    if not cont:
+        return prev
+    p, n = prev[-1], cont[0]
+    mid_token = (p in ":(,+-.#" or n in ":),"
+                 or (p in "eE" and (n.isdigit() or n in "+-")))
+    return prev + cont if mid_token else prev + " " + cont
+
+
 def _rstrip_amp(cur: str) -> str:
     """剥离行尾 MCNP 续行符 &（先剥 $ 注释，避免误伤注释内字面 &）。
 
@@ -121,9 +202,32 @@ def normalize_lines(raw_text: str) -> list[str]:
             merged.append(line)
             continue
 
-        # MCNP 预处理器行（#ifdef/#else/#endif/#define…）：续行断点，单独保留。
-        # 否则 #ifdef 之后的缩进核素行会被错误并入 #ifdef 行。
+        # MCNP 预处理器行（#ifdef/#else/#endif/#define…）与 THTME 表头行（"#    tmp1 …"）：
+        # `#` 后是字母 ⇒ 续行断点，单独保留。否则 #ifdef 之后的缩进核素行会被错误并入 #ifdef 行。
+        if is_preprocessor_line(stripped):
+            if current.strip():
+                merged.append(_rstrip_amp(current))
+                current = ""
+            merged.append(line.rstrip())
+            continue
+
+        # 行首 `#` + 非字母（`#25#26…` / `# 22` / `#(1 2)`）= 几何**补集算子**，绝不可能是
+        # 卡片起始 ⇒ 强制接回上一行（不要求上一行尾有 `&`、也不要求本行缩进 5 格）。
+        # 2026-09-26 用户实测：栅元卡几何太长、手工折行后行首正好是 `#25…`，
+        # 旧实现把它当"条件行"单独抛出 ⇒ 栅元的 surface_expr 截断在 `#24`、`imp:n/p=1` 一并丢失。
+        # 边界：上一行必须是**几何卡**（首 token 是数字，如 `5 5 -1.2e-3 …` / `1 pz -1`）——
+        # THTME 卡（`THTME -10 …`）后面跟的表头行才不会被误并。
         if stripped.startswith("#"):
+            if current.strip() and _GEOM_CARD_RE.match(current.strip()):
+                cur_body = strip_comment(current).rstrip()
+                if cur_body.endswith("&"):
+                    cur_body = cur_body[:-1].rstrip()
+                cur_comment = extract_comment(current)
+                line_comment = extract_comment(line)
+                current = _join_continuation(cur_body, strip_comment(line).strip())
+                if cur_comment or line_comment:
+                    current += " $ " + (cur_comment or line_comment)
+                continue
             if current.strip():
                 merged.append(_rstrip_amp(current))
                 current = ""
@@ -143,7 +247,7 @@ def normalize_lines(raw_text: str) -> list[str]:
                 cur_body = cur_no_dollar.rstrip()
                 if cur_body.endswith("&"):
                     cur_body = cur_body[:-1].rstrip()
-                current = cur_body + " " + line_no_dollar.strip()
+                current = _join_continuation(cur_body, line_no_dollar.strip())
                 # 保留 $ 注释：当前行无注释时取续行注释（_generate_cells 拆分长行时
                 # 注释可能落在续行上，不可丢）
                 if cur_comment or line_comment:
@@ -151,7 +255,8 @@ def normalize_lines(raw_text: str) -> list[str]:
                 continue
             # Continuation by ampersand: current line ends with &
             if cur_no_dollar.rstrip().endswith("&"):
-                merged_no_dollar = cur_no_dollar.rstrip()[:-1].rstrip() + " " + line_no_dollar.strip()
+                merged_no_dollar = _join_continuation(
+                    cur_no_dollar.rstrip()[:-1].rstrip(), line_no_dollar.strip())
                 current_dollar = extract_comment(current)
                 line_dollar = extract_comment(line)
                 current = merged_no_dollar

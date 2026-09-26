@@ -23,7 +23,11 @@ export interface SourceItem {
   ccc: string; ara: string; rate: string;
   prob: string;
 }
-export interface TallyDef { type: string; number: number; particle: string; params: string; multiplier?: string; enableEn: boolean; enableTn: boolean }
+/** 前端计数卡定义（↔ 后端 TallyDefinition）。
+ *  `fn_prefix`（"" / "*" / "+" / "FIP" / "FIR" / "FIC"）与 `number_suffix`（F5 环探测器 X/Y/Z）
+ *  是**卡片身份**的一部分：少传一个字段，生成出来就是另一张卡（能量沉积→通量、环探测器→点探测器），
+ *  且全程不报错。字段名与后端同名（snake_case），映射见 `utils/tallyBridge.ts`。 */
+export interface TallyDef { type: string; number: number; particle: string; params: string; multiplier?: string; enableEn: boolean; enableTn: boolean; fn_prefix?: string; number_suffix?: string }
 
 /* ── 源项结构化分布（对齐 MCNP 源分布卡说明.md；v2 双态：raw 原文 ↔ structured 表单）── */
 /** SI 类型；"" = 无字母（MCNP 缺省 H 直方图，不得再回填 L） */

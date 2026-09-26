@@ -135,6 +135,26 @@ out["force_include"] = [
         include_void=True, force_include_numbers={1})
 ]
 
+# 15. GEOUNED 的墓区栅元必须不渲染（2026-09-24 用户："3D 预览还是一坨"）
+#     GEOUNED 生成的 deck **带 imp**，但 `flat_cell_json` 原先不输出 `imp_*`
+#     ⇒ 只认 imp=0 的判据在 STEP 路径上取不到值 ⇒ 恒不成立，
+#     ⇒ 半径 1049 的球外（体积 = 模型 7372%、bbox 2927³）被渲染进预览、把模型整个包住。
+#     GEOUNED 的官方标记是注释：void.py:201/208 写死 "Graveyard_in"/"Graveyard"。
+out["graveyard_comment"] = nums([
+    cell(number=1, surface_expr="-1",
+         comment="/Open CASCADE STEP translator 7.8 11"),
+    cell(number=46, surface_expr="-277 (-262:270:-263:268:-265:266)",
+         material="0", comment="Graveyard_in"),
+    cell(number=47, surface_expr="277", material="0", comment="Graveyard"),
+    cell(number=48, surface_expr="-3", material="0", comment="graveyard"),   # 大小写
+    cell(number=49, surface_expr="-4", material="0", comment="graveyard outer sphere"),
+])
+# imp=0 那条原有规则不许被改坏（即使注释是普通文本）
+out["graveyard_imp"] = nums([
+    cell(number=1, surface_expr="-1", impN="0", comment="normal cell"),
+    cell(number=2, surface_expr="-2", comment="normal cell"),
+])
+
 print("RESULT=" + json.dumps(out, ensure_ascii=False))
 '''
 
@@ -231,3 +251,37 @@ def test_imp_any_zero_graveyard_filter(classify_results):
 def test_force_include_graveyard_retained(classify_results):
     """水密检测 force_include_numbers：graveyard（imp=0）在内的第一栅元被强制包含。"""
     assert sorted(classify_results["force_include"]) == [1, 2]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# GEOUNED 墓区必须不渲染（2026-09-24，用户："3D 预览还是一坨"）
+#
+# 为什么单开一组：STEP 导入路径上 **`flat_cell_json` 把 `imp_*` 丢了**（前端只原样转发），
+# 所以只认 imp=0 的判据在 preview-3d 里**取不到值** ⇒ GEOUNED 的两个墓区被当普通栅元渲染。
+# ⚠️ GEOUNED 的 deck **是带 imp 的**（实测 `47 0 277 Vol=1.000 imp:n=0 imp:p=0 $Graveyard`），
+#    失效是我们丢字段造成的；而栅元 46（`Graveyard_in`）GEOUNED **有意给 imp:n=1**
+#    ⇒ 只能靠注释判据拦。
+# 实测：栅元 47 体积 = 模型的 7372%、bbox 2927³；栅元 46 = 1583%、2097³；
+# 两者把模型（1042×1751×260）整个包住、相机被撑到 ±2000 ⇒ 预览里只有"一坨"。
+# 修法 = 判据加第二条「注释含 graveyard」（GEOUNED 官方标记，void.py:201/208）。
+# ══════════════════════════════════════════════════════════════════════
+
+def test_geouned_graveyard_comment_cells_are_not_rendered(classify_results):
+    """注释为 GEOUNED 墓区标记的栅元一律不渲染；普通注释的栅元不受影响。"""
+    kept = classify_results["graveyard_comment"]
+    assert 1 in kept, "普通栅元（注释是 STEP translator）不该被误伤"
+    for n in (46, 47, 48, 49):
+        assert n not in kept, (
+            f"墓区栅元 {n} 仍被渲染 —— 它会把整个模型包住（实测体积达模型 7372%）")
+    assert kept == [1]
+
+
+def test_graveyard_comment_match_is_case_insensitive(classify_results):
+    """`Graveyard` / `graveyard` / `Graveyard_in` 都要认（大小写不敏感 + 子串）。"""
+    kept = classify_results["graveyard_comment"]
+    assert 48 not in kept and 49 not in kept
+
+
+def test_imp_zero_rule_still_works(classify_results):
+    """加了注释判据后，imp=0 那条原有规则不许被改坏。"""
+    assert classify_results["graveyard_imp"] == [2]

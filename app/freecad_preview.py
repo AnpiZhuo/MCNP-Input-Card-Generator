@@ -12,6 +12,8 @@ import tempfile
 import shutil
 import threading
 
+from app.generator.parsers.lines import normalize_geometry_spacing
+
 # pymcnp Geometry AST 节点类型，在 freecad_preview 中延迟导入
 _Intersection = None
 _Union = None
@@ -35,8 +37,13 @@ def parenthesize_unions(expr: str) -> str:
     MCNP 语义 'a b c:d e f' = (a∩b∩c) ∪ (d∩e∩f)；pymcnp 会把 ':' 解析成
     链中普通并集导致几何错误。包上括号后 pymcnp 识别为顶层 union。
     已带括号的段保持原样；括号内的 ':' 不切分。
+
+    顺带补 `#` 补集算子前缺失的空白（`-14#1` → `-14 #1`）：pymcnp 对 `#` 前的空白是硬要求
+    （实测 `-14#1` → TypesError ⇒ AST=None ⇒ 栅元静默不渲染），而本函数是所有 pymcnp
+    几何解析的唯一入口（preview-3d / 源演示 / 重合检测 / 截面）。解析侧
+    （`parsers.core.parse_cells`）已用同一助手规范化；这里兜住**手输**表达式。
     """
-    expr = (expr or "").strip()
+    expr = normalize_geometry_spacing((expr or "").strip())
     if not expr:
         return expr
     parts = []
@@ -95,6 +102,89 @@ def ast_has_facet(node) -> bool:
             return True
         return any(ast_has_facet(x) for x in node)
     return False
+
+
+# ── 必然无界的并集分支剔除（GEOUNED 退化交项的消费侧容错）──────────────
+# 平面类曲面：只有这些类型参与"≤3 面必无界"的判定（曲面可能 3 个就围出有界体）。
+_PLANAR_SURF_TYPES = frozenset({"PX", "PY", "PZ", "P_0", "P_1"})
+
+
+def _union_branches(node):
+    """展平顶层 union → 分支列表；**不是 union 就返回 None**（单约束栅元不参与）。"""
+    if not (isinstance(node, list) and node and node[0] == "union"):
+        return None
+    out = []
+
+    def walk(n):
+        if isinstance(n, list) and n and n[0] == "union":
+            walk(n[1])
+            walk(n[2])
+        else:
+            out.append(n)
+
+    walk(node)
+    return out
+
+
+def _term_constraints(node):
+    """纯交项 → ``[(sign, surf_num)]``；含嵌套并集 / 组补集 → None（不判）。"""
+    if not isinstance(node, list) or not node:
+        return None
+    tag = node[0]
+    if tag == "surf":
+        return [("pos", node[1])]
+    if tag == "unary":
+        inner = node[1]
+        if not (isinstance(inner, list) and inner and inner[0] == "surf"):
+            return None
+        return [("neg" if node[2] == "neg" else "pos", inner[1])]
+    if tag == "intersect":
+        a = _term_constraints(node[1])
+        b = _term_constraints(node[2])
+        if a is None or b is None:
+            return None
+        return a + b
+    return None
+
+
+def prune_unbounded_union_branches(ast_json, surf_types: dict):
+    """剔除并集里**在 3D 中必然无界**的分支，返回 ``(新 AST, 剔除数)``。
+
+    为什么需要（2026-09-24 实测，用户："选 50 面时栅元 4 出现一块额外的异形三角锥"）：
+    GEOUNED 的凸分解偶尔会产出一个只由 **3 个平面**构成的交项，例如
+    `144(P_0) -190(P_0) -180(PY)`。而 **3 个平面半空间在 3D 里必然无界**
+    （围出有界区域至少要 4 个平面）⇒ 该分支从块里一路漏到包围盒，被裁成一个大楔形。
+    实测 50 面档的栅元 4：44 个交项里有 1 个这样的退化项，体积从真值 ~3.4e7
+    涨到 **5.36e8（模型的 195%）**、状态 `infinite`、bbox 2097×1342×1704；
+    **剔掉该项后 `closed`、3.49e7（+1.2%）**。
+
+    为什么这是**正确**的而不是"掩盖问题"：栅元对应的是**有界的 CAD 实体**，
+    一个数学上必然无界的分支**不可能**是它的一部分 —— 剔掉它只会让几何更接近真值。
+    （GEOUNED 的输出我们改不了，只能在消费侧做对的事。）
+
+    安全边界（三条，避免误伤）：
+      · 只处理**顶层是并集**的栅元 —— 单约束栅元（如 `277` 的 graveyard 球外半空间）
+        本来就是无界的合法栅元，不在此列；
+      · 只剔**纯平面**且约束数 ≤3 的分支 —— 含柱/球/锥的分支 3 个曲面也可能围出有界体；
+      · 若剔完一个不剩，**原样返回**（宁可不动，也不产出空栅元）。
+    """
+    branches = _union_branches(ast_json)
+    if branches is None:
+        return ast_json, 0
+    keep, dropped = [], 0
+    for b in branches:
+        cons = _term_constraints(b)
+        if (cons is not None and len(cons) <= 3
+                and all(surf_types.get(n) in _PLANAR_SURF_TYPES for _, n in cons)):
+            dropped += 1
+            continue
+        keep.append(b)
+    if not keep or not dropped:
+        return ast_json, 0
+    node = keep[0]
+    for b in keep[1:]:
+        node = ["union", node, b]
+    return node, dropped
 
 
 def resolve_cell_complements(ast_node, cells_by_num: dict, stack=None):
@@ -546,10 +636,25 @@ class FreeCADEngine:
         cell_dicts = []
         self.skipped_cells = []
         for c in cells_data:
+            if c.get("ast") is None:
+                # 表达式没解析出 AST（build_cells_data 契约：「预览时该栅元不渲染」）。
+                # 2026-09-23 实测：GEOUNED 的 827 字符真空表达式因续行拼接插空格而解析失败
+                # ⇒ ast=None ⇒ 这里直接 AttributeError ⇒ **整次预览 HTTP 500**（用户看到"3D 预览全乱"）。
+                # 与下面的 facet 分支同一原则：一个栅元的问题不该拖垮整次预览。
+                self.skipped_cells.append({
+                    "number": c["number"],
+                    "reason": "栅元表达式无法解析（已跳过，不影响其余栅元）",
+                })
+                continue
             try:
                 ast_json = _geometry_ast_to_json(c["ast"].ast)
             except (ValueError, AttributeError) as e:
                 raise RuntimeError(f"栅元 {c['number']} AST 序列化失败: {e}")
+            # 剔除"3 个平面必然无界"的退化并集分支（GEOUNED 偶发产出；
+            # 不剔就会漏到包围盒、裁成大楔形 —— 用户报的"异形三角锥"）。
+            # 放在这一层 = 3D 预览 / STEP 导出 / 截面 / 重合检测 四条路一起受益。
+            ast_json, _dropped = prune_unbounded_union_branches(
+                ast_json, {s["number"]: s["type"] for s in surf_dicts})
             if ast_has_facet(ast_json):
                 # 宏体 facet 引用（1.1 之类）几何引擎未支持：跳过该栅元并归因，
                 # 不让一个栅元拖垮整次预览（旧行为：int('1.1') ValueError → 整次 500）

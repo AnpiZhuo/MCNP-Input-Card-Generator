@@ -186,7 +186,10 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
       const j = await r.json();
       if (j.status === "ok" && j.deck) {
         patch({ surfaces: j.deck.surfaces || "", tr_cards: j.deck.tr_cards || "", cells: j.deck.cells || [] });
-        alert("✅ STEP 导入成功");
+        // 后端流水线提示（例：实体预分解已生效（块数与面数）/ 已跳过及原因）—— 必须让用户看见，
+        // 否则分不清"切割没生效"和"切割开了但看不出差别"。
+        const notes: string[] = Array.isArray(j.warnings) ? j.warnings : [];
+        alert("✅ STEP 导入成功" + (notes.length ? "\n\n" + notes.map((n) => "• " + n).join("\n") : ""));
         return;
       }
       alert(j.message || "STEP 导入失败");

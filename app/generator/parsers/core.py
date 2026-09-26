@@ -20,7 +20,8 @@ from app.models import CellData, CellRow, MaterialData, MaterialRow, SourceData,
 from app.meshtal.fmesh_parser import parse_fmesh_lines
 from ..banners import is_universe_group_comment, parse_universe_group_comment
 from ..distributions import parse_distribution_lines, merge_distribution_entry
-from .lines import _SURFACE_TYPES, extract_comment, strip_comment
+from .lines import (_SURFACE_TYPES, extract_comment, strip_comment,
+                    is_preprocessor_line, normalize_geometry_spacing)
 
 
 def _is_float(s: str) -> bool:
@@ -143,9 +144,24 @@ def parse_cells(cell_lines: list[str]) -> list[CellRow]:
         if stripped.upper().startswith("C ") or stripped.upper().startswith("C\t"):
             pending_c = stripped
             continue
-        # MCNP 预处理器/条件行（#ifdef/#else/#endif…）→ 原样 CellRow
+        # 行首 `#`：分两类（判据 = `#` 后第一个非空白字符是字母还是数字，见 lines.is_preprocessor_line）。
+        #   ① `#ifdef` / `#else` / `#endif` / `#define`、THTME 表头 `#  tmp1 …` → 原样 CellRow；
+        #   ② `#25` / `# 22` / `#(1 2)` = **几何补集算子**：normalize_lines 已把它接回上一张几何卡，
+        #      走到这里说明上一行不是几何卡（如文件首行）⇒ 并入上一个栅元的 surface_expr，
+        #      绝不整行当"条件行"抛出（旧行为的后果：几何截断 + imp 丢失，2026-09-26 用户实测）。
         if stripped.startswith("#"):
             pending_c = ""
+            if is_preprocessor_line(stripped):
+                cells.append(CellRow(kind="raw", text=line.rstrip()))
+                continue
+            if cells and cells[-1].kind == "cell":
+                _tail = strip_comment(line).strip()
+                _c = extract_comment(line)
+                cells[-1].cell.surface_expr = normalize_geometry_spacing(
+                    (cells[-1].cell.surface_expr + " " + _tail).strip())
+                if _c:
+                    cells[-1].cell.comment = _c
+                continue
             cells.append(CellRow(kind="raw", text=line.rstrip()))
             continue
         comment = extract_comment(line)
@@ -293,7 +309,9 @@ def parse_cells(cell_lines: list[str]) -> list[CellRow]:
 
         cells.append(CellRow(kind="cell", cell=CellData(
             number=number, material=material, density=density,
-            surface_expr=" ".join(surf_parts),
+            # `#` 补集算子前必须有空白（pymcnp 硬要求，见 normalize_geometry_spacing）：
+            # 用户写 `-14#1#2` 时在这里补成 `-14 #1 #2`，已规范的写法逐字不变。
+            surface_expr=normalize_geometry_spacing(" ".join(surf_parts)),
             imp_n=imp_n, imp_p=imp_p, imp_e=imp_e,
             vol=vol, pwt=pwt, ext=ext, fcl=fcl,
             u=u_, fill=fill, lat=lat, trcl=trcl,

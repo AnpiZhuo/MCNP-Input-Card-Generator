@@ -128,6 +128,27 @@ def flat_cell_json(row) -> dict:
         "density": str(density) if density else "",
         "surface_expr": _f("surface_expr") or "",
         "comment": _f("comment") or "",
+        # ── 以下字段是**下游分类判据的输入**，少一个就会让规则静默失效 ──
+        # 2026-09-24 实测（用户："3D 预览还是一坨"）：本函数原先只输出上面 5 个键，
+        # 而 `api_server.build_cells_data` 的「项14 cell 分类规则」要读
+        # `imp_n/imp_p/imp_e`（graveyard → 不渲染）、`render`、`fill`、`fill_grid`、`u`。
+        # 这几个键在 STEP 导入这条路上**没有任何环节能再补回来**（前端只是原样转发）。
+        # ⚠️ 注意：GEOUNED 生成的 deck **是带 imp 的**（实测 `47 0 277 Vol=1.000 imp:n=0
+        #    imp:p=0 $Graveyard`），所以丢掉 `imp_*` 的后果是 —— 连 `imp=0` 的真墓地都拦不住。
+        #    另外 GEOUNED 的 `Graveyard_in`（球内盒外真空区）**有意给 `imp:n=1`**，
+        #    只能靠注释判据识别（见 `build_cells_data._is_graveyard`）。
+        # 后果：两个墓区（实测体积 = 模型的 7372% / 1583%、bbox 2927³ / 2097³）被当普通栅元
+        # **渲染进 3D 预览** ⇒ 把整个模型包住、相机被撑到 ±2000（模型只有 1042×1751×260）
+        # ⇒ 视觉上"一坨"。
+        # ⇒ 纪律：**序列化口必须喂全下游判据要读的键**；判据"读不到就放行"的设计，
+        #   一旦序列化口漏字段就会静默全放行（与"自证判据退化成恒真"同族）。
+        "imp_n": str(_f("imp_n") or ""),
+        "imp_p": str(_f("imp_p") or ""),
+        "imp_e": str(_f("imp_e") or ""),
+        "u": str(_f("u") or ""),
+        "fill": str(_f("fill") or ""),
+        "fill_grid": str(_f("fill_grid") or ""),
+        "render": bool(_f("render", True)),
     }
 
 
@@ -156,9 +177,10 @@ class StepConversionError(RuntimeError):
 
 def run_step_converter(name: str, step_path: str, material: str,
                        density: float, settings: dict,
-                       freecad_bin: str | None = None) -> str:
-    """运行 STEP→MCNP 转换（当前仅 GEOUNED），返回 MCNP 文件路径。
+                       freecad_bin: str | None = None) -> tuple[str, list]:
+    """运行 STEP→MCNP 转换（当前仅 GEOUNED），返回 (MCNP 文件路径, 提示列表)。
 
+    「提示」= worker 回传的流水线备注（例：实体预分解已生效（块数与面数）/ 已跳过及原因）。
     失败时抛 StepConversionError（message 含具体原因，不吞异常）。
     """
     if name != "geouned":
@@ -170,7 +192,8 @@ def run_step_converter(name: str, step_path: str, material: str,
         raise StepConversionError(f"GEOUNED 不可用：{reason}")
     work_dir = tempfile.mkdtemp(prefix="geouned_")
     try:
-        return conv.run(step_path, material, density, work_dir, settings)
+        path = conv.run(step_path, material, density, work_dir, settings)
+        return path, list(getattr(conv, "last_warnings", []) or [])
     except StepConversionError:
         raise
     except Exception as e:

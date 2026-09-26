@@ -33,7 +33,19 @@ class PreviewCache:
     #   2 = AABB 标志位合并 + 裸平面半空间 + 顶点投影（GQ 薄片体积 −4.6% → −0.3%）
     #   3 = RHP/HEX 的 r/s/t 改按 C810 p.3-21 的**面心矢量（边心距）**解释
     #       （顶点由相邻两面求交；同一张卡形状变化：绕轴 30° 朝向 + 边长 1/cos30°）
-    GEOMETRY_CACHE_VERSION = 3
+    #   4 = 剔除"3 个平面必然无界"的退化并集分支（GEOUNED 偶发产出；
+    #       不剔就会漏到包围盒、裁成大楔形 —— 用户报的"异形三角锥"）
+    GEOMETRY_CACHE_VERSION = 4
+
+    # ⚠️ 光靠上面这个人工版本号**不够**（2026-09-12 与 2026-09-24 **两次**都踩到）：
+    # 它的正确性依赖"改几何算法时记得 +1"，而漏 bump 的表现是**用户看不到修复**。
+    # 更糟的是缓存**落盘**（`get()` 在内存 miss 时从 meta.json 恢复、**跨进程重启仍命中**）
+    # ⇒ 连重启后端都救不回来。2026-09-24 实测：改完退化项剔除后重跑，栅元 4 仍是
+    # 旧的 5.36e8（模型的 195%），直到手动清 `D:\MCNP\memory\preview_cache` 才生效。
+    # ⇒ 因此**额外把几何引擎源码的内容摘要并进指纹**：引擎文件一改，缓存自动全失效。
+    _ENGINE_FILES = ("_freecad_csg_worker.py", "freecad_preview.py",
+                     "quadric.py", "voxel_csg.py")
+    _ENGINE_DIGEST = None
 
     def __init__(self, base_dir=None, max_entries: int = 3, builder=None):
         """
@@ -55,19 +67,44 @@ class PreviewCache:
         self._lock = threading.RLock()
 
     # ── 指纹 ───────────────────────────────────────────────
+    @classmethod
+    def _engine_digest(cls) -> str:
+        """几何引擎源码的内容摘要（模块级算一次）。
+
+        并进指纹 ⇒ **引擎文件一改，所有旧缓存自动失效**，不再依赖"记得 bump
+        GEOMETRY_CACHE_VERSION"这条纪律（见类头长注释）。
+        文件读不到时记 `<missing>`（宁可摘要变化导致多算一次，也不要静默沿用旧缓存）。
+        """
+        if cls._ENGINE_DIGEST is None:
+            here = os.path.dirname(os.path.abspath(__file__))
+            h = hashlib.sha256()
+            for name in cls._ENGINE_FILES:
+                h.update(name.encode("utf-8"))
+                h.update(b"\0")
+                try:
+                    with open(os.path.join(here, name), "rb") as f:
+                        h.update(f.read())
+                except OSError:
+                    h.update(b"<missing>")
+                h.update(b"\0")
+            cls._ENGINE_DIGEST = h.hexdigest()[:16]
+        return cls._ENGINE_DIGEST
+
     def fingerprint(self, surfaces: str, cells: list, tr_cards: str,
                     extra: dict | None = None) -> str:
         """canonical json (sort_keys) → sha256 hex。
 
         输入与 handler 收到的 preview-3d 请求一致（surfaces 文本、cells JSON
         列表、tr_cards 文本）。同一 deck 文本/结构 → 同指纹；任一字段变化 → 不同。
-        另含 ``GEOMETRY_CACHE_VERSION``：几何算法升级后旧缓存自动失效。
+        另含 ``GEOMETRY_CACHE_VERSION``（人工语义版本）与 ``_engine_digest()``
+        （**引擎源码内容摘要，自动**）：两者任一变化都让旧缓存失效 ——
+        前者记录"为什么变"，后者兜住"忘了 bump"。
         extra（可选 dict）并入 canonical json —— 格阵 universe STL 缓存用它携带
-        u/cellNum/pitch/height，防不同裁剪参数脏命中。extra 为 None 时行为与旧版
-        一致（除几何版本号外，既有 preview-3d 指纹不变）。
+        u/cellNum/pitch/height，防不同裁剪参数脏命中。
         """
         payload = {"surfaces": surfaces, "cells": cells, "tr_cards": tr_cards,
-                   "geom_ver": self.GEOMETRY_CACHE_VERSION}
+                   "geom_ver": self.GEOMETRY_CACHE_VERSION,
+                   "engine": self._engine_digest()}
         if extra is not None:
             payload["extra"] = extra
         canonical = json.dumps(

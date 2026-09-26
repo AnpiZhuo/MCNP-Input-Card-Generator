@@ -100,10 +100,20 @@ describe("坑 6.7/6.8：sidecar 产物缺失时必须中止，绝不把旧副本
      *
      * 产物落点现在是 `gui/dist_sidecar/python`（spec 里刻意与 vite 的 dist 分开）。
      */
-    const { renameSync, existsSync } = await import("node:fs");
+    const { renameSync, existsSync, rmSync } = await import("node:fs");
     const gui = join(__dirname, "..");
     const out = join(gui, "dist_sidecar", "python");
     const hidden = join(gui, "dist_sidecar", "python_guard_test");
+
+    /**
+     * ⚠️ 探测名必须先清干净（2026-09-26 实测：本用例永久红的根因）。
+     *
+     * Windows **不能**把目录改名到一个**已存在**的目录上 —— 直接 `EPERM`。
+     * 本用例的 `finally` 在还原失败（或进程被杀）时会把这个探测名留在盘上，
+     * 于是**下一次运行必红**：实测残留目录的 mtime 是前一天 15:42，跨会话一直红。
+     * 这里前置清理，`finally` 也做兜底还原，保证"跑一次红"不会变成"永远红"。
+     */
+    rmSync(hidden, { recursive: true, force: true });
 
     if (!existsSync(out)) {
       // 没跑过 PyInstaller 的环境：产物本来就不存在，守卫同样应当拦住
@@ -119,7 +129,14 @@ describe("坑 6.7/6.8：sidecar 产物缺失时必须中止，绝不把旧副本
       expect(r.err).toContain("PyInstaller 产物不存在");
       expect(r.err).toContain("mcnp_sidecar.spec");
     } finally {
-      renameSync(hidden, out);
+      // 兜底还原：`out` 若被别的进程重建，先清掉它（否则 Windows 同样 EPERM）；
+      // 还原动作本身不许覆盖真实断言失败（2026-09-26 实测的二次伤害）。
+      try {
+        if (existsSync(hidden)) {
+          if (existsSync(out)) rmSync(out, { recursive: true, force: true });
+          renameSync(hidden, out);
+        }
+      } catch { /* 还原失败不改变用例结论，但下一次运行会被前置清理兜住 */ }
     }
   });
 

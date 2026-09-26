@@ -1,5 +1,21 @@
 # 项目记忆文档（AI 速查手册）
 
+> **★ 本批（2026-09-26）三处用户实测 bug + v1.7.7 打包部署 —— 已改 ✅ / 已提交 ✅ / 已打包部署 ✅ · 版本 1.7.7（用户指定）**
+> **三条用户原话驱动的修复**（详情见 `## S11` 与 `docs/CHANGELOG.md` 2026-09-26 三条）：
+> ① 「计数卡的前缀，`*`号，解析时无法传入，自己点选后，点生成时也没有」—— 引擎侧本来是对的，漏的是**前后端缝**
+>    （`_deck_to_frontend_dict`/`_tally_from_dict` 都没带 `fn_prefix`/`number_suffix`；前端 `TallyTab` 更把下拉框做成装饰品）；
+> ② 「没自己打空格时解析没有出现空格；换行后第一个字符是#时会解析成#条件，应该判断数字还是字母」—— 判据改成 `#` 后**字母还是数字**，
+>    并补 `-14#1` → `-14 #1`（`#` 是几何里唯一"前面必须有空白"的算子，pymcnp 缺空白直接 `TypesError` ⇒ 栅元在 3D 预览里静默消失）；
+> ③ 「截面拖动时…卡死在导入时的粉色页面 / 旋转过之后拖动很怪异」—— 拖入导入覆盖层只认"真拖文件"且 leave/drop/end 一律熄；
+>    截面旋转中心与平移解耦（拖动位移原为 `(I−S+S·M)Δ`，会偏方向又放大约 1.5×）。
+> **门禁**：pytest **1417 passed / 0 failed / 11 skipped**；vitest **104 files / 927 passed**；tsc 两档 0；vite build 0。
+> **打包部署（v1.7.7）**：版本 7 个字段齐改；`build:release` 干净工作区必失败 ⇒ 走手册手工顺序；产物 exe 6,622,208 B /
+> `python.exe` 32,622,751 B（与 `binaries/` 哈希一致）/ `_internal` 7873 文件 / exe 内 bundle `index-dO5WbQoY.js`；
+> 旧交付目录整卷改名备份 `D:\MCNP\_backup_1.7.6_20260926_154504`；部署版冒烟 5001 **2 s** 就绪，`parse-inp` 用户那张
+> `#` 折行卡 = 1 栅元 / 54 项 / 含 `#55` / imp 在位 + 回显 `fn_prefix='*'`/`number_suffix='X'`、`generate` 回放 `*F4:N`/`F5X:N`。
+> 本包同时带上 **09-23/24 那批未打包的改动（S10：GEOUNED 参数 UI / FreeCAD 自适应切分 / 退化项剔除 / 墓区过滤）**。
+
+
 > **★ 本批（2026-09-20）源抽样器全量重构（仿 MCNP 模型）+ 官方裁判门禁，已提交 `8a73ea9`/`ce9eb1c`，已打包部署 ✅**
 > **起因**：三个官方算例（`MCNP6\Testing\VALIDATION_SHIELDING\Inputs\{photon_kerma, fns_config1_neutron_onaxis, lps_water}.inp`）
 > 用**官方 `mcnp6.exe` 输出当裁判**（print table 170 + `the mean of source distribution N is …`），暴露 6 项不符：
@@ -173,7 +189,81 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
-## S9（当前批次）真实 MCNP keff 解析修复 + keff 解析玻璃卡（2026-09-20，**已提交 ✅ / 已打包部署 ✅ · 版本仍 1.7.6**）
+## S11（当前批次）计数卡前缀 `*` + 栅元几何 `#` + 截面拖动两坑 + **v1.7.7 发布**（2026-09-26，**已改 ✅ / 已提交 ✅ / 已打包部署 ✅ · 版本 1.7.7（用户指定）**）
+
+> **三态**：**已改 ✅ / 已提交 ✅ / 已打包部署 ✅**（手工链：vite → PyInstaller 229 s → binaries → `npm run build:app`；
+> 部署 `D:\MCNP\MCNP输入卡生成器`，7873 文件 / 214,820,150 B）。
+> 详细流水：`docs/CHANGELOG.md` 2026-09-26 三条（两条修复 + 一条发布）。
+> 门禁：pytest **1417 passed / 0 failed / 11 skipped**；vitest **104 files / 927 passed**；tsc 两档 0；vite build 0。
+
+三条都是**用户实测**驱动，且**三条的共同形态一样**：引擎/算法侧本来是对的，坏在"接缝"或"判据"上——
+
+| # | 用户原话 | 真根因 | 修法（单一实现落在哪） |
+|---|---|---|---|
+| 1 | 「计数卡的前缀，`*`号，解析时无法传入，自己点选后，点生成时也没有」 | **前后端缝两头都漏同一对字段**：`_deck_to_frontend_dict` 序列化不带 `fn_prefix`/`number_suffix`（导入读不到）；`_tally_from_dict` 反序列化不收（选了也传不上来）；前端 `TallyTab` 的 `deckToLocalT` 写死 `prefix:""`、`localToDeckT` 压根不写 ⇒ **下拉框是装饰品**。引擎侧 `parse_f_tally`/`_generate_tallies` 一直是对的，`test_regress_fm_prefix.py` 只测引擎侧所以缝一直是绿的 | 缝两端补齐（含 camelCase 容忍）+ 新增纯模块 `gui/src/utils/tallyBridge.ts`（键序照后端回显顺序，护 `useDeckSynced` 等价判定）+ F5 行补**可见可改的环探测器轴控件**（旧行为连导入的 `F5X` 都被吃掉） |
+| 2 | 「没自己打空格时解析没有出现空格；用户换行后第一个字符是#时会解析成#条件，**你应该判断一下是数字还是英文字母**」 | `normalize_lines`/`parse_cells` 见**行首 `#`** 一律当预处理器/条件行 ⇒ 手工折行的几何续行整行抛出：栅元 5 的 `surface_expr` **截断在 `#24`（丢 31 项补集）**、`imp:n/imp:p=1` 与 `$` 注释一起丢；另 `-14#1#2` 缺空格原样进 deck，而 `#` 是几何里**唯一"前面必须有空白"**的算子（实测 pymcnp `-14#1#2#3` → `TypesError` ⇒ AST=None ⇒ 该栅元在 3D 预览/源演示/重合检测里**静默消失**；`:`/`(`/`)` 紧贴都能解析） | 判据改成 **`#` 后第一个非空白字符是字母还是数字**（字母=`#ifdef`/THTME 表头⇒断点；数字/括号=几何补集⇒接回上一张几何卡，且**不要求 `&`/缩进**、仅当上一行首 token 是数字，THTME 表头不被误并）；新增 `lines.normalize_geometry_spacing`（`-14#1`→`-14 #1`）挂**生产者**（`parse_cells`）与**消费者**（`freecad_preview.parenthesize_unions`，兜手输）两侧，已规范文本逐字不变（护 R1） |
+| 3 | 「3D预览中，截面拖动时，有时候会不知道框选到什么东西，导致前端**误以为是在导入东西，而卡死在导入时的粉色页面**」「截面拖动时，如果截面**有进行过旋转，拖动行为就会变得很怪异**」 | ① `App.tsx` 拖入导入覆盖层（`inset:0; zIndex:9999`）**`dragenter` 无条件点亮**、**`dragleave`/`dragend` 从不清除** ⇒ 拖拽起点落在**已选中的文字/可拖元素**上时浏览器会起一次原生拖拽（实测 `dataTransfer.types` 只有 `text/plain`、**无 `Files`**），这种拖拽**不会落到 `drop`**（松手在窗口外/Esc/跨文档）⇒ 粉色覆盖层永久留在屏幕上（`elementFromPoint(400,300)` 命中的就是它）= 卡死。② `CrossSectionView` 旋转中心写成 `(viewBox.x - pan.x)+w/zoom/2`（**跟着平移走**）⇒ 平移量被卷进旋转矩阵：`d(screen)/d(pan)=k(I−S+S·M)`，拖 Δ 的实际位移是 `(I−S+S·M)Δ`（θ=37° 实测 63/−41 变 74.99/−87.17，长度 ×1.53、方向差 16°）；θ=0 时退化为 Δ ⇒ **只有转过角度才露头** | ① 新增 `gui/src/utils/dragImport.ts`：只有**真拖文件**才亮、`leave/drop/end` **一律熄**、`onDragStart` 也熄、`dragLeave` 只在真离开 shell 时熄；覆盖层补 `pointerEvents:none`（意外亮起也不许吃点击）。② 新增 `gui/src/utils/sectionView.ts`（viewBox/旋转中心/组变换/等比缩放/拖动→pan 单一实现，**旋转中心不含 pan**），不变量"**任意旋转角下拖 Δ ⇒ 内容正好移 Δ**"由属性测试锁死 |
+
+### S11.1 证据（每步都留了能红的尺子）
+
+- **真浏览器复现（修复前，构建产物 + 真 Chrome）**：内部拖拽（`types=["text/plain"]`）⇒ 粉色覆盖层亮；紧接着 `dragend`+`dragleave` ⇒ **仍在**（`body.innerText` 仍含"释放以导入 INP 文件"）、`elementFromPoint` 命中覆盖层。修复后同一串事件：**全程不亮**；真拖文件（`types=["Files"]`）仍亮（导入功能没丢）且 `pointerEvents:none`；`dragend` 后熄灭。
+- **纯函数属性测试**：`gui/test/sectionView.test.ts`（14 例）—— 任意旋转角（0/15/37/−25/90/180/270）× 缩放 × 三种留白下"拖 Δ ⇒ 内容正好移 Δ"；含**旧公式反向对照**（精确断言位移 = `(I−S+S·M)Δ`、θ=0 退化为 Δ）。
+- **组件 DOM 测试**：`gui/test/crossSectionPan.dom.test.tsx`（4 例）—— 渲染出的 `viewBox`/`transform` 必须与算法一致。**当场抓到本次接线的一处错**：把 `dragStart` 记录当 pan 传入 ⇒ 拖动量多 200px（纯函数全绿也照样错，说明该层测试必要）。
+- **部署版端到端**：`/api/parse-inp` 喂用户那张折行卡 ⇒ 1 栅元 / 54 项 / 含 `#55` / 无 `#1#2` 粘连 / `imp:n=imp:p=1` / 注释在位；回显 `fn_prefix='*'`、`number_suffix='X'`（⇒ exe 内 PYZ 的 `api_server.py` 与松散投放的 `generator/parsers/*` 都是新版）；`/api/generate` 回放 `*F4:N 1 2` + `F5X:N 0 0 0 1`。
+
+### S11.2 本批新增纪律（已固化进 §6）
+
+- **字段要在"缝"上双向核对**：模型/引擎有 ≠ 前端读得到。"导入读不到 + 传不上来"两头都漏时，任何单侧测试都全绿。
+- **拖拽类覆盖层：只认真文件 + 任何结束事件都熄 + 永不挡点击**（`pointerEvents:none`）——否则用户一次误拖就永久卡死。
+- **旋转/平移这类视图变换，用"不变量"当测试**（"内容跟着鼠标走"），而不是断言某个 `transform` 字符串长什么样。
+- **`#` 是 MCNP 几何里唯一"前面要留白"的算子**；行首 `#` 必须按后随字符判"条件行 vs 几何补集"。
+
+### S11.3 打包链实测出的三件事（**下次打包前先看**）
+
+1. **`npm run build:release` 在干净工作区必失败**（本轮首次即中止）：`scripts/build-release.mjs` 把 `vite build + tauri build`
+   排在 PyInstaller **之前**，而 `tauri.conf.json` 的 `beforeBuildCommand` 含 `sync-sidecar`、正等着 `dist_sidecar/`。
+   实测日志：`[sync-sidecar] ❌ PyInstaller 产物不存在 … 已中止` → `Error beforeBuildCommand … failed` → `build-release ❌`。
+   ⇒ **干净机/首次构建走手册手工顺序**（vite → PyInstaller → binaries → `npm run build:app`），本轮即如此。**该脚本的排序缺陷未修，留待裁决。**
+2. **手册第 4 步的 `--workpath build_sidecar` 与 `build-release.mjs` 清缓存清的 `build/mcnp_sidecar` 不是同一目录**
+   ⇒ "坑 B 清缓存"对不上。本轮用"产物与源码**逐文件哈希对拍** + 端点**功能级冒烟**"独立证明 sidecar 是新版（不依赖清缓存纪律）。
+3. **主程序关闭后 `--mcp-http` 子进程（8100）不会随之终止**（实测残留 PID 仍在跑并占 8100；文档口径写的是"跟随主程序退出"）。
+   ⇒ 打包/部署/冒烟前后都先查 **8100**，按 PID 精确清理（勿 `taskkill /im python.exe` 误杀他处 python）。
+
+## S10（上一批次）实体预分解换血 + 三个几何 bug（2026-09-24，**已改 ✅ / 已提交 ✅ / 已随 v1.7.7 再次出包部署 ✅**）
+
+> **三态**：**已改 ✅ / 未提交 / 已打包部署 ✅**（`npm run build:release` 175–289 s → 部署 `D:\MCNP\MCNP输入卡生成器` 7878 文件 / 254.07 MB → 部署版端到端复验通过）。
+> 详细流水：`docs/CHANGELOG.md` 2026-09-24 三条 + `docs/frontend-changes.md` 同名三节。
+> 门禁：pytest **1381 passed / 0 failed / 11 skipped**；vitest 99 files / 877 passed；typecheck 两档 EXIT 0。
+
+本批是**用户连续实测驱动**的四轮，每轮都是"用户说现象 → 量化 → 定位根因 → 修 → 补能红的回归"：
+
+| 轮 | 用户原话 | 真根因 | 谁的问题 |
+|---|---|---|---|
+| 1 | 「能调分解等级吗？分块的面数可以大一点的其实」→「考虑到 freecad 性能，每块面数控制在 30 以下」 | MCCAD 暴露的是**过程参数**（`recurrenceDepth`），给不了"每块面数"这个**结果指标**；且它把实体面数合计从 194 涨到 1110 | 设计选型 |
+| 2 | 「分解的 stp 没问题，为什么 geouned 解析这些 stp 就出问题了？」→「把这些块一个一个传进程序看体积有没有变化」 | ① `_surf_classes()` 按 keyword 覆盖掉 `P_0` ⇒ 四系数平面被转成三点 ⇒ 感度翻转；② `_plane_halfspace` 厚板盖不满包围盒 | **我们的** |
+| 3 | 同上（切了仍是几百个面 / 块 003 残留） | 不切时 GEOUNED 会产出「**3 个平面的交**」——3D 里必然无界 | **GEOUNED 的**（"预分解"恰好是它的解）|
+| 4 | 「我用切分后，3D 预览…看到的是一坨」→「每个栅元都是乱的」 | 墓区栅元（`Graveyard`/`Graveyard_in`，体积 = 模型 7372%/1583%）被渲染，把模型整个包住 | **我们的**（序列化口漏 imp + 判据只认 imp）|
+
+### S10.1 定位手法（可复用，本批最值钱的部分）
+
+1. **按用户给的办法做逐块闭环**：把多实体 STEP 拆成单文件 → 逐块量**三处体积**
+   （V0 基准真值 / V1 GEOUNED 的 `Vol=` 卡 / V2 程序重建）⇒ **责任一次性分清**
+   （V1 全对 + V2 爆炸 + 对照块精确 ⇒ 错在表达式，不在转换、也不在重建机制）。
+2. **纯算术角点检测**（不碰几何引擎）：MCNP 的栅元是"若干交项的并"，每个交项必须落在块内
+   ⇒ 把包围盒 8 个角点代进每项，命中的就是"不界定"的项。
+3. **翻转对照**：把可疑约定整体取反再跑同一判据（"当前 2 项命中 / 翻转 0 项命中"）。
+4. **量"前端要渲染的东西"**：调真实 `/api/preview-3d`，把返回的每个 STL 都算体积与 bbox
+   ⇒ 一眼看出谁是"一坨"（墓区：体积 7372%、bbox 2927³，模型才 1042×1751×260）。
+5. **自己把 STL 画出来**：不需要浏览器也能看"形状对不对"（实体块总 bbox 与模型一致 ⇒ 几何正确）。
+
+### S10.2 本批新增纪律（已固化进 §6）
+
+- **判据必须能红**：`正侧 + 负侧 = 盒` 是恒真式（`负侧 := bb.cut(正侧)`），回退修复后照样绿 —— **假判据比没有判据更危险**。
+- **序列化口必须喂全下游判据要读的键**：判据"读不到就放行"时，漏字段 = 静默全放行。
+- **同一 keyword 的多个 pymcnp 变体不能按 keyword 收成一个**；需要"迁就某个变体"的转换代码是危险信号。
+- **几何覆盖类不变量（"够不够大"）不写判据就一定会漏**。
+
+## S9（上一批次）真实 MCNP keff 解析修复 + keff 解析玻璃卡（2026-09-20，**已提交 ✅ / 已打包部署 ✅ · 版本仍 1.7.6**）
 
 > **三态**：**已改 ✅ / 已提交 ✅（`2a18f43`）/ 已打包部署 ✅**（`node scripts/build-release.mjs` 236 s → 备份 `_backup_1.7.6_20260920_004344` → 部署 + 冒烟通过；详见 S9.7）。
 > 详细流水：`docs/CHANGELOG.md` 总表 + `docs/backend-changes.md`（§真实 MCNP 结果的 keff 序列解析修复）+ `docs/frontend-changes.md`（§keff 解析：独立玻璃卡 + 两个子按钮）。
@@ -1170,8 +1260,76 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 
 ## §2 当前状态快照（语义记忆）
 
-- **开发阶段**：**v1.7.6 已打包部署**（2026-09-11，`D:\MCNP\MCNP输入卡生成器`）——含 **S1 全量**（源演示修复链 4 轮 + 粒子圆点化 + 方向线/长度滑杆 + 一键运行多核 tasks）。**部署版冒烟实测**：`/api/xsdir-check` **200**（`loaded=true`）、`/api/diff-inp` **200**（旧包 500）、`/api/lattice-extent` **200**、`/api/source-demo-sample` **200**（旧包 404）；5001 与 MCP 8100 均 LISTENING；`_internal\app\{mcnp_tasks,preview_cache,lattice,diff_inp}.py` 与 `_internal\vendor\geouned` 全部在位。旧包已备份 `D:\MCNP\_backup_1.7.5_20260912_114743`（223.1 MB / 2303 files）。
+- **开发阶段**：**v1.7.7 已打包部署**（2026-09-26，**用户指定升版**）—— 本包含 **S11 三条修复（计数卡前缀 / 栅元 `#` / 截面拖动）+ S10 全量（GEOUNED 参数 UI · FreeCAD 自适应切分 · `P A B C D` 感度 · slab 覆盖 · 墓区过滤）+ 09-23 各批**。
+  **部署版冒烟实测（2026-09-26，真跑 exe）**：5001 **2 s** 就绪；`/api/xsdir-check` `loaded=true`；`/api/parse-inp` 喂用户那张"手工折行、续行行首 `#`"的栅元卡 ⇒ **1 栅元 / 54 项 / 含 `#55` / 无 `#1#2` 粘连 / `imp:n=imp:p=1` / 注释在位**，回显 `F4.fn_prefix='*'`、`F5.number_suffix='X'`；`/api/generate` 回放 `*F4:N 1 2` + `F5X:N 0 0 0 1`；收尾 5001/8100/1420 全释放。
+  **产物核对**：exe **6,622,208 B**、`python.exe` **32,622,751 B**（与 `src-tauri/binaries/` **哈希一致**）、`_internal` **7873 文件 / 214,820,150 B**、exe 内 bundle **`index-dO5WbQoY.js`**（旧包 `index-DA8CoYHE.js`）、PE 资源版本 **1.7.7**（UTF-16）；部署目录 `_internal\app\generator\parsers\lines.py` 与源码**哈希一致**。旧包已备份 `D:\MCNP\_backup_1.7.6_20260926_154504`（**整卷改名移动**，秒级可回滚）。
+  > 旧状态（已作废）：**v1.7.6 已打包部署**（2026-09-11，`D:\MCNP\MCNP输入卡生成器`）——含 **S1 全量**（源演示修复链 4 轮 + 粒子圆点化 + 方向线/长度滑杆 + 一键运行多核 tasks）。**部署版冒烟实测**：`/api/xsdir-check` **200**（`loaded=true`）、`/api/diff-inp` **200**（旧包 500）、`/api/lattice-extent` **200**、`/api/source-demo-sample` **200**（旧包 404）；5001 与 MCP 8100 均 LISTENING；`_internal\app\{mcnp_tasks,preview_cache,lattice,diff_inp}.py` 与 `_internal\vendor\geouned` 全部在位。旧包已备份 `D:\MCNP\_backup_1.7.5_20260912_114743`（223.1 MB / 2303 files）。
   > 旧状态（已作废）：v1.7.5（2026-09-10 部署）只含技术债修复全量 + SDEF 源粒子演示，**不含** 09-11 的源演示二批 / 圆点化 / 多核 tasks。
+  > **2026-09-23 同版本重出包（版本恒 1.7.6，用户指定不升版）**：GEOUNED STEP 导入参数 UI 进包。
+  > 链路 vite → PyInstaller（190 s）→ binaries 替换 → `npm run build:app` → 部署
+  > `D:\MCNP\MCNP输入卡生成器`（7876 文件 / 242.3 MB）。**冒烟**：3 秒后端就绪、
+  > `xsdir-check loaded=true count=7925`。**证据链**：部署包内 `step_importer_geouned.py` /
+  > `geouned_worker.py` **sha256 与源码逐字节一致**、新映射在包内跑通、exe 内搜到本批前端
+  > bundle 名 `index-Dlg3rafp.js`（旧包 `index--y8mVlhU.js`）。**未备份旧包**（用户明确指示
+  > 「不必进行备份」）；首次部署后按真机反馈又改了两处子弹框行为并**只重出前端**（未重跑
+  > PyInstaller —— 后端未变，`python.exe`/`_internal` 逐字节相同）。
+  > **2026-09-23 同日后半批（版本仍 1.7.6）**：**MCCAD 实体预分解**（基本页开关）+ 导入设置持久化。
+  > 动因是用户模型（`厂房建模.step`，3 实体 / 270 面）经 GEOUNED 直转后**栅元 3 引用 146 个面**，
+  > 而 `simplify` 两档对它**逐位相同**（25/23/146）⇒ 实体分解无档位是根因。**实测结论**：
+  > 备份里的 `McCAD.exe` 可用（**FreeCAD 的 bin 补 OCC DLL 即可**，无需打包 47 MB）；
+  > McCAD 只分解 → 3 实体变 **188 实体**；交给 GEOUNED → **186 个实体栅元、单栅元最大面数
+  > 146 → 9（平均 6）、体积守恒 0.0002%**；而 **MCCAD 自己的转换器在 `decompose=true` 时
+  > 拒绝该模型**（无 `MCFile.i`，mm/cm 都拒）⇒ **McCad 切、GEOUNED 转**。
+  > 详见 `docs/frontend-changes.md` 同名章节与 CHANGELOG 同日两条。
+  > **2026-09-24（版本仍 1.7.6）：MCCAD 整条链路被 FreeCAD 自适应切分替换掉。**
+  > 三条实测判死外部程序路线：① MCCAD 的 188 块里 186 个实体块**每个 ≤8 面**，但实体面数
+  > **合计从 194 涨到 1110**（块数换复杂度做亏了）；② 它切出**退化块**（栅元 80/134 表达式
+  > 同为 `-208 211`，`Vol≈6.7e-07`/`3.6e-06` cm³，3 位小数显示成 `Vol=0.000`），
+  > `minSolidVolume=1.0e-3` 拦不住；③ **它暴露的是过程参数**（`recurrenceDepth`），而用户要的是
+  > **结果指标**（每块面数）—— 同样深度在不同模型上得到的块复杂度完全不同，加多少档都给不了。
+  > **新机制**：`app/adaptive_cut_freecad.py`（FreeCAD 子进程）+ `app/adaptive_decompose.py`
+  > （父侧深模块），**按结果收敛的最长边二分** —— `Faces <= 上限` 就留，否则沿最长边中分，
+  > 某轴切不出 ≥2 块就换轴，三轴都切不动或到深度上限就**原样保留并计数**。
+  > 实测 274 m³ 模型：上限 30 → **18 块（19–30 面，0 块超限）**、上限 50 → 9 块、上限 20 → 41 块
+  > （2 块切不动，如实上报）；体积比均 **1.0000000**、碎屑 0、1–2 s。
+  > 最终栅元：**47 个 / 实体面数合计 367 / 最大 48**（不切是 30 / 194 / 146；MCCAD 是 205 / 1110 / 52）。
+  > **如实记下的局限**：**真空栅元不受块切分控制**（28 个真空栅元最大 48 面）—— 真空是实体
+  > **之间**的空隙，把实体切碎只会让它更零碎，不会更简单。用户"≤30 面"的要求在**实体块**侧全达成。
+  > **两个真 bug**：`import FreeCAD` **必须先于** `import Part`（否则 `ModuleNotFoundError`，
+  > 后果不是报错而是**静默跳过切割**）；同一 bug 让 `geouned_worker._bbox_of()` 恒返回 None ⇒
+  > 分解自证**退化成恒真空检查**。详见 `docs/frontend-changes.md` 2026-09-24 节。
+  > **2026-09-24 同日第二批（版本仍 1.7.6）：`P A B C D` 感度翻转 + `_plane_halfspace` 覆盖不足。**
+  > 用户驱动：「分解的 stp 没问题，为什么 geouned 解析这些 stp 就出问题了？」→「把这些 stp 中的块
+  > 拆出来、一个一个传进程序，看体积有没有变化」→「检查出 bug 在哪里」。**按此方法定位**：
+  > 18 块逐块量三处体积 —— **V1（GEOUNED 的 `Vol=` 卡）17/17 全对**、**V2（程序重建）16/18 爆炸
+  > （+494%…+11389%）**、对照块 000/001 偏差 +0.0004%/−0.0000% ⇒ 责任在**表达式**不在重建机制。
+  > **① `_surf_classes()` 按 keyword 收成一个类**：pymcnp 的 `P_0`（四系数）/`P_1`（三点）
+  > **`_KEYWORD` 都是 `p`**，`_d[_kw] = _obj` 让 `P_1` 覆盖 `P_0` ⇒ 四系数卡解析失败 ⇒ 落进
+  > "系数→三点"兜底 ⇒ 下游按 C810 §3-17「原点负感度」重算法向 ⇒ **D<0 的平面整体翻面**
+  > （GEOUNED 写的一般平面 D 大量为负）。**C810 §3-17 原文（PDF 541 页）**：那条规则**只管三点形式**，
+  > 四系数形式的正侧就是写下的符号 ⇒ `plane_from_points` 本身没错，错的是"不该走三点"。
+  > **② `_plane_halfspace` 厚板盖不满包围盒**：横向需 ≥`√3B`（要求参考点 ∥ 法向，而 `P_0` 分支取
+  > `(D/A,0,0)`）、沿法向厚度需 ≥`√3B−n·p`（只伸 2B 时要求 `n·p ≥ −0.268B`）。修法：参考点**投影成
+  > 最近点** + 厚度取 **4B**。**效果（18 块最坏偏差）**：+11389% → 修感度 +0.5128% → 再修厚板 **+0.0897%**；
+  > 块 003 三级台阶 +249% → +0.49% → **−0.0049%（closed）**。**③ 第三处是 GEOUNED 的**：不切时那个
+  > 202 面实体的栅元表达式有 229 个交项，**唯一一个 3 面项由三个平面构成**——**3 个平面半空间的交在
+  > 3D 里必然无界** ⇒ 溢出（`infinite`、体积 = 真值 2.7 倍）。我们改不了 GEOUNED，**但"实体预分解"
+  > 恰好是它的解**：`cut=ON` 时 18/18 实体栅元 `closed`、体积合计 +0.0048%。
+  > **2026-09-24 同日第三批（版本仍 1.7.6）：GEOUNED 墓区被渲染进 3D 预览（"一坨"的真根因）。**
+  > 用户：「我用切分后，3D 预览…看到的是一坨」→「每个栅元都是乱的」→「你用视图能力，截图查看」。
+  > **量化**：预览返回 **47 个 STL**，其中栅元 47（注释 `Graveyard`、半径 1049 球外）体积 =
+  > 模型 **7372%**、bbox **2927³**；栅元 46（`Graveyard_in`）**1583%**、2097³ ⇒ 把模型
+  > （1042×1751×260）整个包住、相机被撑到 **±2000**。**根因两处**：① `flat_cell_json`（这条路上
+  > **唯一的序列化口**）只输出 5 键，丢了 `imp_n/imp_p/imp_e`、`render`、`fill`、`fill_grid`、`u`；
+  > ② `build_cells_data` 的 graveyard 判据要读 `imp_*`，**而上游 `flat_cell_json` 把 `imp_*` 丢了**（实测 GEOUNED 的 deck **是带 imp 的**：`47 0 277 Vol=1.000 imp:n=0 imp:p=0 `）⇒
+  > 取不到值 ⇒ **恒不成立**。**修法**：判据加第二条「**注释含 graveyard**」（GEOUNED 官方标记，
+  > `void.py:201/208`；`mcnp_format.py:256` 也这么认）+ 序列化口补齐 7 键（同步 `api.yaml` 契约）。
+  > **效果**：预览 STL **47 → 45**、全部 STL 总 bbox **2927³ → 1043.9×1752.8×262**。
+  > **部署（2026-09-24 23:05/23:07，版本仍 1.7.6）**：`npm run build:release` → 部署
+  > `D:\MCNP\MCNP输入卡生成器`（**7878 文件 / 254.07 MB**）；`_internal` 与构建产物**7873 项
+  > 逐项一致**、顶层三件套 sha256 一致、`_internal\app\step_importer.py` sha256 与源码一致。
+  > **部署版端到端复验**：47 栅元 → 预览 **45 个 STL**、46/47 排除、总 bbox 1043.9×1752.8×262。
+  > 三批详见 `docs/frontend-changes.md` 与 `docs/CHANGELOG.md` 2026-09-24 三条。
 - **技术债状态**：2026-09-10 完成全量审计（**34 条**，详见 `docs/tech-debt-report.md` + `docs/audit/`，后者被 `.gitignore` 忽略）→ **已完成修复 + 实跑验证 + 打包部署**（见 S1）。审计结论"已证实 P0 = 0"经实机**修正为：至少 1 条实际已坏**（部署版 `/api/diff-inp` 500）。剩余待办见 S1「🧹 待办」（M-10 / TD-19 / TD-35 残项 / C810 核对）。
 - **待排期**：无（#7 重合检查已于 2026-08-22 交付；`MCNP输入卡生成器_功能待办清单.md` 的 P1#2「3D 预览悬停/编号标签」仍未做）
 - **已完成功能**：
@@ -1179,6 +1337,9 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
   - INP 生成/导入（含拖拽）、工作区自动保存/恢复、4 套主题
   - 材料库（**97 种预设**：49 内置 + 48 PNNL-15870 精选同位素级；xsdir 校验 + 下拉自动填充密度）+ **用户可编辑持久材料库**（材料库深化，2026-08-30：custom/override、导入导出 JSON·CSV、xsdir 反向索引 + 组成自洽校验、「📚材料库」管理面板、MT卡/其他随预设贯通，存 `D:\MCNP\material\material_library.json`）
   - 3D 预览（FreeCAD CSG，`#n` 栅元补集支持）+ 平面截面（STL numpy 切）+ STEP/GEOUNED 导入
+  - **GEOUNED STEP 导入参数 UI**（2026-09-23，**已打包部署 ✅**）：导入对话框改 **4 个子页签**（基本 / 常用调节 / 进阶与少见 / 高危 ⚠），共 **40 项 GEOUNED 参数**可调 —— 真空栅元切割三件套 `maxSurf`/`maxBracket`/`minVoidSize`（第 2 页「常用调节」）、`simplify`、`spline_surfaces`、`voidMat`、`skipSolids`、`sort_enclosure`、`debug`、Options 9 项、Tolerances 全 15 项、`export_csg` 5 项。核心语义：**留空 = 该键不发送 = 用 GEOUNED 自己的默认值**（与 GEOUNED config.json"省略键即默认"同构）；全部控件配中文悬停释义（子弹框含作用/默认/怎么调/开与关/逐选项释义/风险 + `对应 GEOUNED 参数：` 英文行），**触发器只有参数右侧的 `?` 图标、鼠标移开立即消失**；颜色零硬编码（4 套主题自动正确，暗色主题正文近白）。后端 `_map_app_settings_to_geouned` 改**表驱动白名单**（44 行，缺省/非法即不发送）+ worker 五区段接线。**导入设置会记住**（独立键 `mcnp_step_import_v1`，主界面「清空」不影响；材料名/密度/TMP 不记忆）。详见 `docs/frontend-changes.md` 与 `docs/CHANGELOG.md` 2026-09-23 条
+  - **实体预分解（每块面数上限可调）**（2026-09-24）：基本页开关「启用实体预分解」+ 下拉「每块面数上限」（较粗 50 / **适中 30（默认）** / 较细 20 面）。纯 FreeCAD/OCC 实现，**不依赖任何外部程序**（MCCAD 链路已整体移除）：`app/adaptive_decompose.py`（父侧深模块）+ `app/adaptive_cut_freecad.py`（FreeCAD 子进程），**按结果收敛的最长边二分**，切不动就如实计数上报。实测 274 m³ 模型：上限 30 → **18 块（19–30 面，0 块超限）**、体积比 1.0000000、1.4 s；最终 47 栅元。**它同时规避了 GEOUNED 的退化分解**（见 §6「3 个平面的交必然无界」）。失败一律回退原文件、原因经 warnings 传到界面
+  - **3D 预览不再渲染 GEOUNED 墓区**（2026-09-24）：graveyard 判据加「注释含 graveyard」+ `flat_cell_json` 补齐下游判据键。此前两个墓区（体积 = 模型 7372% / 1583%、bbox 2927³）被渲染，把模型整个包住、相机撑到 ±2000 —— 用户报的"3D 预览是一坨/每个栅元都是乱的"就是它
   - **GQ/SQ 曲面 3D 预览**（2026-08-22）：含任意 GQ/SQ 的栅元走纯 numpy 体素 CSG（`app/mc.py`/`voxel_csg.py`/`quadric.py`），TR 变换正确、水密、无 vtk 依赖、打包可用
   - **GQ/SQ 精确截面（2D 解析切片）**（2026-08-22）：`app/analytic_slice.py` 在切割平面上解析求值 + marching squares 提取轮廓；**切线平面法快路径**（椭球/圆柱平滑水密网格，~600 三角形）
   - **mctal 解析 + 参数扫描**（2026-08-22）：`app/mctal_parser.py`（k-eff/收敛/tally，纯 stdlib）+ `app/sweep.py` + `/api/sweep-plan`（规划）/`/api/sweep-run`（执行，上限 50 组合）+ 前端 `SweepDialog.tsx`（参数编辑/组合预览/结果表/TSV 下载，OutputTab 入口）
@@ -1233,9 +1394,9 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 | | | |
 | **前端（gui/src/）** | | |
 | `gui/src/App.tsx` | 主界面（顶栏/导入/生成/保存恢复/主题） | 前端 |
-| `gui/src/components/` | 标签页组件：BasicSettings/MaterialTab/GeometryTab/SourceTab/TallyTab/AdvancedTab/OutputTab | 前端 |
+| `gui/src/components/` | 标签页组件：BasicSettings/MaterialTab/GeometryTab/SourceTab/TallyTab/AdvancedTab/OutputTab。**TallyTab 的"前缀/环探测器轴"必须经 `utils/tallyBridge.ts` 落 deck**（2026-09-26 起，见 §6 接缝那条） | 前端 |
 | `gui/src/components/Preview3D.tsx` / `Preview3DWindow.tsx` | Three.js 3D 预览（独立窗口） | 前端 |
-| `gui/src/components/CrossSectionView.tsx` / `CrossSectionWindow.tsx` | 平面截面（独立窗口） | 前端 |
+| `gui/src/components/CrossSectionView.tsx` / `CrossSectionWindow.tsx` | 平面截面（独立窗口）；**视图变换/拖动换算一律走 `utils/sectionView.ts`**（2026-09-26 起：旋转中心不得含 `pan`） | 前端 |
 | `gui/src/three/` | 3D 深模块：cameraParams/renderGate/cellMaterial/TickGrid（`setLabelTheme` 屏幕·纸质两种标签底）/axisConfig（轴单一事实来源；**`color` 屏幕色 + `paperInk` 出图墨色**）/planeOffset（截面平面坐标换算）/quickCellPreview（快捷建栅元线框） | 前端 |
 | `gui/src/volume/` | 体积可视化 11 模块（volumeShader/VolumeRenderer/colorize/alignWorld/downsampleRequest/fmeshState/ColorLegend/FMeshForm/VolumeControlPanel/ResultWindow/surfacesAABB） | 前端 |
 | `gui/src/ptrac/` | PTRAC 径迹 3D 窗口模块（trackColors/PtracRenderer/PtracWindow 等） | 前端 |
@@ -1249,7 +1410,10 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 | `gui/src/three/planeEquation.ts` | **切割平面方程单一权威**：解析/格式化/步长折半加倍/成叠平面序列（3D 预览截面、截面窗口、fmesh 切面三处共用） | 前端 |
 | `gui/src/components/PlaneControls.tsx` | **平面方程 + 步长 + 步进共享控件**（上条那三处共用，避免步长语义分叉） | 前端 |
 | `gui/src/components/TallyChartWindow.tsx` | **「Tally 通量图」独立窗口**（原为输出页弹窗，图小/与数据表互挤/不可导出） | 前端 |
-| `gui/src/utils/DeckContext.tsx` | **单一权威表单状态**（localStorage 键 `mcnp_workspace_v1`） | 前端 |
+| `gui/src/utils/DeckContext.tsx` | **单一权威表单状态**（localStorage 键 `mcnp_workspace_v1`）；`TallyDef` 含**卡片身份字段** `fn_prefix`/`number_suffix`（漏传即换卡，见 §6） | 前端 |
+| `gui/src/utils/tallyBridge.ts` | **计数卡行双向桥接纯函数（2026-09-26 新增）**：`deckTalliesToRows`/`rowsToDeckTallies`/`splitTallyNumber` —— 前缀 `*`/`+`/`FIP|FIR|FIC` 与 F5 环探测器轴 `X|Y|Z` 全靠它过缝（键序照后端回显顺序，护 `useDeckSynced` 等价判定） | 前端 |
+| `gui/src/utils/dragImport.ts` | **拖入导入覆盖层判定纯函数（2026-09-26 新增）**：只有**真拖文件**（`types` 含 `Files`）才亮；`leave`/`drop`/`end` 一律熄 —— 旧实现让"内部拖拽 + 没有 drop"永久卡在粉色页面（见 §6） | 前端 |
+| `gui/src/utils/sectionView.ts` | **二维截面视口/变换纯函数（2026-09-26 新增）**：viewBox / 旋转中心（**不含 pan**）/ 组变换 / 等比缩放（`preserveAspectRatio` 留白）/ "拖动 Δpx → 新 pan" —— 不变量"任意旋转角下拖 Δ ⇒ 内容正好移 Δ"由属性测试锁死 | 前端 |
 | `gui/src/utils/useSectionTextMode.ts` / `sectionConvert.ts` | 文本↔表单互转深模块 + API 封装 | 前端 |
 | `gui/src/utils/gridState.ts` | E0/En/T0/Tn 网格解析/序列化深模块 | 前端 |
 | `gui/src/utils/backend.ts` / `dataCollector.ts` / `contract.ts` | 后端生命周期 / 表单收集 / 数据类型 | 前端 |
@@ -1308,6 +1472,29 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 | **GQ/SQ 渲染后续增强（同日）**：① **2D 解析切片**（`app/analytic_slice.py`）——切割平面逐点解析求值 + 2D marching squares 轮廓，preview-3d 会话存 deck 快照、cross-section 对 GQ/SQ 栅元自动走解析切片；② **切线平面法快路径**（`voxel_csg._tangent_plane_mesh`）——单个内侧椭球/球/圆柱 + 平面封口 → 切线半空间 + 凸裁剪（Sutherland–Hodgman + 盖面极角排序），水密；椭球 162 方向 + 绕中心体积校正（无封口）/642 方向（有封口），圆柱 48 段；union/补集/多二次曲面/锥回退 MC | 截面轮廓位置精度只取决于解析求值（STL 受网格分辨率限制）；切线路径三角形数 ~600 vs MC ~10 万；OWEN csgScene 的做法（金螺旋方向分布不均 + 边链盖面在贴面顶点退化）不能直接照搬 | 2026-08-22 |
 
 ## §5 核心业务规则（语义记忆 · 必读）
+
+- **⭐ 3D 预览「渲染哪些栅元」的分类规则（项14，2026-08-24 用户确认；2026-09-24 补第二条判据）**：
+  唯一实现 = `gui/backend/api_server.py::build_cells_data`，按序：
+  1. **fill 装配容器**（`fill` 非空 或 `fill_grid` 非空，含 `fill="0"`）→ 跳过自身 STL（内容由 FILL 装配走 preview-lattice）；
+  2. **graveyard → 不渲染**，判据**两条并列、各管一段**：
+     · `imp_n/imp_p/imp_e` 任一为 `0`（MCNP 语义：该粒子重要性 0 = 杀粒子）；
+     · **注释含 `graveyard`**（大小写不敏感）—— **GEOUNED 的官方标记**，`void.py:201/208` 写死
+       `MatInfo = "Graveyard_in"/"Graveyard"`，GEOUNED 自己的 `mcnp_format.py:256` 也这么认。
+  3. `render:false` → 跳过；
+  4. 其余实体（`material≠0`）与纯 void（`material=0`，无 fill 无 u）→ 参与 STL（`include_void=True` 时）。
+
+  **⚠️ 两条判据的分工（2026-09-24 实测查准，别记错）**：GEOUNED 生成的 deck **是带 imp 的**，
+  实测 `47 0 277 Vol=1.000 imp:n=0 imp:p=0 $Graveyard`、`46 0 -277 (...) imp:n=1.000 $Graveyard_in`：
+  | 栅元 | imp 判据 | 注释判据 | `imp:n` | 说明 |
+  |---|---|---|---|---|
+  | 47 | **命中** | 命中 | **0** | 真墓地（半径 1049 球**外**）—— imp 本该就拦住它 |
+  | 46 | 不命中 | **命中** | **1.000** | `Graveyard_in`（球**内**、enclosure 盒外）—— **GEOUNED 有意给 imp=1**（粒子可在其中飞行，按 MCNP 语义不是墓地），但它是 GEOUNED 的边界结构、体积达模型 1583%，同样不该画 |
+  ⇒ **imp 判据失效的原因是上游丢字段**（`flat_cell_json` 没输出 `imp_*`），**不是 GEOUNED 没写 imp**。
+  ⇒ **为什么必须拦这两个**：它们的 bbox 是 **2927³ / 2097³**，而模型只有 1042×1751×260 ——
+  一旦渲染就把模型整个包住、相机被撑到 ±2000 ⇒ 用户看到"一坨"（2026-09-24 实证，见 S10 与 §6）。
+  ⇒ **改这条规则前先读**：这些键**全部**由 `app/step_importer.flat_cell_json` 供给（STEP 导入 → 前端
+  → preview-3d 的唯一序列化口，契约见 `docs/contracts/api.yaml` 的 `deck.cells`）——
+  **判据"读不到就放行"，所以序列化口漏一个键就等于该条规则静默失效。**
 
 - **⭐ hexCenter 权威公式（单一事实，2026-09-10 立此条目以防误用）**：
   ```
@@ -1376,6 +1563,44 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 
 ## §6 踩坑与排雷指南（情景记忆 · 经验教训）
 
+- **❗拖入导入覆盖层：内部拖拽也会触发，且"没有 drop"就永久卡死（2026-09-26 真 Chrome 实测 + 用户报"卡死在导入时的粉色页面"）**：
+  `dragenter` 是**任何** HTML5 拖拽都会触发的 —— 拖拽起点落在**已选中的文字/可拖元素**上时，浏览器起的是原生拖拽，
+  其 `dataTransfer.types` 只有 `text/plain`、**没有 `Files`**。旧 `App.tsx` 对任何 `dragenter` 都点亮全屏覆盖层
+  （`inset:0; zIndex:9999`），而 `dragleave`/`dragend` 只 `preventDefault()`、**从不清除** ⇒ 松手在窗口外/Esc/跨文档拖动
+  （`dragend` 只在**源文档**触发）时覆盖层永久留在屏幕上，`elementFromPoint` 命中的就是它 ⇒ 点击全被吃掉 = "卡死"。
+  **三条铁律**：① 只认**真拖文件**（`types` 含 `"Files"`）才亮；② `leave`/`drop`/`end` **一律熄灭**（覆盖层不保留"等一个 drop"的记忆）；
+  ③ 覆盖层加 **`pointerEvents:"none"`**（就算意外亮起也绝不吃点击）。实现收敛在 `gui/src/utils/dragImport.ts`，回归 `gui/test/dragImport.test.ts`。
+- **❗"拖动/旋转"这类视图变换必须用不变量当测试，而且要当心"中心点含平移"（2026-09-26 用户报"截面旋转后拖动很怪异"）**：
+  `<g transform="scale(1,-1) rotate(θ cx cy)">` 里 **cx 一旦含 `pan`，平移量就被卷进旋转矩阵** ——
+  `d(screen)/d(pan) = k(I − S + S·M)`，于是拖 Δ 的真实位移是 `(I − S + S·M)Δ`：**既偏方向又放大**（θ=37° 实测 63/−41 变 74.99/−87.17，长度 ×1.53、方向差 16°）；
+  **θ=0 时 M=I ⇒ 退化为 Δ（正确）**，所以"平时看不出来、转过才怪"。另：像素↔用户单位必须用**等比缩放** `min(rw/w, rh/h)`
+  （SVG 默认 `preserveAspectRatio="xMidYMid meet"` 会留白），"X 用宽、Y 用高各算一套"在长宽比不匹配时拖动跟不上鼠标（实测只走 66.7%）。
+  **纪律**：把变换抽成纯函数（`utils/sectionView.ts`）+ 断言**不变量**"任意旋转角下拖 Δ ⇒ 内容正好移 Δ"，别去断言 transform 字符串；
+  另加**组件 DOM 测试**锁"渲染出的 `viewBox`/`transform` 与算法一致"—— 本轮就是靠它抓到"把 `dragStart` 记录当 pan 传入"（纯函数全绿照样错）。
+- **❗模型/引擎里有字段 ≠ 前端拿得到：接缝必须双向核对（2026-09-26 用户报"计数卡前缀 `*` 解析传不进来、点选后生成也没有"）**：
+  `_deck_to_frontend_dict`（序列化）与 `_tally_from_dict`（反序列化）**两头都漏** `fn_prefix`/`number_suffix`，
+  前端 `TallyTab` 更把下拉框做成装饰品（`deckToLocalT` 写死 `prefix:""`、`localToDeckT` 不写 `prefix`）——
+  而引擎侧 `parse_f_tally`/`_generate_tallies` 一直是对的，`test_regress_fm_prefix.py` **只测引擎侧**所以这条缝永远绿。
+  **纪律**：卡片"身份字段"（前缀/后缀/粒子/编号）在**导入（后端→前端）与生成（前端→后端）两个方向**都要有断言；
+  新增字段时同步四处（后端两处映射 + `DeckContext` 类型 + 桥接纯函数），否则"界面上选了、INP 里没有"且**全程无报错**。
+- **`#` 是 MCNP 几何里唯一"前面必须有空白"的算子；行首 `#` 必须按**后随字符**判性质（2026-09-26 用户实测）**：
+  ① **缺空格**：`-14#1#2#3` → pymcnp `TypesError: MCNP data type not recognized` ⇒ AST=None ⇒ 该栅元在 3D 预览/源演示/重合检测里**静默消失**；
+  `-14 #1 #2 #3` 正常；而 `:`/`(`/`)` 紧贴都能解析（实测 `1 -2:3`、`(1 -2):(3)` 均 OK）⇒ **只补 `#` 前那一个空格**（`lines.normalize_geometry_spacing`，挂 `parse_cells` 与 `parenthesize_unions` 两侧；已规范文本逐字不变，护 R1）。
+  ② **行首判性质**：`#` 后是**字母** = MCNP 预处理器 / THTME 表头（`#ifdef`、`#    tmp1 …`）⇒ 续行断点、单独成行；
+  `#` 后是**数字/括号** = 几何**补集算子**（`#25`、`#(1 2)`）⇒ **接回上一张几何卡**（用户手工折行时行首正好是 `#`，旧实现整行抛成"条件行"⇒
+  栅元 5 的 `surface_expr` 截断在 `#24`、**丢 31 项补集**、`imp` 与 `$` 注释一起丢）。边界：仅当上一行首 token 是**数字**时才强制接回（THTME 表头才不会被误并）。
+- **打包链三个新增实测坑（2026-09-26，打包 v1.7.7 时踩到）**：
+  ① **`npm run build:release` 在干净工作区（无 `dist_sidecar/`）必失败** —— 它把 `vite build + tauri build` 排在 PyInstaller **之前**，
+  而 `tauri.conf.json` 的 `beforeBuildCommand` 含 `sync-sidecar`、正等着 `dist_sidecar/`（实测 `[sync-sidecar] ❌ PyInstaller 产物不存在 … 已中止`
+  → `Error beforeBuildCommand … failed` → `build-release ❌ tauri build`）⇒ **干净机/首次构建走手册手工顺序**（vite → PyInstaller → binaries → `npm run build:app`）。
+  ② 手册第 4 步的 `--workpath build_sidecar` 与 `build-release.mjs` 清缓存清的 `build/mcnp_sidecar` **不是同一个目录** ⇒ "坑 B 清缓存"对不上；
+  可信的新版判据是**哈希对拍 + 端点功能级冒烟**（本轮即用：`_internal\app\**` 松散 `.py` 与源码 sha256 一致 + 部署版打 `/api/parse-inp` 验本批修复）。
+  ③ **主程序关闭后 `--mcp-http` 子进程（8100）不会随之终止**（实测残留 PID 仍跑并占 8100，文档口径写的是"跟随主程序退出"）⇒ 打包/部署/冒烟前后先查 8100，**按 PID 精确清理**（勿 `taskkill /im python.exe` 误杀他处 python）。
+- **Windows 不能把目录改名到一个**已存在**的目录（EPERM）——测试里的"探测名"会因此把门禁变成永久红（2026-09-26 实测）**：
+  `gui/test/syncSidecar.test.ts` 靠"把 `dist_sidecar/python` 改名成 `python_guard_test`"制造"产物缺失"场景，
+  但 `finally` 还原一旦失败/进程被杀，探测名就留在盘上 ⇒ 之后**每次运行必 EPERM 红**（实测残留目录 mtime 是**前一天 15:42**，跨会话一路红，
+  表现成"vitest 1 failed"却与改动无关）。**修法**：进用例先 `rmSync(探测名)` 清残留 + `finally` 兜底还原且**不覆盖真实断言失败**；
+  **通用纪律**：任何"改名/删除"式测试夹具都必须**幂等**（先清残留），否则一次意外会把门禁永久染红。
 - **vite dev 在本机挂死（2026-08-15 实测）**：node 24.18 + vite 5.4.21 + @vitejs/plugin-react 4.7.0 组合下 vite dev 接收请求后零响应（最小空项目正常，加载项目配置即挂）→ 浏览器白屏/转圈。**启动 bat 已改为 vite build + python http.server 静态服务 dist**，不再依赖 vite dev。
 - **5001 端口劫持（2026-08-15 实测；2026-08-24 阶段2 验收复现；2026-08-24 Wave 2a 再复现）**：Windows SO_REUSEADDR 允许多进程同绑 5001——打包版 sidecar 与 bat 起的 api_server 可同时"监听"，请求被劫持分流。bat 已加 netstat 占用检测（有后端就复用）；诊断用 `Get-NetTCPConnection -LocalPort 5001` 查 OwningProcess。**阶段2 复现实证（QA 独立验收）**：运行中的旧打包版 `D:\MCNP\MCNP输入卡生成器\python.exe -u backend/mcnp_bridge.py`（无新端点）劫持契约闸门 HTTP 用例 → 新端点 `test_http_validate_lattice_surfaces` 404；其余旧端点用例由劫持端也能通过，**只有新增端点才暴露劫持**。**Wave 2a 再复现**：残留旧 server（PID 4776，跑旧代码无 cycle 判环）劫持 5001 → cycle 端点 500 递归错误（新端点/新逻辑才暴露）；杀 PID 复绿。教训：验收新端点/新逻辑前先清 5001（杀旧 sidecar/旧 server/关主程序），或契约闸门 fixture 起子进程前检测端口占用并明确报错；**浏览器复验前必须确认 5001 跑的是新代码**。**Wave 2a 复发（2026-08-24）**：pytest 残留的旧 api_server 子进程（PID 4776，跑**旧代码**）劫持 5001 → 新 cycle 端点 500（maximum recursion depth exceeded，traceback 行号与当前文件不符=老代码跑 cycle 无判环）。杀 PID 后复绿。诊断要点：HTTP 500 且 traceback 行号对不上当前文件 → 先查 `netstat -ano | grep 5001` 占位进程，别先改代码。
 - **P0 体积层渲染两弹（2026-08-15 实测，真实渲染复现）**：① three r160 WebGLProgram 对 RawShaderMaterial **前置 `#define SHADER_TYPE` 块** → shader 首行 `#version 300 es` 不再首位 → GLSL 编译失败 → **体积层自引入从未渲染**（静默，快照测试只锁字符串不编译一路绿灯）。修复：shader 去首行 `#version` + `glslVersion: THREE.GLSL3`。② 相机未 offset：物体按 offset 平移到原点但相机用未 offset 世界盒 → target 对空、画面错位。修复：`applyOffsetToBox` 纯函数。**教训：WebGL 类问题必须 headless 真渲染验证，不能只靠快照测试**。
@@ -1500,6 +1725,244 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
   仍是 `None`）⇒ 那批"真实 HTTP 往返"用例**测的是安装版旧代码**，还报绿。§6 的"5001 端口劫持"条目早有记载，
   本条把它推进到**测试闸门自身的假绿**。修法（待做）：fixture 用**空闲随机端口**（或先检测占用即 skip/fail），
   并在探活成功后**断言监听者就是刚起的子进程**。
+  **❗2026-09-23 再次命中（且证明"占位者不一定是装机版"）**：GEOUNED 参数 UI 批全量 pytest
+  = 1298/1/11，唯一失败恒定是 `test_http_mcnp_detect_lists_all_candidates`（socket 读超时）。
+  首次跑时占位者是**用户运行中的部署版**（`D:\MCNP\MCNP输入卡生成器\python.exe -u
+  backend/mcnp_bridge.py`）；用户关闭后复跑，占位者换成**另一会话的临时脚本**
+  （`D:\AItool\.tmp\__geo2.py`，用部署版 python.exe 起）⇒ 同一用例**照样**超时，同文件其余 29 例全过。
+  **判据（可复跑）**：`Get-NetTCPConnection -LocalPort 5001 -State Listen` 查 OwningProcess →
+  `Get-CimInstance Win32_Process -Filter "ProcessId = <pid>"` 看 CmdLine 判断是谁；
+  **排除 `test_api_contract.py` 后全量 1269/0/11** ⇒ 与业务代码无关。
+  **纪律**：占位者若是**用户程序或他人会话的进程**，不得直接杀 —— 只能如实在结论里标注"环境所致"，
+  并推动 fixture 改随机端口（本批即如此处理）。
+- **❗跑在"非冻结子进程"里的代码看不到随包目录 —— 路径发现必须在知道环境的那一侧做（2026-09-23 端到端实测踩到）**：
+  MCCAD 实体切割上线后用户实测「还是几百个面」。**端到端复现**（POST `/api/import-step`，
+  `mccadCut=true`）拿到真因：`warnings` 里明写 `MCCAD 切割已跳过：未找到 McCAD.exe…`，
+  而曲面卡与开关关闭时**完全一样**（171 张、栅元 3 仍 146 面）。
+  **根因**：worker 跑在 **FreeCAD 的 python.exe** 里 —— 它**不是** PyInstaller 冻结进程 ⇒
+  `sys.frozen`/`sys._MEIPASS` 都不存在 ⇒ `find_mccad()` 里"随包 `_MEIPASS/mccad/McCAD.exe`"
+  那条候选**永远命不中**，只能回落 PATH ⇒ 打包版**静默跳过**。
+  **我的局部探针为什么没抓到**：探针里我手动设了 `MCCAD_PATH` 环境变量，**正好绕过了这个洞** ——
+  局部测试把环境依赖偷偷满足了，等于没测。
+  **修法（可复用原则）**：**谁的进程知道环境，谁负责解析路径** —— 冻结的转换器
+  （`GeoUnedConverter._resolve_mccad_exe()`：`_MEIPASS` → `MCCAD_PATH` → 仓库 `vendor/mccad/`）
+  解析出**绝对路径**，经 payload 的 `mccad.exe` 传给 worker；`find_mccad(mccad_exe="")` 把
+  "显式路径"放第一优先级，env/随包/PATH 只作回落。
+  **修复后同一端到端实测**：`off` = 171 曲面卡 / 30 栅元 / 最大 146 面 / 平均 43.2；
+  `on` = 167 曲面卡 / **205 栅元** / 最大 53 面 / **平均 9.1**，并给出"切割已生效"提示。
+  **连带纪律**：① 涉及"随包资源 + 子进程"的功能，**验收必须走真实入口端到端**（局部探针不算），
+  且**不许在探针里预置本该由程序自己解析的环境变量**；② **静默降级必须回传到用户可见处** ——
+  本次正是靠 `warnings` 一路回传到 API 响应，才一眼分清"跳过"与"没生效"。
+- **GEOUNED 的"切"只有一个方向：真空可调、实体不可调（2026-09-23 源码级普查）**：
+  `maxSurf`/`maxBracket`/`minVoidSize` 全仓**只在 `void/void.py:108-110`** 被读 ⇒ **只对真空栅元生效**；
+  实体侧 `_decompose_solids`（`core.py:614`）是**必经步骤**，用户只能影响"怎么切"
+  （`nPlaneReverse`/`splitTolerance`/`scaleUp`/`enlargeBox`/`forceCylinder`），**不能影响"切多少"**；
+  且 `decom_one.SplitSolid` 末尾 `return Part.makeCompound(...)` ⇒ 切出来的块**合并回同一个
+  `GeounedSolid`**，只是**同一个栅元**表达式里的辅助面，**不会各自成栅元**。
+  **三个可复用的判据**：① 实体 → 栅元的映射是 **1:1**（`core.py:441` 每实体建一个栅元）；
+  ② 想"一变多"只有一条路 —— CAD 侧切分（`compSolids=False` 时每个 sub-solid 各成一个栅元，
+  见 `load_step.py:149-162`；`compSolids=True` 走 `LF.fuse_meta_obj` 合成一个）；③ `enclosure`/
+  `envelope` 节点**永远**融合，不受 `compSolids` 影响。
+  ⚠️ **纪律**：参数"有没有文档"**不能**当作"要不要暴露"的依据（`maxSurf` 官方只写 `#TODO` 但在用；
+  `newSplitPlane` 有 changelog 描述却**零消费者**= 死参数）。**暴露任何第三方参数前必须 grep 消费者。**
+- **PyInstaller：`datas` 里的 `.exe` 会被"二进制重分类"，顺着导入表收进一大堆 DLL（2026-09-23 实测）**：
+  把 `McCAD.exe` 放进 `Analysis(datas=…)` 后，run 日志出现 `binary vs. data reclassification`，
+  它顺着 McCAD.exe 的导入表把 **FreeCAD 的 49 个 OCC/MSVC DLL**（`TK*.dll`/`MSVCP140`/`FreeImage`/
+  `freetype`/`OpenEXR*` …共约 **46 MB**）收进 `_internal\` **根**目录 —— 而 McCad.exe 在
+  `_internal\mccad\`，**Windows 的 DLL 搜索顺序不含上级目录**，它**照样找不到**这些 DLL
+  （运行时真正管用的是把 FreeCAD 的 `bin` 前置进子进程 PATH）⇒ 纯涨体积（251.1 → 205.4 MB）。
+  **修法**：**Analysis 之后晚注入** `a.datas += [...]`（按普通数据文件拷贝，不做依赖扫描）。
+  ⚠️ 两个易错点：① 规范化 TOC 是 **3 元组且顺序为 `(目标名, 源路径, "DATA")`**，与
+  `Analysis(datas=)` 的 2 元组 `(源, 目标)` **相反** —— 写错会
+  `ValueError: not enough values to unpack (expected 3, got 2)`；② 判断"有没有被误收"时别用
+  `^TK`/`^zlib` 这种粗正则 —— `tk86t.dll`（Tcl/Tk，原生文件对话框用）与 `zlib1.dll`（Python 自带）
+  **本来就在包里**，是长期存在的正常成员。
+- **同一个事实写两处，搬家时必漏一处（2026-09-23 实测）**：`StepImportDialog` 原先在**参数元数据**
+  里写 `page: "basic"`、又在 `PAGE_LAYOUT` 的 row 里列一遍归属。把真空三件套从「基本」搬到
+  「常用调节」时只改了 `PAGE_LAYOUT` ⇒ 症状是"**校验报错跳到错的页**、**改动计数记到错的页签**"，
+  且因为元数据骗人，测试里"在常用调节页找该字段"直接找不到。**修法**：页归属**只由 `PAGE_LAYOUT`
+  派生**（启动时建一张 `PAGE_OF_KEY` 索引，元数据不再有 `page` 字段）。
+  ⇒ 纪律：**同一事实（键属于哪一页/哪一层）只能有一个来源，另一个方向一律派生。**
+- **❗打包：PyInstaller 必须带 `--distpath dist_sidecar`；手册与 spec 互相矛盾（2026-09-23 踩到）**：
+  `mcnp_sidecar.spec:130-139` 明令"**必须**用命令行 `--distpath dist_sidecar` 指定独立目录，
+  不要手敲裸 PyInstaller"，理由是 **`vite build` 会清空 `gui\dist\`**：若 sidecar 落在
+  `dist\python\`，则"先 PyInstaller → 再 `npm run build:app`"会把刚打好的 sidecar **删掉**，
+  同步脚本随后把 `binaries\` 里**上一次的旧 python.exe** 铺进 `target\release` 并报"✅ 已是最新"
+  ⇒ **"版本号新、后端旧"的包**（spec 点名 = 坑 6.7）。**但**：① `docs/手动打包方法.md` 第 4/5 步
+  写的恰是"裸 `python -m PyInstaller mcnp_sidecar.spec`" + `gui\dist\python\`（**错的**）；
+  ② spec 注释让走的 `npm run build:sidecar` **在 `package.json` 里不存在**（scripts 只有
+  `sync-sidecar`/`check-sidecar`/`verify-sidecar`/`build:app`）；③ `coll.distpath = ...` 也不行
+  —— COLLECT 对象没有该属性，赋值被静默忽略。**正确命令**：
+  `python -m PyInstaller mcnp_sidecar.spec --noconfirm --distpath dist_sidecar --workpath build_sidecar`
+  （**手册已按此修正**）。**教训**：规格说明与操作手册不一致时，**以能解释"为什么"的那份为准**
+  （spec 写清了失败模式，手册只是漏了参数），并把两边都改齐。
+- **子弹框的"触发器绑在哪儿 + 文案跟谁走"是产品决策，不是实现细节（2026-09-23 用户两轮反馈）**：
+  第 1 版把 `onMouseEnter/Leave` 绑在**整行**（label+控件+`?`），用户真机反馈两条：
+  ①「鼠标移开时就立即消失」⇒ 删掉 140ms 缓冲（原意是"指针能移进子弹框继续读"，用户不需要，
+  连 `TipBubble` 的 mouse 处理一起删，否则是死代码）；②「我看你留了很多问号，把程序改为，
+  鼠标停在问号上的时候再出弹窗」⇒ 触发器**收到 `?` 图标上**，划过输入框/下拉/按钮**都不弹窗**。
+  **连带纪律**：页签下方那行提示原文是"鼠标悬停任意输入框 / 下拉 / 按钮…"，触发器一改它就**变成
+  错误指引**，必须同步改成"鼠标停在参数右侧的 ? 上…" —— **提示文案必须与触发器同一处定义**。
+  两条都补了专属用例：`划过输入框/下拉/按钮都不弹窗`（**等过 200ms 再断言**，区分"根本不出现"
+  与"延迟出现"）+ `鼠标移开 ? 立即消失`（**同步断言**，留着旧缓冲必红）。
+- **GEOUNED 自身没有 UI；它的"设置"= 一个 config.json（2026-09-23 源码级确证，§4 ADR 相关）**：
+  **判据（可复跑）**：包内文件只有 `.py/.txt/.exe`；`bin\` 仅 `geouned_cadtocsg.exe` /
+  `geouned_csgtocad.exe`（对应 `dist-info\entry_points.txt` 两条 `console_scripts`）；
+  `grep -r "PyQt\|PySide\|tkinter\|wx\|QApplication"` **零命中**；两个脚本各只有 `-i/--input`
+  一个参数。配置入口 `CadToCsg.from_json()` **只认 6 个键**（`Settings`/`Options`/`Tolerances`/
+  `NumericFormat`/`load_step_file`/`export_csg`），执行顺序写死「构造四对象 → `load_step_file()`
+  → `start()` → `export_csg()`」。**两个坑**：`config["load_step_file"]` 是**硬索引**（缺键 = `KeyError`）；
+  `core.py:259` 的报错文案列出 `'Parameters'` 但**代码里没有这个分支**（文档幽灵键）。
+  **语义同构**：config.json 省略某键 = 用构造默认值 ⇒ 与本程序前端「留空 = 不发送」完全一致。
+  **参数面**：Settings 15 / Options 11 / Tolerances 15 / NumericFormat 14 / `load_step_file` 3 /
+  `export_csg` 9。**判断更正**：`Settings.maxSurf` 官方只写 `#TODO`，但它实为**真空栅元切割的触发阈值**
+  （`void/void.py:137`；全仓**仅** `void.py:108` 一处使用），与 `maxBracket` 是 **AND** 关系、
+  `minVoidSize` 是尺寸地板、`while iloop < 50` 是内建上限（不可配）。
+  ⇒ **纪律：参数"有没有文档"不能当作"要不要暴露"的依据，要 grep 它的使用点。**
+- **GEOUNED 的 setter 是严格类型 ⇒ 映射层必须表驱动白名单 + 精确落型（2026-09-23 实测）**：
+  `minVoidSize` 必须是 `float`（传 `int` 直接 `TypeError`）、`maxSurf`/`maxBracket`/`startCell`/
+  `startSurf`/`nPlaneReverse`/`UCARD` 必须 `int`、各 bool 项必须 `bool`、`voidMat` 必须长度 3 的
+  `(int, int|float, str)` 或空 list。落地方针：**缺省 / 类型不符 / 越界 → 该键不进 payload**
+  （= 用 GEOUNED 默认），**不回落成本程序的默认值**（否则 GEOUNED 升版改默认值会被钉死）。
+  **反向坑（必须专项测试锁死）**：GEOUNED 默认是**开**的项（`newSplitPlane`/`scaleUp`/
+  `cellSummaryFile`），用户点成"关"时必须真的传出去，不能被"留空"逻辑顺手吞掉。
+  **兼容性技巧**：payload 的 `settings` 区段键名与**旧 worker** 读的扁平键名逐字相同
+  ⇒ 新旧 worker/转换器交叉搭配都不会"静默用错编号"。
+- **悬停子弹框两条硬规则：颜色全走主题变量 + portal 到缩放容器（2026-09-23 实测）**：
+  ① **`--accent-glow` 不可作文字颜色** —— 多巴胺主题里它是 `#FF8FAB`（粉），压在
+  `--dialog-bg = rgba(255,222,240,.96)`（浅粉）上对比度约 **1.6:1，等于看不见** ⇒ 只作装饰色条；
+  同理 `--red` 在多巴胺是 `#FF2D78`（粉）⇒ 高危警告用「⚠ + 红左条 + 12% 淡红底
+  （`color-mix`）」，**文字一律 `--text-primary`**。② 气泡底用 **`--bg-surface`**（4 套主题均
+  **不透明**），不能用 `--dialog-bg`（alpha .95~.97，会透出背后内容致对比度漂移）；阴影也用
+  `--dialog-overlay`（原先写 `rgba(0,0,0,.45)` 会被"零硬编码色值"断言抓住）。
+  ③ **必须 `createPortal` 到 `getAppPortalRoot()`**：`FloatingDialog` 的 `backdrop-filter` 会创建
+  containing block，使其中 `position:fixed` 的子孙相对父定位并被 `overflow:hidden` 裁剪；
+  挂到 `#root` 内的 `#app-portal-root` 才既逃裁剪又随 `--app-scale` 的 zoom 缩放。
+  ⚠️ 挂 `document.body` **主题变量不会丢**（`data-theme` 设在 `<html>`，变量沿 DOM 继承），
+  丢的是**缩放** ⇒ 位置与字号与控件错位。**测试锁法**：断言子弹框内联样式为 `var(...)`
+  且 `outerHTML` 里没有 `#RRGGBB` / `rgb(`/`rgba(`。
+- **列表类输入必须用 `<textarea>`：`<input>` 会吞掉换行（2026-09-23 DOM 测试抓出）**：
+  实测向 `<input>` 写入 `"3，7\n12"` 得到 `[3, 712]` —— 浏览器对 `input[type=text]` 做值净化时
+  删掉 `\n`，而该控件的释义里承诺"逗号或换行分隔"。⇒ 凡"多行/换行分隔"的输入一律 `textarea`。
+  **这类问题静态审查看不见**，DOM 测试一次抓到 —— 与 §6「WebGL 类问题必须真渲染验证」同一纪律：
+  浏览器行为相关的假设必须用真实 DOM/渲染验证。
+- **同一种卡的多种「卡项形式」在 pymcnp 里是多个类、但 `_KEYWORD` 相同 ⇒ 按 keyword 建表会互相覆盖（2026-09-24 实测，3D 预览"体积爆炸"的真根因）**：
+  pymcnp 把 `P` 拆成 `P_0`（四系数 `P A B C D`）/`P_1`（三点），**两者 `_KEYWORD` 都是 `p`**。
+  `api_server._surf_classes()` 写的是 `_d[_kw] = _obj` ⇒ `dir()` 里靠后的 `P_1` **覆盖** `P_0`。
+  于是四系数卡解析失败（两变体实测**互斥**：`P_0` 只认 4 项、`P_1` 只认 9 项），落进
+  `parse_surfaces` 的 `except` 兜底 —— 而那条兜底的注释写着"pymcnp 的 P 只支持三点定义"
+  （**误判**，因为 `P_0` 被自己的建表逻辑挤掉了）⇒ 把系数**转成三个点**。
+  **致命处**：三点形式下游要走 C810 §3-17「**原点负感度**」规则，该规则**无视点序**、
+  按 D 的符号重新定侧 ⇒ **`D < 0` 的平面正负侧整体翻转**。GEOUNED 生成的一般平面
+  **全是四系数且 D 大量为负**（−197.99 / −32.509 / −19.799 …）⇒ 含这些面的栅元不再被
+  界定、一路漏到包围盒 ⇒ 用户看到的"体积爆炸、形状全变"（块 002 重建体积达真值 **71 倍**）。
+  ⚠️ 兜底里"校正三点法向与 (A,B,C) 同向"那几行**毫无作用** —— 下游 `plane_from_points`
+  会无视点序。**作者防住了点序，没防住规则本身。**
+  ⇒ **纪律：① 按 keyword 建 pymcnp 类表时必须保留全部变体（值用列表）+ "逐个 try、
+  第一个成功即用"；② 需要"迁就某个变体"的转换代码是危险信号 —— 先查是不是建表丢了变体；
+  ③ 认不出来就如实报错，绝不静默出错几何。**
+  同类 keyword 冲突共 11 组（`P/DF/DS/F/M/SB/SI/SP/T/TF/TR`），曲面里只有 `P` 会中招。
+- **C810 §3-17 的「原点负感度」只适用于三点形式；四系数形式的正侧就是写下来的符号（2026-09-24 查证 PDF 第 541 页）**：
+  手册原文 "If there are four entries on a P card, they are assumed to be the general plane
+  equation coefficients… **The sense of the plane is determined by requiring the origin to
+  have negative sense.**" ⇒ 那条规则属于"三点定义平面"这一节，**不能**套到四系数卡上。
+  ⇒ 排查"平面朝反了"时，先分清**卡是哪种形式**，再谈规则 —— 本轮一开始我误判成
+  `quadric.plane_from_points`（§3-17 实现）写错了，实际它是对的，错的是"不该走三点"。
+- **`_plane_halfspace` 的厚板「横向 4B + 沿法向 2B」盖不满包围盒（2026-09-24 实测，同轮第二个 bug）**：
+  厚板底面过参考点、沿法向伸出、横向 4B（半宽 2B）。要盖满 `[-B,B]³` **两个尺寸都要够**：
+  ① 横向半宽 ≥ 盒角到「过参考点沿法向的直线」的垂直距离（**参考点 ∥ 法向**时 = √3·B）；
+  ② 沿法向厚度 ≥ `√3·B − n·p`（只伸 2B 时要求 `n·p ≥ −0.268B`）。
+  `P_1` 分支取"平面上离原点最近的点"（∥ 法向）因而安全；**`P_0` 分支取 `(D/A, 0, 0)`**，
+  A 只是小分量时严重偏离法向；块 003 的平面 `n·p = −462.8 < −0.268×1242` 则中招第二条。
+  两者都让 **`bb.cut(正侧)`（负侧）在没盖到的区域多留一块 ⇒ 交集漏出包围盒**。
+  **修法**：参考点**投影成最近点**（不变量下沉到唯一构造点）+ **厚度也取 4B**（恒够）。
+  块 003 实测三级台阶：**+249% → +0.49% → −0.0049%（`closed`）**。
+  ⇒ **纪律：「够不够大」这类几何覆盖从来不写判据的东西，一定会漏。**
+- **GEOUNED 的凸分解会产出「3 个平面的交」这种**必然无界**的退化项（2026-09-24 实测，第三方缺陷）**：
+  原模型（不切）那个 202 面实体的栅元表达式有 **229 个交项**，面数分布
+  `{3: 1, 4: 3, 5: 57, 6: 101, 7: 47, 8: 9, 9: 6}` —— **唯一的 3 面项**由三个平面构成
+  （`+144 P 0.707 0 -0.707 -19.799` / `−190 PY −553.067` / `−220 P 0.556 −0.831 0 549.767`），
+  而 **3 个平面半空间的交在 3D 里必然无界**（围出有界区域至少要 4 个平面；`PY −553.067`
+  连模型 y 范围 −180~220 都在外）⇒ 该栅元溢出到包围盒（实测 `infinite`、体积 ≈ 真值 2.7 倍）。
+  **我们改不了 GEOUNED，但本程序的「实体预分解」恰好是它的解**：先把实体切成 ≤30 面的
+  简单块，每块表达式都良定义 ⇒ 部署版端到端实测 **`cut=ON` 时 18/18 实体栅元 `closed`、
+  体积合计 +0.0048%**；而 `cut=OFF` 为 +282%、1 个 `infinite`。
+  ⇒ **遇到复杂厂房模型要建议用户开「启用实体预分解」**；也说明"把大实体先切小"这个
+  产品决策不只是性能优化，**它还顺手规避了 GEOUNED 的退化分解**。
+  ⚠️ **但它规避不干净**（同日第四批实测）：用户把档位调到**较粗（50 面）**时，
+  9 块里的**栅元 4** 又出现一个 3 面退化项（`144(P_0) -190(P_0) -180(PY)`）
+  ⇒ 体积 5.36e8（模型的 **195%**）、`infinite`、渲染成一块巨大的**异形三角锥**（用户原话）。
+  **所以消费侧必须自己容错**：`app/freecad_preview.prune_unbounded_union_branches()`
+  剔除并集里「**纯平面且约束数 ≤3**」的分支 —— 数学上必然无界的分支**不可能**属于
+  有界的 CAD 实体，剔掉只会更接近真值。三条安全边界见该函数 docstring（只处理顶层并集 /
+  只剔纯平面 / 剔完为空则原样返回）。**效果：栅元 4 → `closed`、3.49e7（+1.2%），9 块合计 100.005%。**
+- **⚠️ 预览缓存落盘 + 指纹只含 deck ⇒ 改了几何引擎"用户看不到修复"（2026-09-12 与 09-24 **两次**踩到，已改为自动失效）**：
+  `preview_cache` 不只是内存缓存 —— `get()` 在内存 miss 时从 `meta.json` **恢复**，
+  **跨进程重启仍命中**（实测 `D:\MCNP\memory\preview_cache` 下积了 **18 个**指纹目录；
+  LRU 上限 3 只管内存索引，重启后旧目录不会被驱逐）。
+  而指纹原本只含 `(surfaces, cells, tr_cards)` + **人工** `GEOMETRY_CACHE_VERSION`
+  ⇒ 改了几何引擎但**忘了 bump** ⇒ 旧 STL 被复用。2026-09-24 实测：改完退化项剔除后重跑，
+  栅元 4 仍是旧的 5.36e8，**连重启后端都救不回来**，直到手动清 `preview_cache` 才生效。
+  ⇒ **修法**：在人工版本号之外，把**几何引擎源码的内容摘要**
+  （`_freecad_csg_worker.py` / `freecad_preview.py` / `quadric.py` / `voxel_csg.py` 的 sha256）
+  并入指纹 ⇒ **引擎文件一改，旧缓存自动全失效**，不再依赖"记得 bump"这条纪律；
+  `GEOMETRY_CACHE_VERSION` 升到 4 记录语义。
+  ⇒ **纪律：凡是"靠人记得做某事"的缓存失效开关，都该加一个自动兜底。**
+- **⚠️ 判据必须能"红"：`正侧 + 负侧 = 盒` 是恒真式，抓不到任何覆盖缺陷（2026-09-24 现场踩到）**：
+  我第一版回归判据就是它 —— 但 `负侧 := bb.cut(正侧)`，两者按定义恒等于盒体积，
+  所以**回退修复后照样绿**（典型假判据，比没有判据更危险：它给人"有保护"的错觉）。
+  改成「OCC 的 `isInside` 必须与解析式 `n·x > n·p` **逐点一致**」后才真正能红
+  （回退后 `P0_A_small` 7/27、`P0_A_tiny` 18/27、`P0_neg_far` 4/27 个采样点不一致）。
+  ⇒ **纪律：写完判据先问"它在 bug 存在时会不会绿？"—— 不会红就当场废掉重写。**
+  同族教训：`test_preview_bound.py` 为了不 import `api_server` 而**镜像**了一份解析逻辑，
+  镜像里没有 `_surf_classes()` 的覆盖问题 ⇒ 对这类缺陷**天生看不见**（假 seam）。
+- **序列化口漏字段 ⇒ 下游"读不到就放行"的判据会**静默全放行**（2026-09-24 实测，3D 预览"一坨"的真根因）**：
+  `app/step_importer.flat_cell_json` 是 STEP 导入 → 前端 → `preview-3d` 这条路上
+  **唯一的序列化口**，原先只输出 5 个键；而 `api_server.build_cells_data` 的
+  「项14 cell 分类规则」要读 `imp_n/imp_p/imp_e`（graveyard → 不渲染）、`render`、
+  `fill`、`fill_grid`、`u` —— 前端只是原样转发，**这些键没有任何环节能补回来**。
+  更要命的是 graveyard 判据要读 `imp_*`，**而上游序列化口把它们丢了** ⇒ 取不到值
+  ⇒ 判据**恒不成立**（与"自证判据退化成恒真"同族）。
+  ⚠️ **别记反（2026-09-24 当场更正过一版）**：GEOUNED 生成的 deck **是带 imp 的** ——
+  实测 `47 0 277 Vol=1.000 imp:n=0 imp:p=0 $Graveyard`。**失效是我们丢字段，不是 GEOUNED 没写。**
+  另有一个反例必须记住：栅元 46（`Graveyard_in`，球内盒外真空区）GEOUNED **有意给 `imp:n=1.000`**
+  （粒子可在其中飞行，按 MCNP 语义**不是**墓地）⇒ **imp 判据天然拦不住它**，只能靠注释判据。
+  ⇒ 两条判据**各管一段、缺一不可**：imp 管"重要性 0"，注释管"GEOUNED 的边界结构"。
+  后果：GEOUNED 的两个墓区被当普通栅元渲染 —— 栅元 47（`Graveyard`，半径 1049 球外）
+  体积 = 模型的 **7372%**、bbox 2927³；栅元 46（`Graveyard_in`）**1583%**、2097³；
+  把模型（1042×1751×260）整个包住、相机被撑到 ±2000 ⇒ 预览里只有"一坨"。
+  **修法**：① graveyard 判定加第二条「**注释含 graveyard**」—— 这是 GEOUNED 的官方标记
+  （`void.py:201/208` 写死 `MatInfo = "Graveyard_in"/"Graveyard"`，
+  `mcnp_format.py:256` 也这么认），比 imp 可靠得多；② 序列化口补齐全部判据键。
+  ⇒ **纪律：判据"读不到就放行"时，必须回头查序列化口喂了没有；跨层传数据的字段
+  要在契约里显式列全（本轮同步了 `api.yaml` 的 deck.cells schema）。**
+- **`import FreeCAD` 必须先于 `import Part`，否则**静默**退化（2026-09-24 实测，同族两处）**：  FreeCAD 的 `python.exe` 裸跑 `import Part` 必 `ModuleNotFoundError: No module named 'Part'`；
+  只有先 `import FreeCAD` 才把它自己的 `bin` 挂上模块搜索路径（同一解释器实测：
+  `-c "import FreeCAD, Part"` ✓ / `-c "import Part"` ✗）。**这个错不会报出来**，只会让：
+  ① 可用性探测判"解释器里没有 FreeCAD 模块" ⇒ **静默跳过实体预分解**（用户表现："开了跟没开
+  一样" —— 与 `_MEIPASS` 那次故障**表现一模一样、根因完全不同**，排查时别被表象带偏）；
+  ② `geouned_worker._bbox_of()` **恒返回 None** ⇒ 分解自证**退化成恒真的空检查**
+  （"看起来有保护、其实什么都没拦"，比没有检查更危险）。
+  ⇒ **纪律：凡是"探测/校验"类函数，先证明它在可用环境下真能返回非空/非恒真值**，再拿它下结论；
+  测试里锁住 import 顺序（`test_probe_imports_freecad_before_part` /
+  `test_worker_bbox_reader_imports_freecad_first`）。
+- **自证判据的不对称是刻意的：按"哪一边读不到"分别定（2026-09-24 决议）**：
+  分解自证比对前后包围盒时，**原文件都读不出来 → 放行**（没有可比对象，FreeCAD 读取失败
+  不该阻断导入）；**原文件读得出、产物读不出来 → 判定产物坏了、回退**。
+  上一版写成"任一边 None 就放行" ⇒ 在 `_bbox_of` 恒 None 的那个 bug 下**退化成恒真**。
+  ⇒ 纪律：**"读不到"不等于"没问题"**，降级路径必须逐边定义，且要为它写用例
+  （现存 4 例：只产物读不到 / 只原文件读不到 / 包围盒不一致 / 一致）。
+- **外部程序暴露「过程参数」，用户要的往往是「结果指标」（2026-09-24 决议）**：
+  MCCAD 只给 `recurrenceDepth`（递归深度）—— 同样深度在不同模型上得到的块复杂度完全不同，
+  所以"加档位"解决不了用户"每块面数控制在 30 以下"的诉求；改由 FreeCAD/OCC 侧自己实现
+  **按面数上限收敛的二分**（最长边中分 + 切不动就换轴 + 切不动如实计数上报）直接给出结果指标。
+  ⇒ **选依赖时先问"它暴露的是过程还是结果"**；过程参数再多档也不等于可控。
+  配套判据：网格切 K 档只能得 3^K 块（3/27/81/192…），**无法对准面数目标** ——
+  "看起来能调"和"真的能对准目标"是两件事。
+- **切实体能压实体侧面数，压不动真空侧（2026-09-24 实测，别向用户许诺过头）**：
+  274 m³ 厂房模型切到每块 ≤30 面后，**实体块**面数合计 194→367（18 块，最大 25 面），
+  但 **28 个真空栅元最大仍有 48 面**。真空是实体**之间**的空隙，把实体切碎只会让空隙更零碎。
+  ⇒ 用户提"每块 ≤N 面"时，**先问清是块还是最终栅元**，并如实报告没做到的那一侧。
 
 
 ## §7 技术争议与决议（语义记忆）
@@ -1518,8 +1981,16 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 
 ### 版本里程碑
 
+> ⚠️ **v1.7.6 之后有一长串「同版本重出包」批次**（纪律：bug 修复批严禁升版，故版本号恒 1.7.6）：
+> 2026-09-12 STEP 导入 500 热修 → 09-16/17 几何曲面语义全类型审计（11 类）+ 打包坑 6.2 根治 →
+> 09-19 排版审计/出图 PNG → 09-20 keff 解析 + 任务扫描 → 09-20 R1+O6 →
+> 09-23 GEOUNED STEP 导入参数 UI → 09-23 MCCAD 实体预分解 → 09-23/24 子弹框两轮反馈 →
+> **09-24 实体预分解换血（MCCAD → FreeCAD 自适应）+ P 卡感度 + slab 覆盖 + 墓区过滤（S10）**。
+> **这条"同版本重出包"长链在 2026-09-26 终结：用户指定升版 v1.7.7**（含 S11 三条修复 + S10 全量）。
+
 | 版本 | 时间 | 内容 |
 | :--- | :--- | :--- |
+| **v1.7.7** | 2026-09-26 | **计数卡前缀 `*` 全链贯通 + 栅元几何 `#` 判定 + 截面拖动两坑**（**用户指定升版**；本包同时带上 S10 那批未打包改动）：① 缝两端补 `fn_prefix`/`number_suffix` + 新增 `gui/src/utils/tallyBridge.ts` + F5 行环探测器轴控件；② 行首 `#` 按"字母/数字"判性质 + `normalize_geometry_spacing`（`-14#1`→`-14 #1`，挂解析侧与 pymcnp 消费侧）；③ 新增 `dragImport.ts`（只认真拖文件、leave/drop/end 一律熄、`pointerEvents:none`）与 `sectionView.ts`（旋转中心不含 pan，"拖 Δ ⇒ 内容正好移 Δ"由属性测试锁死）。门禁 pytest **1417/0/11**、vitest **104 files / 927 passed**、tsc 两档 0、build 0。手工链打包部署 + 部署版冒烟（见 §2 / S11）。**未 push** |
 | **v1.7.6** | 2026-09-11 | **源演示修复二批 + 粒子圆点化 + 一键运行 MCNP 多核 tasks**（**用户指定升版**）：① 源演示"看不见栅元"根因二批 —— 后端补 camelCase 别名时**漏 `mat`** + `SourceTab` 把 **snake_case** `deck.cells` 强断言成 camelCase `LocalCellRow` ⇒ `material=""` ⇒ `getMatColor("")` 返回 `transparent` ⇒ `buildCellMaterial` 判为**真空 M0**（`opacity:0`，13 个外壳全不可见）；且取景误用体积窗口的 `computeFramingBox`（`VOLUME_FRAMING_RATIO=0.25`，源区/热室≈0.057）把外壳挤出视野。② 方向线不可见（世界空间固定长度 1.17 被取景缩成 ~1px）+「方向线长度」滑杆失效（`setDirectionLength` 从不重建几何）⇒ 改**屏幕空间恒定**。③ 粒子圆点化（`Points` 贴图 + `alphaTest`）。④ **一键运行 MCNP 支持多核 `tasks N`**：UI（`PreviewDialog` footer 核数滑杆 + PTRAC/SSW/SSR **选模式即提示**）+ 后端 `app/mcnp_tasks.py` 扫卡强制降级（C810 页 875 排他卡）。**实测 `tasks` 取物理核数而非逻辑核**（8 物理核机上 tasks 8 = 8.36s vs tasks 16 = 15.06s）。门禁 pytest **900** / vitest **625** / tsc 两档 0 / build 0。**已打包部署 + 冒烟通过**（部署版 `diff-inp` 200、`source-demo-sample` 200、5001 + MCP 8100 LISTENING）。commits `48c51ed` / `857aed1` / `b1f0043` / `21d93d0` |
 | **v1.7.5** | 2026-09-04 | **AI 接入 inputcard-mcp（MCP over HTTP）+ 快捷建栅元六棱柱(RHP)/四面体 + 深模块化 + 废弃一键打包**（新功能上线，用户指定/确认升版）：`inputcard_mcp/` 包（6 深工具，统一按语义段读写）；主程序启动自动拉起 `--mcp-http`（本机 8100 `/mcp` + `/workspace`，含「当前工作区」会话 + 前端 AI 面板）；**移除 stdio 旧接入**（`--mcp-server`/注册MCP.bat 删除）；快捷建栅元扩到 HEX/TET + IMP 改数值默认 0；抽出深模块 `useQuickAddOverlap`；删除 `release.bat`/`release.ps1`（一键打包废弃，仅手动）；新增 `AI接入.md`。门禁 vitest 554/0 + tsc EXIT 0。reflog: `.git/logs/HEAD:250-251` |
 | **v1.7.4** | 2026-08-27 | **3D 预览 MCNP 窗口裁剪修复 + U 分组侧边栏**（用户指定新功能上线升版）：① 实体=universe∩格元盒∩容器cell，修超壳/重叠外壳 + 无限水虚假水块（BEAVRS 超壳叶 48→16）；② 3D 预览侧边栏改 U 分组 + 保留未分组栅元；disc 改用容器裁剪 STL、subPitch 半径；版本五处同步。**18-28 追加**：disc STL 键错配修复（燃料 pin 方块→真实圆柱）+ z 居中（燃料棒/围板位置）|
@@ -1545,20 +2016,30 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 ```
 1. vite build                       （前端产物，~3-4s；node .\node_modules\vite\bin\vite.js build）
 2. PyInstaller sidecar              （在 gui\ 下跑 gui/mcnp_sidecar.spec，产物名 "python"；
-                                    核对 _keep_py / _keep_dirs 清单，如 outp_parser.py/meshtal/ 等新增模块）
-3. 替换 binaries                    （把新 sidecar 的 python.exe + _internal 换进 target\release\）
+                                     ★ 必须带 --distpath dist_sidecar（默认落 dist/ 会被 vite 清掉）；
+                                     ⚠️ --workpath 用 build_sidecar 时，build-release.mjs 清的
+                                     build/mcnp_sidecar 并不是同一目录（"清缓存"对不上，见 §6）；
+                                     核对 _keep_py / _keep_dirs 清单，如 outp_parser.py/meshtal/ 等新增模块）
+3. 替换 binaries                    （把新 sidecar 的 python.exe + _internal 换进 target\release\；
+                                     复制完**双向比对文件数与总字节**——只比 exe 大小不够）
 4. tauri build                      （⚠️ rust 环境变量必须指到**子目录**：`RUSTUP_HOME=D:\rust\rustup`、
                                     `CARGO_HOME=D:\rust\cargo`、`PATH` 前置 `D:\rust\cargo\bin`
                                     —— `D:\rust` 下是 `cargo/` + `rustup/` 两个目录，**根目录不是 home**；
                                     指错会报 `rustup could not choose a version of cargo to run … no default
                                     is configured`（2026-09-20 实测，构建在 tauri 阶段中止、不产出半成品）。
-                                    命令：node .\node_modules\@tauri-apps\cli\tauri.js build）
+                                    ★ 首选 `npm run build:app`（vite → 预同步 → tauri → 后同步+自检）。
+                                    ⚠️ **别在干净工作区跑 `npm run build:release`**：它把 tauri build 排在
+                                    PyInstaller 前，而 beforeBuildCommand 含 sync-sidecar ⇒ 无 dist_sidecar/
+                                    时必中止（2026-09-26 实测，见 §6/S11.3））
 5. ⚠️ 6.2 时效校验（必做）           （tauri 增量编译不刷新 target\release 的 sidecar！
                                     ★ 最快判据：查 target\release\_internal\app\ 里**有没有本批新增模块**
                                       —— 2026-09-11 实测缺 mcnp_tasks.py，一眼看穿"版本号新、后端旧"；
+                                      ★ 更硬：松散 .py 与源码 **sha256 对拍** + 部署版打**本批相关端点**做功能级冒烟
+                                      （2026-09-26 用 `/api/parse-inp` 那张 `#` 折行卡一次验穿 PYZ 与解析模块）；
                                       亦可对比 python.exe 的 mtime/体积，不一致就按手册强制覆盖）
-6. 备份 + 部署 D:\MCNP\MCNP输入卡生成器（⚠️ 先杀运行中的旧主程序 + 占 5001 的 sidecar，否则文件锁目录致
-                                      _internal 残缺；部署前把旧包备份到 D:\MCNP\_backup_<版本>_<时间戳>）
+6. 备份 + 部署 D:\MCNP\MCNP输入卡生成器（⚠️ 先杀运行中的旧主程序 + 占 5001 的 sidecar，**还要查 8100**
+                                      —— `--mcp-http` 子进程不随主程序退出（2026-09-26 实测）；否则文件锁目录致
+                                      _internal 残缺；备份可用**整卷改名移动**（秒级、可回滚）到 D:\MCNP\_backup_<旧版本>_<时间戳>）
 7. 冒烟                             （起部署版 → 5001 探活 → 打端点；⚠️ 先确认 5001 空闲，被占则请求被劫持
                                       产生假象；收尾杀掉主 exe + 其 sidecar **按路径精确匹配**，勿误杀他处 python）
 ```
@@ -1569,8 +2050,8 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 
 | 门禁 | 命令/位置 | 基线 |
 | :--- | :--- | :--- |
-| pytest | `tests/`（unit + parser + integration，含契约漂移闸门 test_api_contract.py 与真实 HTTP） | **最新实跑（2026-09-20，R1+O6 批）：1133 passed / 0 failed / 0 skipped**。沿革：573(08-22) → … → 900(09-11) → 1019(09-20 keff) → 1049(09-20 MCNP 检测) → 1118+1xfail(09-20 源演示 F1–F8) → **1133(09-20 R1+O6)**。**重跑后请覆盖本行**；⚠️ 跑前 **unset `PYTHONIOENCODING`**（见 §6 环境坑） |
-| vitest | `gui/test/`（**98 个测试文件**；含 jsdom DOM 交互） | **最新实跑（2026-09-20，R1+O6 批）：98 files / 830 tests passed / 0 skip**。沿革：358(08-22) → … → 794(09-19) → **828(09-20 源演示批) → 830(09-20 R1+O6，+2 surfacesAABB RHP)**。**重跑后请覆盖本行** |
+| pytest | `tests/`（unit + parser + integration，含契约漂移闸门 test_api_contract.py 与真实 HTTP） | **最新实跑（2026-09-26，v1.7.7 发布批）：1417 passed / 0 failed / 11 skipped**（`python -m pytest tests/ -q`，**独占跑**）。沿革：… → 1298+1F(09-23 GEOUNED 参数 UI) → 1332(09-23 MCCAD) → 1366(09-24 自适应切分) → 1376(09-24 P 卡感度/slab) → 1381(09-24 墓区过滤) → **1417(09-26 S11：栅元 `#` 17 例 + 计数卡身份字段 5 例 + 既有批次累计)**。**重跑后请覆盖本行**；⚠️ 跑前 **unset `PYTHONIOENCODING`**（见 §6 环境坑 —— 设成 utf-8 会让 `test_meshtal_worker.py` 的 GBK 子进程读取炸掉），并**先确认 5001 空闲**（否则契约 HTTP 用例测的是别人）。**2026-09-26 补记（两次实测复现）**：`test_http_mcnp_detect_lists_all_candidates` 在**与 vitest 全量并发**时 120 s 超时（该用例要扫全盘找 MCNP 安装），**隔离单跑 5 s 通过** ⇒ 门禁别与别的重活并发跑 |
+| vitest | `gui/test/`（**104 个测试文件**；含 jsdom DOM 交互） | **最新实跑（2026-09-26，v1.7.7 发布批）：104 files / 927 passed / 0 skip**。沿革：… → 877(09-24 自适应切分) → **903(09-26 上午：tallyBridge 19 + tallyPrefix.dom 7)** → **927(09-26 S11：dragImport 6 + sectionView 14 + crossSectionPan.dom 4)**。**重跑后请覆盖本行**。⚠️ **侧车产物存在时**（跑过 PyInstaller 的机器）会走 `syncSidecar.test.ts` 的"改名探测"分支 —— 该用例已加**前置清残留 + 兜底还原**（见 §6 那条 EPERM 坑），若它红了先看 `gui/dist_sidecar/python_guard_test` 是否被别的会话留下 |
 | tsc | `gui/` 下 `npm run typecheck`（= `tsc --noEmit && tsc -p tsconfig.test.json --noEmit`） | 两档 **EXIT 0**。**2026-09-10 扩容**：此前只查 `src/`，测试文件不在类型检查内（审计 TD-17） |
 | 漂移闸门 | handlers dict ↔ `docs/contracts/api.yaml` 双向一致；spec `_keep_py` ↔ `_import_app` 双向一致 | **49 端点**；spec 闸门（`test_sidecar_spec_keep.py`）**绿** |
 
@@ -1578,8 +2059,8 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 
 ### 版本发布纪律
 
-- bug 修复批**严禁升版**；升版仅限新功能且由上级指定。
-- 版本**六处**同步：`tauri.conf.json` / `package.json` / **`package-lock.json`（顶层 `version` + `packages[""].version`）** / `Cargo.toml` / `Cargo.lock`（`name="mcnp-ui"`）/ README 徽章。
+- bug 修复批**默认严禁升版**；升版仅限**上级（用户）指定**——**2026-09-26 例外经用户明确指定升到 1.7.7**（此前 09-12~09-24 一长串 bug 修复批全部恒 1.7.6，纪律不变）。
+- 版本**六处同步、实为 7 个字段**：`tauri.conf.json`（`package.version`）/ `package.json` / **`package-lock.json`（顶层 `version` + `packages[""].version` 两处）** / `Cargo.toml` / `Cargo.lock`（`name="mcnp-ui"`）/ README 徽章；改完**复查零个旧版本号残留**（`Select-String -Pattern '1\.7\.6'` 那六个文件）。
 - 侧边栏版本号来自 `Sidebar.tsx` 直接 `import pkg from "../../package.json"`（单一来源，升版不再破）—— ⚠️ **构建期打进 bundle**，故**升版后必须重新 `vite build`**，否则界面仍显示旧版本。
 
 

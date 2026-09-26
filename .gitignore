@@ -41,6 +41,10 @@ Thumbs.db
 # Scratch
 .tmp/
 
+# ★ 个人数据备份，绝不入库（2026-09-26：该目录含 Adobe credentials_list.txt 与注册表导出；
+#   远端 origin 是公开仓库 ⇒ 一旦 `git add -A` 误提交即泄露。要备份请放到仓库之外）
+adobe_signout_backup/
+
 # IDE
 .vscode/
 .idea/

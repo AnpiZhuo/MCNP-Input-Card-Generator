@@ -34,6 +34,11 @@ _keep_py = [
                                   # _keep_py 的**数据**文件而非 PYZ 模块 ⇒ PyInstaller 静态分析
                                   # 看不到这条边，漏登记则冻结版 mcnp_locator 必 ImportError）
     "file_dialog.py",             # 原生文件选择窗口规格（kind → 标题/类型；keff 解析卡用）
+    "adaptive_decompose.py",      # 实体预分解（父侧）
+    "adaptive_cut_freecad.py",    # 实体预分解（**子进程**执行体，由 FreeCAD python 跑）
+                                  # 两者都是 geouned_worker 在 FreeCAD python 里的
+                                  # `import` / 子进程目标 —— 松散数据文件之间的引用，
+                                  # PyInstaller 静态分析看不到 ⇒ 漏登记则冻结版必失败，勿重蹈 TD-02
 ]
 _keep_dirs = ["generator", "docs", "meshtal", "ptrac"]  # generator（含 parsers）+ 参考文档 + meshtal 网格计数 + ptrac 粒子径迹模块
 
@@ -69,6 +74,18 @@ GEOUNED_SRC = r"D:\MCNP\GEOUNED"
 if os.path.isdir(os.path.join(GEOUNED_SRC, "geouned")):
     _datas.append((GEOUNED_SRC, "vendor"))
 
+# ── 外部可执行文件：**目前一个都没有** ──
+# 实体预分解改由 FreeCAD 自带的 python.exe 直接做（`adaptive_cut_freecad.py`），
+# 所以不再随包分发任何 exe。下面这条历史教训留在这里，别让后人再踩：
+#
+# 若将来又要随包带一个 exe：**不要放进 `Analysis(datas=...)`**。PyInstaller 会对它做
+# "binary vs. data reclassification"，顺着导入表把 FreeCAD 的 49 个 OCC/MSVC DLL
+# （TKernel.dll / FreeCAD.dll 系 + MSVCP140 …，约 46 MB）也收进包，落在 `_internal\`
+# 根目录 —— 而那个 exe 在子目录里，**DLL 搜索顺序不含上级目录，它照样找不到**。
+# 正确做法是在 Analysis 之后 `a.datas += [(目标名, 源路径, "DATA")]` 晚注入（3 元组、
+# 顺序与 `Analysis(datas=)` 的 2 元组相反；直接 += 2 元组会 ValueError:
+# not enough values to unpack (expected 3, got 2)）。
+
 # 排除 pymcnp._show*（渲染层，不拉 pyvista/vtk）
 _hidden = [m for m in collect_submodules("pymcnp") if not m.startswith("pymcnp._show")]
 
@@ -94,6 +111,8 @@ _hidden += _ptrac_mods
 # （顶层 import mcp.server.fastmcp）。其 __mcp_http_main 还需 uvicorn/starlette（FastMCP stdio 路径
 # 不 import 它们，故须显式打进 PYZ；主程序 api_server 路径不触碰，不影响 5001 后端启动）。
 _hidden += ["inputcard_mcp", "inputcard_mcp.server", "uvicorn", "starlette"]
+
+# ── 关于随包 exe 的教训见上方注释（当前没有随包 exe，故无晚注入步骤）──
 
 a = Analysis(
     [os.path.join(GUI_BACKEND, "mcnp_bridge.py")],

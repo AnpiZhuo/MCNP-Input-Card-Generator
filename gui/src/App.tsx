@@ -24,6 +24,7 @@ import {
   normalizeMcnpDetect, upsertCandidate, type McnpState,
 } from "./utils/mcnpSelect";
 import { buildRawOverrides } from "./utils/rawOverrides";
+import { DROP_OVERLAY_TEXT, overlayAfterDrag } from "./utils/dragImport";
 import { canonicalSourceMode } from "./utils/sourceAdv";
 import AppScaleProvider from "./utils/appScale";
 
@@ -288,10 +289,38 @@ function AppInner() {
     }
   }, [importInpText]);
 
-  const handleDrag = useCallback((e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); }, []);
-  const handleDragOver = useCallback((e: React.DragEvent) => { e.preventDefault(); }, []);
-  const handleDragEnter = useCallback((e: React.DragEvent) => { e.preventDefault(); setDragOver(true); }, []);
-  const handleDragLeave = useCallback((e: React.DragEvent) => { e.preventDefault(); }, []);
+  /**
+   * 拖入导入覆盖层（2026-09-26 用户实测"截面拖动时卡死在粉色页面"的修复）。
+   *
+   * 旧实现：`dragenter` 无条件点亮、`dragleave`/`dragend` 从不清除 ⇒ 任何**没落到 drop**
+   * 的拖拽（内部拖文字/图片、松手在窗口外、Esc 取消）都把全屏覆盖层永久留在屏幕上，
+   * 而它 `inset:0; zIndex:9999` 会盖住并吃掉所有点击 = 界面卡死。
+   * 现在判定收敛在 `utils/dragImport`（只有真拖文件才亮；leave/end/drop 一律熄）。
+   */
+  const dragTypes = (e: React.DragEvent) => (e.dataTransfer ? e.dataTransfer.types : null);
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(overlayAfterDrag("over", dragTypes(e)));
+  }, []);
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(overlayAfterDrag("enter", dragTypes(e)));
+  }, []);
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    // 掠过子元素时 **不** 熄灭（否则拖文件经过子元素边界会一闪一闪）；
+    // 真正离开窗口（relatedTarget 为空或不在 shell 内）才熄。
+    const to = e.relatedTarget as Node | null;
+    if (to && e.currentTarget.contains(to)) return;
+    setDragOver(overlayAfterDrag("leave", dragTypes(e)));
+  }, []);
+  const handleDragEnd = useCallback((e: React.DragEvent) => {
+    // dragend = 这次拖拽结束了（放下/取消/落在窗口外）——无条件熄灭，绝不留残影
+    e.preventDefault();
+    setDragOver(overlayAfterDrag("end", dragTypes(e)));
+  }, []);
+  /** 内部拖拽起手（拖的是选中的文字/元素而不是文件）：绝不当成"拖文件进来" */
+  const handleDragStart = useCallback(() => { setDragOver(false); }, []);
 
   const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault(); setDragOver(false);
@@ -462,11 +491,12 @@ function AppInner() {
 
   return (
     <div className="app-shell"
-      onDrag={handleDrag} onDragStart={handleDrag} onDragEnd={handleDrag}
+      onDragStart={handleDragStart} onDrag={handleDragOver} onDragEnd={handleDragEnd}
       onDragOver={handleDragOver} onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave} onDrop={handleDrop}
       style={{ position: "relative" }}>
-      {dragOver && <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(255,0,128,0.15)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, fontWeight: 700, color: "#fff" }}>释放以导入 INP 文件</div>}
+      {/* pointerEvents:none —— 就算覆盖层因为任何意外亮起来，也不许它吃掉点击（用户报的"卡死"） */}
+      {dragOver && <div style={{ position: "fixed", inset: 0, zIndex: 9999, pointerEvents: "none", background: "rgba(255,0,128,0.15)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, fontWeight: 700, color: "#fff" }}>{DROP_OVERLAY_TEXT}</div>}
       <Sidebar active={activeTab} onSelect={setActiveTab} tabs={TABS} theme={theme} onThemeChange={(t) => setTheme(t as Theme)} onImport={handleImportNative} />
       <div className="main-area">
         <div className="topbar" onMouseDown={handleTopbarDrag}>

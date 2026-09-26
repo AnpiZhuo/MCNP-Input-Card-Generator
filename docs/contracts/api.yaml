@@ -403,6 +403,19 @@ paths:
                                     density: { type: string }
                                     surface_expr: { type: string }
                                     comment: { type: string }
+                                    # ── 2026-09-24 扩展（原 5 键 → 12 键）──
+                                    # 这些键是 preview-3d 侧 `build_cells_data`
+                                    # 「项14 cell 分类规则」的**唯一来路**（前端只原样转发）。
+                                    # 少了 imp_* ⇒ graveyard 判据取不到值 ⇒ GEOUNED 的
+                                    # 两个墓区（体积 = 模型 7372% / 1583%、bbox 2927³）
+                                    # 被渲染进 3D 预览、把整个模型包住（用户："一坨"）。
+                                    imp_n: { type: string }
+                                    imp_p: { type: string }
+                                    imp_e: { type: string }
+                                    u: { type: string }
+                                    fill: { type: string }
+                                    fill_grid: { type: string }
+                                    render: { type: boolean }
                   - type: object
                     properties:
                       status: { type: string, enum: [error] }
@@ -2274,6 +2287,8 @@ components:
       description: |
         app/models.py:174 TallyDefinition 的前端形态（particle 空格串 ↔ particles list；
         enableEn ↔ generate_en；enableTn ↔ generate_tn）。
+        `fn_prefix` / `number_suffix` 是**卡片身份**字段（2026-09-26 补）：漏传即换卡
+        （*F4 能量沉积→F4 通量、F5X 环探测器→F5 点探测器），且全程不报错。
       properties:
         type: { type: string, enum: [F1, F2, F4, F5, F6, F7, F8] }
         number: { type: integer, description: 1/2/4/5/15/25… }
@@ -2281,6 +2296,9 @@ components:
         params: { type: string, description: F5 多点或曲面/栅元号参数串 }
         enableEn: { type: boolean }
         enableTn: { type: boolean }
+        multiplier: { type: string, description: FMn 乘子参数串，"" = 不生成 FM 卡 }
+        fn_prefix: { type: string, description: '计数卡前缀修饰：""（通量）/ "*"（能量沉积）/ "+" / FIP|FIR|FIC（F5 成像）' }
+        number_suffix: { type: string, description: 'F5 环探测器轴字母 X/Y/Z；其余类型为 ""' }
     DistEntry:
       type: object
       description: |

@@ -26,6 +26,14 @@ def _cell(**kw) -> CellData:
     return CellData(**base)
 
 
+# 前端 / `cellBridge` 依赖的**基础 5 键**（必须逐字保留）
+BASE_KEYS = {"number", "material", "density", "surface_expr", "comment"}
+# 下游分类判据所需的键（`api_server.build_cells_data` 读；缺了规则会静默失效）
+# 2026-09-24 扩展：少了 `imp_*` ⇒ graveyard 判据取不到值 ⇒ GEOUNED 的两个墓区
+# （实测体积 = 模型 7372% / 1583%、bbox 2927³）被渲染进预览、把整个模型包住。
+CLASSIFY_KEYS = {"imp_n", "imp_p", "imp_e", "u", "fill", "fill_grid", "render"}
+
+
 # ── 1. 回归本体：CellRow 必须能序列化（修复前 AttributeError）──
 def test_cellrow_serializes_without_number_attribute_error():
     row = CellRow(kind="cell", cell=_cell(number=7, material="2",
@@ -33,14 +41,34 @@ def test_cellrow_serializes_without_number_attribute_error():
                                          surface_expr="-3 4",
                                          comment="clad"))
     out = flat_cell_json(row)
-    assert out == {"number": 7, "material": "2", "density": "-2.7",
-                   "surface_expr": "-3 4", "comment": "clad"}
+    assert {k: out[k] for k in BASE_KEYS} == {
+        "number": 7, "material": "2", "density": "-2.7",
+        "surface_expr": "-3 4", "comment": "clad"}
 
 
-# ── 2. 契约字段集：恰好 api.yaml 的 5 个平铺键 ──
+# ── 2. 契约字段集：基础 5 键必须在 + 分类判据键必须在 ──
 def test_flat_cell_contract_fields():
-    assert set(flat_cell_json(CellRow(kind="cell", cell=_cell()))) == {
-        "number", "material", "density", "surface_expr", "comment"}
+    keys = set(flat_cell_json(CellRow(kind="cell", cell=_cell())))
+    assert BASE_KEYS <= keys, f"基础键丢了: {sorted(BASE_KEYS - keys)}"
+    assert CLASSIFY_KEYS <= keys, (
+        f"分类判据键丢了: {sorted(CLASSIFY_KEYS - keys)} —— "
+        f"build_cells_data 的 graveyard/fill/render 规则会静默失效")
+
+
+# ── 2b. 分类判据键必须真的把值带过去（不是占位空串）──
+def test_classify_keys_carry_real_values():
+    out = flat_cell_json(CellRow(kind="cell", cell=_cell(
+        number=9, material="0", imp_n="0", imp_p="1", u="10", fill="3",
+        fill_grid='{"dims":[1,1,1]}', render=False)))
+    assert out["imp_n"] == "0" and out["imp_p"] == "1"
+    assert out["u"] == "10" and out["fill"] == "3"
+    assert out["fill_grid"] == '{"dims":[1,1,1]}'
+    assert out["render"] is False
+
+
+def test_render_defaults_to_true_when_absent():
+    """缺 render 的旧数据要当"渲染"（不能因补字段反而把东西藏掉）。"""
+    assert flat_cell_json(CellRow(kind="cell", cell=_cell()))["render"] is True
 
 
 # ── 3. 真空栅元：density 空串（不是 "None"/"0"）──
@@ -59,12 +87,13 @@ def test_raw_rows_pass_through_in_order():
         CellRow(kind="raw", text="#endif"),
     ]
     out = geometry_deck_response("1 pz 1", "", cells)
-    assert out["cells"] == [
-        {"kind": "raw", "text": "#ifdef ENDF7"},
-        {"number": 1, "material": "1", "density": "-1.0",
-         "surface_expr": "-1 2", "comment": ""},
-        {"kind": "raw", "text": "#endif"},
-    ]
+    assert out["cells"][0] == {"kind": "raw", "text": "#ifdef ENDF7"}
+    assert out["cells"][2] == {"kind": "raw", "text": "#endif"}
+    cell0 = out["cells"][1]
+    assert {k: cell0[k] for k in BASE_KEYS} == {
+        "number": 1, "material": "1", "density": "-1.0",
+        "surface_expr": "-1 2", "comment": ""}
+    assert CLASSIFY_KEYS <= set(cell0), "分类判据键丢了"
 
 
 # ── 5. 兼容历史平铺 CellData / 平铺 dict（旧调用方与前端旧格式）──
@@ -72,7 +101,9 @@ def test_flat_cell_data_and_dict_still_accepted():
     assert flat_cell_json(_cell(number=3)) ["number"] == 3
     flat_dict = {"number": 4, "material": "1", "density": "-1.0",
                  "surface_expr": "-9", "comment": "x"}
-    assert flat_cell_json(flat_dict) == flat_dict
+    got = flat_cell_json(flat_dict)
+    assert {k: got[k] for k in BASE_KEYS} == flat_dict      # 原有键原样保留
+    assert CLASSIFY_KEYS <= set(got)                        # 缺失的判据键补空值
     assert flat_cell_json({"kind": "raw", "text": "#else"}) == {
         "kind": "raw", "text": "#else"}
 

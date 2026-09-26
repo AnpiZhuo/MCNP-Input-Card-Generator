@@ -7,23 +7,11 @@ import PtracForm from "../ptrac/PtracForm";
 import { ptracFromDict } from "../ptrac/ptracState";
 import { fmeshDefsToRows } from "../volume/fmeshState";
 import { useDeck } from "../utils/DeckContext";
+import { deckTalliesToRows, rowsToDeckTallies, splitTallyNumber, TALLY_PREFIX_OPTIONS, type TallyRow } from "../utils/tallyBridge";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
 import { useDeckSynced } from "../utils/useDeckSynced";
 
 type TallyType = "F1" | "F2" | "F4" | "F5" | "F6" | "F7" | "F8";
-type TallyPrefix = "" | "*" | "+";
-
-interface Tally {
-  id: number;
-  prefix: TallyPrefix;
-  type: TallyType;
-  number: string;
-  particle: string;
-  params: string;
-  multiplier: string;
-  enableEn: boolean;
-  enableTn: boolean;
-}
 
 const TYPE_LABELS: Record<TallyType, string> = {
   F1: "曲面粒子流", F2: "曲面平均通量", F4: "栅元平均通量",
@@ -77,29 +65,31 @@ export default function TallyTab() {
   const { deck, patch } = useDeck();
   // 计数列表：deck.tallies(snake) 单一权威，本地工作副本带稳定 id（共享 hook 收敛推拉守卫）
   const idsRef = useRef<number[]>([]);   // 按位置缓存上次的 tally id：number 变化不复位 key，避免输入光标丢失
-  const deckToLocalT = (ds: any[]): Tally[] => {
+  const deckToLocalT = (ds: any[]): TallyRow[] => {
     const used = new Set<number>();
-    return (ds || []).map((t, i) => {
+    // 字段映射（含 fn_prefix / number_suffix 两个身份字段）统一在 tallyBridge——组件只补稳定 id
+    return deckTalliesToRows(ds).map((t, i) => {
       let id = idsRef.current[i];
       if (id === undefined || used.has(id)) {
-        id = (t.number && t.type) ? (t.number * 10 + (t.type.charCodeAt(1) - 48) + (t.particle?.charCodeAt(0) || 0)) : (i + 1);
+        id = (t.number && t.type) ? (parseInt(t.number) * 10 + (t.type.charCodeAt(1) - 48) + (t.particle?.charCodeAt(0) || 0)) : (i + 1);
         while (used.has(id)) id++;
       }
       used.add(id);
-      return { id, prefix: "" as const, type: t.type as any, number: String(t.number), particle: t.particle, params: t.params, multiplier: t.multiplier || "", enableEn: t.enableEn || false, enableTn: t.enableTn || false };
+      return { ...t, id };
     });
   };
-  const localToDeckT = (ts: Tally[]) => ts.map(t => ({ type: t.type, number: parseInt(t.number) || 0, particle: t.particle || "n", params: t.params, multiplier: t.multiplier, enableEn: t.enableEn, enableTn: t.enableTn }));
-  const [tallies, setTallies] = useDeckSynced<Tally[], any[]>({
+  const [tallies, setTallies] = useDeckSynced<TallyRow[], any[]>({
     deck, patch, key: "tallies",
     fromDeck: (v) => { const next = deckToLocalT(v || []); idsRef.current = next.map(t => t.id); return next; },
-    toDeck: localToDeckT,
+    toDeck: rowsToDeckTallies,
   });
   // 文本↔表单互转（深模块：逻辑在 useSectionTextMode 一处）
   const tallyText = useSectionTextMode("tally", {
     deck, patch, overrideKey: "tally",
     onBackToForm: (data) => {
-      if (data.tallies?.length) setTallies(data.tallies);
+      // 后端口径（snake_case，含 fn_prefix/number_suffix）→ 本地行：必须过同一座桥，
+      // 否则文本模式导入 `*F4` 后前缀仍是空（本地行没有 `prefix` 字段）。
+      if (data.tallies?.length) setTallies(deckToLocalT(data.tallies));
       // FMESH/TMESH 卡：后端 fmesh_defs → deck.tally.fmesh
       if (data.tally?.fmesh_defs) {
         patch({ tally: { ...(deck.tally || {}), fmesh: fmeshDefsToRows(data.tally.fmesh_defs) } });
@@ -122,20 +112,23 @@ export default function TallyTab() {
     const newNum = Math.max(maxNum + 10, 10);
     const digit = newNum % 10;
     const newType = TYPE_BY_DIGIT[digit] || "F4";
-    setTallies([...tallies, { id: Date.now(), prefix: "", type: newType, number: String(newNum), particle: "n", params: "", multiplier: "", enableEn: false, enableTn: false }]);
+    setTallies([...tallies, { id: Date.now(), prefix: "", type: newType, number: String(newNum), suffix: "", particle: "n", params: "", multiplier: "", enableEn: false, enableTn: false }]);
   };
   const delTally = (id: number) => setTallies(tallies.filter((t) => t.id !== id));
-  const updateTally = (id: number, field: keyof Tally, value: any) => setTallies(tallies.map((t) => (t.id === id ? { ...t, [field]: value } : t)));
+  const updateTally = (id: number, field: keyof TallyRow, value: any) => setTallies(tallies.map((t) => (t.id === id ? { ...t, [field]: value } : t)));
 
   const handleNumberChange = (id: number, val: string) => {
+    // X/Y/Z 后缀（F5 环探测器）不再是"输入即丢"：卡号框写 25X / F25X 时把 X 存进 suffix，
+    // 生成侧才能还原成 `F5X:N`（否则环探测器静默变点探测器）。
+    const { suffix } = splitTallyNumber(val);
     setTallies(tallies.map((t) => {
       if (t.id !== id) return t;
       // 通用解析：剥 F 前缀 + X/Y/Z 后缀 → 按个位数映射类型（25/F25/25X/F25X/5 → F5）
       const parsed = parseTallyTypeNumber(val);
-      if (parsed.type) return { ...t, number: parsed.number, type: parsed.type };
+      if (parsed.type) return { ...t, number: parsed.number, suffix, type: parsed.type };
       // F5 成像变体（IC/IR/IP）：保留既有语义
       const v = parseF5Variant(val);
-      if (v.num) { const pn = parseInt(v.num) || 0; if (pn > 0 && pn % 10 === 5) return { ...t, number: val, type: "F5" }; }
+      if (v.num) { const pn = parseInt(v.num) || 0; if (pn > 0 && pn % 10 === 5) return { ...t, number: val, suffix, type: "F5" }; }
       return { ...t, number: val };
     }));
   };
@@ -158,9 +151,18 @@ export default function TallyTab() {
             <thead><tr><th>前缀</th><th>类型</th><th>编号</th><th>粒子</th><th>参数</th><th>乘子</th><th>En</th><th>Tn</th><th>操作</th></tr></thead>
             <tbody>{tallies.map((t) => (
               <tr key={t.id}>
-                <td><select className="form-select" value={t.prefix} onChange={e => updateTally(t.id,"prefix",e.target.value)} style={{height:30,fontSize:12,width:56}} title="*Fn=能量通量 +F8=电荷沉积"><option value="">无</option><option value="*">*</option><option value="+">+</option></select></td>
+                <td><select className="form-select" aria-label="计数卡前缀" value={t.prefix} onChange={e => updateTally(t.id,"prefix",e.target.value)} style={{height:30,fontSize:12,width:56}} title="*Fn=能量通量（乘能量）/ +Fn=计数修饰；FIP/FIR/FIC=F5 成像">{TALLY_PREFIX_OPTIONS.map(p => <option key={p || "none"} value={p}>{p || "无"}</option>)}{/* 导入来的成像前缀（FIP/FIR/FIC）不在固定选项里：补一个动态项，免得 select 显示空白并把值写丢 */}{t.prefix && !(TALLY_PREFIX_OPTIONS as readonly string[]).includes(t.prefix) && <option value={t.prefix}>{t.prefix}</option>}</select></td>
                 <td><select className="form-select" value={t.type} onChange={e => updateTally(t.id,"type",e.target.value)} style={{height:30,fontSize:12,width:130}}>{(Object.keys(TYPE_LABELS) as TallyType[]).map(tp => <option key={tp} value={tp}>{tp} {TYPE_LABELS[tp]}</option>)}</select></td>
-                <td><input className="form-input" value={t.number} onChange={e => handleNumberChange(t.id, e.target.value)} style={{height:28,fontSize:12,width:70}} placeholder="如 4" /></td>
+                <td style={{whiteSpace:"nowrap"}}>
+                  <input className="form-input" aria-label="计数卡编号" value={t.number} onChange={e => handleNumberChange(t.id, e.target.value)} style={{height:28,fontSize:12,width:70}} placeholder="如 4" title="计数卡号（数字）；F5 环探测器用右侧轴字母" />
+                  {/* F5X/F5Y/F5Z 环探测器：轴字母是**卡片身份**的一部分（丢了就把环探测器变成点探测器），
+                      必须有可见可改的控件 —— 旧实现里连导入都会被抹掉。仅在 F5 行出现。 */}
+                  {t.type === "F5" && (
+                    <select className="form-select" aria-label="环探测器轴" value={t.suffix} onChange={e => updateTally(t.id, "suffix", e.target.value)} style={{height:28,fontSize:12,width:46,marginLeft:4}} title="F5 环探测器轴：空=点探测器；X/Y/Z=沿该轴的环探测器（生成 F5X:N …）">
+                      <option value="">—</option><option value="X">X</option><option value="Y">Y</option><option value="Z">Z</option>
+                    </select>
+                  )}
+                </td>
                 <td><input className="form-input" value={t.particle} onChange={e => updateTally(t.id,"particle",e.target.value)} onBlur={e => {
                   const v = e.target.value;
                   const parts = v.split(/[\s,]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
@@ -179,7 +181,7 @@ export default function TallyTab() {
                   if (warns.length) alert(warns.join("\n"));
                   updateTally(t.id, "particle", [...new Set(parts.filter(p => valid.includes(p) && (!perType || perType.includes(p))))].join(",") || (type === "F7" ? "N" : type === "F8" ? "P" : "N"));
                 }} style={{height:28,fontSize:12,width:100}} placeholder="如 N,P,E" /></td>
-                <td><input className="form-input" value={t.params} onChange={e => updateTally(t.id,"params",e.target.value)} style={{height:28,fontSize:12,width:180}} placeholder={TYPE_PARAM_PLACEHOLDER[t.type]} title={TYPE_TOOLTIP[t.type]} /></td>
+                <td><input className="form-input" value={t.params} onChange={e => updateTally(t.id,"params",e.target.value)} style={{height:28,fontSize:12,width:180}} placeholder={TYPE_PARAM_PLACEHOLDER[t.type as TallyType] || "参数"} title={TYPE_TOOLTIP[t.type as TallyType] || ""} /></td>
                 <td><input className="form-input" value={t.multiplier} onChange={e => updateTally(t.id,"multiplier",e.target.value)} style={{height:28,fontSize:12,width:150}} placeholder="如 8.65E10 1 -5 -6" title="FM 响应乘子：C m r1 r2 ...（空 = 不生成 FM 卡）" /></td>
                 <td style={{textAlign:"center"}}><input type="checkbox" checked={t.enableEn} onChange={e => updateTally(t.id,"enableEn",e.target.checked)} style={{accentColor:"var(--accent)"}} title="生成 En 能量卡" /></td>
                 <td style={{textAlign:"center"}}><input type="checkbox" checked={t.enableTn} onChange={e => updateTally(t.id,"enableTn",e.target.checked)} style={{accentColor:"var(--accent)"}} title="生成 Tn 时间卡" /></td>

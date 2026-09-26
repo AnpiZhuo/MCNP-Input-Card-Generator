@@ -206,3 +206,63 @@ def test_cross_process_corrupt_meta_returns_none(tmp_path):
     fp_dir.mkdir(parents=True)
     (fp_dir / "meta.json").write_text("{not json", encoding="utf-8")
     assert cache.get("fp") is None
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 几何引擎改动必须让缓存自动失效（2026-09-24）
+#
+# 为什么单开一组：`GEOMETRY_CACHE_VERSION` 是**人工**开关，靠"改算法时记得 +1"。
+# 2026-09-12 与 2026-09-24 **两次**都因为漏 bump 而"用户看不到修复"；更糟的是缓存
+# **落盘**（内存 miss 时从 meta.json 恢复、跨进程重启仍命中）⇒ 连重启后端都救不回来
+# （实测：改完退化项剔除后重跑，栅元 4 仍是旧的 5.36e8，直到手动清 preview_cache）。
+# 现在把**几何引擎源码的内容摘要**并进指纹 ⇒ 引擎文件一改，旧缓存自动全失效。
+# ══════════════════════════════════════════════════════════════════════
+
+def test_engine_digest_is_stable_and_nonempty():
+    """引擎摘要在同一进程内稳定、非空、定长（否则指纹每次抖动、缓存全 miss）。"""
+    a = PreviewCache._engine_digest()
+    b = PreviewCache._engine_digest()
+    assert a == b and len(a) == 16
+    assert all(c in "0123456789abcdef" for c in a)
+
+
+def test_fingerprint_includes_engine_digest(tmp_path):
+    """同一 deck 的指纹必须把引擎摘要算进去 —— 引擎变了指纹就得变。"""
+    cache = PreviewCache(base_dir=str(tmp_path / "c"))
+    fp = cache.fingerprint("1 pz 1", [{"number": 1}], "")
+    assert cache.fingerprint("1 pz 1", [{"number": 1}], "") == fp      # 稳定
+    old = PreviewCache._ENGINE_DIGEST
+    try:
+        PreviewCache._ENGINE_DIGEST = "0" * 16
+        assert cache.fingerprint("1 pz 1", [{"number": 1}], "") != fp
+    finally:
+        PreviewCache._ENGINE_DIGEST = old
+
+
+def test_engine_digest_changes_when_engine_file_changes(tmp_path, monkeypatch):
+    """真的改一个引擎文件 → 摘要变（"忘记 bump 也不会脏命中"的机制本体）。"""
+    f = tmp_path / "engine.py"
+    f.write_text("v1", encoding="utf-8")
+    monkeypatch.setattr(PreviewCache, "_ENGINE_FILES", ("engine.py",))
+    monkeypatch.setattr(PreviewCache, "_ENGINE_DIGEST", None)
+    monkeypatch.setattr("app.preview_cache.os.path.dirname",
+                        lambda p: str(tmp_path) if p.endswith("preview_cache.py")
+                        else os.path.dirname(p))
+    a = PreviewCache._engine_digest()
+    f.write_text("v2", encoding="utf-8")
+    monkeypatch.setattr(PreviewCache, "_ENGINE_DIGEST", None)
+    b = PreviewCache._engine_digest()
+    assert a != b
+
+
+def test_engine_digest_covers_real_geometry_files():
+    """四个几何引擎文件必须都在清单里（漏一个 = 改它不会失效）。"""
+    for name in ("_freecad_csg_worker.py", "freecad_preview.py",
+                 "quadric.py", "voxel_csg.py"):
+        assert name in PreviewCache._ENGINE_FILES
+
+
+def test_geometry_cache_version_bumped_for_prune():
+    """版本号 ≥4 —— 4 是"剔除必然无界的退化并集分支"那一版（人工语义记录）。"""
+    assert PreviewCache.GEOMETRY_CACHE_VERSION >= 4
+
