@@ -1,6 +1,6 @@
 # 项目记忆文档（AI 速查手册）
 
-> **★ 本批（2026-09-26）三处用户实测 bug + 打包链修复 + v1.7.7 打包部署 —— 已改 ✅ / 已提交 ✅（`83c5a20` + `b4d7d05`）/ 已 push ✅（→ `origin/main`）/ 已打包部署 ✅ · 版本 1.7.7（用户指定）**
+> **★ 本批（2026-09-26）三处用户实测 bug + 打包链修复 + v1.7.7 打包部署 & GitHub Release —— 已改 ✅ / 已提交 ✅（`83c5a20` + `b4d7d05`）/ 已 push ✅（→ `origin/main`）/ **已出 Release ✅（`v1.7.7`，资产 `MCNP-Input-Card-Generator-v1.7.7-win64.zip` 113.8 MB，SHA-256 `06f812ef…85b6f`）** / 已打包部署 ✅ · 版本 1.7.7（用户指定）**
 > **三条用户原话驱动的修复**（详情见 `## S11` 与 `docs/CHANGELOG.md` 2026-09-26 三条）：
 > ① 「计数卡的前缀，`*`号，解析时无法传入，自己点选后，点生成时也没有」—— 引擎侧本来是对的，漏的是**前后端缝**
 >    （`_deck_to_frontend_dict`/`_tally_from_dict` 都没带 `fn_prefix`/`number_suffix`；前端 `TallyTab` 更把下拉框做成装饰品）；
@@ -189,7 +189,7 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
-## S11（当前批次）计数卡前缀 `*` + 栅元几何 `#` + 截面拖动两坑 + 打包链修复 + **v1.7.7 发布**（2026-09-26，**已改 ✅ / 已提交 ✅ `83c5a20`+`b4d7d05` / 已 push ✅ `origin/main` / 已打包部署 ✅ · 版本 1.7.7（用户指定）**）
+## S11（当前批次）计数卡前缀 `*` + 栅元几何 `#` + 截面拖动两坑 + 打包链修复 + **v1.7.7 发布（含 GitHub Release）**（2026-09-26，**已改 ✅ / 已提交 ✅ `83c5a20`+`b4d7d05` / 已 push ✅ `origin/main` / 已出 Release ✅ `v1.7.7` / 已打包部署 ✅ · 版本 1.7.7（用户指定）**）
 
 > **三态**：**已改 ✅ / 已提交 ✅ / 已打包部署 ✅**（手工链：vite → PyInstaller 229 s → binaries → `npm run build:app`；
 > 部署 `D:\MCNP\MCNP输入卡生成器`，7873 文件 / 214,820,150 B）。
@@ -1269,6 +1269,9 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 - **开发阶段**：**v1.7.7 已打包部署**（2026-09-26，**用户指定升版**）—— 本包含 **S11 三条修复（计数卡前缀 / 栅元 `#` / 截面拖动）+ S10 全量（GEOUNED 参数 UI · FreeCAD 自适应切分 · `P A B C D` 感度 · slab 覆盖 · 墓区过滤）+ 09-23 各批**。
   **部署版冒烟实测（2026-09-26，真跑 exe）**：5001 **2 s** 就绪；`/api/xsdir-check` `loaded=true`；`/api/parse-inp` 喂用户那张"手工折行、续行行首 `#`"的栅元卡 ⇒ **1 栅元 / 54 项 / 含 `#55` / 无 `#1#2` 粘连 / `imp:n=imp:p=1` / 注释在位**，回显 `F4.fn_prefix='*'`、`F5.number_suffix='X'`；`/api/generate` 回放 `*F4:N 1 2` + `F5X:N 0 0 0 1`；收尾 5001/8100/1420 全释放。
   **产物核对**：exe **6,622,208 B**、`python.exe` **32,622,751 B**（与 `src-tauri/binaries/` **哈希一致**）、`_internal` **7873 文件 / 214,820,150 B**、exe 内 bundle **`index-dO5WbQoY.js`**（旧包 `index-DA8CoYHE.js`）、PE 资源版本 **1.7.7**（UTF-16）；部署目录 `_internal\app\generator\parsers\lines.py` 与源码**哈希一致**。旧包已备份 `D:\MCNP\_backup_1.7.6_20260926_154504`（**整卷改名移动**，秒级可回滚）。
+  **分发（2026-09-26）**：已提交 + 已 push `origin/main`，并出 **GitHub Release `v1.7.7`** —— 资产 **`MCNP-Input-Card-Generator-v1.7.7-win64.zip`（119,365,948 B = 113.8 MB）**，
+  发布页 <https://github.com/AnpiZhuo/MCNP-Input-Card-Generator/releases/tag/v1.7.7>；**SHA-256 `06f812ef70306ad1cb422d687ef9851a1ef01600cead8c00fa0c4f6141785b6f`**（= GitHub 资产 `digest` 字段 ⇒ 上传前后逐字节一致；说明正文里也附了它供下载者自校）。
+  本机 `gh` CLI 令牌已失效 ⇒ 发布走 git 凭据 + REST API（建草稿 → 传资产 → 校验 → 转正），细节见 §6/§9。
   > 旧状态（已作废）：**v1.7.6 已打包部署**（2026-09-11，`D:\MCNP\MCNP输入卡生成器`）——含 **S1 全量**（源演示修复链 4 轮 + 粒子圆点化 + 方向线/长度滑杆 + 一键运行多核 tasks）。**部署版冒烟实测**：`/api/xsdir-check` **200**（`loaded=true`）、`/api/diff-inp` **200**（旧包 500）、`/api/lattice-extent` **200**、`/api/source-demo-sample` **200**（旧包 404）；5001 与 MCP 8100 均 LISTENING；`_internal\app\{mcnp_tasks,preview_cache,lattice,diff_inp}.py` 与 `_internal\vendor\geouned` 全部在位。旧包已备份 `D:\MCNP\_backup_1.7.5_20260912_114743`（223.1 MB / 2303 files）。
   > 旧状态（已作废）：v1.7.5（2026-09-10 部署）只含技术债修复全量 + SDEF 源粒子演示，**不含** 09-11 的源演示二批 / 圆点化 / 多核 tasks。
   > **2026-09-23 同版本重出包（版本恒 1.7.6，用户指定不升版）**：GEOUNED STEP 导入参数 UI 进包。
@@ -1569,6 +1572,17 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 
 ## §6 踩坑与排雷指南（情景记忆 · 经验教训）
 
+- **❗发 GitHub Release 的两条实情（2026-09-26 实测，发布 v1.7.7 时摸清）**：
+  ① **本机 `gh` CLI 不可用**：`gh auth status` 报 `The token in keyring is invalid`，任何 API 调用 401 `Bad credentials`（要 `gh auth login` 重认证，需人工）。
+  但 **git 自己那份凭据（GCM）是好的**（push 刚成功过，`X-OAuth-Scopes = gist, repo, workflow`）⇒ 可用
+  `git credential fill`（`protocol=https`/`host=github.com`）取令牌后**直连 REST API**：`POST /repos/{o}/{r}/releases`
+  （**`target_commitish` 必须 40 位全 SHA**，短 SHA 会 422 validation failed）→ `POST https://uploads.github.com/.../assets?name=…`
+  （`-InFile` + `Content-Type: application/octet-stream`，113.8 MB 上传 12 s）→ `PATCH /releases/assets/{id}` 改名 → `PATCH /releases/{id} {"draft":false}` 转正。
+  **纪律：先建草稿 → 传资产 → 校验 → 再转正**（否则可能出现"已发布但没有资产"的空 release）。令牌只在内存里传，不打印不落盘。
+  ② **资产名会被规范化**：原名 `MCNP输入卡生成器 1.7.7.zip` 上传后变成 `MCNP.1.7.7.zip`（中文被去掉、空格变点）⇒ **上传后 PATCH 成约定名**
+  `MCNP-Input-Card-Generator-v<版本>-win64.zip`（对齐 v1.7.6.2 / v1.7.4 两个既有 asset）。
+  ③ **上传完整性有官方免费判据**：GitHub API 返回资产的 **`digest: "sha256:…"`**（它自己算的），与本地 `Get-FileHash` 一比即可自证"传上去的就是本地那份"
+  （v1.7.7：两边都是 `06f812ef…85b6f`）；发布说明里也附了 SHA-256 供下载者 `certutil -hashfile … SHA256` 自校。
 - **❗`git push` 到 github 报 `Could not connect to server`（本机 HTTP/2 直连不稳）—— 加 `-c http.version=HTTP/1.1` 即通（2026-09-26 实测）**：
   `git push origin main` 失败：`fatal: unable to access 'https://github.com/…': Failed to connect to github.com port 443 after 21148 ms: Could not connect to server`（`PUSH_EXIT=128`），
   但同一时刻 `Test-NetConnection github.com -Port 443` **可达为 True**、DNS 正常（20.205.243.166，非 hosts 劫持）、无 http(s).proxy 配置、本机也没有常见代理端口在听。
@@ -2008,7 +2022,7 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 
 | 版本 | 时间 | 内容 |
 | :--- | :--- | :--- |
-| **v1.7.7** | 2026-09-26 | **计数卡前缀 `*` 全链贯通 + 栅元几何 `#` 判定 + 截面拖动两坑**（**用户指定升版**；本包同时带上 S10 那批未打包改动）：① 缝两端补 `fn_prefix`/`number_suffix` + 新增 `gui/src/utils/tallyBridge.ts` + F5 行环探测器轴控件；② 行首 `#` 按"字母/数字"判性质 + `normalize_geometry_spacing`（`-14#1`→`-14 #1`，挂解析侧与 pymcnp 消费侧）；③ 新增 `dragImport.ts`（只认真拖文件、leave/drop/end 一律熄、`pointerEvents:none`）与 `sectionView.ts`（旋转中心不含 pan，"拖 Δ ⇒ 内容正好移 Δ"由属性测试锁死）；④ **打包链修复**：`build-release.mjs` 改 sidecar 先行（旧版在干净工作区必自我中断 —— 实测清空 `dist_sidecar`+两个缓存目录后 **EXIT 0 / 182 s**）+ workpath 口径统一（两个缓存目录都清）+ 四条顺序铁律加源码级回归锁。门禁 pytest **1417/0/11**、vitest **104 files / 928 passed**、tsc 两档 0、build 0。手工链打包部署 + 部署版冒烟（见 §2 / S11）。**已 push `origin/main`**（`main 2715a90..b4d7d05`；⚠️ 默认 HTTP/2 直连报 `Could not connect to server` ⇒ 用 `git -c http.version=HTTP/1.1 push` 才通，见 §6/§9） |
+| **v1.7.7** | 2026-09-26 | **计数卡前缀 `*` 全链贯通 + 栅元几何 `#` 判定 + 截面拖动两坑**（**用户指定升版**；本包同时带上 S10 那批未打包改动）：① 缝两端补 `fn_prefix`/`number_suffix` + 新增 `gui/src/utils/tallyBridge.ts` + F5 行环探测器轴控件；② 行首 `#` 按"字母/数字"判性质 + `normalize_geometry_spacing`（`-14#1`→`-14 #1`，挂解析侧与 pymcnp 消费侧）；③ 新增 `dragImport.ts`（只认真拖文件、leave/drop/end 一律熄、`pointerEvents:none`）与 `sectionView.ts`（旋转中心不含 pan，"拖 Δ ⇒ 内容正好移 Δ"由属性测试锁死）；④ **打包链修复**：`build-release.mjs` 改 sidecar 先行（旧版在干净工作区必自我中断 —— 实测清空 `dist_sidecar`+两个缓存目录后 **EXIT 0 / 182 s**）+ workpath 口径统一（两个缓存目录都清）+ 四条顺序铁律加源码级回归锁。门禁 pytest **1417/0/11**、vitest **104 files / 928 passed**、tsc 两档 0、build 0。手工链打包部署 + 部署版冒烟（见 §2 / S11）。**已 push `origin/main`**（`main 2715a90..b4d7d05`；⚠️ 默认 HTTP/2 直连报 `Could not connect to server` ⇒ 用 `git -c http.version=HTTP/1.1 push` 才通，见 §6/§9）。**已出 GitHub Release `v1.7.7`**（tag→`ce4977d`；资产 `MCNP-Input-Card-Generator-v1.7.7-win64.zip` 119,365,948 B / SHA-256 `06f812ef…85b6f` 与本地逐字节一致；<https://github.com/AnpiZhuo/MCNP-Input-Card-Generator/releases/tag/v1.7.7>） |
 | **v1.7.6** | 2026-09-11 | **源演示修复二批 + 粒子圆点化 + 一键运行 MCNP 多核 tasks**（**用户指定升版**）：① 源演示"看不见栅元"根因二批 —— 后端补 camelCase 别名时**漏 `mat`** + `SourceTab` 把 **snake_case** `deck.cells` 强断言成 camelCase `LocalCellRow` ⇒ `material=""` ⇒ `getMatColor("")` 返回 `transparent` ⇒ `buildCellMaterial` 判为**真空 M0**（`opacity:0`，13 个外壳全不可见）；且取景误用体积窗口的 `computeFramingBox`（`VOLUME_FRAMING_RATIO=0.25`，源区/热室≈0.057）把外壳挤出视野。② 方向线不可见（世界空间固定长度 1.17 被取景缩成 ~1px）+「方向线长度」滑杆失效（`setDirectionLength` 从不重建几何）⇒ 改**屏幕空间恒定**。③ 粒子圆点化（`Points` 贴图 + `alphaTest`）。④ **一键运行 MCNP 支持多核 `tasks N`**：UI（`PreviewDialog` footer 核数滑杆 + PTRAC/SSW/SSR **选模式即提示**）+ 后端 `app/mcnp_tasks.py` 扫卡强制降级（C810 页 875 排他卡）。**实测 `tasks` 取物理核数而非逻辑核**（8 物理核机上 tasks 8 = 8.36s vs tasks 16 = 15.06s）。门禁 pytest **900** / vitest **625** / tsc 两档 0 / build 0。**已打包部署 + 冒烟通过**（部署版 `diff-inp` 200、`source-demo-sample` 200、5001 + MCP 8100 LISTENING）。commits `48c51ed` / `857aed1` / `b1f0043` / `21d93d0` |
 | **v1.7.5** | 2026-09-04 | **AI 接入 inputcard-mcp（MCP over HTTP）+ 快捷建栅元六棱柱(RHP)/四面体 + 深模块化 + 废弃一键打包**（新功能上线，用户指定/确认升版）：`inputcard_mcp/` 包（6 深工具，统一按语义段读写）；主程序启动自动拉起 `--mcp-http`（本机 8100 `/mcp` + `/workspace`，含「当前工作区」会话 + 前端 AI 面板）；**移除 stdio 旧接入**（`--mcp-server`/注册MCP.bat 删除）；快捷建栅元扩到 HEX/TET + IMP 改数值默认 0；抽出深模块 `useQuickAddOverlap`；删除 `release.bat`/`release.ps1`（一键打包废弃，仅手动）；新增 `AI接入.md`。门禁 vitest 554/0 + tsc EXIT 0。reflog: `.git/logs/HEAD:250-251` |
 | **v1.7.4** | 2026-08-27 | **3D 预览 MCNP 窗口裁剪修复 + U 分组侧边栏**（用户指定新功能上线升版）：① 实体=universe∩格元盒∩容器cell，修超壳/重叠外壳 + 无限水虚假水块（BEAVRS 超壳叶 48→16）；② 3D 预览侧边栏改 U 分组 + 保留未分组栅元；disc 改用容器裁剪 STL、subPitch 半径；版本五处同步。**18-28 追加**：disc STL 键错配修复（燃料 pin 方块→真实圆柱）+ z 居中（燃料棒/围板位置）|
@@ -2080,6 +2094,10 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 
 ### 版本发布纪律
 
+- **发 GitHub Release（v1.7.7 起固化的三步）**：① 先 `gh auth status` —— **本机 gh 令牌已失效**，不可用则走"git 凭据 + REST API"（`git credential fill` 取令牌，**不打印不落盘**）；
+  ② **建草稿 → 上传资产 → 校验 → 转正**（`POST /releases` 用 **40 位全 SHA** 作 `target_commitish`；资产用 `POST https://uploads.github.com/.../assets?name=…` + `-InFile` + `application/octet-stream`）；
+  ③ 资产名对齐约定 **`MCNP-Input-Card-Generator-v<版本>-win64.zip`**（中文名会被 GitHub 规范化掉），并在说明里附 **SHA-256**（官方的 `digest` 字段可自证上传一致）。
+  参考：v1.7.7 → <https://github.com/AnpiZhuo/MCNP-Input-Card-Generator/releases/tag/v1.7.7>（113.8 MB 上传耗时 12.2 s）。
 - **推送到远端**：`git push origin main`。⚠️ 本机**默认 HTTP/2 直连 github 常常失败**（`Could not connect to server`，而 `Test-NetConnection` 又是通的）⇒ 改用
   **`git -c http.version=HTTP/1.1 push origin main`**（2026-09-26 实测：默认失败、HTTP/1.1 成功）。只读探活：`git -c http.version=HTTP/1.1 ls-remote --heads origin`。
 - bug 修复批**默认严禁升版**；升版仅限**上级（用户）指定**——**2026-09-26 例外经用户明确指定升到 1.7.7**（此前 09-12~09-24 一长串 bug 修复批全部恒 1.7.6，纪律不变）。
