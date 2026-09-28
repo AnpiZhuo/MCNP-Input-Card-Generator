@@ -27,8 +27,10 @@ from app.generator import source_spec as ss
 # 夹具/常量
 # ────────────────────────────────────────────────────────────────────────────
 
-#: C810 Table 3.3（p.3-55 ~ p.3-57）列出的全部源变量 + 手册正文出现、仓库也在用的两个
-#: （JSU：p.3-55 变量清单；RATE：仓库既有 sdef_rate 字段，表 3.3 印刷行未列）—— 22 个。
+#: C810 Table 3.3（p.3-55 ~ p.3-57）列出的 20 个源变量 + 手册正文出现、仓库也在用的两个
+#: （JSU：p.3-55 变量清单；RATE：仓库既有 sdef_rate 字段）—— 共 22 个。
+#: ⚠ 二者都不在 Table 3.3 里：JSU 记「未决」，RATE 已于 2026-09-28 **定案为
+#: 「C810 没有这个源变量」**（见 NOT_A_C810_VARIABLE）。
 TABLE_3_3_VARS = frozenset({
     "CEL", "SUR", "ERG", "TME", "DIR", "VEC", "NRM", "POS", "RAD", "EXT",
     "AXS", "X", "Y", "Z", "CCC", "ARA", "WGT", "EFF", "PAR", "TR",
@@ -52,8 +54,17 @@ NO_SCALAR_DEFAULT = frozenset({
     "CEL", "DIR", "VEC", "POS", "AXS", "X", "Y", "Z", "CCC", "ARA", "PAR", "TR",
 })
 
-#: 手册里找不到 Table 3.3 出处的两个变量（按硬要求：不写数值，anchor=None，记未决）。
-UNDECIDED_NO_ANCHOR = frozenset({"RATE", "JSU"})
+#: 手册正文有、Table 3.3 没有 ⇒ 按硬要求「不写数值，anchor=None，记未决」。
+UNDECIDED_NO_ANCHOR = frozenset({"JSU"})
+
+#: **已定案**为「C810 根本没有这个源变量」的字段（anchor=None，但不再是"未决"）。
+#: RATE（2026-09-28 定案）：Table 3.3 变量列无此行，说明书全文检索 RATE 的 57 处命中
+#: 全是普通英文（convergence/sampling/dose/energy loss rate）；字段只为兼容旧数据保留。
+NOT_A_C810_VARIABLE = frozenset({"RATE"})
+
+#: 「没有字面默认值」的**登记口径**：Table 3.3 说"由位置/面/MODE 定"的 12 个
+#: + 正文有、表里没有的 JSU（未决）+ C810 里根本没有的 RATE（定案不实现）。
+NO_LITERAL_DEFAULT = NO_SCALAR_DEFAULT | UNDECIDED_NO_ANCHOR | NOT_A_C810_VARIABLE
 
 _SPEC_PATH = pathlib.Path(ss.__file__)
 
@@ -293,11 +304,11 @@ def test_every_var_spec_declares_a_default():
     """每个变量都要显式声明 default —— 契约 §1.4：默认值只许来自 VAR_SPEC 表。
 
     ``None`` 是**声明过的**"没有单一数值默认"（由位置/面/MODE 定），不是漏填：
-    它必须出现在 NO_SCALAR_DEFAULT（有字面默认值的 8 个）+ 未决的 2 个之外没有别人。
+    它必须出现在 NO_LITERAL_DEFAULT（表 3.3 的 12 个 + JSU 未决 + RATE 不实现）里。
     """
     for name, spec in ss.VAR_SPEC.items():
         assert hasattr(spec, "default"), name
-        assert spec.default is not None or name in (NO_SCALAR_DEFAULT | UNDECIDED_NO_ANCHOR), (
+        assert spec.default is not None or name in NO_LITERAL_DEFAULT, (
             f"{name} 的 default 是 None，但没有登记为「无单一数值默认」")
 
 
@@ -340,7 +351,7 @@ def test_literal_defaults_match_the_table_map():
 def test_no_scalar_default_set_is_exactly_what_table_3_3_says():
     """None 的集合必须**恰好**等于手册能解释的那批（多一个 = 悄悄丢了默认值）。"""
     none_vars = {n for n, s in ss.VAR_SPEC.items() if s.default is None}
-    assert none_vars == NO_SCALAR_DEFAULT | UNDECIDED_NO_ANCHOR
+    assert none_vars == NO_LITERAL_DEFAULT
 
 
 def test_var_spec_field_keys_point_back_to_the_variable():
@@ -427,12 +438,17 @@ def test_dep_parent_candidates_cover_documented_dependencies():
 
 
 def test_every_semantic_value_has_a_page_reference_and_notes():
-    """每个变量都要有人读页码 + 机检锚点（或明确记为未决）。"""
+    """每个变量都要有人读页码 + 机检锚点（或明确记为未决 / 明确记为"手册没这个变量"）。"""
     for name, spec in ss.VAR_SPEC.items():
         assert spec.source_page.startswith("C810") or spec.source_page.startswith("未在 C810"), name
         if name in UNDECIDED_NO_ANCHOR:
             assert spec.anchor is None
             assert "未决" in spec.notes, name
+        elif name in NOT_A_C810_VARIABLE:
+            # 定案：手册里没有这个源变量 ⇒ 不写数值、不实现；notes 要说清依据，
+            # 且**不许**再挂"未决"（未决会让下一个人以为还能等锚点表给答案）。
+            assert spec.anchor is None
+            assert "C810" in spec.notes and "未决" not in spec.notes, name
         else:
             assert spec.anchor == "#C810-3-56-TABLE-3-3", name
 
@@ -471,9 +487,11 @@ def test_anchors_used_excludes_undecided_entries():
     assert "#C810-3-56-TABLE-3-3" in used
 
 
-def test_undecided_entries_are_the_known_two():
-    """未决项必须**显式**留白（不再出现在未决清单里 = 有人补了出处却没登记）。"""
-    assert {n for n, s in ss.VAR_SPEC.items() if s.anchor is None} == UNDECIDED_NO_ANCHOR
+def test_anchor_less_entries_are_exactly_the_known_ones():
+    """没有锚点的变量必须**显式**登记：JSU（未决，待锚点表给答案）
+    + RATE（已定案"手册没这个变量"，不留待办）。多一个 = 有人加了变量却没给出处。"""
+    assert {n for n, s in ss.VAR_SPEC.items() if s.anchor is None} == (
+        UNDECIDED_NO_ANCHOR | NOT_A_C810_VARIABLE)
 
 
 def test_anchor_table_contains_the_distribution_family_tags():

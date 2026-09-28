@@ -307,15 +307,22 @@ VAR_SPEC: dict[str, VarSpec] = {
         "两种形态都要支持：TR=n 固定变换 / TR=Dn 变换分布（p.3-59：TR=Dn 时要自带 SIn/SPn，"
         "且 SI 必须用 L 列出 TR 编号）—— 故 TR 上的 Dn 是合法值，不是错误。",
     ),
-    # RATE 不在 Table 3.3 的印刷行里（表只到 TR），但仓库既有字段（sdef_rate）认它；
-    # 契约 §1.4 **v1 曾**把 RATE 与 AXS/CCC/ARA/TR 并列记为 0 —— 那句没有逐条对过原文，
-    # 已从契约删除并在 §1.4 留了 ⚠ 说明（正是本契约要防的"AI 转述"）。
-    # ⚠ 按硬要求：手册里找不到出处 ⇒ **不写数值**、anchor=None、记未决。
+    # RATE：**C810 里没有这个源变量**（已定案，2026-09-28）。
+    # 依据：① Table 3.3（p.3-55 ~ p.3-57）的变量列里没有 RATE 行（原文块机检：无该词）；
+    #      ② 说明书**全文**检索 ``\bRATE\b`` 共 57 处，全部是普通英文（convergence rate /
+    #         sampling rate / dose rate / energy loss rate…），无一处与 SDEF 有关。
+    # ⇒ 按"找不到出处就不写语义"的规矩：不写数值、anchor=None、**不实现**；
+    #   引擎侧给出值就明确拒绝（source_sampler._UNSUPPORTED_VARS）。
+    # 仓库仍保留 `sdef_rate` 字段只为**兼容旧数据**（前端模板已标"非标准"），
+    # 它不构成 C810 语义，也不允许被静默当成"某个默认值"。
     "RATE": VarSpec(
         "RATE", None, (), (), "scalar", ("sdef_rate",), "str",
-        "未在 C810 Table 3.3 印刷行找到（契约 §1.4 曾记为 0，该句已删）", None,
-        "未决：契约 §1.4 v1 把 RATE 的默认值记为 0（已删），C810 Table 3.3（p.3-56）印刷行里"
-        "找不到 RATE 这一行 ⇒ 按「找不到出处不写数值」的规矩留 None，等锚点表定案。",
+        "未在 C810 找到：Table 3.3 无此行，全文检索 RATE 只作普通英文出现", None,
+        "已定案（2026-09-28）：C810 没有 RATE 这个 SDEF 源变量 —— Table 3.3（p.3-56）"
+        "变量列无此行，说明书全文检索 RATE（57 处）全是普通英文（convergence/sampling/"
+        "dose/energy loss rate），无一处属源变量语义。故不写默认值、不实现；"
+        "源演示里给了 RATE= 值即**明确报错**（契约 §4：认不出就报错，不静默当默认值）。"
+        "字段 `sdef_rate` 仅为兼容旧数据而保留（前端已标注「非标准」）。",
     ),
     # JSU 只在手册正文出现（p.3-55 的 MCNP 变量清单：「JSU = the surface where the particle
     # started, or zero if the starting point is not on any surface」；p.3-66 的 SP −21 默认 a

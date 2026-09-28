@@ -77,7 +77,8 @@ _NON_VARIABLE_FIELDS = frozenset({
 #: ⚠ ``CCC`` 已于 2026-09-28 落地（位置层的 cookie-cutter 拒绝采样）⇒ 不在此列；
 #: ``ARA`` 见 ``_IGNORED_VARS``（只认不发警告不算错）。
 _UNSUPPORTED_VARS = {
-    "RATE": "RATE（未在 C810 Table 3.3 的印刷行中找到；Table 3.3 的默认值清单不含它）",
+    "RATE": "RATE（C810 没有这个 SDEF 源变量：Table 3.3 无此行，说明书全文检索 RATE 只作"
+            "普通英文出现 ⇒ 无法按手册实现，给了值就报错，不猜语义）",
 }
 
 #: C810 3-60 的 **CEL 层级路径**：整串带圆括号（`( cn < cn-1 < … < c0 )`）。

@@ -246,6 +246,19 @@ def test_cel_lattice_element_path_mentions_lattice_index():
     assert "格元指标" in r["error"], r["error"]
 
 
+def test_rate_is_rejected_as_not_a_c810_source_variable():
+    """`RATE` 不是 C810 的 SDEF 源变量（2026-09-28 定案）⇒ 给了值必须明确报错。
+
+    依据：Table 3.3 变量列无 RATE 行；说明书全文检索 `\\bRATE\\b` 的 57 处命中全是普通
+    英文（convergence/sampling/dose/energy loss rate），无一处属源变量语义。按契约 §4
+    「认不出就报错」，既不能实现，也不能静默忽略或当成某个默认值。
+    """
+    r = sample_source({"sdef_pos_x": "0", "sdef_pos_y": "0", "sdef_pos_z": "0",
+                       "sdef_rate": "1e6", "sdef_erg": "14"}, [], n_particles=1, seed=1)
+    assert r["status"] == "error", r
+    assert "RATE" in r["error"] and "C810" in r["error"], r["error"]
+
+
 def test_cel_distribution_selects_cell():
     geometry = {
         "cells": {
