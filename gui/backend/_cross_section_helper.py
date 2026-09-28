@@ -2,7 +2,7 @@
 Cross-section helper — 调 FreeCAD 子进程（_freecad_cross_section_worker.py）做 CSG 截面。
 不走 STL + PyVista，直接在 FreeCAD 中用 common(thin_box) 提取截面多边形。
 """
-import sys, os, json, re, subprocess
+import sys, os, json, subprocess
 
 _here = os.path.dirname(__file__)
 # 打包后：helper 与 worker 同在 _internal/app/ 同级目录
@@ -24,6 +24,25 @@ for _name in dir(_pi):
         _kw = (_obj._KEYWORD or '').upper()
         if _kw:
             _SURF_CLASSES[_kw] = _obj
+
+
+def parse_tr_cards(tr_text: str) -> dict:
+    """TRn / *TRn 卡解析 —— 转发给 ``api_server.parse_tr_cards``（**唯一实现**）。
+
+    本文件曾内联**第二份**实现（`docs/audit/t2-backend-debt.md` BE-15）：那份同样不认
+    ``*TRn`` 的角度、``$`` 行内注释、5/3 值退化与 ``M`` 字段，且与权威版各自演进 ⇒
+    同一个 deck 在 preview-3d 与 cross-section 两条通道下会解析出**不同几何**，用户侧
+    表现为"截面预览与 3D 预览对不上"，且没有任何报错。改为转发后只有一处实现。
+
+    **惰性 import**：不在导入期把 api_server（重模块；冻结版里还是 sidecar 的主模块）
+    拉进来 —— helper 会被打进 ``_internal/app``，导入期多拉一个模块就多一份启动成本。
+    """
+    _backend = os.path.dirname(os.path.abspath(__file__))
+    if _backend not in sys.path:
+        sys.path.insert(0, _backend)
+    from api_server import parse_tr_cards as _authoritative  # noqa: PLC0415 — 见 docstring
+
+    return _authoritative(tr_text)
 
 
 def get_cross_section(data: dict) -> dict:
@@ -102,32 +121,8 @@ def get_cross_section(data: dict) -> dict:
     if not surf_dicts or not cells_json:
         return {"slices": [], "message": "缺少有效曲面或栅元"}
 
-    # 4. TR 卡
-    tr_cards = {}
-    for _line in tr_text.strip().splitlines():
-        _ls = _line.strip()
-        if not _ls:
-            continue
-        m = re.match(r'^\*?TR(\d+)', _ls.upper())
-        if not m:
-            continue
-        try:
-            tn = int(m.group(1))
-            if str(tn) in tr_cards:
-                continue
-            vals = [float(v) for v in _ls.split()[1:]]
-            translate = vals[:3] if len(vals) >= 3 else [0, 0, 0]
-            rotate = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
-            if len(vals) >= 9:
-                import numpy as np
-                rotate = [[vals[3], vals[4], vals[5]], [vals[6], vals[7], vals[8]]]
-                if len(vals) >= 12:
-                    rotate.append([vals[9], vals[10], vals[11]])
-                else:
-                    rotate.append(np.cross(rotate[0], rotate[1]).tolist())
-            tr_cards[str(tn)] = {"translate": translate, "rotate": rotate}
-        except Exception:
-            pass
+    # 4. TR 卡：走 api_server 的唯一实现（BE-15；本文件不再维护第二份解析器）
+    tr_cards = parse_tr_cards(tr_text)
 
     # 5. 序列化 worker 输入（bound 随曲面最大坐标自适应，大几何不被裁剪）
     _maxc = 0.0
