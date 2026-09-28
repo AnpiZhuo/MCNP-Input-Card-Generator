@@ -208,6 +208,8 @@ export interface SourceDemoResult {
   message?: string;
   /** 几何解析类告警（曲面行未解析、栅元未解析）——非阻断，界面以警示条展示 */
   geometryWarnings?: string[];
+  /** 引擎侧语义告警（当前唯一来源：`ARA` 被接受但本程序不使用）——同样非阻断、必须展示 */
+  warnings?: string[];
 }
 
 /** POST /api/source-demo-sample：SDEF 源粒子抽样（演示源） */

@@ -42,6 +42,11 @@
     `geometry` 由 **api_server 层准备**（复用其 `parse_surfaces` / `Geometry.from_mcnp` / `resolve_cell_complements` / `voxel_csg` 构造 field 函数）：`{cells: {num: {field, aabb}}, surfaces: {num: {type, params, field, rotate, origin}}, trCards, cellVolumes}`——source_sampler 只消费 field/变换/体积、不解析几何（保持纯 stdlib+numpy，不 import pymcnp）。`rotate`/`origin` 是该曲面自身 TR 卡的 3×3 与平移；`trCards` 供 `SDEF TR=n`/`TR=Dn` 使用；`cellVolumes` 是逐栅元体积（`SP V` 用）。
   - 输出（`status=ok`）：`{status, particles:[{id,x,y,z,dx,dy,dz,energy,weight,particle}], energyRange:{min,max}, bounds:{min:[x,y,z],max:[x,y,z]}}`。
   - 输出（`status=error`）：`{status, error, hint?}`（见 §4 错误清单）。
+  - 输出（`status=ok` 的**附加告警键**，都非阻断、都**必须**被前端展示）：
+    `warnings?: string[]`（引擎侧语义告警，如「`ARA` 已接受但本程序不使用」）、
+    `geometryWarnings?: string[]`（几何解析告警，由 api_server 在栅元/曲面/TR 解析失败时附加）。
+    前端把两类合成一条警示条（`gui/src/utils/sourceDemoWarnings.ts` ← `SourceTab`）。
+    **只展示其中一类等于静默**：实测踩过 —— `ARA` 的"接受但不使用"说明被丢掉，用户以为它生效了。
 - **接口不变量**：
   - 方向 `(dx,dy,dz)` 是单位矢量；`particle` ∈ {n,p,e,f,h,a,s,other}：PAR 映射 `1/N`→`n`、
     `2/P`→`p`、`3/E`→`e`、**特殊写法 `4/F`→`f`（正电子，C810 3-56 表尾正文，锚点

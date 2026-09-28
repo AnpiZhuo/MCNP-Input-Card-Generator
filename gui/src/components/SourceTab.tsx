@@ -6,6 +6,7 @@ import DocViewer from "./DocViewer";
 import { useDeck } from "../utils/DeckContext";
 import type { DistEntry, SourceItem, CellRow } from "../utils/DeckContext";
 import { sourceDemoSample } from "../utils/api";
+import { sourceDemoWarning } from "../utils/sourceDemoWarnings";
 import { openSourceDemo } from "../utils/windows";
 import { SOURCE_TEMPLATES, fieldsForTemplate, SDEF_FIELD_META } from "../utils/sourceTemplates";
 import {
@@ -44,7 +45,8 @@ const fixedToDeck = (f: FixedSource): SourceItem => ({
 });
 
 const PAR_LABELS: Record<string, string> = {
-  "1": "1-中子", "2": "2-光子", "3": "3-电子",
+  "1": "1-中子", "2": "2-光子", "3": "3-电子", "4": "4-正电子",
+  "N": "N-中子", "P": "P-光子", "E": "E-电子", "F": "F-正电子",
   "H": "H-质子", "A": "A-α粒子", "S": "S-裂片",
 };
 
@@ -179,12 +181,10 @@ export default function SourceTab() {
         setDemoError(res.error || res.message || "源抽样失败");
         return;
       }
-      // 几何部分失败时给出警告（非阻断）：后端只在栅元解析失败时返回该字段
-      const gw = (res as any).geometryWarnings as string[] | undefined;
-      if (gw && gw.length) {
-        setDemoWarning("部分栅元几何未能解析（" + gw.slice(0, 3).join("；")
-          + (gw.length > 3 ? " 等 " + gw.length + " 项" : "") + "），相关源形状可能不准。");
-      }
+      // 几何部分失败 / 引擎侧告警（ARA 等）都**非阻断**：合一条警示条展示。
+      // ⚠ 只读 geometryWarnings 会把 warnings（如「ARA 已接受但本程序不使用」）整条丢掉。
+      const warn = sourceDemoWarning(res.geometryWarnings, res.warnings);
+      if (warn) setDemoWarning(warn);
       await openSourceDemo({
         cells: cellsForBackend,
         surfaces: deck.surfaces || "",
