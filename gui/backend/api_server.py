@@ -343,30 +343,75 @@ def _model_box_from_cells_surfaces(data: dict):
         return None
     return {"min": [-ext, -ext, -ext], "max": [ext, ext, ext]}
 
-def parse_tr_cards(text: str) -> dict:
-    """解析 TRn 变换卡文本为 {num: {translate, rotate}}"""
-    import re
+_TR_CARD_RE = re.compile(r"^(\*?)TR(\d+)(?=\s|$)", re.IGNORECASE)
+_TR_NUM_RE = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
+
+
+def parse_tr_cards(text: str, errors: list | None = None) -> dict:
+    """解析 TRn / *TRn 变换卡文本为 {num: {translate, rotate}}（C810 印刷页 3-30 / 3-31）。
+
+    - ``TRn`` 的 B1~B9 是**方向余弦**；``*TRn`` 的 B1~B9 是**角度**（度，0~180）
+      ——「∗TRn means that the Bi are angles in degrees rather than being the cosines
+      of the angles」(C810 3-30) ⇒ 带星号时对 B 取 cos；平移量 O1O2O3 **不受星号影响**。
+    - B1B2B3 = 辅系 x′ 轴在主系 (x,y,z) 的方向余弦（B4~B6 = y′、B7~B9 = z′，
+      C810 3-31 的轴对表）⇒ 返回的 ``rotate`` **每行 = 一个辅系轴在主系中的分量**，
+      与 ``voxel_csg`` / ``_freecad_csg_worker.apply_trn`` 的既有约定
+      ``p_global = rotateᵀ·p_local + o`` 一致。
+    - 手册允许 5 种 B 矩阵写法（C810 3-31）：9 值（完整）/ 6 值（两矢量 + 叉积生成第三个）/
+      5 值（欧拉角补全）/ 3 值（任意补全）/ 0 值（单位矩阵）。6 值可**确定**复现（叉积）；
+      5/3 值的补全算法是 MCNP 内部行为、手册只写 "Eulerian angles scheme" /
+      "some arbitrary way"、未给公式 ⇒ **不猜**：记一条 ``errors`` 并跳过该卡 —— 下游
+      按"变换卡不存在"明确报错，而不是静默用单位矩阵算出错误几何。
+    - 行内 ``$`` 之后是注释；参数遇非数值 token 停靠（与前端 ``surfacesAABB.parseTrCards``
+      同口径）。旧实现把整行直接 ``float()`` ⇒ 带 ``$`` 注释的 TR 卡整条丢失。
+    """
     tr_cards = {}
-    for _line in text.strip().splitlines():
-        _ls = _line.strip()
-        if not _ls: continue
-        m = re.match(r'^\*?TR(\d+)', _ls.upper())
-        if not m: continue
+    for _lineno, _line in enumerate((text or "").splitlines(), 1):
+        _ls = _line.split("$", 1)[0].strip()
+        if not _ls:
+            continue
+        m = _TR_CARD_RE.match(_ls)
+        if not m:
+            continue
+        is_angle = bool(m.group(1))
+        tn = int(m.group(2))
+        if str(tn) in tr_cards:
+            continue
         try:
-            tn = int(m.group(1))
-            if str(tn) in tr_cards: continue
-            vals = [float(v) for v in _ls.split()[1:]]
+            vals = []
+            for tok in _ls.split()[1:]:
+                if not _TR_NUM_RE.match(tok):
+                    break
+                vals.append(float(tok))
             translate = vals[:3] if len(vals) >= 3 else [0, 0, 0]
-            rotate = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
-            if len(vals) >= 9:
+            rest = vals[3:]
+            if not rest:
+                # 手册模式 #5：无 B 项 ⇒ 单位矩阵（纯平移）
+                rotate = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+            elif len(rest) >= 9:
+                # 手册模式 #1：完整 3×3
+                b = rest[:9]
+                rotate = [[b[0], b[1], b[2]], [b[3], b[4], b[5]], [b[6], b[7], b[8]]]
+            elif len(rest) >= 6:
+                # 手册模式 #2：两矢量 + 叉积生成第三个
                 import numpy as np
-                rotate = [[vals[3], vals[4], vals[5]], [vals[6], vals[7], vals[8]]]
-                if len(vals) >= 12:
-                    rotate.append([vals[9], vals[10], vals[11]])
-                else:
-                    rotate.append(np.cross(rotate[0], rotate[1]).tolist())
+                v1 = [float(v) for v in rest[0:3]]
+                v2 = [float(v) for v in rest[3:6]]
+                rotate = [v1, v2, np.cross(v1, v2).tolist()]
+            else:
+                if errors is not None:
+                    errors.append(
+                        f"TR{tn}（第 {_lineno} 行）：B 矩阵只给了 {len(rest)} 项。"
+                        "C810 3-31 的模式 #3（5 值，欧拉角补全）/#4（3 值，任意补全）"
+                        "是 MCNP 内部行为、手册未给公式 ⇒ 本条变换未生效（不猜）")
+                continue
+            if is_angle:
+                # C810 3-30：∗TRn 的 Bi 是角度（度，0~180）而非方向余弦
+                rotate = [[math.cos(math.radians(v)) for v in row] for row in rotate]
             tr_cards[str(tn)] = {"translate": translate, "rotate": rotate}
-        except: pass
+        except Exception as e:
+            if errors is not None:
+                errors.append(f"TR{tn}（第 {_lineno} 行）解析失败：{e}")
     return tr_cards
 
 
@@ -3374,6 +3419,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             data = self._read_body() or {}
             sdef_fields = data.get("sdefFields") or {}
             distributions = data.get("sdefDistributions") or []
+            mode = data.get("mode") or []
             n_particles = int(data.get("nParticles") or 500)
             surf_text = str(data.get("surfaces") or "")
             cells = data.get("cells") or []
@@ -3381,7 +3427,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             geometry = self._prepare_source_geometry(surf_text, cells, tr_text)
             from app.generator.source_sampler import sample_source
             result = sample_source(sdef_fields, distributions, geometry,
-                                   n_particles=n_particles)
+                                   n_particles=n_particles, mode=mode)
             # 几何解析若有失败，随响应带出（前端可提示），避免"静默无几何"
             errs = geometry.get("geometryErrors") or []
             if errs and isinstance(result, dict):
@@ -3405,7 +3451,9 @@ class MCNPHandler(BaseHTTPRequestHandler):
         # 把"哪些曲面行没能解析"一并交上来（行号 + 原因）：不交的话，用户只会看到下游的
         # 「引用的曲面未定义」，而真因在那一行写法上（2026-09-20 实测的 SO 卡就是如此）。
         surfs = parse_surfaces(surf_text, _source_geometry_errors)
-        tr_cards = parse_tr_cards(tr_text)
+        # TR 卡的诊断（*TRn 角度、5/3 值补全未给公式等）也并入同一列表：否则源演示只会
+        # 看到下游「SDEF TR=n 引用的变换卡不存在」，而真因在那一行写法上。
+        tr_cards = parse_tr_cards(tr_text, _source_geometry_errors)
         surfaces = {}
         for s in surfs:
             try:

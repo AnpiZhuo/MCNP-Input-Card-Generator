@@ -214,6 +214,7 @@ export interface SourceDemoResult {
 export async function sourceDemoSample(payload: {
   sdefFields: Record<string, string>;
   sdefDistributions: any[];
+  mode?: string[];
   surfaces?: string;
   cells?: any[];
   trCards?: string;

@@ -161,6 +161,29 @@ def test_fixed_direction():
         assert abs(p["dx"]) < 1e-9 and abs(p["dy"]) < 1e-9 and abs(p["dz"] - 1) < 1e-9
 
 
+def test_fixed_direction_uses_explicit_cosine():
+    r = _ok(sample_source(
+        {"sdef_pos_x": "0", "sdef_pos_y": "0", "sdef_pos_z": "0",
+         "sdef_dir": "-1", "sdef_vec": "0 0 1", "sdef_erg": "14"},
+        [], n_particles=20, seed=1))
+    assert all(abs(p["dx"]) < 1e-9 and abs(p["dy"]) < 1e-9 and p["dz"] < -1 + 1e-9
+               for p in r["particles"])
+
+
+def test_eff_from_sdef_extra_is_applied():
+    r = sample_source(
+        {"sdef_cel": "1", "sdef_erg": "14", "sdef_extra": "EFF=0.75"},
+        [], geometry=_geom(), n_particles=1, seed=1)
+    assert r["status"] == "ok", r.get("error")
+
+
+def test_default_particle_follows_mode():
+    r = _ok(sample_source(
+        {"sdef_pos_x": "0", "sdef_pos_y": "0", "sdef_pos_z": "0",
+         "sdef_erg": "14"}, [], n_particles=3, seed=1, mode=["p", "e"]))
+    assert {p["particle"] for p in r["particles"]} == {"p"}
+
+
 # ── SUR / CEL 几何判定 ────────────────────────────────────
 
 def _geom():
@@ -196,6 +219,62 @@ def test_cel_uniform():
                           n_particles=300, seed=1))
     for p in r["particles"]:
         assert p["x"] ** 2 + p["y"] ** 2 + p["z"] ** 2 <= 1.0
+
+
+def test_cel_distribution_selects_cell():
+    geometry = {
+        "cells": {
+            1: {"field": lambda x, y, z: (x >= -1) & (x <= 0),
+                "aabb": ((-1, -1, -1), (0, 1, 1))},
+            2: {"field": lambda x, y, z: (x >= 0) & (x <= 1),
+                "aabb": ((0, -1, -1), (1, 1, 1))},
+        },
+        "surfaces": {},
+    }
+    r = _ok(sample_source(
+        {"sdef_cel": "D4", "sdef_erg": "14"},
+        [{"id": 4, "si": {"type": "L", "values": ["1", "2"]},
+          "sp": {"type": "D", "values": ["0", "1"]}}],
+        geometry=geometry, n_particles=100, seed=1))
+    assert all(p["x"] >= 0 for p in r["particles"])
+
+
+def test_cel_uses_explicit_position_region():
+    geometry = {
+        "cells": {
+            1: {"field": lambda x, y, z: x >= 0},
+        },
+        "surfaces": {},
+    }
+    r = _ok(sample_source(
+        {"sdef_cel": "1", "sdef_pos_x": "0.5", "sdef_pos_y": "0",
+         "sdef_pos_z": "0", "sdef_rad": "0.5", "sdef_erg": "14"},
+        [], geometry=geometry, n_particles=200, seed=1))
+    for p in r["particles"]:
+        radius = math.sqrt((p["x"] - 0.5) ** 2 + p["y"] ** 2 + p["z"] ** 2)
+        assert p["x"] >= 0
+        assert radius <= 0.5 + 1e-9
+
+
+def test_ccc_clips_existing_position_distribution():
+    geometry = {
+        "cells": {
+            9: {"field": lambda x, y, z: x >= 0,
+                "aabb": ((0, -1, -1), (1, 1, 1))},
+        },
+        "surfaces": {},
+    }
+    r = _ok(sample_source(
+                {"sdef_ccc": "9", "sdef_pos_x": "D1", "sdef_pos_y": "D2",
+                 "sdef_pos_z": "D3", "sdef_erg": "14"},
+        [{"id": 1, "si": {"type": "L", "values": ["-1", "1"]},
+                    "sp": {"type": "D", "values": ["1", "1"]}},
+                 {"id": 2, "si": {"type": "L", "values": ["0"]},
+                    "sp": {"type": "D", "values": ["1"]}},
+                 {"id": 3, "si": {"type": "L", "values": ["0"]},
+                    "sp": {"type": "D", "values": ["1"]}}],
+        geometry=geometry, n_particles=100, seed=1))
+    assert all(p["x"] >= 0 for p in r["particles"])
 
 
 def test_surface_sphere():
@@ -286,6 +365,15 @@ def test_sdef_tr_transforms_position_and_direction():
         assert p["z"] > 99.0
         # 方向也要转（PX 面法线 +X → 世界 +Y）
         assert p["dy"] > 0.0, "方向必须经 TR 旋转（旧实现完全忽略 TR）"
+
+
+def test_sdef_tr_missing_card_is_error():
+    r = sample_source(
+        {"sdef_pos_x": "0", "sdef_pos_y": "0", "sdef_pos_z": "0",
+         "sdef_tr": "99", "sdef_erg": "14"}, [], geometry={"trCards": {}},
+        n_particles=1, seed=1)
+    assert r["status"] == "error"
+    assert "TR='99'" in r["error"]
 
 
 # ── SP V / SI S 分布号 0 / SDEF TR=Dn ─────────────────────

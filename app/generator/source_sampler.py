@@ -77,7 +77,6 @@ _NON_VARIABLE_FIELDS = frozenset({
 #: 「positions are sampled only within the cookie-cutter cell」，会改变位置语义），
 #: ARA 只服务于点探测器的直接贡献（p.3-56），本引擎不算 tally ⇒ 认了它也不影响起始状态。
 _UNSUPPORTED_VARS = {
-    "CCC": "cookie-cutter 栅元（C810 p.3-58/3-59：位置必须限制在裁剪栅元内）",
     "RATE": "RATE（未在 C810 Table 3.3 的印刷行中找到；Table 3.3 的默认值清单不含它）",
 }
 
@@ -184,12 +183,14 @@ class _Engine:
     所有"值从哪来"的问题都走一条路径：``_resolve``。
     """
 
-    def __init__(self, fields: dict, sampler: DistributionSampler, geometry=None):
+    def __init__(self, fields: dict, sampler: DistributionSampler, geometry=None, mode=None):
         # 归一化交给模型层（``fdir=d2`` / ``fdir d2`` / ``FDIR=D2`` → ``FDIR D2``）：
         # 引擎侧不再自己认"F 打头"的写法（旧 `_erg_parent` 就是这么散的）。
         self.f = normalize_sdef_fields(dict(fields or {}))
         self.s = sampler
         self.geometry = geometry or {}
+        mode_values = mode if isinstance(mode, (list, tuple, set)) else str(mode or "").split()
+        self.mode = {str(value).strip().lower() for value in mode_values}
         self.rng: random.Random | None = None
         # 本次抽样（= 本粒子）的取值缓存；`sample_one` 每个粒子清空一次。
         # 键 = 变量名，值 = `_resolve` 的 `(值, 父值索引)` —— 同一个变量的第二次询问
@@ -258,9 +259,16 @@ class _Engine:
             if var == "PAR":
                 # PAR 的取值域是**粒子类型**（`_PAR_GROUP`：n/p/e/h/a/s 或 1/2/3…）或 Dn，
                 # 不是通用的三种变量形态 ⇒ 不能过 `parse_var_ref`（实测 preview_inp09_m27
-                # 的 `par = h` 就卡在这里被判"非法值"）。合法性由 `_par()` 判。
+                # 的 `par = h` 就卡在这里被判"非法值"）。合法性由 `_par()` 判；C810
+                # 还规定 PAR 必须是显式值，不允许 Dn。
+                if re.fullmatch(r"(?i)\s*d\d+\s*", raw):
+                    raise SourceSamplingError(
+                        f"SDEF PAR={raw!r} 不允许使用 Dn：C810 Table 3.3 要求 PAR 为显式粒子类型")
                 continue
             ref = parse_var_ref(raw)
+            if var in ("WGT", "EFF") and ref["kind"] != "const":
+                raise SourceSamplingError(
+                    f"SDEF {var}={raw!r} 不允许使用分布：C810 Table 3.3 要求 {var} 为显式值")
             if ref["kind"] == "const":
                 _scalar(ref["value"], var)
             # 依赖形态（Fvar′ Dn）的父值是否到位，要等抽样时才判得准：父变量既可能是
@@ -343,7 +351,13 @@ class _Engine:
         spec = spec_for(var)
         if not spec.field_keys:
             raise SourceSamplingError(f"源变量 {spec.name} 在 SDEF 卡上没有对应字段")
-        return str(self.f.get(spec.field_keys[0]) or "").strip()
+        direct = str(self.f.get(spec.field_keys[0]) or "").strip()
+        if direct or var != "EFF":
+            return direct
+        # EFF remains in sdef_extra for compatibility with older deck data.
+        extra = str(self.f.get("sdef_extra") or "")
+        match = re.search(r"(?:^|\s)EFF\s*=\s*(\S+)", extra, re.IGNORECASE)
+        return match.group(1) if match else ""
 
     def _vec(self, var: str) -> tuple:
         """三元组变量（VEC/AXS/POS）→ ``(x,y,z)``；分量缺省 = 0（C810 p.3-57 的 POS 语义）。
@@ -599,6 +613,23 @@ class _Engine:
         return self._geom_helper
 
     def _position(self) -> tuple[tuple, int | None]:
+        """生成位置，并在需要时应用 C810 的 ``CCC`` cookie-cutter 限制。"""
+        ccc = self._field("CCC")
+        if not ccc or ccc == "0":
+            return self._position_uncut()
+        ccc_num = self._resolve_cell_number(ccc, "CCC")
+        for _ in range(100000):
+            pos, pos_index = self._position_uncut()
+            if self.geom.contains_cell(ccc_num, pos):
+                return pos, pos_index
+            # 拒绝采样的下一次尝试必须重新抽取 X/Y/Z、RAD、EXT 等位置变量；
+            # CCC 本身在同一粒子内保持不变。
+            self._cache.clear()
+        raise SourceSamplingError(
+            f"SDEF CCC={ccc!r} 拒绝采样失败：100000 次尝试没有位置落入裁剪栅元 "
+            f"{ccc_num}（C810 3-58/3-59：位置必须限制在 cookie-cutter 栅元内）")
+
+    def _position_uncut(self, use_cel: bool = True) -> tuple[tuple, int | None]:
         """位置 = **变量组合**（契约 §3）：``SUR`` / ``CEL`` / ``POS+RAD+EXT+AXS`` / ``X-Y-Z``。
 
         分派次序与旧实现一致（SUR → CEL → POS 多点 → X/Y/Z 笛卡尔 → POS+RAD/EXT → 点源），
@@ -613,8 +644,13 @@ class _Engine:
         if sur and sur not in ("0",):
             return self._position_surface(sur), None
         # 2. 栅元均匀 CEL（拒绝采样 + EFF 判据，C810 p.3-57/3-59）
-        if self.cel_source:
-            return self.geom.sample_cell(self._cell_number(cel), self._eff()), None
+        if self.cel_source and use_cel:
+            cell_num = self._resolve_cell_number(cel, "CEL")
+            region = self._position_uncut if self._has_position_region() else None
+            return self.geom.sample_cell(
+                cell_num, self._eff(),
+                candidate=(lambda: region(use_cel=False)[0]) if region else None,
+            ), None
         px, py, pz = (self._field_for_key(k) for k in ("sdef_pos_x", "sdef_pos_y", "sdef_pos_z"))
         # 3. POS=Dn 多点源（三分量同引用 = SI 每 3 个一组）
         if px and px == py == pz and parse_var_ref(px)["kind"] == "dist":
@@ -642,14 +678,37 @@ class _Engine:
             return (self._coord("X"), self._coord("Y"), self._coord("Z")), None
         return (0.0, 0.0, 0.0), None
 
-    def _cell_number(self, raw: str) -> int:
-        """``CEL`` 的栅元号：只认显式整数（CEL 由位置定，不是分布变量）。"""
+    def _has_position_region(self) -> bool:
+        """是否给出了 C810 CEL 拒绝采样所需的用户采样区域。"""
+        return any(self._field_for_key(k) for k in (
+            "sdef_pos_x", "sdef_pos_y", "sdef_pos_z", "sdef_rad", "sdef_ext"))
+
+    def _resolve_cell_number(self, raw: str, var: str) -> int:
+        """解析 CEL/CCC 的显式栅元号或 ``Dn`` 栅元分布引用。"""
+        ref = parse_var_ref(raw)
+        if ref["kind"] == "dist":
+            value = self._smp(ref["did"], var, cel=self.cel_source)
+            self.vals[var] = value
+            self.sampled.add(var)
+            return self._cell_number(value, raw)
+        if ref["kind"] != "const":
+            raise SourceSamplingError(
+                f"SDEF {var}={raw!r} 的依赖形态暂不支持：栅元选择必须是显式栅元号"
+                "或 Dn（C810 Table 3.3 / 3-55）")
+        return self._cell_number(ref["value"], raw)
+
+    @staticmethod
+    def _cell_number(value, raw: str) -> int:
+        """把 CEL 值收敛为严格的整数栅元号，不截断小数。"""
         try:
-            return int(float(raw))
+            number = float(value)
         except (TypeError, ValueError):
             raise SourceSamplingError(
-                f"SDEF CEL={raw!r} 不是栅元号（C810 Table 3.3：CEL 由位置定，"
-                "只接受显式栅元号）")
+                f"SDEF CEL={raw!r} 不是数值栅元号（C810 Table 3.3）")
+        if not math.isfinite(number) or not number.is_integer():
+            raise SourceSamplingError(
+                f"SDEF CEL={raw!r} 不是整数栅元号（C810 Table 3.3）")
+        return int(number)
 
     def _position_multi_point(self, did: int) -> tuple[tuple, int]:
         """``POS=Dn`` 多点源：``SI`` 每 3 个值 = 一个位置，``SP`` 概率选位置组。
@@ -827,9 +886,8 @@ class _Engine:
                 # 固定方向余弦（u v w 三分量逐字给出）
                 return tuple(_scalar(t, "DIR") for t in toks[:3])
             if axis and any(axis):
-                # DIR=1（或其它单值）＝沿参考轴（VEC / 面法线）——C810 p.3-59 单向源写法
                 self.last_mu = _scalar(toks[0] if toks else "0", "DIR")
-                return _norm(axis)
+                return self._dir_from_mu(self.last_mu, axis)
             raise SourceSamplingError(
                 "SDEF DIR 写成单值（方向余弦）但缺少参考轴：请给 VEC，或把源放在曲面上"
                 "（面源的 VEC 默认 = 面法线）—— C810 Table 3.3 的 VEC 行")
@@ -923,11 +981,14 @@ class _Engine:
             tr_no = int(round(self._smp(ref["did"], "TR")))
             tr = cards.get(str(tr_no)) or cards.get(tr_no)
         elif ref["kind"] == "const":
-            tr = cards.get(raw) or cards.get(str(raw))
+            tr_no = self._cell_number(ref["value"], raw)
+            tr = cards.get(str(tr_no)) or cards.get(tr_no)
         else:
-            return None
+            raise SourceSamplingError(
+                f"SDEF TR={raw!r} 的依赖形态不受支持；请使用变换编号或 Dn 分布")
         if not tr:
-            return None
+            raise SourceSamplingError(
+                f"SDEF TR={raw!r} 引用的变换卡不存在（C810 Table 3.3：TR=n 或 TR=Dn）")
         return {"origin": tuple(tr.get("translate") or (0.0, 0.0, 0.0)),
                 "rotate": tr.get("rotate")}
 
@@ -1024,10 +1085,12 @@ class _Engine:
         不把它伪装成"从 Table 3.3 读到的默认值"。"""
         raw = self._field("PAR")
         if not raw:
+            # MCNP chooses the lowest applicable default particle on MODE.
+            for particle in ("n", "p", "e"):
+                if particle in self.mode:
+                    return particle
             return "n"
         text = str(raw).strip().upper()
-        if text[:1] == "D" and text[1:].isdigit():
-            return _PAR_GROUP.get(str(int(self._par_value())), "other")
         return _PAR_GROUP.get(text, "other")
 
     # ── 未实现变量的显式拒绝（契约 §4）──────────────────────
@@ -1110,21 +1173,34 @@ class _GeometryHelper:
             raise SourceSamplingError(f"SUR={surf_num} 引用的曲面未定义")
         return str(s["type"])
 
+    def contains_cell(self, cell_num: int, pos: tuple[float, float, float]) -> bool:
+        """判断一个世界坐标点是否落在栅元内，供 CCC 过滤已有位置分布。"""
+        info = self.cells.get(cell_num)
+        if info is None or not info.get("field"):
+            raise SourceSamplingError(f"CCC={cell_num} 引用的栅元不存在或无法判定")
+        import numpy as np
+        try:
+            inside = info["field"](
+                np.asarray([pos[0]]), np.asarray([pos[1]]), np.asarray([pos[2]]))
+            return bool(np.asarray(inside).ravel()[0])
+        except Exception as exc:
+            raise SourceSamplingError(
+                f"CCC={cell_num} 的栅元几何判定失败：{exc}") from exc
+
     # ── RAD / EXT 的取值入口（唯一）：交回引擎的通用路径 ──────
     def _radial_at(self, did, power: float) -> float:
         """面源 ``RAD``（面内半径）：走变量名感知的通用路径
         （``SI x`` + ``SP −21`` ⇒ C810 p.3-66 规则 4 的 ``SI 0 x``；无 SP ⇒ 默认幂律）。"""
         return self.engine._default_power_law(did, power, "RAD")
 
-    def sample_cell(self, cell_num: int, eff: float) -> tuple:
+    def sample_cell(self, cell_num: int, eff: float, candidate=None) -> tuple:
         """CEL 拒绝采样（C810 p.3-57 正文 + p.3-59 的 EFF 判据）。
 
-        **区域来源（相对 C810 的有意扩展）**：C810 p.3-57 要求由**用户**给一个完全包含该
-        栅元的区域（X/Y/Z 笛卡尔 / POS+RAD 球 / POS+AXS+RAD+EXT 柱），并原话提醒「you must
-        make sure that the sampling region really does contain every part of the cell
-        because MCNP has no way of checking this」。本程序的 SDEF 表单里"只给 CEL"是最常见
-        用法，故**用栅元紧盒（`voxel_csg.cell_aabb`）当区域** —— 用户不必自己算盒；
-        代价是盒错则采样必错，所以紧盒必须对（宏体紧盒 2026-09-20 补齐）。
+        **区域来源**：C810 p.3-57 要求由**用户**给一个完全包含该栅元的区域（X/Y/Z 笛卡尔 /
+        POS+RAD 球 / POS+AXS+RAD+EXT 柱），并原话提醒「you must make sure that the sampling
+        region really does contain every part of the cell because MCNP has no way of checking this」。
+        本程序在用户给出这些位置变量时使用其候选区域；只给 CEL 时才用栅元紧盒
+        （`voxel_csg.cell_aabb`）作为便利默认值。
 
         **判死口径（C810 p.3-59 原文）**：「If in any source cell or cookie-cutter cell the
         acceptance rate is too low, the problem is terminated for inefficiency. The criterion
@@ -1135,27 +1211,33 @@ class _GeometryHelper:
         if info is None:
             raise SourceSamplingError(f"CEL={cell_num} 引用的栅元不存在或无法判定")
         aabb = info.get("aabb")
-        if not aabb:
+        if candidate is None and not aabb:
             raise SourceSamplingError(
                 f"CEL={cell_num} 无法确定栅元包围盒（该栅元含无界曲面或未支持的几何）⇒ "
                 "无法做栅元均匀抽样。请改用面源（SUR），或改用退化体源"
                 "（POS + AXS + RAD + EXT）自己指定采样范围")
-        # aabb 两种形态都接受：`(lo3, hi3)`（早期契约/单测夹具）与
-        # `(lo3, hi3, axes3)`（`voxel_csg.cell_aabb` 的真实返回，带逐轴有界标志）。
-        bounded = aabb[2] if len(aabb) > 2 else (True, True, True)
-        if not all(bounded):
-            raise SourceSamplingError(
-                f"CEL={cell_num} 的包围盒有**无界轴**（该栅元在某个方向上延伸到无穷）⇒ "
-                "无法做栅元均匀抽样。请改用面源（SUR），或改用退化体源自己指定采样范围")
+        if candidate is None:
+            # aabb 两种形态都接受：`(lo3, hi3)`（早期契约/单测夹具）与
+            # `(lo3, hi3, axes3)`（`voxel_csg.cell_aabb` 的真实返回，带逐轴有界标志）。
+            bounded = aabb[2] if len(aabb) > 2 else (True, True, True)
+            if not all(bounded):
+                raise SourceSamplingError(
+                    f"CEL={cell_num} 的包围盒有**无界轴**（该栅元在某个方向上延伸到无穷）⇒ "
+                    "无法做栅元均匀抽样。请改用面源（SUR），或改用退化体源自己指定采样范围")
+            lo = [max(-1e6, x) for x in aabb[0]]
+            hi = [min(1e6, x) for x in aabb[1]]
+            if any(hi[i] <= lo[i] for i in range(3)):
+                raise SourceSamplingError(f"CEL={cell_num} 包围盒退化（{lo} → {hi}）")
         field = info.get("field")
-        lo = [max(-1e6, x) for x in aabb[0]]
-        hi = [min(1e6, x) for x in aabb[1]]
-        if any(hi[i] <= lo[i] for i in range(3)):
-            raise SourceSamplingError(f"CEL={cell_num} 包围盒退化（{lo} → {hi}）")
+        if not field:
+            raise SourceSamplingError(f"CEL={cell_num} 引用的栅元缺少可判定的几何")
         import numpy as np
         rng = self.engine.rng
         for _ in range(100000):
-            p = [rng.uniform(lo[i], hi[i]) for i in range(3)]
+            if candidate is None:
+                p = [rng.uniform(lo[i], hi[i]) for i in range(3)]
+            else:
+                p = candidate()
             self._cel_tries += 1
             try:
                 inside = field(np.asarray([p[0]]), np.asarray([p[1]]), np.asarray([p[2]]))
@@ -1358,7 +1440,8 @@ class _GeometryHelper:
         raise SourceSamplingError(f"SUR 面采样：{s['type']} 面均匀拒绝采样失败（椭球过扁？）")
 
 
-def sample_source(sdef_fields, distributions, geometry=None, *, n_particles=500, seed=None) -> dict:
+def sample_source(sdef_fields, distributions, geometry=None, *, n_particles=500, seed=None,
+                  mode=None) -> dict:
     """SDEF 抽样编排入口（契约 §0 的对外不变量：签名与返回结构逐字不变）。
 
     返回 ``{"status":"ok", particles, energyRange, bounds}`` 或 ``{"status":"error", error}``。
@@ -1367,7 +1450,7 @@ def sample_source(sdef_fields, distributions, geometry=None, *, n_particles=500,
     """
     try:
         sampler = DistributionSampler(distributions)
-        engine = _Engine(sdef_fields or {}, sampler, geometry)
+        engine = _Engine(sdef_fields or {}, sampler, geometry, mode=mode)
         # 未实现的已声明变量（CCC/ARA/RATE）：给了值就明确报错，不静默当没看见
         engine._reject_unsupported()
         rng = random.Random(seed)

@@ -164,6 +164,11 @@ export default function SourceTab() {
       const res = await sourceDemoSample({
         sdefFields: adv,
         sdefDistributions: distributions,
+        mode: [
+          deck.basic?.mode_n && "n",
+          deck.basic?.mode_p && "p",
+          deck.basic?.mode_e && "e",
+        ].filter(Boolean) as string[],
         surfaces: deck.surfaces || "",
         cells: cellsForBackend,
         trCards: deck.tr_cards || "",
