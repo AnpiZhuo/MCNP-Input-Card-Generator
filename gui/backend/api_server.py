@@ -349,6 +349,59 @@ _TR_NUM_RE = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
 #: C810 3-31 允许的 B 矩阵项数（模式 #1/#2/#3/#4/#5 = 9/6/5/3/0 项）。
 _TR_B_COUNTS = (0, 3, 5, 6, 9)
 
+#: 手册（C810 3-31）的**告警**阈值：「A warning message is issued if the nonorthogonality is
+#: more than about 0.001 radian」。低于它的归一化是 MCNP 的**静默**行为（本程序照做、不刷屏）。
+_TR_ORTH_WARN = 1e-3
+#: 低于它的偏离视为浮点噪声 ⇒ 逐位不动（手册：「exact vectors like (1,0,0) are left unchanged」）。
+_TR_ORTH_EXACT = 1e-12
+
+
+def _tr_normalize(rotate, tn: int, lineno: int, errors: list | None):
+    """按 C810 3-31 归一化 B 矩阵；退化到无法定义时返回 ``None``（调用方跳过该卡）。
+
+    手册原文（锚点 ``#C810-3-31-TR-B-MATRIX``）：
+
+        "In all cases, MCNP cleans up any small nonorthogonality and normalizes the matrix.
+         In this process, exact vectors like (1,0,0) are left unchanged. A warning message is
+         issued if the nonorthogonality is more than about 0.001 radian."
+
+    做法 = **极分解的最近正交矩阵** ``U·Vᵀ``（Frobenius 范数意义下最近）：已正交的输入逐位
+    不变；左手系（det = −1，手册允许：混合手性必须给全 9 值）的手性也保持不变。
+
+    **为什么必须做**：本程序内部对同一个 R 有两条用法 —— 曲面几何走 ``inv(R)``
+    （`voxel_csg._surface_transform`）、源的位置/方向走 ``Rᵀ``（`source_sampler._to_world`）。
+    R 正交时两者互逆；非正交时**不再互逆** ⇒ 同一张 TR 卡在同一个源演示里给出两套坐标系，
+    且没有任何提示。
+
+    退化（秩 < 3，例如两行相同）时「最近的正交矩阵」不唯一 ⇒ 不猜：记诊断并让该卡不生效。
+    """
+    import numpy as np
+
+    R = np.asarray(rotate, dtype=float)
+    if R.shape != (3, 3) or not np.all(np.isfinite(R)):
+        if errors is not None:
+            errors.append(f"TR{tn}（第 {lineno} 行）：B 矩阵不是 3×3 的有效数值 ⇒ 本条变换未生效")
+        return None
+    dev = float(np.max(np.abs(R @ R.T - np.eye(3))))    # = 各行非单位长/不垂直的最大偏离
+    sv = np.linalg.svd(R, compute_uv=False)
+    if float(sv[-1]) <= 1e-9 * max(float(sv[0]), 1.0):
+        if errors is not None:
+            errors.append(
+                f"TR{tn}（第 {lineno} 行）：B 矩阵退化（奇异值 {sv[0]:.3g}/{sv[1]:.3g}/{sv[2]:.3g}，"
+                "秩 < 3）—— 此时「最近的正交矩阵」不唯一，C810 3-31 的归一化无从定义 ⇒ "
+                "本条变换未生效（不猜）")
+        return None
+    if dev <= _TR_ORTH_EXACT:
+        return rotate                                    # 已正交：逐位不动
+    U, _s, Vt = np.linalg.svd(R)
+    if dev > _TR_ORTH_WARN and errors is not None:
+        errors.append(
+            f"TR{tn}（第 {lineno} 行）：B 矩阵非正交（max|R·Rᵀ−I| = {dev:.3g} > "
+            f"{_TR_ORTH_WARN:g}）⇒ 已按 C810 3-31 归一化（MCNP 同样清理小非正交，"
+            "并在非正交度超过约 0.001 radian 时告警）")
+    return (U @ Vt).tolist()
+
+
 
 def _tr_split_entries(rest: list, tn: int, lineno: int, errors: list | None):
     """O1O2O3 之后的数值项 → ``(B 项, M)``；判不出来返回 ``None``（C810 3-30 的 M 字段）。
@@ -473,6 +526,12 @@ def parse_tr_cards(text: str, errors: list | None = None) -> dict:
             if is_angle:
                 # C810 3-30：∗TRn 的 Bi 是角度（度，0~180）而非方向余弦
                 rotate = [[math.cos(math.radians(v)) for v in row] for row in rotate]
+            # C810 3-31：MCNP 一律清理小非正交并**归一化** B 矩阵。放在这里（角度取 cos
+            # 之后、M 折算之前）：*TRn 的 cos 一般不严格正交，M=-1 的 −Rᵀ·O 也必须用
+            # **归一化后**的 R 算，否则与 MCNP 的等效平移不一致。
+            rotate = _tr_normalize(rotate, tn, _lineno, errors)
+            if rotate is None:
+                continue
             tr_cards[str(tn)] = {
                 "translate": _tr_translate(o, rotate, m_flag),
                 "rotate": rotate,

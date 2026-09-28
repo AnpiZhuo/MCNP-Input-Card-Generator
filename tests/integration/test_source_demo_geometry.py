@@ -231,6 +231,61 @@ def test_sdef_tr_m_minus_one_actually_moves_sampled_positions():
         assert (p["x"], p["y"], p["z"]) == pytest.approx(_TR_M_MINUS_ONE_TRANSLATE, abs=1e-9)
 
 
+# ── TR 矩阵的归一化与非正交告警（C810 3-31）────────────────────────────────
+#
+# 手册原文（锚点 #C810-3-31-TR-B-MATRIX）：
+#   "In all cases, MCNP cleans up any small nonorthogonality and normalizes the matrix.
+#    In this process, exact vectors like (1,0,0) are left unchanged. A warning message is
+#    issued if the nonorthogonality is more than about 0.001 radian."
+
+
+def _max_orth_deviation(rotate) -> float:
+    """max|R·Rᵀ − I|：0 = 正交；非零即各行非单位长或两两不垂直。"""
+    dev = 0.0
+    for i in range(3):
+        for j in range(3):
+            dot = sum(rotate[i][k] * rotate[j][k] for k in range(3))
+            dev = max(dev, abs(dot - (1.0 if i == j else 0.0)))
+    return dev
+
+
+def test_tr_card_nonorthogonal_matrix_is_normalized_and_reported():
+    """非正交的 B 矩阵必须**归一化**（MCNP 同举），并把偏离报出来。
+
+    旧行为原样收下 ⇒ ①与 MCNP 算出的几何不同；②本程序内部两条变换（曲面走 inv(R)、
+    源位置与方向走 Rᵀ）在非正交时不再互逆 ⇒ 同一张 TR 卡给出两套坐标系，且无任何提示。
+    """
+    g = _prep("5 PX 5", "TR20 0 0 0  1 0 0  0 1 0  0 0 0.98")
+    assert "20" in g["trCards"], g["geometryErrors"]
+    assert _max_orth_deviation(g["trCards"]["20"]["rotate"]) < 1e-12, g["trCards"]["20"]
+    assert any("归一" in e and "TR20" in e for e in g["geometryErrors"]), g["geometryErrors"]
+
+
+def test_tr_card_already_orthonormal_matrix_is_left_unchanged():
+    """手册：「exact vectors like (1,0,0) are left unchanged」⇒ 已正交的矩阵逐位不变、不告警。
+
+    用的是左手系（det=−1）的反射：手册明确「Pattern #1 is required if one of the systems
+    is right-handed and the other is left-handed」⇒ 左手系合法，归一化**不得**改掉它的手性。
+    """
+    g = _prep("5 PX 5", "TR21 0 0 0  0 1 0  1 0 0  0 0 1")
+    assert g["geometryErrors"] == [], g["geometryErrors"]
+    assert g["trCards"]["21"]["rotate"] == [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+
+
+def test_star_tr_card_angles_are_normalized_too():
+    """`*TRn` 的角度取 cos 后一般不严格正交 ⇒ 同样要归一化（MCNP 对两种写法一视同仁）。"""
+    g = _prep("5 PX 5", "*TR22 0 0 0  10 100 95  95 12 100  100 95 10")
+    assert "22" in g["trCards"], g["geometryErrors"]
+    assert _max_orth_deviation(g["trCards"]["22"]["rotate"]) < 1e-12, g["trCards"]["22"]
+
+
+def test_tr_card_singular_rotation_is_reported_not_silently_repaired():
+    """B 矩阵退化（两行相同 ⇒ 秩 1）时「最近的正交矩阵」**不唯一** ⇒ 不许猜：报错且该卡不生效。"""
+    g = _prep("5 PX 5", "TR23 0 0 0  1 0 0  1 0 0  0 0 1")
+    assert "23" not in g["trCards"]
+    assert any("TR23" in e for e in g["geometryErrors"]), g["geometryErrors"]
+
+
 def test_cell_volumes_available_for_sp_v():
     """`SP V`（C810 3-64 概率 ∝ 栅元体积）需要 geometry 给出逐栅元体积。
 

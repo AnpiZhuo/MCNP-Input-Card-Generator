@@ -359,6 +359,93 @@ def test_ccc_clips_existing_position_distribution():
     assert all(p["x"] >= 0 for p in r["particles"])
 
 
+# ── 拒绝采样的 EFF 判据（C810 p.3-59）────────────────────────────────────────
+#
+# 手册原文（PDF p584 = 印刷 3-59）：
+#   "The efficiency criterion EFF applies to **both CCC and CEL** rejection. If in **any**
+#    source cell or cookie-cutter cell the acceptance rate is too low, the problem is
+#    terminated for inefficiency. The criterion for termination is
+#    MAX(number of successes, 10) < EFF ∗ number of tries."
+
+
+def _thin_slab_ccc_case():
+    """裁剪栅元接受率 ≈ 0.5%（< EFF 默认 1%）的可复现场景：200 个离散位置只有 1 个在内。"""
+    xs = ["0"] + [str(-i) for i in range(1, 200)]
+    dists = [
+        {"id": 1, "si": {"type": "L", "values": xs},
+         "sp": {"type": "D", "values": ["1"] * len(xs)}},
+        {"id": 2, "si": {"type": "L", "values": ["0"]}, "sp": {"type": "D", "values": ["1"]}},
+        {"id": 3, "si": {"type": "L", "values": ["0"]}, "sp": {"type": "D", "values": ["1"]}},
+    ]
+    geometry = {"cells": {9: {"field": lambda x, y, z: (x >= 0) & (x <= 0.002),
+                              "aabb": ((0.0, -1.0, -1.0), (0.002, 1.0, 1.0))}},
+                "surfaces": {}}
+    fields = {"sdef_ccc": "9", "sdef_pos_x": "D1", "sdef_pos_y": "D2",
+              "sdef_pos_z": "D3", "sdef_erg": "14"}
+    return fields, dists, geometry
+
+
+def test_ccc_rejection_applies_the_eff_criterion():
+    """CCC 的接受率低于 EFF ⇒ 必须明确报错（手册：EFF 同时管 CCC 与 CEL）。
+
+    旧行为：CCC 只有"每粒子 100000 次"的硬上限 ⇒ 这个 0.5% 接受率的案例会**返回 ok**
+    （实测 20 颗粒子照出），而 MCNP 按 p.3-59 的判据会终止问题。
+    """
+    fields, dists, geometry = _thin_slab_ccc_case()
+    r = sample_source(fields, dists, geometry=geometry, n_particles=20, seed=1)
+    assert r["status"] == "error", r
+    assert "EFF" in r["error"] and "CCC" in r["error"], r["error"]
+
+
+def test_ccc_rejection_ok_when_acceptance_is_healthy():
+    """接受率正常（≥ EFF）时不得误报：同样的裁剪栅元，把点都放在里面即可。"""
+    dists = [
+        {"id": 1, "si": {"type": "L", "values": ["0", "1"]},
+         "sp": {"type": "D", "values": ["1", "1"]}},
+        {"id": 2, "si": {"type": "L", "values": ["0"]}, "sp": {"type": "D", "values": ["1"]}},
+        {"id": 3, "si": {"type": "L", "values": ["0"]}, "sp": {"type": "D", "values": ["1"]}},
+    ]
+    geometry = {"cells": {9: {"field": lambda x, y, z: (x >= 0) & (x <= 5.0),
+                              "aabb": ((0.0, -1.0, -1.0), (5.0, 1.0, 1.0))}},
+                "surfaces": {}}
+    r = _ok(sample_source({"sdef_ccc": "9", "sdef_pos_x": "D1", "sdef_pos_y": "D2",
+                           "sdef_pos_z": "D3", "sdef_erg": "14"},
+                          dists, geometry=geometry, n_particles=50, seed=1))
+    assert all(p["x"] >= 0 for p in r["particles"])
+
+
+def test_cel_efficiency_is_judged_per_cell_not_aggregated():
+    """CEL 的效率必须**逐栅元**判（手册：「in **any** source cell…」），不是全部栅元合计。
+
+    构造：栅元 1 接受率 100%、栅元 2 接受率 0.5%，分布按 19:1 偏向栅元 1。
+    · 逐栅元判：栅元 2 的 max(成功,10) < EFF×尝试 ⇒ 该终止；
+    · 合计判（旧行为）：总成功 ≈200 / 总尝试 ≈2190 ⇒ 200 ≥ 21.9 ⇒ **不报**，
+      栅元 2 的问题被栅元 1 的命中数掩盖。
+    """
+    xs = ["0"] + [str(-i) for i in range(1, 200)]      # 仅 "0" 落在栅元 2 里 ⇒ 接受率 0.5%
+    dists = [
+        {"id": 1, "si": {"type": "L", "values": xs},
+         "sp": {"type": "D", "values": ["1"] * len(xs)}},
+        {"id": 2, "si": {"type": "L", "values": ["0"]}, "sp": {"type": "D", "values": ["1"]}},
+        {"id": 3, "si": {"type": "L", "values": ["0"]}, "sp": {"type": "D", "values": ["1"]}},
+        {"id": 4, "si": {"type": "L", "values": ["1", "2"]},
+         "sp": {"type": "D", "values": ["0.95", "0.05"]}},
+    ]
+    geometry = {
+        "cells": {
+            1: {"field": lambda x, y, z: x <= 1.0, "aabb": ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0))},
+            2: {"field": lambda x, y, z: (x >= 0) & (x <= 0.002),
+                "aabb": ((0.0, -1.0, -1.0), (0.002, 1.0, 1.0))},
+        },
+        "surfaces": {},
+    }
+    r = sample_source({"sdef_cel": "D4", "sdef_pos_x": "D1", "sdef_pos_y": "D2",
+                       "sdef_pos_z": "D3", "sdef_erg": "14"},
+                      dists, geometry=geometry, n_particles=200, seed=1)
+    assert r["status"] == "error", r
+    assert "EFF" in r["error"] and "CEL=2" in r["error"], r["error"]
+
+
 def test_surface_sphere():
     r = _ok(sample_source({"sdef_sur": "5", "sdef_erg": "14"}, [], geometry=_geom(),
                           n_particles=200, seed=1))

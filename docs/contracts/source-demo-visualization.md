@@ -116,6 +116,12 @@
     （旧实现退回 ±1e3 大盒硬撞 10 万次，只会给出一句误导性的「包围盒可能退化」。）
 12. **CEL 拒绝采样效率过低**（C810 3-59 判据 `MAX(成功数,10) < EFF×尝试数`，EFF 默认 0.01）⇒
     明确报「效率过低」并指路；`sdef_eff` 可覆盖 EFF（C810 Table 3.3）。
+    **2026-09-28 补齐两处口径**（复核发现）：① **逐栅元判**（原文「in **any** source cell or
+    cookie-cutter cell」）—— 计数按栅元号分开记账，不再全栅元合计（合计会让好栅元掩盖坏栅元）；
+    ② **判据涵盖 CCC**（原文「The efficiency criterion EFF applies to **both CCC and CEL**
+    rejection」）—— CCC 的拒绝采样此前只有"每粒子 100000 次"硬上限、没有 EFF 判据；
+    ③ 判据改为**每次尝试都判**（含零命中）：命中分支里判会让"一次都打不中"的栅元一直撞到
+    上限才报错，而 MCNP 在尝试数超过 `100×MAX(成功数,10)` 时就终止了。
 13. **面源只允许 平面/球面/椭球面**（C810 3-58）：柱面/锥面/环面、**斜置 GQ（有 xy/yz/zx 交叉项）**、
     双曲面/抛物面一律报错并提示改用退化体源。
 14. **内置函数与源变量配对错误**（C810 Table 3.4：−21→DIR/RAD/EXT、−31→DIR/EXT、−41→TME/X/Y/Z、
@@ -145,6 +151,22 @@ really does contain every part of the cell because **MCNP has no way of checking
 | **O7** | `−7`（Spare energy spectrum） | p.3-65 Table 3.4 | **显式不支持**（报错说明它是"留给你自己加谱的框架"） |
 | **O8** | `SB` 用**内置函数**时对函数的偏倚 | p.3-66：「only −21 and −31 can be used on SB cards… If it is biased, the function is approximated within each bin by n equally probable groups such that the product of n and the number of bins is as large as possible but not over 300」 | **未实现**（`SP f` + `SB f` 的卡本程序按**未偏倚**抽样、权重 1 ⇒ 自洽但不是 MCNP 的行为）。表格式 SB 已实现（见下） |
 | **O9** | `CEL` 的**栅元层级路径**（重复结构 / 格阵） | p.3-60~3-61（锚点 `#C810-3-60-CEL-PATH`）：「CEL must have a value that is a path, enclosed in parentheses, from level n to level 0」`( cn < cn-1 < …. < c0 )`；`ci` 可为 0 / `Dm` / 带负号，格元可写成 `ci[j1 j2 j3]`；采样坐标系由「第一个负/零 ci」定（pds level） | **显式不支持**：源演示的几何层只建**平铺**栅元（`{cells: {num: {field, aabb}}}`，没有 universe/FILL/LAT 层级，也没有 pds level 与格元抽样），无法定位路径里的源栅元。抽样前即**报错说明真因**并给两条替代写法（单栅元号 / `SUR=` / `POS+RAD/EXT`）——**不静默当单栅元用**（旧行为是把它当"非法源变量值"，把一个合法写法说成写错了） |
+| **O10** | 面源 `SUR` + 显式 **`X/Y/Z`**（球面/椭球面上"钉一个点"的源） | p.3-58：「The value of the variable SUR is nonzero for a distribution on a surface. **If X, Y, and Z are specified, their sampled values determine the position.** … If X, Y, and Z are not specified, the position is sampled on the surface SUR.」 | **未对齐，两处**：① 采样侧球面/椭球面分支**不看 X/Y/Z**（一律按面积/EXT 抽样）⇒ 演示把"面上一个点"画成"整面均匀"；② 生成侧常量一律回写成 `POS=x y z`（实测 `sdef sur=1 x=0 y=0 z=-10 erg=14` → `SDEF ERG=14 POS=0 0 -10 SUR=1`，0 告警）⇒ **导出的卡与导入前语义不同**。根因：解析层把 `POS` 与 `X/Y/Z` 写进同一组字段（`core.py`：`key == "POS"` 与 `key == "X"` 都写 `src.pos_x`），模型层无法区分 ⇒ 修它要**拆字段**（解析/生成/往返/前端四层），尚未做。**平面源 + RAD=0 时两者等价**，故只影响面源上的定点写法 |
+
+**已对齐（2026-09-28 复核修复）**：
+
+- **TR 矩阵的归一化与非正交告警** —— C810 3-31 原文：「In all cases, MCNP cleans up any small
+  nonorthogonality and normalizes the matrix. In this process, exact vectors like (1,0,0) are left
+  unchanged. A warning message is issued if the nonorthogonality is more than about 0.001 radian.」
+  修前：原样收下 ⇒ ①与 MCNP 的几何不同；②本程序对同一个 R 有**两条互逆**的用法（曲面几何走
+  `inv(R)`、源的位置/方向走 `Rᵀ`），非正交时**不再互逆** ⇒ 同一张 TR 卡给出两套坐标系且无提示。
+  现在：`api_server._tr_normalize` 用**极分解的最近正交矩阵** `U·Vᵀ` 归一化（已正交的输入逐位
+  不动、左手系 det=−1 的手性保留）；偏离 > 0.001 记一条诊断（MCNP 的告警口径）；退化（秩 <3，
+  「最近正交矩阵」不唯一）⇒ 报错且该卡不生效。
+- **拒绝采样的 EFF 判据**（逐栅元 + 涵盖 CCC + 每次尝试都判）—— 见 §4 错误清单第 12 条的补充。
+- **`CEL` + 用户采样区域时失败文案抛 `UnboundLocalError`** —— `sample_cell` 的 `lo/hi` 只在
+  "用紧盒"分支定义，而失败文案无条件引用它 ⇒ "用户给了 POS+RAD/EXT 区域 + 10 万次全不中"会抛
+  `UnboundLocalError: lo`（用户看到一句 Python 内部错误）。现在按区域来源给出可读描述。
 
 **已对齐（2026-09-20 修复，原列本表）**：
 

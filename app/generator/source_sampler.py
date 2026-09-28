@@ -120,6 +120,39 @@ def _reject_cel_path(raw: str) -> None:
         "（CEL=5）；② 用 SUR= 或 POS+RAD/EXT 显式给出位置。")
 
 
+#: 拒绝采样的**安全上限**（每颗粒子、每个被拒绝的栅元）。MCNP 靠 EFF 判据终止，这个上限只是
+#: 我们自己的兜底：EFF 判据在**零命中**时也会触发（见 `_reject_eff_check`），所以正常路径上
+#: 先到的是 EFF，不是这个数。
+_MAX_REJECTION_TRIES = 100000
+
+
+def _reject_eff_check(var: str, cell_num: int, eff: float, tries: int, hits: int) -> None:
+    """C810 p.3-59 的效率判据：``MAX(成功数, 10) < EFF × 尝试数`` ⇒ 终止问题（我们报错）。
+
+    手册原文（PDF p584 = 印刷 3-59，锚点见 `#C810-3-56-TABLE-3-3` 的 EFF 行）：
+
+        "The efficiency criterion EFF applies to **both CCC and CEL** rejection. If in **any**
+         source cell or cookie-cutter cell the acceptance rate is too low, the problem is
+         terminated for inefficiency. The criterion for termination is
+         MAX(number of successes, 10) < EFF ∗ number of tries. The default value of EFF, 0.01,
+         lets a problem get by at rather low efficiency, but for the rare problem in which low
+         source efficiency is unavoidable, you may need to specify a lower value for EFF."
+
+    两点口径：① **逐栅元**判（"in any source cell or cookie-cutter cell"），故计数按栅元号分开；
+    ② **每次尝试都判**（含零命中）—— 旧实现只在命中分支里判，于是"一个都打不中"的栅元会一直
+    撞到 100000 次上限才报错，而 MCNP 早在尝试数超过 ``100×MAX(成功数,10)`` 时就终止了。
+    """
+    if max(hits, 10) < eff * tries:
+        raise SourceSamplingError(
+            f"{var}={cell_num} 拒绝采样效率过低：{tries} 次尝试只接受 {hits} 次"
+            f"（低于 EFF={eff:g}）。C810 p.3-59 原文「The efficiency criterion EFF applies to"
+            " both CCC and CEL rejection … The criterion for termination is MAX(number of"
+            " successes, 10) < EFF ∗ number of tries」⇒ **MCNP 会直接终止问题**，故这里明确"
+            "报错而不是继续硬抽。若该源的低效率无法避免，按手册可把 EFF 调小"
+            "（「you may need to specify a lower value for EFF」）；也可改用面源/退化体源"
+            "自己给出紧一些的采样区域")
+
+
 #: Table 3.3 里有声明、但**不改变粒子起始状态**的变量：**接受它**（不报错），只在返回的
 #: ``warnings`` 里说明本引擎不使用。⚠ 2026-09-20 修（抽样检测实测）：官方
 #: VALIDATION_SHIELDING 的 **6 个 duct 算例**全都带 ``ara= <面积>``，原先按"未实现即报错"
@@ -248,6 +281,11 @@ class _Engine:
         self.cel_source = False
         # 最近一次方向抽样的 μ（相对 VEC/参考轴）——`ERG=FDIR Dn` 的父值
         self.last_mu: float | None = None
+        # CCC（cookie-cutter）拒绝采样的**逐栅元**计数：C810 p.3-59 的 EFF 判据是
+        # 「in **any** source cell or cookie-cutter cell」= 逐栅元判，且跨粒子累计
+        # （不能只看单颗粒子）。与 `_GeometryHelper` 的 CEL 计数同口径。
+        self._ccc_tries: dict[int, int] = {}
+        self._ccc_hits: dict[int, int] = {}
         # 几何判定器（惰性构造，只在 CEL/SUR 路径上需要）
         self._geom_helper: _GeometryHelper | None = None
         # 值得提醒但不致命的情形（如 DIR=Dn 但没有参考轴 ⇒ 按各向同性处理）。
@@ -658,20 +696,34 @@ class _Engine:
         return self._geom_helper
 
     def _position(self) -> tuple[tuple, int | None]:
-        """生成位置，并在需要时应用 C810 的 ``CCC`` cookie-cutter 限制。"""
+        """生成位置，并在需要时应用 C810 的 ``CCC`` cookie-cutter 限制。
+
+        手册 p.3-58：「If CCC is present, the position sampled by the above procedures is
+        accepted if it is within cell CCC and is resampled if it is not, exactly like CEL
+        rejection in the cell source case.」+ p.3-59：「The efficiency criterion EFF applies to
+        **both CCC and CEL** rejection」⇒ 这里的拒绝采样必须和 CEL 用**同一条** EFF 判据
+        （旧实现只有"每粒子 100000 次"的硬上限 ⇒ 该被 MCNP 拒绝的低效率源会照出图）。
+        """
         ccc = self._field("CCC")
         if not ccc or ccc == "0":
             return self._position_uncut()
         ccc_num = self._resolve_cell_number(ccc, "CCC")
-        for _ in range(100000):
+        eff = self._eff()
+        for _ in range(_MAX_REJECTION_TRIES):
             pos, pos_index = self._position_uncut()
-            if self.geom.contains_cell(ccc_num, pos):
+            self._ccc_tries[ccc_num] = self._ccc_tries.get(ccc_num, 0) + 1
+            hit = self.geom.contains_cell(ccc_num, pos)
+            if hit:
+                self._ccc_hits[ccc_num] = self._ccc_hits.get(ccc_num, 0) + 1
+            _reject_eff_check("CCC", ccc_num, eff, self._ccc_tries[ccc_num],
+                              self._ccc_hits.get(ccc_num, 0))
+            if hit:
                 return pos, pos_index
             # 拒绝采样的下一次尝试必须重新抽取 X/Y/Z、RAD、EXT 等位置变量；
             # CCC 本身在同一粒子内保持不变。
             self._cache.clear()
         raise SourceSamplingError(
-            f"SDEF CCC={ccc!r} 拒绝采样失败：100000 次尝试没有位置落入裁剪栅元 "
+            f"SDEF CCC={ccc!r} 拒绝采样失败：{_MAX_REJECTION_TRIES} 次尝试没有位置落入裁剪栅元 "
             f"{ccc_num}（C810 3-58/3-59：位置必须限制在 cookie-cutter 栅元内）")
 
     def _position_uncut(self, use_cel: bool = True) -> tuple[tuple, int | None]:
@@ -1226,10 +1278,11 @@ class _GeometryHelper:
         self.cells = g.get("cells", {}) or {}
         self.surfs = g.get("surfaces", {}) or {}
         self.engine = engine
-        # CEL 拒绝采样的累计计数：C810 p.3-59 的效率判据是**全栅元级**的
-        # （MAX(成功数,10) < EFF×尝试数），故跨粒子累计，不能只看单个粒子。
-        self._cel_tries = 0
-        self._cel_hits = 0
+        # CEL 拒绝采样的累计计数：C810 p.3-59 的判据是「in **any** source cell or
+        # cookie-cutter cell」= **逐栅元**判（合计判会让好栅元掩盖坏栅元），且跨粒子累计
+        # （不能只看单颗粒子）。⇒ 按栅元号分别记账。
+        self._cel_tries: dict[int, int] = {}
+        self._cel_hits: dict[int, int] = {}
 
     def surf_info(self, surf_num: int) -> str:
         """曲面号 → 类型（未定义则报错，报错文案与旧实现一致）。"""
@@ -1270,7 +1323,8 @@ class _GeometryHelper:
         **判死口径（C810 p.3-59 原文）**：「If in any source cell or cookie-cutter cell the
         acceptance rate is too low, the problem is terminated for inefficiency. The criterion
         for termination is ``MAX(number of successes, 10) < EFF * number of tries``」。
-        照此判据**明确报错**；EFF 默认 0.01（Table 3.3），可用 ``sdef_eff`` 覆盖。
+        照此判据**明确报错**（判据与计数规则见 :func:`_reject_eff_check`：逐栅元、每次尝试都判）；
+        EFF 默认 0.01（Table 3.3），可用 ``sdef_eff`` 覆盖。
         """
         info = self.cells.get(cell_num)
         if info is None:
@@ -1293,36 +1347,41 @@ class _GeometryHelper:
             hi = [min(1e6, x) for x in aabb[1]]
             if any(hi[i] <= lo[i] for i in range(3)):
                 raise SourceSamplingError(f"CEL={cell_num} 包围盒退化（{lo} → {hi}）")
+            region_desc = f"包围盒 {['%.4g' % x for x in lo]} → {['%.4g' % x for x in hi]}"
+        else:
+            # ⚠ 用**用户给的**候选区域时没有 lo/hi —— 旧实现的失败文案无条件引用 lo/hi，
+            # 于是"用户区域 + 10 万次全不中"会抛 `UnboundLocalError`（用户看到的是一句
+            # Python 内部错误，而不是可执行的诊断）。这里改成显式的区域描述。
+            region_desc = "用户给的采样区域（X/Y/Z 或 POS+RAD/EXT）"
         field = info.get("field")
         if not field:
             raise SourceSamplingError(f"CEL={cell_num} 引用的栅元缺少可判定的几何")
         import numpy as np
         rng = self.engine.rng
-        for _ in range(100000):
+        for _ in range(_MAX_REJECTION_TRIES):
             if candidate is None:
                 p = [rng.uniform(lo[i], hi[i]) for i in range(3)]
             else:
                 p = candidate()
-            self._cel_tries += 1
+            self._cel_tries[cell_num] = self._cel_tries.get(cell_num, 0) + 1
+            hit = False
             try:
                 inside = field(np.asarray([p[0]]), np.asarray([p[1]]), np.asarray([p[2]]))
+                hit = inside is not None and bool(np.asarray(inside).ravel()[0])
             except Exception:
-                continue
-            if inside is not None and bool(np.asarray(inside).ravel()[0]):
-                self._cel_hits += 1
-                # C810 p.3-59：MAX(成功数,10) < EFF×尝试数 ⇒ 效率过低（MCNP 会终止问题）
-                if max(self._cel_hits, 10) < eff * self._cel_tries:
-                    raise SourceSamplingError(
-                        f"CEL={cell_num} 拒绝采样效率过低：{self._cel_tries} 次尝试只接受 "
-                        f"{self._cel_hits} 次（低于 EFF={eff:g}；C810 3-59 的判据 "
-                        "MAX(成功数,10) < EFF×尝试数 会直接终止问题）。"
-                        "通常意味着采样区域远大于栅元 —— 若该栅元几何特殊（宏体/补集/退化盒），"
-                        "请改用退化体源自己指定采样范围")
+                hit = False
+            if hit:
+                self._cel_hits[cell_num] = self._cel_hits.get(cell_num, 0) + 1
+            # C810 p.3-59：判据只看累计计数 ⇒ **每次尝试都判**（零命中时同样会触发；
+            # 旧实现只在命中分支里判 ⇒ 一个都打不中的栅元会一直撞到 100000 次上限）。
+            _reject_eff_check("CEL", cell_num, eff, self._cel_tries[cell_num],
+                              self._cel_hits.get(cell_num, 0))
+            if hit:
                 return (p[0], p[1], p[2])
         raise SourceSamplingError(
-            f"CEL={cell_num} 拒绝采样失败：100000 次尝试无一命中（EFF={eff:g}；"
-            f"包围盒 {['%.4g' % x for x in lo]} → {['%.4g' % x for x in hi]}）。"
-            "该栅元在这套几何下几乎是空集，或包围盒远大于实心")
+            f"CEL={cell_num} 拒绝采样失败：{_MAX_REJECTION_TRIES} 次尝试无一命中"
+            f"（EFF={eff:g}；{region_desc}）。"
+            "该栅元在这套几何下几乎是空集，或采样区域远大于实心")
 
     def sample_surface(self, surf_num: int, rng, px: float, py: float, pz: float,
                        rad_did: int | None, nrm: float, axis=(), ext=None) -> tuple:
