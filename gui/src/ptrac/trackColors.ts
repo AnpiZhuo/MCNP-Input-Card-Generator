@@ -8,11 +8,15 @@
 
 export type ParticleKey = "n" | "p" | "e";
 
-/** 粒子类型 → 基色（用户敲定三色） */
+/** 粒子类型 → 基色（用户敲定三色 + 正电子第四色） */
 export const TRACK_COLORS: Record<string, string> = {
   n: "#3b82f6", // 中子 · 蓝
   p: "#ef4444", // 光子 · 红
   e: "#eab308", // 电子 · 黄
+  // 正电子：SDEF `PAR=4/F`（C810 3-56 表尾正文，锚点 #C810-3-56-PAR）——它不是电子，
+  // 也不该落进"未知灰"。PTRAC 的三色面板图例（TRACK_LEGEND）保持不变，
+  // 源演示的图例在 SourceDemoWindow 里按需补出这一项。
+  f: "#a855f7", // 正电子 · 紫
 };
 
 /** 其余粒子类型（未识别/未知）→ 灰 */
@@ -23,13 +27,14 @@ export const TRACK_PARTICLE_LABELS: Record<string, string> = {
   n: "中子",
   p: "光子",
   e: "电子",
+  f: "正电子",
 };
 
 /** 能量深浅图例常量：低能浅 → 高能深 的 HSL lightness 区间（0..1） */
 export const SHADE_LIGHT = 0.78; // 低能（浅）
 export const SHADE_DARK = 0.32;  // 高能（深）
 
-/** 面板图例列表（三色 + 中文标签，顺序固定 n/p/e） */
+/** 面板图例列表（三色 + 中文标签，顺序固定 n/p/e；正电子见 TRACK_COLORS.f） */
 export const TRACK_LEGEND: { key: ParticleKey; label: string; color: string }[] = [
   { key: "n", label: TRACK_PARTICLE_LABELS.n, color: TRACK_COLORS.n },
   { key: "p", label: TRACK_PARTICLE_LABELS.p, color: TRACK_COLORS.p },

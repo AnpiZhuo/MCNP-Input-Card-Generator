@@ -121,6 +121,7 @@ export default function SourceEditDialog({ point, index, isKsrc, onSave, onClose
               React.createElement("option", { value: "1" }, "1 - 中子"),
               React.createElement("option", { value: "2" }, "2 - 光子"),
               React.createElement("option", { value: "3" }, "3 - 电子"),
+              React.createElement("option", { value: "4" }, "4 - 正电子 (e⁺)"),
               React.createElement("option", { value: "H" }, "H - 质子"),
               React.createElement("option", { value: "A" }, "A - α粒子"),
               React.createElement("option", { value: "S" }, "S - 裂片"),

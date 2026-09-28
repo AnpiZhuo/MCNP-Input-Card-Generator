@@ -57,9 +57,15 @@ from .source_spec import (
     spec_for,
 )
 
-# PAR → 渲染分组（与前端 trackColors.ts 的 particleGroup 对齐）
+# PAR → 渲染分组（与前端 trackColors.ts 的粒子基色对齐）。
+# ⚠ 1/N、2/P、3/E 与**特殊写法 4/F = 正电子**都是 C810 3-56 正文原文
+# （锚点 #C810-3-56-PAR：「The allowed value for PAR is 1 or N for neutron, 2 or P for photon,
+# or 3 or E for electron. … A special syntax allows PAR to be specified as 4 or F to make the
+# source type a positron rather than an electron in a MODE E or P E or N P E problem.」）。
+# h/a/s 是本程序既有映射（C810 3-56 未列）——保留以免破坏既有 deck 与前端下拉，但不是手册语义。
 _PAR_GROUP = {
     "1": "n", "n": "n", "2": "p", "p": "p", "3": "e", "e": "e",
+    "4": "f", "f": "f",
     "h": "h", "a": "a", "s": "s",
 }
 
@@ -1130,18 +1136,26 @@ class _Engine:
         return self._value("TME")
 
     def _par(self) -> str:
-        """粒子类型。缺省取中子：Table 3.3 的 PAR 默认值由 **MODE 卡**定
-        （「the lowest of these three that corresponds to an actual or default entry on the
-        MODE card」），而本引擎只拿到 SDEF 字段、没有 MODE ⇒ 沿用既有口径按 ``n``，
-        不把它伪装成"从 Table 3.3 读到的默认值"。"""
+        """粒子类型（C810 3-56 正文，锚点 `#C810-3-56-PAR`）。
+
+        * 显式值：``1/N`` = 中子、``2/P`` = 光子、``3/E`` = 电子，另有**特殊写法 ``4/F``
+          = 正电子**（「to make the source type a positron rather than an electron」）——
+          它只在 ``MODE E / P E / N P E`` 问题里与电子区分。渲染分组见 ``_PAR_GROUP``。
+        * 缺省：Table 3.3 说「the lowest of these three that corresponds to an actual or
+          default entry on the MODE card」⇒ 按 ``mode`` 参数（`api_server` 从 deck 的
+          ``mode_n/p/e`` 取）在 ``n → p → e`` 里取最低的适用粒子；调用方没传 ``mode``
+          时沿用既有口径 ``n``（不伪装成"从 Table 3.3 读到的默认值"）。
+        """
         raw = self._field("PAR")
         if not raw:
-            # MCNP chooses the lowest applicable default particle on MODE.
             for particle in ("n", "p", "e"):
                 if particle in self.mode:
                     return particle
             return "n"
-        text = str(raw).strip().upper()
+        # ⚠ 小写再查表：`_PAR_GROUP` 的键是小写（与前端分组一致），而手册给的合法写法里
+        # **字母是大写**（`PAR=N` / `P` / `E`）。旧实现先 `.upper()` 再查小写键 ⇒ 字母写法
+        # 一律落到 "other"（数字 1/2/3 才碰巧能用），C810 明写的 `PAR=N` 就这样丢了语义。
+        text = str(raw).strip().lower()
         return _PAR_GROUP.get(text, "other")
 
     # ── 未实现变量的显式拒绝（契约 §4）──────────────────────
@@ -1151,8 +1165,8 @@ class _Engine:
             for key in spec.field_keys:
                 if str(self.f.get(key) or "").strip():
                     raise SourceSamplingError(
-                        f"SDEF {name} 暂不支持：本引擎还没实现{why}"
-                        "（它在 C810 Table 3.3 里有声明，但静默忽略会让用户以为生效了）")
+                        f"SDEF {name} 暂不支持：{why}"
+                        "（本引擎不实现它；静默忽略会让用户以为生效了）")
         # 不影响起始状态的变量（ARA）：**接受 + 记 warnings** —— 既不静默，也不误伤
         # （官方 6 个 duct 算例全带 ara=，见 _IGNORED_VARS 注释）
         for name, why in _IGNORED_VARS.items():

@@ -147,6 +147,36 @@ cases. Pattern #1 is required if one of the systems is right-handed and the othe
 - `5. None. MCNP will create the identity matrix`
 
 
+## #C810-3-56-PAR
+
+来源：C810.pdf PDF p581 = 印刷 3-56
+
+原文：
+
+```text
+The specification of WGT, EFF and PAR must be only an explicit value. A distribution is not
+allowed. The allowed value for PAR is 1 or N for neutron, 2 or P for photon, or 3 or E for electron.
+The default is the lowest of these three that corresponds to an actual or default entry on the MODE
+card. Only one kind of particle is allowed in an SDEF source. A special syntax allows PAR to be
+specified as 4 or F to make the source type a positron rather than an electron in a MODE E or P E
+or N P E problem.
+```
+
+关键短语：
+
+- `The specification of WGT, EFF and PAR must be only an explicit value`
+
+- `A distribution is not allowed`
+
+- `The allowed value for PAR is 1 or N for neutron, 2 or P for photon, or 3 or E for electron`
+
+- `The default is the lowest of these three that corresponds to an actual or default entry on the MODE card`
+
+- `Only one kind of particle is allowed in an SDEF source`
+
+- `A special syntax allows PAR to be specified as 4 or F to make the source type a positron rather than an electron in a MODE E or P E or N P E problem`
+
+
 ## #C810-3-60-CEL-PATH
 
 来源：C810.pdf PDF p585-586 = 印刷 3-60 ~ 3-61

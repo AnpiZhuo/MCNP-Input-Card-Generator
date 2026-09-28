@@ -120,6 +120,26 @@ ANCHORS: dict[str, dict] = {
         ),
     },
     # ── 源变量模型（印刷 p.3-55 ~ p.3-56）────────────────────────────────
+    "#C810-3-56-PAR": {
+        # Table 3.3 的**表尾正文**（与表同在 3-56）：WGT/EFF/PAR 只许显式值 + PAR 的取值域
+        # + 「4 或 F = 正电子」这条特殊写法。表格格里的字会被词级重建重排，这段正文不会。
+        "pages": (581, 581),
+        "start": r"The specification of WGT, EFF and PAR must be only an explicit value",
+        # 收在页末：这段是 3-56 该页的**最后一段**（下一段 DIR 续说在 3-57），页区间取单页
+        # ⇒ `end=None` 就是"到本页末尾"，比另找一个只会落在别页的正则更稳。
+        "end": None,
+        "phrases": (
+            "The specification of WGT, EFF and PAR must be only an explicit value",
+            "A distribution is not allowed",
+            "The allowed value for PAR is 1 or N for neutron,"
+            " 2 or P for photon, or 3 or E for electron",
+            "The default is the lowest of these three that corresponds to an actual"
+            " or default entry on the MODE card",
+            "Only one kind of particle is allowed in an SDEF source",
+            "A special syntax allows PAR to be specified as 4 or F to make the source type"
+            " a positron rather than an electron in a MODE E or P E or N P E problem",
+        ),
+    },
     "#C810-3-60-CEL-PATH": {
         # 跨页：正文（路径格式 + pds level 表）在 3-60，格元抽样与"接受/拒绝"表在 3-61
         # ⇒ 页区间取 585-586，id 的主印张页按 **3-60** 冻结（与 TABLE-3-3 同口径）。

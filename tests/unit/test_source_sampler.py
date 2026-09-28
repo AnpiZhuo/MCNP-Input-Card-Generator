@@ -184,6 +184,50 @@ def test_default_particle_follows_mode():
     assert {p["particle"] for p in r["particles"]} == {"p"}
 
 
+@pytest.mark.parametrize("value,expect", [
+    ("1", "n"), ("N", "n"),
+    ("2", "p"), ("P", "p"),
+    ("3", "e"), ("E", "e"),
+    # 特殊写法：源类型是**正电子**而不是电子（C810 3-56 表尾正文，锚点 #C810-3-56-PAR）
+    ("4", "f"), ("F", "f"),
+])
+def test_par_allowed_values_map_to_particle_groups(value, expect):
+    """C810 3-56：PAR 的合法取值 1/N、2/P、3/E + 特殊写法 4/F = 正电子。
+
+    旧实现没有 4/F ⇒ 落到 ``"other"``（渲染成"未知粒子"，正电子语义丢失）。
+    """
+    r = _ok(sample_source(
+        {"sdef_pos_x": "0", "sdef_pos_y": "0", "sdef_pos_z": "0",
+         "sdef_par": value, "sdef_erg": "14"}, [], n_particles=5, seed=1))
+    assert {p["particle"] for p in r["particles"]} == {expect}
+
+
+def test_ara_is_accepted_with_a_warning_not_an_error():
+    """C810 Table 3.3（p.3-56）：`ARA` 只用于**点探测器直接贡献**的归一化，与粒子的起始
+    位置/方向/能量/权重无关 ⇒ 本程序接受它但不使用，只记一条 ``warnings``。
+
+    官方 VALIDATION_SHIELDING 的 6 个 duct 算例全带 `ara=` —— 按"未实现即报错"会让它们一个都
+    开不出来（2026-09-20 实测）。这条断言同时钉住"说明必须真的回给调用方"：前端 `SourceTab`
+    曾经只读 `geometryWarnings`、把这条整条丢掉（用户以为 ARA 生效了）。
+    """
+    r = _ok(sample_source(
+        {"sdef_pos_x": "0", "sdef_pos_y": "0", "sdef_pos_z": "0",
+         "sdef_ara": "1.5", "sdef_erg": "14"}, [], n_particles=3, seed=1))
+    assert any("ARA" in w for w in r.get("warnings", [])), r.get("warnings")
+
+
+def test_par_distribution_is_rejected():
+    """C810 3-56：「The specification of WGT, EFF and PAR must be only an explicit value.
+    A distribution is not allowed.」⇒ PAR=Dn 必须明确报错（锚点 #C810-3-56-PAR）。"""
+    r = sample_source({"sdef_pos_x": "0", "sdef_pos_y": "0", "sdef_pos_z": "0",
+                       "sdef_par": "D3", "sdef_erg": "14"},
+                      [{"id": 3, "si": {"type": "L", "values": ["1", "2"]},
+                        "sp": {"type": "D", "values": ["1", "1"]}}],
+                      n_particles=1, seed=1)
+    assert r["status"] == "error"
+    assert "PAR" in r["error"] and "显式" in r["error"], r["error"]
+
+
 # ── SUR / CEL 几何判定 ────────────────────────────────────
 
 def _geom():

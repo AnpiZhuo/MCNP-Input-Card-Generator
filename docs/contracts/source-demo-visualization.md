@@ -43,7 +43,9 @@
   - 输出（`status=ok`）：`{status, particles:[{id,x,y,z,dx,dy,dz,energy,weight,particle}], energyRange:{min,max}, bounds:{min:[x,y,z],max:[x,y,z]}}`。
   - 输出（`status=error`）：`{status, error, hint?}`（见 §4 错误清单）。
 - **接口不变量**：
-  - 方向 `(dx,dy,dz)` 是单位矢量；`particle` ∈ {n,p,e,h,a,s,other}（PAR 1/2/3/H/A/S 映射）。
+  - 方向 `(dx,dy,dz)` 是单位矢量；`particle` ∈ {n,p,e,f,h,a,s,other}：PAR 映射 `1/N`→`n`、
+    `2/P`→`p`、`3/E`→`e`、**特殊写法 `4/F`→`f`（正电子，C810 3-56 表尾正文，锚点
+    `#C810-3-56-PAR`）**、`H/A/S`→`h/a/s`（本程序既有扩展、手册 3-56 未列）、其余→`other`。
   - `particles` 恒 500 条（除非报错）；`id` 1..500。
   - 位置分四路（互斥，按 MCNP 语义）：**① 面源 SUR** / **② 栅元均匀 CEL** / **③ 笛卡尔 X/Y/Z** / **④ 柱坐标 POS+RAD+EXT+AXS**。
   - **面源（①）语义（C810 3-58 ~ 3-59 + Table 3.3）**：只支持**平面**（P/PX/PY/PZ）、**球面**（SO/S/SPH/SX/SY/SZ）、**椭球面**（GQ/SQ 的**轴平行**椭球，位置按**面积均匀** —— 拉伸回单位球后加权拒绝采样，不是旧实现的"体内近似撒点"）；柱面/锥面/环面、以及**斜置 GQ / 非椭球二次曲面**按 MCNP 语义**明确报错**并提示改用退化体源（原文：Cylindrical surface sources must be specified as degenerate volume sources）。

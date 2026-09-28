@@ -32,6 +32,17 @@ interface BridgeData {
   title?: string;
 }
 
+/**
+ * 源演示图例 = 共享三色（n/p/e，**始终显示**）+ **正电子**（`PAR=4/F`，C810 3-56 表尾正文，
+ * 锚点 `#C810-3-56-PAR`）——正电子不属于 PTRAC 面板的三色图例，故只在**确实抽到**时才补一行，
+ * 避免每个中子源都多出一行"正电子 0"。
+ */
+export function demoLegendFor(counts: Record<string, number>) {
+  const base = TRACK_LEGEND.map((l) => ({ key: l.key as string, label: l.label, color: l.color }));
+  if ((counts.f || 0) <= 0) return base;
+  return [...base, { key: "f", label: TRACK_PARTICLE_LABELS.f, color: TRACK_COLORS.f }];
+}
+
 export default function SourceDemoWindow() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<SourceDemoRendererHandle | null>(null);
@@ -141,6 +152,7 @@ export default function SourceDemoWindow() {
   for (const p of data.particles || []) {
     particleCounts[p.particle] = (particleCounts[p.particle] || 0) + 1;
   }
+  const legend = demoLegendFor(particleCounts);
 
   return (
     <div style={containerStyle}>
@@ -168,7 +180,7 @@ export default function SourceDemoWindow() {
                         canvas,
                         title: "源粒子抽样演示（SDEF）",
                         subtitle: subtitleOf([`样本 ${count} 个`, data.title ? `「${data.title}」` : undefined]),
-                        legend: TRACK_LEGEND.map((l) => ({ color: l.color, label: `${l.label} ${particleCounts[l.key] || 0}` })),
+                        legend: legend.map((l) => ({ color: l.color, label: `${l.label} ${particleCounts[l.key] || 0}` })),
                         caption: "圆点=粒子出射点，方向线=飞行方向；颜色按粒子类型",
                       })
                     : undefined,
@@ -182,7 +194,7 @@ export default function SourceDemoWindow() {
         <div style={{ padding: "8px 14px", borderBottom: "1px solid rgba(255,255,255,0.06)", fontSize: 11, lineHeight: 1.7, color: "var(--text-secondary)" }}>
           <div style={{ color: "var(--text-tertiary)" }}>粒子 {count} 个 · 只表从哪发出/往哪飞</div>
           <div style={{ display: "flex", gap: 10, marginTop: 3, flexWrap: "wrap" }}>
-            {TRACK_LEGEND.map((l) => (
+            {legend.map((l) => (
               <span key={l.key} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                 <span style={{ width: 9, height: 9, borderRadius: 2, background: l.color, display: "inline-block", flexShrink: 0 }} />
                 <span style={{ color: "var(--text-secondary)" }}>{l.label} {particleCounts[l.key] || 0}</span>

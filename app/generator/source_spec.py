@@ -82,6 +82,8 @@ ANCHOR_IDS: frozenset[str] = frozenset({
     "#C810-3-31-TR-B-MATRIX",       # B 矩阵轴对表 + 5 种可接受写法（6 值由叉积补全等）
     # 重复结构里的 CEL 路径（SDEF CEL 的层级写法；印刷页 3-60 ~ 3-61，见 §4.2 已知差异）
     "#C810-3-60-CEL-PATH",          # CEL = ( cn < … < c0 ) 路径；pds level 与格元指标
+    # PAR 的表尾正文（印刷页 3-56）：WGT/EFF/PAR 只许显式值；PAR 取值域与 4/F = 正电子
+    "#C810-3-56-PAR",
     # SDEF 源变量模型（p.3-55 ~ p.3-56）
     "#C810-3-55-VAR-FORMS",         # 三种形态：显式值 / Dn / Fvar' Dn
     "#C810-3-55-SAMPLING-ORDER",    # 依赖变量必须在父变量之后抽样
@@ -292,12 +294,17 @@ VAR_SPEC: dict[str, VarSpec] = {
     ),
     # p.3-56：「PAR / Particle type source will emit / 1=neutron if MODE N or N P or N P E /
     # 2=photon if MODE P or P E / 3=electron if MODE E」⇒ 默认由 MODE 卡定，不是一个固定数。
+    # 表尾正文（同页）另给「allowed value … 1 or N / 2 or P / 3 or E」与**特殊写法 4/F
+    # = 正电子**，并明说 WGT/EFF/PAR「must be only an explicit value. A distribution is not
+    # allowed.」⇒ 锚点 #C810-3-56-PAR 存全文（本行把 4/F 与"不许分布"两件事都锚住）。
     "PAR": VarSpec(
         "PAR", None, (), (), "scalar", ("sdef_par",), "str",
-        "C810 Table 3.3, p.3-56", _ANCHOR_TABLE_3_3,
+        "C810 Table 3.3, p.3-56（表尾正文见锚点 #C810-3-56-PAR）", _ANCHOR_TABLE_3_3,
         "默认值 = MODE 卡里最低的那一种（原文「The default is the lowest of these three that "
-        "corresponds to an actual or default entry on the MODE card」）；特殊写法 4/F = 正电子。"
-        "必须是显式值，不允许分布。",
+        "corresponds to an actual or default entry on the MODE card」）；特殊写法 4/F = 正电子"
+        "（源类型变成正电子而不是电子，锚点 #C810-3-56-PAR）。必须是显式值，不允许分布。"
+        "⚠ C810 3-56 只给了 1/N、2/P、3/E 与 4/F；本程序的 H/A/S 是**既有扩展、手册未列**，"
+        "保留以免破坏既有 deck 与前端下拉。",
     ),
     # p.3-56 表尾：「TR / Source particle transformation TR=n or distribution of
     # transformations TR=Dn / None」。

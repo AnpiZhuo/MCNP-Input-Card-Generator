@@ -43,6 +43,16 @@ describe("三色映射（trackColor）", () => {
     expect(TRACK_PARTICLE_LABELS.e).toBe("电子");
     expect(TRACK_LEGEND.map((l) => l.key)).toEqual(["n", "p", "e"]);
   });
+
+  it("正电子 `f`（SDEF PAR=4/F，C810 3-56）有独立基色与标签，不落进未知灰", () => {
+    // 锚点 #C810-3-56-PAR：「A special syntax allows PAR to be specified as 4 or F to make
+    // the source type a positron rather than an electron in a MODE E or P E or N P E problem.」
+    expect(trackColor("f")).toBe(TRACK_COLORS.f);
+    expect(trackColor("f")).not.toBe(TRACK_FALLBACK_COLOR);
+    expect(TRACK_PARTICLE_LABELS.f).toBe("正电子");
+    // PTRAC 三色面板图例**不含**正电子（源演示在 SourceDemoWindow 里按需补出这一行）
+    expect(TRACK_LEGEND.map((l) => l.key)).not.toContain("f");
+  });
 });
 
 describe("能量深浅渐变（trackShade）", () => {
