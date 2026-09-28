@@ -64,6 +64,89 @@ can be entered in any form acceptable to a Fortran E-edit descriptor.)
 - `Completely blank cards are`
 
 
+## #C810-3-30-TR-CARD
+
+来源：C810.pdf PDF p555 = 印刷 3-30
+
+原文：
+
+```text
+5. TRn Coordinate Transformation Card
+Form: TRn O1 O2 O3 B1 B2 B3 B4 B5 B6 B7 B8 B9 M
+n = number of the transformation: 1 ≤ n ≤ 999. ∗TRn means that
+the Bi are angles in degrees rather than being the cosines of the
+angles.
+O1 O2 O3 = displacement vector of the transformation.
+B1 to B9 = rotation matrix of the transformation.
+M = 1 (the default) means that the displacement vector is the location
+of the origin of the auxiliary coordinate system, defined in the
+main system.
+= -1 means that the displacement vector is the location of the
+origin of the main coordinate system, defined in the auxiliary
+system.
+Default: TRn 0 0 0 1 0 0 0 1 0 0 0 1 1
+```
+
+关键短语：
+
+- `Form: TRn O1 O2 O3 B1 B2 B3 B4 B5 B6 B7 B8 B9 M`
+
+- `M = 1 (the default) means that the displacement vector is the location of the origin of the auxiliary coordinate system, defined in the main system`
+
+- `= -1 means that the displacement vector is the location of the origin of the main coordinate system, defined in the auxiliary system`
+
+- `Default: TRn 0 0 0 1 0 0 0 1 0 0 0 1 1`
+
+
+## #C810-3-31-TR-B-MATRIX
+
+来源：C810.pdf PDF p556 = 印刷 3-31
+
+原文：
+
+```text
+The B matrix specifies the relationship between the directions of the axes of the two coordinate
+systems. Bi is the cosine of the angle (or the angle itself, in degrees in the range from 0 to 180, if
+the optional asterisk is used) between an axis of the main coordinate system (x,y,z) and an axis of
+the auxiliary coordinate system x′y′z′ as follows:
+Element B1 B2 B3 B4 B5 B6 B7 B8 B9
+Axes x,x' y,x' z,x' x,y' y,y' z,y' x,z' y,z' z,z'
+The meanings of the Bi do not depend on M. It is usually not necessary to enter all of the elements
+of the B matrix. These patterns are acceptable:
+1. All nine elements.
+2. Two of the three vectors either way in the matrix (6 values). MCNP will create the third
+vector by cross product.
+3. One vector each way in the matrix (5 values). The component in common must be less
+than 1. MCNP will fill out the matrix by the Eulerian angles scheme.
+4. One vector (3 values). MCNP will create the other two vectors in some arbitrary way.
+5. None. MCNP will create the identity matrix.
+A vector consists of the three elements in either a row or a column in the matrix. In all cases, MCNP
+cleans up any small nonorthogonality and normalizes the matrix. In this process, exact vectors like
+(1,0,0) are left unchanged. A warning message is issued if the nonorthogonality is more than about
+0.001 radian.
+Pattern #5 is appropriate when the transformation is a pure translation. Pattern #4 is appropriate
+when the auxiliary coordinate system is being used to describe a set of surfaces that are all surfaces
+of rotation about a common skew axis. Patterns 2 and 3 are about equally useful in more general
+cases. Pattern #1 is required if one of the systems is right-handed and the other is left-handed.
+```
+
+关键短语：
+
+- `Element B1 B2 B3 B4 B5 B6 B7 B8 B9`
+
+- `Axes x,x' y,x' z,x' x,y' y,y' z,y' x,z' y,z' z,z'`
+
+- `The meanings of the Bi do not depend on M`
+
+- `2. Two of the three vectors either way in the matrix (6 values). MCNP will create the third vector by cross product`
+
+- `3. One vector each way in the matrix (5 values). The component in common must be less than 1. MCNP will fill out the matrix by the Eulerian angles scheme`
+
+- `4. One vector (3 values). MCNP will create the other two vectors in some arbitrary way`
+
+- `5. None. MCNP will create the identity matrix`
+
+
 ## #C810-3-55-VAR-FORMS
 
 来源：C810.pdf PDF p580 = 印刷 3-55

@@ -51,7 +51,9 @@
       **球面 + AXS（C810 3-58）**：指定 AXS 时，`EXT` 的抽样值 = 「AXS 与球心→位置矢量」夹角的余弦
       （µ），方位角仍 0~360° 均匀；未给 AXS 才按面积均匀。故球面源的 µ 分布由 EXT 的 SI/SP 决定。
     - **方向参考轴**：显式 `VEC` 优先；面源缺 `VEC` ⇒ **面法线**（球面 = 径向、带 `NRM` 符号）；`DIR` 缺省 ⇒ 余弦分布 `p(μ)=2μ`。`NRM` 只影响面法线符号。
-    - `SDEF TR=n`（整数编号）或 **`TR=Dn`（变换分布：`SI L` 列 TR 号 + `SP` 给概率，C810 3-64/3-66）**：对抽出的**位置与方向**都作用一次（约定 `p_global = Rᵀ·p + o`，与 `_freecad_csg_worker.apply_trn` 一致）；TR 卡取不到时按"未变换"处理并走既有告警口径。
+    - `SDEF TR=n`（整数编号）或 **`TR=Dn`（变换分布：`SI L` 列 TR 号 + `SP` 给概率，C810 3-64/3-66）**：对抽出的**位置与方向**都作用一次（约定 `p_global = Rᵀ·p + o`，与 `_freecad_csg_worker.apply_trn` 一致）；引用的 TR 卡不存在 ⇒ **明确报错**（不按"未变换"静默放行）。
+      - **TR 卡本体**（锚点 `#C810-3-30-TR-CARD` / `#C810-3-31-TR-B-MATRIX`）：`parse_tr_cards` 的输出恒为 `{translate: o, rotate: R}`，其中 R 的**每行 = 一个辅系轴在主系的分量**（手册 3-31 的 `Axes` 轴对表），**`M` 折进 `o`**：`M=1`（默认）⇒ `o = O`；`M=-1`（此时位移矢量是"主系原点在辅系里"的位置）⇒ `o = −Rᵀ·O`。M 只改位移矢量的读法、不改 B 的含义（「The meanings of the Bi do not depend on M」），故下游（`voxel_csg` / `source_sampler` / FreeCAD worker）各自都不必再处理 M。
+      - 手册**未给判别规则**的一处：O 之后给 **6 项且末项恰为 ±1** 时，「6 值（叉积补全第三矢量）」与「5 值 + M」两种读法同时合法。本程序按 **6 值**读（M 取默认 1），并把该歧义写进 `geometryErrors` —— 明确说明，不静默选边。
   - 纯 stdlib + numpy + `random.Random(seed)`；无 FreeCAD（几何判定走 voxel_csg，见模块 C）。
 - **内部 seam**（实现私有，供其单测）：`_sample_variable(field_name)`、`_compose_position()`、`_sample_direction()`——不构成对外接口。
 

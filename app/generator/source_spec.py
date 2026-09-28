@@ -77,6 +77,9 @@ ANCHOR_IDS: frozenset[str] = frozenset({
     # 卡格式（第 3 章开头，印刷页 3-4）
     "#C810-3-4-COMMENTS",           # 注释卡可出现在 INP 任意位置
     "#C810-3-4-CONTINUATION",       # 列 1-5 为空 = 续行
+    # TR 变换卡（SDEF TR=n 引用的变换本体；印刷页 3-30 ~ 3-31）
+    "#C810-3-30-TR-CARD",           # TRn 形式；M=1/−1 决定位移矢量是「辅系原点在主系」还是反向
+    "#C810-3-31-TR-B-MATRIX",       # B 矩阵轴对表 + 5 种可接受写法（6 值由叉积补全等）
     # SDEF 源变量模型（p.3-55 ~ p.3-56）
     "#C810-3-55-VAR-FORMS",         # 三种形态：显式值 / Dn / Fvar' Dn
     "#C810-3-55-SAMPLING-ORDER",    # 依赖变量必须在父变量之后抽样

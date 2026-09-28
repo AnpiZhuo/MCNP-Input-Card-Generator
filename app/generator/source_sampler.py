@@ -970,7 +970,13 @@ class _Engine:
         """SDEF ``TR=`` 的变换数据（C810 Table 3.3 p.3-56 表尾 + p.3-59）。
 
         两种形态：``TR=n`` 固定 TR 编号；``TR=Dn`` **变换分布**（``SI L`` 列 TR 号、
-        ``SP`` 选概率），每颗粒子抽一个 TR 号再变换。取不到卡 → ``None``（按"未变换"）。
+        ``SP`` 选概率），每颗粒子抽一个 TR 号再变换。引用的卡取不到 ⇒ **明确报错**
+        （不静默按"未变换"放行）。
+
+        ``translate`` / ``rotate`` 的语义由 ``parse_tr_cards`` 保证（锚点
+        `#C810-3-30-TR-CARD` / `#C810-3-31-TR-B-MATRIX`）：``rotate`` 每行 = 一个辅系轴
+        在主系的分量；**TR 卡的 ``M=-1`` 已被折进 ``translate``**（``o = −Rᵀ·O``），
+        故这里照 ``p_global = Rᵀ·p_local + o`` 用即可，不必再判 M。
         """
         raw = self._field("TR")
         if not raw:

@@ -443,7 +443,10 @@ def test_every_semantic_value_has_a_page_reference_and_notes():
 
 def test_anchor_ids_is_a_frozen_set_of_wellformed_ids():
     assert isinstance(ss.ANCHOR_IDS, frozenset)
-    assert len(ss.ANCHOR_IDS) == 18
+    # 20 = 18 条 SDEF/分布家族锚点 + 2 条 TR 变换卡锚点（3-30 的 M 字段、3-31 的 B 矩阵模式）。
+    # 改这里的数字前，先确认 docs/authority/c810-sdef.md 与 tools/c810_extract.py 同步改了
+    # （tests/unit/test_c810_anchors.py 的冻结清单是第三处，三处一起改才绿）。
+    assert len(ss.ANCHOR_IDS) == 20
     for anchor in ss.ANCHOR_IDS:
         # 形态 `#C810-<印刷页>-<TAG>`：`3-55` / `3-4` / `3-66` 这样的印刷页 + 大写 TAG
         body = anchor.removeprefix("#C810-")

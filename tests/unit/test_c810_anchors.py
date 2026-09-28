@@ -4,7 +4,7 @@
 （RHP 的 ``r``）、``fdir=d2`` 静默取默认值、注释卡被当家族终止符 —— 根因都是**没有可机检的
 原文出处**。本文件把三件事钉死：
 
-1. **md 内部一致性**：18 个冻结的锚点 id 每个都在，且都有页码行、原文块、关键短语列表。
+1. **md 内部一致性**：20 个冻结的锚点 id 每个都在，且都有页码行、原文块、关键短语列表。
 2. **实现引用闭合**：``app/generator/source_spec.py`` 与契约里出现的每个 ``#C810-…`` id
    都必须在 md 的锚点表里（引不存在的锚点 ⇒ 红）。
 3. **PDF 一致性**（有 ``C810.pdf`` 才算，缺文件就 skip）：从 PDF 重抽一遍，逐条核对
@@ -37,6 +37,8 @@ PDF_TO_PRINTED_OFFSET = 525
 EXPECTED_ANCHOR_IDS = (
     "#C810-3-4-COMMENTS",
     "#C810-3-4-CONTINUATION",
+    "#C810-3-30-TR-CARD",
+    "#C810-3-31-TR-B-MATRIX",
     "#C810-3-55-VAR-FORMS",
     "#C810-3-55-SAMPLING-ORDER",
     "#C810-3-55-ONE-LEVEL",
@@ -151,7 +153,7 @@ def test_anchor_md_has_header_warning(md_text: str):
 
 
 def test_all_frozen_anchor_ids_present(anchors: dict):
-    """18 个冻结 id 全部存在（少一个 ⇒ 有实现的语义没了出处）。"""
+    """20 个冻结 id 全部存在（少一个 ⇒ 有实现的语义没了出处）。"""
     missing = [aid for aid in EXPECTED_ANCHOR_IDS if aid not in anchors]
     assert not missing, f"锚点表缺 id：{missing}"
 
@@ -227,7 +229,7 @@ def test_contract_refs_exist_in_anchor_table(anchors: dict):
 #: 允许「md 里有、但 `app/` + `docs/` 里暂时无人引用」的锚点（**显式白名单**，不许默默放过）。
 #: 注释卡/续行卡是第 3 章卡格式的规则：模型层（`source_spec.py`）只管源变量语义，暂不引用；
 #: 等解析层落锚点（`app/generator/` 的 SDEF/INP 解析路径）后从白名单里删掉。
-#: 当前 18 条都已被 `app/generator/source_spec.py` 引用，故这里为空 —— 留着是给下一条
+#: 当前 20 条都已被 `app/generator/source_spec.py` 引用，故这里为空 —— 留着是给下一条
 #: 新锚点一个「必须先写理由才能免检」的位置。
 UNREFERENCED_ANCHOR_WHITELIST: dict[str, str] = {}
 
@@ -266,7 +268,7 @@ def test_anchor_ids_are_pinned_to_the_anchor_table(anchors: dict):
     assert not only_in_md, (
         f"锚点表里有 source_spec.ANCHOR_IDS 没有的 id（md 加条就得同步内联集合）：{only_in_md}")
     assert spec_ids == set(EXPECTED_ANCHOR_IDS), (
-        "source_spec.ANCHOR_IDS 与本文件冻结的 18 条清单不一致；"
+        "source_spec.ANCHOR_IDS 与本文件冻结的 20 条清单不一致；"
         f"多：{sorted(spec_ids - set(EXPECTED_ANCHOR_IDS))}，"
         f"少：{sorted(set(EXPECTED_ANCHOR_IDS) - spec_ids)}")
 

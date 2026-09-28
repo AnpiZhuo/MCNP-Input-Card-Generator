@@ -346,6 +346,63 @@ def _model_box_from_cells_surfaces(data: dict):
 _TR_CARD_RE = re.compile(r"^(\*?)TR(\d+)(?=\s|$)", re.IGNORECASE)
 _TR_NUM_RE = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
 
+#: C810 3-31 允许的 B 矩阵项数（模式 #1/#2/#3/#4/#5 = 9/6/5/3/0 项）。
+_TR_B_COUNTS = (0, 3, 5, 6, 9)
+
+
+def _tr_split_entries(rest: list, tn: int, lineno: int, errors: list | None):
+    """O1O2O3 之后的数值项 → ``(B 项, M)``；判不出来返回 ``None``（C810 3-30 的 M 字段）。
+
+    M 是卡上**第 13 个字段**：``TRn O1 O2 O3 B1..B9 M``。手册给了 5 种 B 写法却没写
+    「B 项数与 M 同时可变时怎么判别 M」⇒ 只在**条目数本身能把 M 判出来**时读它：
+
+    * O 之后 1/4/7/10 项 ⇒ 0/3/6/9 个 B + M（唯一解）；
+    * O 之后 0/3/5/9 项 ⇒ 纯 B（无 M）；
+    * O 之后 **6 项**是唯一两义之处：「6 值（模式 #2，叉积补全）」与「5 值 + M」都合法。
+
+    6 项时按 **6 值**读（末项为 ±1 才把歧义写进 ``errors``）：①末项不是 ±1 时「5 值 + M」
+    根本不成立（M 只能是 ±1），两读法不冲突；②末项是 ±1 时手册未给判别规则，取 6 值读法
+    与既有行为一致（不动存量卡的解释），并把歧义**明写出来**——不静默选边。
+    """
+    n = len(rest)
+    if n - 1 in _TR_B_COUNTS and n not in _TR_B_COUNTS:
+        last = rest[-1]
+        if last not in (1.0, -1.0):
+            if errors is not None:
+                errors.append(
+                    f"TR{tn}（第 {lineno} 行）：第 {n + 3} 个字段（M）= {last:g}，"
+                    "但 C810 3-30 规定 M 只能是 1 或 -1 ⇒ 本条变换未生效（不猜）")
+            return None
+        return rest[:-1], int(last)
+    if n in _TR_B_COUNTS:
+        if n == 6 and rest[-1] in (1.0, -1.0) and errors is not None:
+            errors.append(
+                f"TR{tn}（第 {lineno} 行）：O 之后 6 项且末项为 {rest[-1]:g} —— "
+                "「6 值（叉积补全）」与「5 值 + M」两种读法在 C810 3-31/3-30 里同时合法，"
+                "手册未给判别规则；本条按 6 值读、M 取默认 1")
+        return rest, 1
+    if errors is not None:
+        errors.append(
+            f"TR{tn}（第 {lineno} 行）：O1O2O3 之后给了 {n} 个数字，"
+            f"不构成 C810 3-31 的任何 B 模式（B 项数需为 {_TR_B_COUNTS}）⇒ 本条变换未生效")
+    return None
+
+
+def _tr_translate(o: list, rotate: list, m_flag: int) -> list:
+    """按 M 把位移矢量 O 折算成 ``p_global = Rᵀ·p_local + o`` 里的 ``o``（C810 3-30）。
+
+    * ``M=1``（默认）：O 就是**辅系原点在主系**里的位置 ⇒ ``o = O``。
+    * ``M=-1``：O 是**主系原点在辅系**里的位置 ⇒ 反解 ``p_aux = R·(p_main − o)`` 在
+      ``p_main = 0`` 处得 ``O = −R·o`` ⇒ ``o = −Rᵀ·O``（R 正交）。
+
+    手册「The meanings of the Bi do not depend on M」⇒ M 只动 translate、不动 rotate，
+    故下游（voxel_csg / source_sampler / FreeCAD worker）都不必各自处理 M。
+    """
+    if m_flag == 1:
+        return list(o)
+    import numpy as np
+    return (-(np.asarray(rotate, dtype=float).T @ np.asarray(o, dtype=float))).tolist()
+
 
 def parse_tr_cards(text: str, errors: list | None = None) -> dict:
     """解析 TRn / *TRn 变换卡文本为 {num: {translate, rotate}}（C810 印刷页 3-30 / 3-31）。
@@ -357,6 +414,10 @@ def parse_tr_cards(text: str, errors: list | None = None) -> dict:
       C810 3-31 的轴对表）⇒ 返回的 ``rotate`` **每行 = 一个辅系轴在主系中的分量**，
       与 ``voxel_csg`` / ``_freecad_csg_worker.apply_trn`` 的既有约定
       ``p_global = rotateᵀ·p_local + o`` 一致。
+    - ``M``（第 13 个字段，C810 3-30）：``M=1``（默认）时 O = 辅系原点在主系里的位置、
+      ``M=-1`` 时 O = 主系原点在辅系里的位置。**M 一律折算进返回的 ``translate``**
+      （``M=-1`` ⇒ ``o = −Rᵀ·O``，见 :func:`_tr_translate`），下游不必再判 M；
+      判别规则与手册未规定的两义处见 :func:`_tr_split_entries`。
     - 手册允许 5 种 B 矩阵写法（C810 3-31）：9 值（完整）/ 6 值（两矢量 + 叉积生成第三个）/
       5 值（欧拉角补全）/ 3 值（任意补全）/ 0 值（单位矩阵）。6 值可**确定**复现（叉积）；
       5/3 值的补全算法是 MCNP 内部行为、手册只写 "Eulerian angles scheme" /
@@ -383,32 +444,39 @@ def parse_tr_cards(text: str, errors: list | None = None) -> dict:
                 if not _TR_NUM_RE.match(tok):
                     break
                 vals.append(float(tok))
-            translate = vals[:3] if len(vals) >= 3 else [0, 0, 0]
-            rest = vals[3:]
-            if not rest:
+            o = vals[:3] if len(vals) >= 3 else [0, 0, 0]
+            split = _tr_split_entries(vals[3:], tn, _lineno, errors)
+            if split is None:
+                continue
+            b_vals, m_flag = split
+            if not b_vals:
                 # 手册模式 #5：无 B 项 ⇒ 单位矩阵（纯平移）
                 rotate = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
-            elif len(rest) >= 9:
+            elif len(b_vals) == 9:
                 # 手册模式 #1：完整 3×3
-                b = rest[:9]
-                rotate = [[b[0], b[1], b[2]], [b[3], b[4], b[5]], [b[6], b[7], b[8]]]
-            elif len(rest) >= 6:
+                rotate = [[b_vals[0], b_vals[1], b_vals[2]],
+                          [b_vals[3], b_vals[4], b_vals[5]],
+                          [b_vals[6], b_vals[7], b_vals[8]]]
+            elif len(b_vals) == 6:
                 # 手册模式 #2：两矢量 + 叉积生成第三个
                 import numpy as np
-                v1 = [float(v) for v in rest[0:3]]
-                v2 = [float(v) for v in rest[3:6]]
+                v1 = [float(v) for v in b_vals[0:3]]
+                v2 = [float(v) for v in b_vals[3:6]]
                 rotate = [v1, v2, np.cross(v1, v2).tolist()]
             else:
                 if errors is not None:
                     errors.append(
-                        f"TR{tn}（第 {_lineno} 行）：B 矩阵只给了 {len(rest)} 项。"
+                        f"TR{tn}（第 {_lineno} 行）：B 矩阵只给了 {len(b_vals)} 项。"
                         "C810 3-31 的模式 #3（5 值，欧拉角补全）/#4（3 值，任意补全）"
                         "是 MCNP 内部行为、手册未给公式 ⇒ 本条变换未生效（不猜）")
                 continue
             if is_angle:
                 # C810 3-30：∗TRn 的 Bi 是角度（度，0~180）而非方向余弦
                 rotate = [[math.cos(math.radians(v)) for v in row] for row in rotate]
-            tr_cards[str(tn)] = {"translate": translate, "rotate": rotate}
+            tr_cards[str(tn)] = {
+                "translate": _tr_translate(o, rotate, m_flag),
+                "rotate": rotate,
+            }
         except Exception as e:
             if errors is not None:
                 errors.append(f"TR{tn}（第 {_lineno} 行）解析失败：{e}")

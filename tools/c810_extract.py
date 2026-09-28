@@ -84,6 +84,41 @@ ANCHORS: dict[str, dict] = {
             "Completely blank cards are",
         ),
     },
+    # ── TR 变换卡（印刷 p.3-30 ~ p.3-31；SDEF TR=n 引用的变换本体）──────────
+    "#C810-3-30-TR-CARD": {
+        "pages": (555, 555),
+        "start": r"5\. TRn Coordinate Transformation Card",
+        # 收在「Use: Optional」上（卡描述的第 3 行固定字段）；Default 行在它之前，故进 span。
+        "end": r"Use: Optional",
+        "phrases": (
+            "Form: TRn O1 O2 O3 B1 B2 B3 B4 B5 B6 B7 B8 B9 M",
+            "M = 1 (the default) means that the displacement vector is the location of the"
+            " origin of the auxiliary coordinate system, defined in the main system",
+            # ⚠ 手册第二行以「= -1 means …」起头（M 承前省略）；− 是 U+2212，归一成 ASCII。
+            "= -1 means that the displacement vector is the location of the origin of the"
+            " main coordinate system, defined in the auxiliary system",
+            "Default: TRn 0 0 0 1 0 0 0 1 0 0 0 1 1",
+        ),
+    },
+    "#C810-3-31-TR-B-MATRIX": {
+        "pages": (556, 556),
+        "start": r"The B matrix specifies the relationship",
+        # 收在下一段正文首句上：把 5 种写法与「Pattern #5 用于纯平移」一并切进来。
+        "end": r"Coordinate transformations in MCNP are used to simplify",
+        "phrases": (
+            "Element B1 B2 B3 B4 B5 B6 B7 B8 B9",
+            "Axes x,x' y,x' z,x' x,y' y,y' z,y' x,z' y,z' z,z'",
+            # M 只改位移矢量的读法，不改 B 的含义 —— 本程序据此把 M 折进 translate。
+            "The meanings of the Bi do not depend on M",
+            "2. Two of the three vectors either way in the matrix (6 values)."
+            " MCNP will create the third vector by cross product",
+            "3. One vector each way in the matrix (5 values)."
+            " The component in common must be less than 1."
+            " MCNP will fill out the matrix by the Eulerian angles scheme",
+            "4. One vector (3 values). MCNP will create the other two vectors in some arbitrary way",
+            "5. None. MCNP will create the identity matrix",
+        ),
+    },
     # ── 源变量模型（印刷 p.3-55 ~ p.3-56）────────────────────────────────
     "#C810-3-55-VAR-FORMS": {
         "pages": (580, 580),
