@@ -120,6 +120,29 @@ ANCHORS: dict[str, dict] = {
         ),
     },
     # ── 源变量模型（印刷 p.3-55 ~ p.3-56）────────────────────────────────
+    "#C810-3-60-CEL-PATH": {
+        # 跨页：正文（路径格式 + pds level 表）在 3-60，格元抽样与"接受/拒绝"表在 3-61
+        # ⇒ 页区间取 585-586，id 的主印张页按 **3-60** 冻结（与 TABLE-3-3 同口径）。
+        "pages": (585, 586),
+        "start": r"Source cell path for repeated structures or lattices",
+        "end": r"Note that the format of the CEL Source Path is the same as for tally cards",
+        "phrases": (
+            "CEL must have a value that is a path, enclosed in parentheses, from level n to level 0",
+            # ⚠ 路径公式 `( cn < cn - 1 < .... < c0 )` 只在**词级重建**里可见：PyMuPDF 的
+            # get_text("text") 在 p585 上漏掉这一行（实测 grep 全库 0 命中），而
+            # test_c810_anchors.test_phrases_come_from_the_real_pdf 是按**原始页文本**机检的
+            # ⇒ 不能把它写成关键短语（写成短语会让那条机检永远红）。改用同一句里的实词。
+            "where level n is not necessarily the bottom",
+            "Each entry in the source path represents a geometry level",
+            "ci is a cell in the universe that fills cell ci-1, or is zero,"
+            " or is Dm for a distribution of cells in the repeated structure case",
+            "If ci is one specific element in a lattice, it is indicated as",
+            "The coordinate system for position and direction sampling (pds) is the coordinate"
+            " system of the first negative or zero ci in the source path",
+            "CEL Source Path Cell of pds Level pds Level",
+            "Lattice cell elements that are defined using the expanded FILL card",
+        ),
+    },
     "#C810-3-55-VAR-FORMS": {
         "pages": (580, 580),
         "start": r"The equal signs are optional\.",

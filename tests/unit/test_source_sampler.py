@@ -221,6 +221,31 @@ def test_cel_uniform():
         assert p["x"] ** 2 + p["y"] ** 2 + p["z"] ** 2 <= 1.0
 
 
+def test_cel_hierarchy_path_is_rejected_with_the_real_reason():
+    """C810 3-60：重复结构里 CEL 的值是**带括号的层级路径** `( cn < … < c0 )`。
+
+    `(5<6<7<8)` / `(0<6[0 0 0]<-7[1 0 0]<8)` 都是**合法** MCNP 写法，而本程序的源演示
+    几何层只建平铺栅元（没有 universe/FILL/LAT 层级、没有 pds level 与格元抽样）⇒ 必须
+    明确报出「层级路径未实现」。旧行为是掉进 `parse_var_ref` 的通用兜底，把它说成
+    「既不是数值、也不是 Dn…」——把一个合法写法判成非法值，用户照着也改不对。
+    """
+    for value in ("(5<6<7<8)", "(0<6[0 0 0]<-7[1 0 0]<8)", "(6<-7<8)", "(0<4<0<-6<7<8)"):
+        r = sample_source({"sdef_cel": value, "sdef_erg": "14"}, [], geometry=_geom(),
+                          n_particles=1, seed=1)
+        assert r["status"] == "error", value
+        assert "层级路径" in r["error"], (value, r["error"])
+        assert "3-60" in r["error"], (value, r["error"])
+        assert "既不是数值" not in r["error"], (value, r["error"])
+
+
+def test_cel_lattice_element_path_mentions_lattice_index():
+    """带格元指标 `ci[j1 j2 j3]` 的路径，报错要把这一点也说出来（用户才知道是格元写法）。"""
+    r = sample_source({"sdef_cel": "(0<6[0 0 0]<7[1 0 0]<8)", "sdef_erg": "14"}, [],
+                      geometry=_geom(), n_particles=1, seed=1)
+    assert r["status"] == "error"
+    assert "格元指标" in r["error"], r["error"]
+
+
 def test_cel_distribution_selects_cell():
     geometry = {
         "cells": {

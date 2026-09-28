@@ -147,6 +147,97 @@ cases. Pattern #1 is required if one of the systems is right-handed and the othe
 - `5. None. MCNP will create the identity matrix`
 
 
+## #C810-3-60-CEL-PATH
+
+来源：C810.pdf PDF p585-586 = 印刷 3-60 ~ 3-61
+
+原文：
+
+```text
+Source cell path for repeated structures or lattices
+The only part of the MCNP source specification that is different when the source is in a repeated
+structure part of the geometry is the use of the CEL parameter on the SDEF card. CEL must have
+a value that is a path, enclosed in parentheses, from level n to level 0, where level n is not
+necessarily the bottom:
+( cn < cn - 1 < .... < c0 )
+ci is a cell in the universe that fills cell ci-1, or is zero, or is Dm for a distribution of cells in the
+repeated structure case. Dm is not valid for a lattice. ci can have a minus sign and is discussed more
+below. Dm cannot have a minus sign. If ci = 0, the cell at that level is searched for. Recall that level
+n is not necessarily the bottom level in the problem. If ci is one specific element in a lattice, it is
+indicated as: ... < ci [j1 j2 j3]< ...
+The coordinate system for position and direction sampling (pds) is the coordinate system of the first
+negative or zero ci in the source path starting from the right and proceeding left. Each entry in the
+source path represents a geometry level, where level zero is the last source path entry, level one the
+second to the left, etc., and level zero is above level one, level two is below level one. The pds level
+is the level associated with the pds cell or pds coordinate system. All levels above the pds level must
+be included in the source path. Levels below the pds level need not be specified, and when given,
+may include one or more zero entries. The default pds level is the first entry in the source path when
+the path has no negative or zero entry.
+Position rejection is done in cells at all levels where ci ≠ 0, but if any ci has a negative universe
+number on its cell card and is at or above the pds level, higher level cells are not checked.
+The following chart illustrates the idea of the pds level.
+CEL Source Path Cell of pds Level pds Level
+(5<6<7<8) 5 3
+(6<-7<8) 7 1
+(0<4<0<-6<7<8) 6 2
+(0<6[0 0 0]<-7[1 0 0]<8) 7 1
+(0<6[0 0 0]<7[1 0 0]<8) Will be determined 3
+
+Lattice cell elements that are defined using the expanded FILL card (see page 3-29) can be
+uniformly sampled automatically. This feature is applied to lattice cell entries in the source path
+that lack an explicit lattice index AND that are at or above the pds level. Lattice cells not defined
+by the expanded FILL card must include an explicit lattice index when at or above the pds level.
+Rejection of automatically sampled lattice elements depends on the entry before the lattice cell
+number in the source path.
+Assume the following cell cards:
+7 0 surfaces lat=1 u=1 fill=0:2 0:0 0:0 1 2 3
+cells 8 and 9 belong to universe 2
+cells 10 and 11 belong to universe 3
+Cell 7 is a lattice with three existing elements: [0 0 0] is filled by itself [u=1], [1 0 0] is filled by
+cells 8 and 9 [u=2], and [2 0 0] is filled by cells 10 and 11 [u=3]. The following combinations show
+which elements are accepted and which are rejected.
+CEL Source Path Accepted Rejected
+7 All elements None
+(0<7) All elements None
+(8<7) [1 0 0] [0 0 0], [2 0 0]
+(10<7) [2 0 0] [0 0 0], [1 0 0]
+The sampling efficiency for cell 7 in the OUTP file will reflect the element rejections. Lattice cell
+entries that lack an explicit lattice index AND are below the pds level are not sampled. Instead, the
+appropriate lattice element is determined by the input source position.
+Lattice element sampling is independent from position sampling. First a lattice element is chosen,
+then a position is chosen. If the sampled position is not in the sampled lattice element, the position
+is resampled until it is in the specified source path and in the lattice element chosen or until an
+efficiency error occurs. The lattice elements will not be resampled to accommodate the sampled
+position. Lattice element rejection is done only as described above.
+Using the previous description of lattice cell 7, add that cell 6 is filled by cell 7. The source path
+becomes (0<7<6). Three elements of the lattice exist [fill=0:2 0:0 0:0] but element [0 0 0] now is
+cut off by cell 6. Lattice element [0 0 0] still will be sampled one-third of the time. The first time
+element [0 0 0] is sampled a FATAL error will occur because the sampled position, no matter what
+it is, will be rejected because element [0 0 0] does not exist. CAUTION: Implement automatic
+lattice sampling carefully and ensure that all of the lattice elements specified on the expanded FILL
+card really do exist.
+See Chapter 4 page 4-27 for a detailed example of specifying a source in a lattice geometry.
+```
+
+关键短语：
+
+- `CEL must have a value that is a path, enclosed in parentheses, from level n to level 0`
+
+- `where level n is not necessarily the bottom`
+
+- `Each entry in the source path represents a geometry level`
+
+- `ci is a cell in the universe that fills cell ci-1, or is zero, or is Dm for a distribution of cells in the repeated structure case`
+
+- `If ci is one specific element in a lattice, it is indicated as`
+
+- `The coordinate system for position and direction sampling (pds) is the coordinate system of the first negative or zero ci in the source path`
+
+- `CEL Source Path Cell of pds Level pds Level`
+
+- `Lattice cell elements that are defined using the expanded FILL card`
+
+
 ## #C810-3-55-VAR-FORMS
 
 来源：C810.pdf PDF p580 = 印刷 3-55

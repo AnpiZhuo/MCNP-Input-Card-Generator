@@ -80,6 +80,8 @@ ANCHOR_IDS: frozenset[str] = frozenset({
     # TR 变换卡（SDEF TR=n 引用的变换本体；印刷页 3-30 ~ 3-31）
     "#C810-3-30-TR-CARD",           # TRn 形式；M=1/−1 决定位移矢量是「辅系原点在主系」还是反向
     "#C810-3-31-TR-B-MATRIX",       # B 矩阵轴对表 + 5 种可接受写法（6 值由叉积补全等）
+    # 重复结构里的 CEL 路径（SDEF CEL 的层级写法；印刷页 3-60 ~ 3-61，见 §4.2 已知差异）
+    "#C810-3-60-CEL-PATH",          # CEL = ( cn < … < c0 ) 路径；pds level 与格元指标
     # SDEF 源变量模型（p.3-55 ~ p.3-56）
     "#C810-3-55-VAR-FORMS",         # 三种形态：显式值 / Dn / Fvar' Dn
     "#C810-3-55-SAMPLING-ORDER",    # 依赖变量必须在父变量之后抽样
@@ -173,7 +175,9 @@ VAR_SPEC: dict[str, VarSpec] = {
         "position_selector", ("sdef_cel",), "str",
         "C810 Table 3.3, p.3-55", _ANCHOR_TABLE_3_3,
         "CEL 的默认值是「由位置定」，不是某个数；另 p.3-60 规定重复结构里 CEL 是带括号的"
-        "层级路径（ci<...<c0），本程序的解析层只保留单栅元写法。",
+        "层级路径 `( cn < … < c0 )`（可含 0/Dm/负号与格元指标 `ci[j1 j2 j3]`，见锚点 "
+        "#C810-3-60-CEL-PATH）—— 本程序的源演示几何层只有平铺栅元、没有 universe/FILL/LAT "
+        "层级，故该写法在抽样前就被明确拒绝（不静默当单栅元用），见契约 §4.2 已知差异。",
     ),
     # p.3-55：「SUR / Surface / Zero (means cell source)」；p.3-57：「The value of the
     # variable SUR is nonzero for a distribution on a surface」。

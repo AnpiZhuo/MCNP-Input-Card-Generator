@@ -73,12 +73,45 @@ _NON_VARIABLE_FIELDS = frozenset({
 })
 
 #: VAR_SPEC 里有声明、但本引擎**尚未实现**的源变量（Table 3.3 有它，位置/方向层没做）。
-#: 非空时必须**明确报错**而不是静默忽略：CCC 是 cookie-cutter（C810 p.3-58/3-59
-#: 「positions are sampled only within the cookie-cutter cell」，会改变位置语义），
-#: ARA 只服务于点探测器的直接贡献（p.3-56），本引擎不算 tally ⇒ 认了它也不影响起始状态。
+#: 非空时必须**明确报错**而不是静默忽略。
+#: ⚠ ``CCC`` 已于 2026-09-28 落地（位置层的 cookie-cutter 拒绝采样）⇒ 不在此列；
+#: ``ARA`` 见 ``_IGNORED_VARS``（只认不发警告不算错）。
 _UNSUPPORTED_VARS = {
     "RATE": "RATE（未在 C810 Table 3.3 的印刷行中找到；Table 3.3 的默认值清单不含它）",
 }
+
+#: C810 3-60 的 **CEL 层级路径**：整串带圆括号（`( cn < cn-1 < … < c0 )`）。
+#: 必须在 `parse_var_ref` **之前**认出来 —— 带空格的路径会被切成多个 token、
+#: 报成"多个 token"，不带空格的会掉进"既不是数值也不是 Dn"的兜底；两种文案都会把
+#: 一个**合法**写法说成非法值。
+_CEL_PATH_RE = re.compile(r"^\(.*\)$")
+#: 路径里的格元指标 `ci[j1 j2 j3]`（C810 3-60：`... < ci [j1 j2 j3] < ...`）。
+_CEL_LATTICE_INDEX_RE = re.compile(r"\[[^\]]*\]")
+
+
+def _reject_cel_path(raw: str) -> None:
+    """CEL 的层级路径写法 ⇒ 明确报出「本程序没有层级几何」这个真因（C810 3-60）。
+
+    ``(5<6<7<8)``、``(0<6[0 0 0]<-7[1 0 0]<8)`` 都是**合法** MCNP 值：路径从 level n
+    逐级写到 level 0，位置/方向的采样坐标系（pds level）由路径里第一个负/零 ``ci`` 决定，
+    栅格元还可以按 ``ci[j1 j2 j3]`` 指定到具体格元（C810 3-60/3-61 有完整表）。
+    本程序的源演示几何层只建**平铺**栅元（api_server 产出的 ``{cells: {num: {field, aabb}}}``
+    里没有 universe/FILL/LAT 层级，也没有 pds level 与格元抽样）⇒ 无法定位路径里的源栅元。
+
+    这条**不是**静默降级：给不出层级几何就直说，并给出两条能落地的替代写法。
+    """
+    text = str(raw or "").strip()
+    if not _CEL_PATH_RE.match(text):
+        return
+    lattice = "，且带格元指标 `ci[j1 j2 j3]`" if _CEL_LATTICE_INDEX_RE.search(text) else ""
+    raise SourceSamplingError(
+        f"SDEF CEL={raw!r} 是重复结构里的**栅元层级路径**{lattice}：C810 印刷页 3-60 规定"
+        "重复结构下 CEL 的值是「从 level n 到 level 0、带括号的路径」`( cn < cn-1 < … < c0 )`"
+        "（`ci` 还可以是 0、`Dm`、或带负号；位置/方向的采样坐标系 pds level 由路径里第一个"
+        "负/零 ci 决定）。本程序的源演示几何层只建立平铺栅元、**没有 universe/FILL/LAT 层级"
+        "与格元抽样** ⇒ 无法定位层级路径中的源栅元。请改用：① 平铺几何下的单栅元号"
+        "（CEL=5）；② 用 SUR= 或 POS+RAD/EXT 显式给出位置。")
+
 
 #: Table 3.3 里有声明、但**不改变粒子起始状态**的变量：**接受它**（不报错），只在返回的
 #: ``warnings`` 里说明本引擎不使用。⚠ 2026-09-20 修（抽样检测实测）：官方
@@ -265,6 +298,11 @@ class _Engine:
                     raise SourceSamplingError(
                         f"SDEF PAR={raw!r} 不允许使用 Dn：C810 Table 3.3 要求 PAR 为显式粒子类型")
                 continue
+            if var == "CEL":
+                # CEL 的**层级路径**（C810 3-60）也在这一遍里点名：否则它会掉进
+                # parse_var_ref 的「含多个 token」/「既不是数值也不是 Dn」兜底 ——
+                # 把一个合法写法说成非法值（真因是"没有 universe/LAT 层级几何"）。
+                _reject_cel_path(raw)
             ref = parse_var_ref(raw)
             if var in ("WGT", "EFF") and ref["kind"] != "const":
                 raise SourceSamplingError(
@@ -685,6 +723,12 @@ class _Engine:
 
     def _resolve_cell_number(self, raw: str, var: str) -> int:
         """解析 CEL/CCC 的显式栅元号或 ``Dn`` 栅元分布引用。"""
+        if var == "CEL":
+            # CEL 的层级路径（C810 3-60）必须在 parse_var_ref **之前**认出来：
+            # 带空格的 `(0<6[0 0 0]<7[1 0 0]<8)` 会被切成多个 token、报成"多个 token"，
+            # 不带空格的 `(5<6<7<8)` 会掉进"既不是数值也不是 Dn"的兜底 —— 两种文案都会
+            # 把一个**合法**的 MCNP 写法说成非法值，用户照着改也改不对。
+            _reject_cel_path(raw)
         ref = parse_var_ref(raw)
         if ref["kind"] == "dist":
             value = self._smp(ref["did"], var, cel=self.cel_source)

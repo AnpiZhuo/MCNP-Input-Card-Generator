@@ -137,6 +137,7 @@ really does contain every part of the cell because **MCNP has no way of checking
 |---|---|---|---|
 | **O7** | `−7`（Spare energy spectrum） | p.3-65 Table 3.4 | **显式不支持**（报错说明它是"留给你自己加谱的框架"） |
 | **O8** | `SB` 用**内置函数**时对函数的偏倚 | p.3-66：「only −21 and −31 can be used on SB cards… If it is biased, the function is approximated within each bin by n equally probable groups such that the product of n and the number of bins is as large as possible but not over 300」 | **未实现**（`SP f` + `SB f` 的卡本程序按**未偏倚**抽样、权重 1 ⇒ 自洽但不是 MCNP 的行为）。表格式 SB 已实现（见下） |
+| **O9** | `CEL` 的**栅元层级路径**（重复结构 / 格阵） | p.3-60~3-61（锚点 `#C810-3-60-CEL-PATH`）：「CEL must have a value that is a path, enclosed in parentheses, from level n to level 0」`( cn < cn-1 < …. < c0 )`；`ci` 可为 0 / `Dm` / 带负号，格元可写成 `ci[j1 j2 j3]`；采样坐标系由「第一个负/零 ci」定（pds level） | **显式不支持**：源演示的几何层只建**平铺**栅元（`{cells: {num: {field, aabb}}}`，没有 universe/FILL/LAT 层级，也没有 pds level 与格元抽样），无法定位路径里的源栅元。抽样前即**报错说明真因**并给两条替代写法（单栅元号 / `SUR=` / `POS+RAD/EXT`）——**不静默当单栅元用**（旧行为是把它当"非法源变量值"，把一个合法写法说成写错了） |
 
 **已对齐（2026-09-20 修复，原列本表）**：
 
