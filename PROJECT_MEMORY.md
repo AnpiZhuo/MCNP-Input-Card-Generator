@@ -189,7 +189,38 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
-## S11（当前批次）计数卡前缀 `*` + 栅元几何 `#` + 截面拖动两坑 + 打包链修复 + **v1.7.7 发布（含 GitHub Release）**（2026-09-26，**已改 ✅ / 已提交 ✅ `83c5a20`+`b4d7d05` / 已 push ✅ `origin/main` / 已出 Release ✅ `v1.7.7` / 已打包部署 ✅ · 版本 1.7.7（用户指定）**）
+## S12（当前批次）SDEF 源演示对齐 C810 —— 交接文档 §2 六项全部收口 + 锚点 18 → 22（2026-09-28，**已改 ✅ / 已提交 ✅ `8383523`+`7e87a3f`+`2a678d9`+`ca58214`+`f1bcbf2`+`f6b5d6f`+`2e483ae` / 未打包（纯源码批，版本仍 1.7.7）**）
+
+> **三态**：**已改 ✅ / 已提交 ✅（7 个提交）/ 未打包** —— 纯源码修复批，未升版、未重出包（打包版 exe 内嵌前端 bundle，本批修复不随旧包生效）。
+> **范围（用户明确限定）**：仅 SDEF **源演示**涉及的卡；权威手册 `D:\MCNP\MCNP6\C810.pdf`（PDF 页 − 525 = 印刷页 3-x）。
+> **门禁（实跑）**：pytest **1458 passed / 0 failed / 11 skipped**；vitest **105 files / 935 passed**；tsc 两档 **EXIT 0**。
+> 详细流水：`docs/CHANGELOG.md` 2026-09-28 一条。
+
+| # | 项 | 真根因 / 结论 | 修法（单一实现落在哪） |
+|---|---|---|---|
+| 1 | **TR 卡 `M`（第 13 参数）被忽略** | C810 3-30：`M=1`（默认）位移矢量是**辅系原点在主系**里的位置；`M=-1` 是**主系原点在辅系**里的位置。本程序恒用 `p_global = Rᵀ·p_local + o` ⇒ `M=-1` 的等效平移是 `o = −Rᵀ·O`，旧实现无条件按 `M=1` ⇒ 位置整体错 | `api_server.parse_tr_cards` 新增 `_tr_split_entries`（按**条目数**判别 M：O 后 1/4/7/10 项 = 0/3/6/9 个 B + M）+ `_tr_translate`（`M=-1 ⇒ −Rᵀ·O`）；**M 折进 `translate`** ⇒ 8 个调用点与全部下游零改动受益 |
+| 2 | **截面通道有第二份 TR 解析器** | `_cross_section_helper.py` 内联的副本缺 `*TRn` 角度 / `$` 注释 / 5-3 值 / M ⇒ 同一 deck 在 preview-3d 与 cross-section 两条通道可能解析出**不同几何且无报错**（`docs/audit/t2-backend-debt.md` BE-15） | 删除副本，改**惰性转发** `api_server.parse_tr_cards`（不在导入期拉进 api_server）；新增 `tests/unit/test_cross_section_helper_tr.py` 断言两条通道逐字节一致 |
+| 3 | **CEL 层级路径不支持** | `(5<6<7<8)`、`(0<6[0 0 0]<-7[1 0 0]<8)` 是**合法** MCNP 值（C810 3-60/3-61：路径 + pds level + 格元指标），但源演示几何层只有**平铺**栅元（无 universe/FILL/LAT 层级）⇒ 无法定位。旧行为把合法写法说成"含多个 token"/"既不是数值也不是 Dn" | 新增 `_reject_cel_path`：抽样前报**真因**（含格元指标字样）并给两条替代写法（单栅元 / `SUR=` / `POS+RAD/EXT`）；锚点 `#C810-3-60-CEL-PATH` + 契约 §4.2 **O9** 登记为已知差异 |
+| 4 | **RATE 悬而未决** | Table 3.3 变量列**无** RATE 行；说明书**全文检索** `\bRATE\b` **57 处命中全是普通英文**（convergence/sampling/dose/energy loss rate）⇒ **C810 没有这个 SDEF 源变量** | 定案：不写默认值、不实现、给值即明确报错（`source_spec` 从"未决"改为"定案"；测试口径拆成 `UNDECIDED_NO_ANCHOR={JSU}` 与 `NOT_A_C810_VARIABLE={RATE}`） |
+| 5 | **PAR=4/F 未映射** | C810 3-56 **表尾正文**：「A special syntax allows PAR to be specified as **4 or F** to make the source type a **positron** rather than an electron in a MODE E or P E or N P E problem.」（同一个"4/F"在 TABLE IIA 里是正电子 `8, f`、`4` 是负 μ 子——两处编号体系不同，SDEF 按 3-56 正文） | `_PAR_GROUP` 补 `4/F → f`；**顺带真 bug**：`_par()` 先 `.upper()` 再查**小写键**表 ⇒ `PAR=N/P/E` 一律落 `"other"`（只有数字能用）⇒ 改成小写再查；前端补正电子基色/标签/图例/PAR 下拉 |
+| 6 | **ARA 只记 warning、界面看不到** | 引擎按契约"接受 + `warnings`"（ARA 只用于点探测器直接贡献的归一化，与起始状态无关；官方 6 个 duct 算例全带 `ara=`），但 `SourceTab` **只读 `geometryWarnings`** ⇒ 该说明整条丢掉、用户以为 ARA 生效 | 新增 `gui/src/utils/sourceDemoWarnings.ts` 合成两类告警（纯函数，可测）+ `SourceDemoResult.warnings` 补类型；契约 §1 写明"两类告警都必须展示" |
+
+### S12.1 证据（每步都留了能红的尺子）
+
+- **锚点机检**：新增 4 条锚点（`#C810-3-30-TR-CARD`/`-3-31-TR-B-MATRIX`/`-3-56-PAR`/`-3-60-CEL-PATH`），`docs/authority/c810-sdef.md` 由 `tools/c810_extract.py` **重新生成**（22 条 / 33,539+ 字符），`--check` 与 `tests/unit/test_c810_anchors.py`（含"短语必须能在 PDF **原始页文本**里找到"）全绿。
+- **先红后绿**：TR 的 M（5 例先红）、CEL 路径（2 例先红——两种旧文案各一类）、PAR 字母/4-F（4 例先红）、ARA（1 例）。
+- **全文检索式定案**：RATE 用逐页 `get_text` + `\bRATE\b` 全库扫（57 命中逐条看过，全是普通英文）⇒ 才敢写"手册没有这个变量"。
+- **跨通道一致性**：`test_cross_section_helper_tr.py` 直接把同一条 deck 文本喂给两个模块比 dict 相等（结构闸门，防有人再内联一份）。
+
+### S12.2 本批新增纪律（可复用）
+
+- **手册引文的"页归属"要机检，不能凭记忆**：交接文档写「表 3.3（3-56）有 4/F」，实际在**同一页的表尾正文**里 —— 表格格里的字会被词级重建重排（`PAR` 那一格只剩 `1=/2=/3=`），而 `get_text("text")` 反过来**漏掉**公式行 `( cn < cn-1 < … < c0 )`。⇒ 锚点短语必须同时满足"在重建 span 里"**且**"在原始页文本里"（后者是 `test_phrases_come_from_the_real_pdf` 的口径），只在一侧出现的句子**不能**当关键短语。
+- **锚点 id 是"多处冻结"**：加一条锚点要同步 **4 处** —— `tools/c810_extract.py` 的 `ANCHORS`、`app/generator/source_spec.py::ANCHOR_IDS`、`tests/unit/test_c810_anchors.py::EXPECTED_ANCHOR_IDS`、`tests/unit/test_source_spec.py` 的长度断言（本次三处计数 18 → 20 → 21 → 22，每加一条都要一起改，漏一处即红）。
+- **大小写归一化必须与查表键同向**：`_par()` 的 `.upper()` + 小写键表，让**手册明写的字母写法**全都静默落进 `"other"` —— 这类 bug 不报错、只在"用户用字母写法"时显形；任何 `.upper()/.lower()` 之后请核对目标表的键。
+- **本机跑测试的解释器（实测）**：带 pytest 的是 `C:\Users\13789\AppData\Local\Microsoft\WindowsApps\python.exe`（Store Python **3.13**，含 pytest/numpy/pymcnp/matplotlib/mcp）；**FreeCAD 的 python 没有 pytest**；`gui\sidecar_dist\python.exe` 是打包产物，**直接跑会挂起**（等 stdin）。
+- **PowerShell 里提交长中文消息别用 `-m`**：消息含 `\b`、成对引号时会被拆成 pathspec（实测报 `did not match any file(s)`）⇒ 写成文件用 `git commit -F <file>`。
+
+## S11（上一批次）计数卡前缀 `*` + 栅元几何 `#` + 截面拖动两坑 + 打包链修复 + **v1.7.7 发布（含 GitHub Release）**（2026-09-26，**已改 ✅ / 已提交 ✅ `83c5a20`+`b4d7d05` / 已 push ✅ `origin/main` / 已出 Release ✅ `v1.7.7` / 已打包部署 ✅ · 版本 1.7.7（用户指定）**）
 
 > **三态**：**已改 ✅ / 已提交 ✅ / 已打包部署 ✅**（手工链：vite → PyInstaller 229 s → binaries → `npm run build:app`；
 > 部署 `D:\MCNP\MCNP输入卡生成器`，7873 文件 / 214,820,150 B）。
