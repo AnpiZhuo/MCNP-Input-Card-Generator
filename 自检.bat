@@ -45,14 +45,14 @@ exit /b 0
 :checks
 echo ============================================================
 echo  MCNP 输入卡生成器 — 环境自检报告 / SELF CHECK REPORT
-echo  脚本版本 : v3 2026-09-20
+echo  脚本版本 : v4 2026-09-29
 echo  时间     : %DATE% %TIME%
 echo  交付目录 : %DIR%
 echo  报告文件 : %OUT%
 echo ============================================================
 ver
 echo.
-echo [1/7] 三件套是否同目录在位
+echo [1/8] 三件套是否同目录在位
 call :fileinfo "MCNP 输入卡生成器.exe" "主程序"
 call :fileinfo "python.exe" "后端 sidecar"
 call :fileinfo "自检.bat" "本脚本"
@@ -64,12 +64,36 @@ if exist "%DIR%_internal" (
   echo   [MISS] _internal 目录不存在   ^<== 后端一闪就没的头号原因
 )
 echo.
-echo [2/7] 关键文件
+echo [2/8] 界面运行时 WebView2 - 没有它主程序窗口根本起不来
+rem 背景（2026-09-29 实测定稿）：界面是 WebView2 渲染的，而 WebView2 平时由 Edge 附带安装。
+rem 精简版 Windows 删掉 Edge 就**连带没有** WebView2 ⇒ 双击 exe 没反应/一闪就没。
+rem 现随包分发一份微软官方"固定版运行时"（与本 exe 同级的 WebView2\ 目录），
+rem 主程序启动时"有则用、无则退"（见 gui\src-tauri\src\main.rs 的 prefer_bundled_webview2）。
+set "WV2=0"
+if exist "%DIR%WebView2\msedgewebview2.exe" (
+  set "WV2=1"
+  echo   [OK]   自带 WebView2 运行时 - WebView2\msedgewebview2.exe 在位（不依赖系统 Edge）
+) else (
+  echo   [--]   没有自带的 WebView2 运行时 - WebView2\msedgewebview2.exe 不存在
+)
+rem 系统装的 WebView2：Edge 系版本号写在 EdgeUpdate 的客户端 GUID 下（64 位系统看 WOW6432Node）
+set "WV2SYS="
+for /f "tokens=3" %%A in ('reg query "HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" /v pv 2^>nul ^| findstr /i "REG_SZ"') do set "WV2SYS=%%A"
+if not defined WV2SYS for /f "tokens=3" %%A in ('reg query "HKCU\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" /v pv 2^>nul ^| findstr /i "REG_SZ"') do set "WV2SYS=%%A"
+if defined WV2SYS (
+  set "WV2=1"
+  echo   [OK]   系统已安装 WebView2 运行时 - 版本 !WV2SYS!
+) else (
+  echo   [--]   系统没有安装 WebView2 运行时（精简版 Windows 删掉 Edge 后就是这样）
+)
+if "!WV2!"=="1" (echo   界面运行时判定 = OK) else (echo   界面运行时判定 = MISSING   ^<== 主程序双击打不开的头号原因)
+echo.
+echo [3/8] 关键文件
 call :musthave "_internal\python313.dll"    "Python 运行时，缺它必报 Failed to load Python DLL"
 call :musthave "_internal\base_library.zip" "标准库归档"
 call :musthave "_internal\app\models.py"    "后端模块"
 echo.
-echo [3/7] 引导自检 - 真实启动一次 sidecar，用完即退，不占端口
+echo [4/8] 引导自检 - 真实启动一次 sidecar，用完即退，不占端口
 set "PROBE=%TEMP%\mcnp_boot_probe.log"
 rem 喂最小载荷验：引导器 + python313.dll + base_library + PYZ 归档。
 rem 验不到 _internal\app 下的 .py 数据文件（PYZ 里另有一份且 FrozenImporter 优先命中）。
@@ -93,13 +117,13 @@ if not errorlevel 1 set "IMPORTBAD=1"
 if "!BOOT!"=="OK" if "!IMPORTBAD!"=="1" set "BOOT=IMPORT-ERR"
 echo   引导判定 = !BOOT!
 echo.
-echo [4/7] 端口与进程
+echo [5/8] 端口与进程
 call :port 5001 "后端 - 主程序启动时会自动拉起"
 call :port 8100 "AI 接入 MCP"
 tasklist /fi "imagename eq python.exe" 2>nul | findstr /i "python.exe" >nul
 if not errorlevel 1 (echo   [OK]   有 python.exe 进程在跑) else (echo   [--]   没有 python.exe 进程在跑)
 echo.
-echo [5/7] 后端自述与用户配置（后端在跑才取得到）
+echo [6/8] 后端自述与用户配置（后端在跑才取得到）
 if "!PT5001!"=="1" (
   where curl >nul 2>&1
   if errorlevel 1 (
@@ -123,7 +147,7 @@ if exist "%APPDATA%\mcnp_generator\config.json" (
   echo   [--]   不存在（从未手动指定过 FreeCAD / MCNP 路径）
 )
 echo.
-echo [6/7] 环境变量
+echo [7/8] 环境变量
 echo   注：这是**运行本脚本这个窗口**的环境；主程序拉起的 sidecar 继承的是你登录
 echo       会话的环境，两者可能不同（GUI 启动常吃不到新设的变量）—— 对比时注意。
 echo   --- 关键项（诊断最需要的几项，原样保留）---
@@ -133,12 +157,13 @@ findstr /b /i /c:"PATH=" /c:"PATHEXT=" /c:"DATAPATH=" /c:"XSDIR=" /c:"xsdir=" /c
 echo   --- 全部环境变量（已滤掉名字或取值里含 KEY/TOKEN/SECRET/PASSWORD 等敏感词的项）---
 findstr /v /i "KEY TOKEN SECRET PASSWORD PASSWD CREDENTIAL COOKIE AUTH" "%ENVALL%" 2>nul
 echo.
-echo [7/7] 结论
+echo [8/8] 结论
 
 set "VERDICT="
 if "!BOOT!"=="FAIL" set "VERDICT=PKG-INCOMPLETE-OR-BLOCKED"
 if not defined VERDICT if "!N!"=="0" set "VERDICT=PKG-INCOMPLETE"
 if not defined VERDICT if "!BOOT!"=="IMPORT-ERR" set "VERDICT=PKG-MODULE-MISSING"
+if not defined VERDICT if "!WV2!"=="0" set "VERDICT=WEBVIEW2-MISSING"
 if not defined VERDICT if "!PT5001!"=="1" set "VERDICT=BACKEND-RUNNING"
 if not defined VERDICT set "VERDICT=PACKAGE-OK-BACKEND-NOT-UP"
 
@@ -157,6 +182,12 @@ if "!VERDICT!"=="PKG-INCOMPLETE-OR-BLOCKED" (
 if "!VERDICT!"=="PKG-INCOMPLETE" (
   echo   少了 _internal 目录。它和 python.exe 是一套，缺一不可。
   echo   处理：重新完整复制/解压整个目录，不要在压缩包里双击运行。
+)
+if "!VERDICT!"=="WEBVIEW2-MISSING" (
+  echo   主程序窗口起不来：界面要靠 WebView2 渲染，而这台机器既没有随包自带的 WebView2 目录，
+  echo   系统也没装 WebView2 运行时（精简版 Windows 删掉 Edge 之后就是这样）。
+  echo   处理：确认交付目录里 WebView2\ 文件夹与 exe 同级且完整 - 关键是 WebView2\msedgewebview2.exe 必须在。
+  echo         若确认缺失或不全，请重新完整解压交付包（不要在压缩包/网盘里直接运行）。
 )
 if "!VERDICT!"=="BACKEND-RUNNING" (
   echo   后端已在本机 5001 上监听，包是好的。

@@ -78,6 +78,12 @@ A desktop application for visually creating, editing, and validating **MCNP** in
 - **Rust / Cargo**（仅打包 Tauri exe 时需要）
 - **FreeCAD ≥ 0.20**（3D 预览/截面/STEP 导入用，检测到才启用）
 
+> 以上是**从源码跑/自己打包**的要求。**直接运行交付包**只需要 Windows 10/11 x64 ——
+> 界面运行时（WebView2）已随包分发（与 exe 同级的 `WebView2\` 目录，**裁剪版 433.7 MB / 29 文件**：
+> 官方固定版运行时 668.4 MB 里与本程序无关的语言包/DRM/PDF/Copilot 等已剔除，见 `docs/手动打包方法.md` §6.5），
+> **不需要装 Edge、不需要装 WebView2 Runtime、不需要联网、不需要管理员权限**。
+> 判别依据见 `docs/手动打包方法.md` §8.1b。
+
 ### 开发运行 Run in Dev
 
 ```bash
@@ -96,9 +102,12 @@ python api_server.py
 ### 打包为 EXE Build Standalone EXE
 
 > 打包为 EXE 请按 **`docs/手动打包方法.md`** 分步操作（`release.bat` / `scripts\release.ps1` 一键脚本已废弃删除）。
-> 流程：vite 构建 → PyInstaller 打包后端 sidecar → 替换 `src-tauri/binaries/` → Tauri 构建 → 复制产物到交付目录 → 冒烟验证。
+> 流程：vite 构建 → PyInstaller 打包后端 sidecar → 替换 `src-tauri/binaries/` → Tauri 构建 → **铺 WebView2 固定版运行时（§6.5；铺设时按 `gui/scripts/slim-webview2.mjs` 裁剪到 433.7 MB）** → 复制产物到交付目录 → 冒烟验证。
+> 也可以一步跑完：`cd gui` → `npm run build:release`（已把 WebView2 那一步串在 `tauri build` 之后；运行时源目录缺失、或裁剪后核心件缺失时会直接中止，不出半成品）。
 
 打包产物在 `gui/src-tauri/target/release/`（`bundle.active=false`，`bundle/` 目录为空属正常）。运行 exe 时前端自动拉起后端、关闭时一起退出。
+
+**交付目录必须有这几件（缺一不可）**：`MCNP 输入卡生成器.exe`、`python.exe`、`_internal\`、`WebView2\`、`自检.bat`。
 
 ---
 

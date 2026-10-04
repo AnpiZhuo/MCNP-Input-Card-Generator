@@ -42,10 +42,11 @@ describe("自检.bat 源文件（仓库根）", () => {
 
   it("给的是可执行的结论标记，而不是只有一堆输出", () => {
     const text = readFileSync(SELFTEST_SRC, "utf8");
-    // 四种结论都要在脚本里出现：漏一种，用户就会拿到"看不懂"而不是"分流结论"
+    // 五种结论都要在脚本里出现：漏一种，用户就会拿到"看不懂"而不是"分流结论"
     for (const verdict of [
       "PKG-INCOMPLETE-OR-BLOCKED", "PKG-INCOMPLETE",
       "BACKEND-RUNNING", "PACKAGE-OK-BACKEND-NOT-UP",
+      "WEBVIEW2-MISSING",           // 2026-09-29：没有 Edge/WebView2 的机器双击打不开
     ]) {
       expect(text).toContain(verdict);
     }

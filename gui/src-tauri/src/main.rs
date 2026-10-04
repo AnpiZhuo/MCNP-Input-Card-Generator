@@ -109,7 +109,38 @@ async fn open_tally_chart_window(app: tauri::AppHandle) -> Result<(), String> {
     create_or_focus(&app, "tally_chart", "Tally 通量图", 1000.0, 700.0, "tally_chart")
 }
 
+/// 优先使用随包分发的 WebView2「固定版运行时」，让没有 Edge 的机器也能开界面。
+///
+/// **背景（2026-09-29 实测）**：界面是 WebView2 渲染的，而 WebView2 平时由 Edge 附带安装。
+/// 精简版 Windows 删掉了 Edge，就同时没有 WebView2 Runtime ⇒ 双击 exe 没反应/一闪就没。
+/// 随包带一份固定版运行时（微软官方可再分发形态），用 WebView2 官方支持的环境变量
+/// `WEBVIEW2_BROWSER_EXECUTABLE_FOLDER` 指过去，即可完全不依赖系统里有没有 Edge。
+///
+/// 为什么是「存在才设」而不是写进 `tauri.conf.json` 的 `webviewInstallMode=fixedRuntime`：
+/// 后者会让 Tauri 在 `setup()` 里**无条件**把该变量指向 `<exe目录>\WebView2`（tauri 1.8.3
+/// `src/app.rs:1696-1715`），于是只要用户漏拷了这个目录（或者只拷了 exe），
+/// 连**本来能用系统运行时**的机器也一并打不开 —— 把"可选增强"变成"硬依赖"。
+/// 这里做成「有则用、无则退」：目录齐全 ⇒ 完全自带；目录缺失 ⇒ 回退系统运行时，行为同旧版。
+#[cfg(target_os = "windows")]
+fn prefer_bundled_webview2() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(dir) = exe.parent() else { return };
+    let runtime = dir.join("WebView2");
+    // 认 msedgewebview2.exe：它必须直接躺在该目录下，这正是浏览器可执行文件目录的定义
+    if runtime.join("msedgewebview2.exe").is_file() {
+        std::env::set_var("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", &runtime);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn prefer_bundled_webview2() {}
+
 fn main() {
+    // ★ 必须在任何窗口/WebView 创建之前调用：WebView2 装载器只在**创建环境时**读这个变量
+    prefer_bundled_webview2();
+
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             get_username,
