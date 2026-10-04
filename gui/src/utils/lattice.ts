@@ -121,13 +121,18 @@ export function hexRingCellCount(rings: number): number {
 }
 
 /**
- * 顶点朝 +X（flat-top）蜂窝格位中心（画布 / LatticePreview3D / latticeInstances 共用，
- * golden 锁死——跨语言 L1，权威公式不可改）：
- *   x = col·pitch + row·pitch/2   （a1=(2a,0) 水平格矢 + a2 的半格斜移）
+ * 蜂窝格位中心（画布 / LatticePreview3D / latticeInstances 共用，golden 锁死——跨语言 L1）：
+ *   x = col·pitch + row·pitch/2   （a1=(pitch,0) 水平格矢 + a2 的半格斜移）
  *   y = row·pitch·√3/2
- * 自洽核验：相邻 (0,0)→(1,0) 距=p、相邻 (0,0)→(0,1) 距=√((p/2)²+(p·√3/2)²)=p。
- * 2026-09-10 更正：本 docstring 原写 `x=i·(pitch·√3/2)、y=j·pitch+(i%2)·pitch/2`，
- * 系旧式（与权威相差 30° 旋转），与下方实现及 `app/lattice.py:604-616` 不符，已按实现改写。
+ * **权威语义（MCNP，C810 3-29 + 官方样例 u233-comp-therm-001-case-6.i cell 19 实测）**：
+ * 格位中心 = col·a1 + row·a2，其中 a1 = 第 1 个列出的侧面的**外向法向**、a2 = 第 3 个
+ * 列出的侧面的外向法向（与 a1 夹 60°）；pitch = |a1| = 2a = 相邻格元中心距。
+ * 本式 = 「第 1 面法向 ∥ +x」这一支（规范朝向：面法向 0°/60°/120°、顶点在 30°+k·60°）；
+ * 第 1 面法向不在 ±x 的卡由后端 `hex_lattice_basis()` 按其面序给出 a1/a2
+ * （`gui/src/utils/lattice.ts` 只负责 UI 里"从零建卡"的规范朝向；3D 实例坐标一律以后端为准）。
+ * 自洽：相邻 (0,0)→(1,0) 距=p、相邻 (0,0)→(0,1) 距=√((p/2)²+(p·√3/2)²)=p。
+ * 术语澄清：本朝向常被写成"顶点+X flat-top"，实为**面心在 0°/60°/120°、顶点在 30°+k·60°**
+ * （即 ±x 是平边、±y 有顶点），仓库历史文档的两种叫法互斥，一律以"面法向"为准。
  */
 export function hexCenter(col: number, row: number, pitch: number): { x: number; y: number } {
   // MCNP LAT=2（交叉验证自官方库 u233-comp-therm-001-case-6.i，flat-top 基向量
@@ -463,8 +468,16 @@ export interface AutoGenParams {
 /**
  * 自动生成格阵格元曲面：
  *   矩形(lat=1)：6 平面 PX/PY/PZ（长宽高+中心）→ 盒内 = +x0 -x1 +y0 -y1 +z0 -z1
- *   六棱柱(lat=2)：6 侧 P 平面（30/90/150/210/270/330°，pointy-top 顶点+X）+ 2 PZ 盖
- *   （外接半径 = 边长；仿 fixtures/hex_lattice.inp 平面法）
+ *   六棱柱(lat=2)：6 侧 P 平面（**外向法向 0°/60°/120°/180°/240°/300°**，即 a1∥x 规范朝向；
+ *     顶点落在 30°+k·60°）+ 2 PZ 盖
+ *   （外接半径 = 边长）
+ *
+ * ⚠ MCNP 平面语义（C810 3-2x：`P A B C D` ⇒ A x+B y+C z − D = 0，`-s` = n·p < D）：
+ *   六个侧面全部以负侧给出时，常数 **D 必须 = n·C + 面心距**（格元中心到该面的距离）。
+ *   原实现写 `D = −(n·C) − apo`（符号反）⇒ 六个半空间交为**空集**，MCNP 里该格元
+ *   根本不存在（FreeCAD 实测：STL 空/无几何；而 3D 预览的 AABB 看不出差别，
+ *   旧校验器只查"法向均布 60°"也放行了）。2026 修正见 `validate_lattice_surfaces`
+ *   新增的半空间交集检查 + golden `lat2_empty_intersection` 反例。
  * 生成的面卡行追加到曲面卡文本（编号从既有最大号顺延）。
  */
 export function autoGenerateSurfaces(
@@ -480,12 +493,13 @@ export function autoGenerateSurfaces(
     const p = params.hex!;
     const R = p.side; // 正六边形外接半径 = 边长
     const apo = (R * Math.sqrt(3)) / 2;
-    // 面法向 0°/60°/120°/180°/240°/300°（⊥ 六条格矢方向，对齐 a1=0° 蜂窝；原 30° 序列错）
+    // 面法向 0°/60°/120°/180°/240°/300°（= a1 方位，对齐 hexCenter；原 30° 序列错）
     for (const deg of [0, 60, 120, 180, 240, 300]) {
       const a = (deg * Math.PI) / 180;
       const nx = Number(Math.cos(a).toFixed(6));
       const ny = Number(Math.sin(a).toFixed(6));
-      const D = Number(-(nx * p.cx + ny * p.cy) - apo).toFixed(6);
+      // 负侧语义 n·p < D ⇒ D = n·C + 面心距（符号必须为正；写反 ⇒ 六半空间交为空）
+      const D = Number((nx * p.cx + ny * p.cy + apo).toFixed(6));
       const n = start + lines.length;
       lines.push(`${n}  p   ${nx}  ${ny}  0   ${D}`);
       sids.push(n);

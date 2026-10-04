@@ -435,6 +435,23 @@ describe("项16：宏体尺寸随格阵（OWEN 模式：包住 fill 平行四边
     expect(nx[1]).toBe("0.5"); // 面 2 法向 60°
     expect(nx[2]).toBe("-0.5"); // 面 3 法向 120°
   });
+  it("生成的六棱柱卡半空间交**非空**（D = n·C + 面心距，写反 ⇒ MCNP 里该格元不存在）", () => {
+    // 非零中心 + 外接半径 2（面心距 apo = 2·√3/2 = √3）
+    const r = autoGenerateSurfaces("2", { hex: { side: 2, H: 2, cx: 1.5, cy: -0.5, cz: 0 } }, "");
+    const toks = r.surfaceExpr.split(/\s+/);
+    expect(toks.slice(0, 6).every((s) => s.startsWith("-"))).toBe(true); // 6 侧全负（外向法向）
+    expect(toks[6].startsWith("-")).toBe(true);   // 顶盖：z < 顶
+    expect(toks[7].startsWith("+")).toBe(true);   // 底盖：z > 底（一正一负）
+    const planes = r.lines.slice(0, 6).map((l) => l.split(/\s+/).map(Number));
+    for (const [, , nx, ny, , D] of planes) {
+      // 格元中心必须落在每个半空间内侧：n·C < D（D 写反时 n·C = +apo > -apo 立刻失败）
+      expect(nx * 1.5 + ny * -0.5).toBeLessThan(D);
+    }
+    // 面心距 = D − n·C ≈ √3（正则六棱柱、side=2 = 外接半径）
+    for (const [, , nx, ny, , D] of planes) {
+      expect(D - (nx * 1.5 + ny * -0.5)).toBeCloseTo(Math.sqrt(3), 6);
+    }
+  });
 });
 
 describe("collectFillUniverses（项7 调色板来源合并）", () => {

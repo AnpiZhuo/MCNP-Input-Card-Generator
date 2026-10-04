@@ -11,9 +11,11 @@
 HTTP 往返用子进程跑 api_server.py，import 发生在独立进程。
 """
 import ast
+import base64
 import json
 import math
 import re
+import struct
 import urllib.request
 from pathlib import Path
 
@@ -365,13 +367,27 @@ def test_http_validate_lattice_surfaces(backend_base_url):
         "surface_expr": "-1 -2 -3 -4 -5 -6 -7 8",
         "lat": "2",
         "surfaces_text": (
-            "1 p 0.866 0.5 0 -0.866\n2 p 0.866 -0.5 0 -0.866\n"
-            "3 p 0 -1.0 0 -0.866\n4 p -0.866 -0.5 0 -0.866\n"
-            "5 p -0.866 0.5 0 -0.866\n6 p 0 1.0 0 -0.866\n"
+            "1 p 1 0 0 0.8660254037844386\n2 p -1 0 0 0.8660254037844386\n"
+            "3 p 0.5 0.8660254037844386 0 0.8660254037844386\n"
+            "4 p -0.5 -0.8660254037844386 0 0.8660254037844386\n"
+            "5 p -0.5 0.8660254037844386 0 0.8660254037844386\n"
+            "6 p 0.5 -0.8660254037844386 0 0.8660254037844386\n"
             "7 pz 0.5\n8 pz -0.5"),
     })
     assert resp_hex.get("status") == "ok", resp_hex
     assert resp_hex.get("ok") is True, resp_hex
+    # 半空间交为空（面卡常数符号写反）必须拒：MCNP 里该格元不存在，而 AABB 看着正常
+    resp_empty = _post(backend_base_url, "/api/validate-lattice-surfaces", {
+        "surface_expr": "-1 -2 -3 -4 -5 -6",
+        "lat": "2",
+        "surfaces_text": (
+            "1 p 1 0 0 -0.8660254037844386\n2 p -1 0 0 -0.8660254037844386\n"
+            "3 p 0.5 0.8660254037844386 0 -0.8660254037844386\n"
+            "4 p -0.5 -0.8660254037844386 0 -0.8660254037844386\n"
+            "5 p -0.5 0.8660254037844386 0 -0.8660254037844386\n"
+            "6 p 0.5 -0.8660254037844386 0 -0.8660254037844386"),
+    })
+    assert resp_empty.get("ok") is False, resp_empty
 
 
 # ── 格阵阶段3端点：lattice-extent / preview-lattice ──────
@@ -431,6 +447,94 @@ NESTED_DECK = {
         {"kind": "cell", "cell": {"number": 5, "material": "5", "density": "-1.0", "surface_expr": "1 -2 3 -4 5 -6", "u": "5", "render": True, "fill_grid": ""}},
     ],
 }
+
+
+# lat=2 六棱柱格阵：**30° 旋转基矢**（第 1 面法向 30° ⇒ a1 = 30°、a2 = 90°、pitch = 2a = √3）。
+# 曲面顺序 = s1(30°) s4(210°) s6(90°) s3(270°) s5(150°) s2(330°)（成对互反，C810 3-29），
+# P 卡常数 D = +apothem（写负号 → 六个半空间交为空，MCNP 里该格元不存在）。
+# universe 格元用「覆盖整格元的大盒」：裁剪实体取格元自身形状时体积 = 六棱柱面积×高，
+# 取 AABB 盒时体积 = 外接矩形面积×高（两者比 0.75）⇒ 可直接断言裁剪形状。
+HEX_APO = 0.8660254037844386
+HEX_LATTICE_DECK = {
+    "surfaces": (
+        "1 p 0.8660254037844386 0.5 0 0.8660254037844386\n"
+        "2 p 0.8660254037844386 -0.5 0 0.8660254037844386\n"
+        "3 p 0 -1.0 0 0.8660254037844386\n"
+        "4 p -0.8660254037844386 -0.5 0 0.8660254037844386\n"
+        "5 p -0.8660254037844386 0.5 0 0.8660254037844386\n"
+        "6 p 0 1.0 0 0.8660254037844386\n"
+        "7 rpp -5 5 -5 5 -0.5 0.5"),
+    "tr_cards": "",
+    "cells": [
+        {"kind": "cell", "cell": {"number": 20, "material": "0", "density": "",
+                                  "surface_expr": "-1 -4 -6 -3 -5 -2", "u": "10",
+                                  "fill": "0:1 0:1 0:0", "lat": "2", "trcl": "",
+                                  "render": True,
+                                  "fill_grid": json.dumps({
+                                      "lat": "2", "kind": "lattice",
+                                      "range": ["0:1", "0:1", "0:0"], "dims": [2, 2, 1],
+                                      "cells": [{"u": "1", "dx": "", "dy": "", "dz": ""},
+                                                {"u": "2", "dx": "", "dy": "", "dz": ""},
+                                                {"u": "1", "dx": "", "dy": "", "dz": ""},
+                                                {"u": "2", "dx": "", "dy": "", "dz": ""}],
+                                      "raw": "0:1 0:1 0:0 1 2 1 2"})}},
+        {"kind": "cell", "cell": {"number": 1, "material": "1", "density": "-1.0",
+                                  "surface_expr": "-7", "u": "1", "render": True,
+                                  "fill_grid": ""}},
+        {"kind": "cell", "cell": {"number": 2, "material": "2", "density": "-1.0",
+                                  "surface_expr": "-7", "u": "2", "render": True,
+                                  "fill_grid": ""}},
+    ],
+}
+
+
+def _stl_solid_volume(raw: bytes) -> float:
+    """二进制/ASCII STL → 实体体积（散度定理）。hex 裁剪形状断言用。"""
+    if b"facet" in raw:
+        vs = [tuple(float(x) for x in m) for m in re.findall(
+            rb"vertex\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)", raw)]
+    else:
+        n = struct.unpack("<I", raw[80:84])[0]
+        vs, off = [], 84
+        for _ in range(n):
+            v = struct.unpack("<9f", raw[off + 12:off + 48])
+            vs.extend([(v[0], v[1], v[2]), (v[3], v[4], v[5]), (v[6], v[7], v[8])])
+            off += 50
+    vol = 0.0
+    for i in range(0, len(vs) - 2, 3):
+        (ax, ay, az), (bx, by, bz), (cx, cy, cz) = vs[i], vs[i + 1], vs[i + 2]
+        vol += (ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx)
+                + az * (bx * cy - by * cx)) / 6.0
+    return abs(vol)
+
+
+def test_http_preview_lattice_hex_basis_and_shape(backend_base_url):
+    """lat=2 端到端：① pitch/朝向跟曲面顺序（30° 基矢，不是「a1 恒 +x」）；
+    ② 裁剪实体 = 格元自身形状（六棱柱），不是 AABB 盒。"""
+    resp = _post(backend_base_url, "/api/preview-lattice", HEX_LATTICE_DECK)
+    assert resp.get("status") == "ok", resp
+    lt = next(l for l in resp.get("lattices", []) if l.get("num") == 20)
+    p = math.sqrt(3.0)
+    assert lt["lat"] == "2", lt
+    assert lt["pitch"][0] == pytest.approx(p, abs=1e-6), lt["pitch"]
+    assert lt["pitch"][1] == pytest.approx(p, abs=1e-6), lt["pitch"]
+    assert float(lt.get("basisDeg") or 0.0) == pytest.approx(30.0, abs=1e-6), lt.get("basisDeg")
+    pos = {q["idx"]: q for q in lt["positions"]}
+    assert set(pos) == {0, 1, 2, 3}, pos
+    # MCNP 索引口径（C810 3-30）：range 0:1 ⇒ 索引 (0,0)/(1,0)/(0,1)/(1,1)
+    #   ⇒ 位置 = 索引 × a1/a2（a1=(1.5, √3/2)、a2=(0, √3)），不按数组中心居中
+    assert pos[0]["x"] == pytest.approx(0.0, abs=1e-6), pos[0]
+    assert pos[0]["y"] == pytest.approx(0.0, abs=1e-6), pos[0]
+    assert pos[1]["x"] == pytest.approx(1.5, abs=1e-6), pos[1]
+    assert pos[1]["y"] == pytest.approx(0.8660254037844386, abs=1e-6), pos[1]
+    d = math.hypot(pos[1]["x"] - pos[0]["x"], pos[1]["y"] - pos[0]["y"])
+    assert d == pytest.approx(p, abs=1e-6), (pos[0], pos[1])
+    # ② 裁剪形状：六棱柱面积 = 3√3/2 · R² = 2.598076（R=1，高 1.0）；
+    #    AABB 盒 = 2.0 × √3 = 3.464102。旧实现（恒 RPP）在此得 3.464 ⇒ 用例锁死回归。
+    uni = lt.get("universes") or {}
+    assert uni.get("1"), lt.keys()
+    raw = base64.b64decode(next(iter(uni["1"].values())))
+    assert _stl_solid_volume(raw) == pytest.approx(2.598076, abs=2e-3), _stl_solid_volume(raw)
 
 
 def test_http_preview_lattice_outermost_root(backend_base_url):

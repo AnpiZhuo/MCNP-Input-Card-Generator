@@ -825,7 +825,7 @@ def _max_surface_num(surf_text: str) -> int:
 
 
 def _clip_suffix_and_lines(box: dict, max_surf: int):
-    """格元盒 → (RPP 曲面卡行, 盒内半空间表达式后缀)。
+    """格元盒 → (RPP 曲面卡行, 盒内半空间表达式后缀)（**兜底**裁剪，见 `_hex_clip_lines`）。
 
     盒 [x_min,x_max]×[y_min,y_max]×[z_min,z_max] 用**一个 RPP 宏体**表达裁剪：
     后缀 `-<num>`（RPP 负侧 = 盒内实体），worker 里对 cell solid ∩ RPP 盒实体做
@@ -850,6 +850,55 @@ def _clip_suffix_and_lines(box: dict, max_surf: int):
         f"{b['z_min']:.6g} {b['z_max']:.6g}"
     )
     return lines, suffix
+
+
+def _cell_clip_lines(clip, max_surf: int):
+    """格元**自身形状** → (曲面卡行 | None, 实体内半空间后缀)；无法表达 → None。
+
+    clip 形态（`app/lattice.py::hex_lattice_basis / cuboid_basis` 产出）：
+      ``("ref", num)``                    单 RPP/BOX/RHP/HEX 宏体 → **直接引用该曲面号**
+                                          （形状即格元本身，不需要新卡；返回 lines=None）；
+      ``("rhp", (V,H,R1[,R2[,R3]]))``     6 平面写的六棱柱 → 合成 RHP（正/非正六棱柱）；
+      ``("box", corner, e1, e2, e3)``     直角六面体（MCNP `BOX` 只收直角，C810 3-21）；
+      ``("arb", verts8, codes6)``         非直角平行六面体 → ARB（8 顶点 + 6 面码）。
+
+    为什么必须换闭合实体：FreeCAD/OCC 对「无界半空间 ∩ 平行轴平面」的 common 恒空
+    （见 `_clip_suffix_and_lines` 的坑说明）——所以**只能用** RPP/BOX/RHP/ARB 这类闭合实体，
+    但它们表示的形状**就是格元自身形状**（MCNP 语义：格元 = 该 cell 的几何）。
+    """
+    if not clip:
+        return None
+    kind = clip[0]
+    try:
+        if kind == "ref":
+            return None, f"-{int(clip[1])}"          # 复用格元自己的曲面号
+        num = max_surf + 1
+        if kind == "rhp":
+            p = clip[1]
+            if not p or len(p) < 3:
+                return None
+            v, h, r1 = p[0], p[1], p[2]
+            rest = [t for vec in p[3:] for t in vec]
+            hn = math.sqrt(sum(float(t) * float(t) for t in h))
+            if hn <= 1e-12 or math.hypot(float(r1[0]), float(r1[1])) <= 1e-12:
+                return None
+            nums = [float(t) for t in (list(v) + list(h) + list(r1) + rest)]
+            return f"{num} rhp " + " ".join(f"{t:.6g}" for t in nums), f"-{num}"
+        if kind == "box":
+            _k, corner, e1, e2, e3 = clip
+            nums = [float(t) for t in (list(corner) + list(e1) + list(e2) + list(e3))]
+            if len(nums) != 12:
+                return None
+            return f"{num} box " + " ".join(f"{t:.6g}" for t in nums), f"-{num}"
+        if kind == "arb":
+            _k, verts, codes = clip
+            if len(verts) != 8 or len(codes) != 6:
+                return None
+            nums = [float(t) for v in verts for t in v] + [int(c) for c in codes]
+            return f"{num} arb " + " ".join(str(t) for t in nums), f"-{num}"
+    except (TypeError, ValueError, IndexError):
+        return None
+    return None
 
 
 def _stl_triangle_count(raw: bytes) -> int:
@@ -1003,7 +1052,11 @@ def _scan_embedding_z(cell_list, surf_text, lattice_u, lattice):
         fill = str(cc.get("fill", "") or "").strip()
         if fill != lu:
             continue
-        ext = lattice.lattice_cell_extent(cc.get("surface_expr", ""), "1", surf_text)
+        # 窗口 cell 自己的 lat（无 → 按 lat=1 解释）。旧实现**硬编码 "1"**：
+        # 六棱柱形态的窗口（6 竖直 P 平面 / RHP 宏体）在 `_plane_box_extent` 处
+        # 因 P 不在 _PLANE_AXIS 直接返回 None ⇒ z 兜底落到 ±0.5 ⇒ pin 被裁成 1cm 薄片。
+        win_lat = str(cc.get("lat", "") or "").strip() or "1"
+        ext = lattice.lattice_cell_extent(cc.get("surface_expr", ""), win_lat, surf_text)
         if ext:
             zlo, zhi = ext.get("z_min"), ext.get("z_max")
             if zlo is not None and zhi is not None:
@@ -1015,11 +1068,18 @@ def _scan_embedding_z(cell_list, surf_text, lattice_u, lattice):
 
 
 def _resolved_extent(raw_extent, lat, req_pitch, req_height,
-                     surf_text, info, sub_by_u, lattice, cell_list=None) -> dict:
+                     surf_text, info, sub_by_u, lattice, cell_list=None,
+                     basis=None) -> dict:
     """格阵 cell 范围 → 解析后 extent（pitch/height 覆盖 + 缺省填充）。
 
     pitch 覆盖次序：请求 > extent/dims > 默认 1；
     z 高度覆盖次序：请求 > 格阵 cell PZ（extent 已含）> universe 栅元 PZ 扫描 > 默认 1。
+
+    hex 半宽由 `lattice.hex_half_extent(p, basis)` **唯一**给出 —— 不写死 x/y：
+    规范朝向（第 1 面法向 ∥ x）：x 半宽 = p/2（对边距）、y 半宽 = p/√3（外接半径）；
+    第 1 面法向在别处（如 30°）则两者互换。旧实现恒写 x = p/√3、y = p/2
+    （**正好是规范朝向的转置**）⇒ 与 `_hex_pitch`「格距 = x 跨度」互为倒数，
+    显式给 pitch 时格距被撑大 15.47%、裁剪盒转过 30°。
     """
     ext = {}
     for ax in "xyz":
@@ -1028,17 +1088,20 @@ def _resolved_extent(raw_extent, lat, req_pitch, req_height,
         ext[ax + "_min"] = lo
         ext[ax + "_max"] = hi
     lat = str(lat or "1")
-    # pitch 覆盖（x/y）
+    # pitch 覆盖（x/y）：以原 extent 的中心为心（无 → 原点）
     if req_pitch is not None and str(req_pitch).strip():
         p = float(req_pitch)
+        cx, cy = 0.0, 0.0
+        if ext["x_min"] is not None and ext["x_max"] is not None:
+            cx = (float(ext["x_min"]) + float(ext["x_max"])) / 2.0
+        if ext["y_min"] is not None and ext["y_max"] is not None:
+            cy = (float(ext["y_min"]) + float(ext["y_max"])) / 2.0
         if lat == "2":
-            # hex：pitch=中心距；x 跨度=2R=2p/√3，y 跨度=p
-            hx = p * 2.0 / math.sqrt(3.0) / 2.0
-            ext["x_min"], ext["x_max"] = -hx, hx
-            ext["y_min"], ext["y_max"] = -p / 2.0, p / 2.0
+            hx, hy = lattice.hex_half_extent(p, basis)
         else:
-            ext["x_min"], ext["x_max"] = -p / 2.0, p / 2.0
-            ext["y_min"], ext["y_max"] = -p / 2.0, p / 2.0
+            hx = hy = p / 2.0
+        ext["x_min"], ext["x_max"] = cx - hx, cx + hx
+        ext["y_min"], ext["y_max"] = cy - hy, cy + hy
     # z 高度覆盖
     if req_height is not None and str(req_height).strip():
         h = float(req_height)
@@ -1241,19 +1304,21 @@ def _stls_base64(cells: dict) -> dict:
 
 def _build_one_universe(surf_text, tr_text, cell_list, u, box,
                         cell_num, pitch, height, lattice,
-                        container_expr: str = "") -> dict:
-    """把 universe u 的实体栅元裁剪到格元盒 → FreeCAD STL（{cellNum: base64}）。
+                        container_expr: str = "", hex_prism=None,
+                        clip_solid=None) -> dict:
+    """把 universe u 的实体栅元裁剪到**格元自身形状** → FreeCAD STL（{cellNum: base64}）。
 
-    格元盒用**一个 RPP 宏体**（`-<num>` 盒内半空间）追加进 universe 栅元
-    surface_expr，worker 内做 cell solid ∩ RPP 盒实体 的 solid-solid common
-    （闭盒实体 ∩ 圆柱正常；「圆柱 ∩ 平行轴平面」FreeCAD/OCC 恒空，QA 复现）。
-    **方法级裁剪**：再把容器 cell 343 的几何约束（container_expr，如 `-80 700 -730`
-    = cz 187.96 内 + z∈[0,460]）追加 —— STL = universe ∩ 格元盒 ∩ 容器 cell。
-    这样格元与容器 cell 无交集的格位（角位 u=30 无限水 `-3:3`，格元盒在圆柱外）∩
-    容器 cell = 空，不产生"圆柱外虚假水块"。换任何外壳皆正确（查容器 cell 几何，
-    非反推超壳结果）。
+    裁剪实体（闭合实体，worker 内做 cell solid ∩ 实体 的 solid-solid common）：
+      ① 格元自身形状：`hex_prism`（`hex_lattice_basis()["prism"]` 的 RHP 六棱柱）→ 一个
+         `rhp` 宏体。MCNP 语义就是「格元 = 该 cell 自己的几何」，只有取自身形状才不会有
+         格元角部把该 universe 的几何带进相邻格元（矩形盒兜底的老问题）。
+      ② AABB 盒：`_clip_suffix_and_lines` 的 RPP —— 拿不到自身形状时的兜底，**并且**
+         ① 无产出时自动回落（OCC 边界情况安全降级）。
+    **方法级裁剪**：再把容器 cell 的几何约束（container_expr，如 `-80 700 -730`）追加 ——
+    STL = universe ∩ 格元形状 ∩ 容器 cell ⇒ 格元与容器无交集的格位（角位无限水 `-3:3`）
+    交集为空，不产生"圆柱外虚假水块"。
     空 STL（0 三角形）显式丢弃不产出——前端对缺失 (u,cellNum) 回退占位盒
-    （显式降级，不静默给 84B 空 STL）。按 u/cellNum/pitch/height 指纹缓存。
+    （显式降级，不静默给 84B 空 STL）。按 u/cellNum/pitch/height/裁剪种类 指纹缓存。
     """
     # 1. 收集 universe u 的实体栅元（跳过格阵 cell + 单值 fill cell）
     #    项14/15：单值 fill cell（含 fill="0"）= 装配容器，不产自身 STL（规则1/7）；
@@ -1275,73 +1340,96 @@ def _build_one_universe(surf_text, tr_text, cell_list, u, box,
             uni_cells.append(cell)
     if not uni_cells:
         return {}
-    # 2. 合成格元盒 RPP 曲面卡 + 盒内半空间后缀（solid-solid 盒裁剪）
+
+    def _mod_cells(suffix: str):
+        out = []
+        for cell in uni_cells:
+            m = dict(cell)
+            expr = str(cell.get("surface_expr", "") or "").strip()
+            # 格元形状（suffix）+ 容器 cell 几何（container_expr）裁剪：
+            # universe ∩ 格元形状 ∩ 容器cell —— 格元完全在容器外的（角位无限水）交集为空不产出。
+            clip = suffix + ((" " + container_expr.strip()) if container_expr.strip() else "")
+            m["surface_expr"] = (expr + " " + clip).strip()
+            out.append(m)
+        return out
+
+    def _build_stls(surfs, cells_data, tr_cards, freecad_bin, fp):
+        from freecad_preview import FreeCADEngine
+        engine = FreeCADEngine(freecad_bin)
+        try:
+            result = engine.build_geometry(surfs, cells_data, tr_cards, fmt="stl")
+            session_dir = tempfile.mkdtemp(prefix="mcnp_lat_stl_")
+            session_cells = {}
+            stl_data = {}
+            for cd in cells_data:
+                num = cd.get("number")
+                if num not in result or not os.path.isfile(result[num]):
+                    continue
+                try:
+                    with open(result[num], "rb") as f:
+                        raw = f.read()
+                    if _stl_triangle_count(raw) == 0:
+                        continue  # 空 STL 显式降级：不产出（前端回退占位盒）
+                    raw = _stl_recenter_z(raw)  # z 居中：前端叶位置=格阵中心约定（修"位置不对/浮空"）
+                    dst = os.path.join(session_dir, f"cell_{num}.stl")
+                    with open(dst, "wb") as f:
+                        f.write(raw)  # 直接落盘已读字节，避免二次读
+                    stl_data[str(num)] = base64.b64encode(raw).decode()
+                except OSError:
+                    continue
+                session_cells[num] = {"material": cd.get("material", "0"), "path": dst}
+            if stl_data:
+                _PREVIEW_CACHE_LATTICE.put(
+                    fp, {"dir": session_dir, "cells": session_cells, "freecad": freecad_bin})
+            return stl_data
+        finally:
+            engine.cleanup()
+
+    # 2. 裁剪实体候选：① 格元自身形状（ref/rhp/box/arb）② AABB 盒（RPP 兜底/回落）
     max_surf = _max_surface_num(surf_text)
-    clip_lines, suffix = _clip_suffix_and_lines(box, max_surf)
-    new_surf_text = (str(surf_text).rstrip() + "\n" + clip_lines) if str(surf_text).strip() else clip_lines
-    mod_cells = []
-    for cell in uni_cells:
-        m = dict(cell)
-        expr = str(cell.get("surface_expr", "") or "").strip()
-        # 格元盒（suffix）+ 容器 cell 343 几何（container_expr）裁剪：
-        # universe ∩ 格元盒 ∩ 容器cell —— 格元完全在容器外的（角位无限水）交集为空不产出。
-        clip = suffix + ((" " + container_expr.strip()) if container_expr.strip() else "")
-        m["surface_expr"] = (expr + " " + clip).strip()
-        mod_cells.append(m)
-    # 3. 指纹缓存（extra 含 pitch/height 防脏命中）
-    fp = _PREVIEW_CACHE_LATTICE.fingerprint(
-        new_surf_text, mod_cells, tr_text,
-        extra={"u": str(u), "cellNum": cell_num,
-               "pitch": list(pitch), "height": height})
-    cached = _PREVIEW_CACHE_LATTICE.get(fp)
-    if cached is not None:
-        return _stls_base64(cached["cells"])
-    # 4. FreeCAD 构建
+    candidates = []
+    cell_clip = _cell_clip_lines(clip_solid, max_surf) if clip_solid \
+        else (_cell_clip_lines(("rhp", hex_prism), max_surf) if hex_prism else None)
+    if cell_clip is not None:
+        candidates.append(("cell", cell_clip))
+    candidates.append(("rpp", _clip_suffix_and_lines(box, max_surf)))
     StepImporter = _import_app("step_importer").StepImporter
     freecad_bin = StepImporter.detect_freecad()
     if not freecad_bin:
         return {}
     import tempfile, base64
-    surfs = parse_surfaces(new_surf_text)
     tr_cards = parse_tr_cards(tr_text)
-    # 格阵 universe 裁剪 STL（_build_one_universe，/api/preview-lattice 内部用）：
-    # 项14/15（2026-08-24）：include_void=True——universe 叶 void 格元（material=0
-    # 无 fill 无 u）也产透明占位 STL（规则4，前端透明材质渲染）。STEP 导出保持
-    # include_void=False（void 无实体可导出，语义正确）。
-    cells_data = [cd for cd in build_cells_data(mod_cells, include_void=True)
-                  if cd.get("ast") is not None]
-    if not surfs or not cells_data:
-        return {}
-    from freecad_preview import FreeCADEngine
-    engine = FreeCADEngine(freecad_bin)
-    try:
-        result = engine.build_geometry(surfs, cells_data, tr_cards, fmt="stl")
-        session_dir = tempfile.mkdtemp(prefix="mcnp_lat_stl_")
-        session_cells = {}
-        stl_data = {}
-        for cd in cells_data:
-            num = cd.get("number")
-            if num not in result or not os.path.isfile(result[num]):
-                continue
-            try:
-                with open(result[num], "rb") as f:
-                    raw = f.read()
-                if _stl_triangle_count(raw) == 0:
-                    continue  # 空 STL 显式降级：不产出（前端回退占位盒）
-                raw = _stl_recenter_z(raw)  # z 居中：前端叶位置=格阵中心约定（修"位置不对/浮空"）
-                dst = os.path.join(session_dir, f"cell_{num}.stl")
-                with open(dst, "wb") as f:
-                    f.write(raw)  # 直接落盘已读字节，避免二次读
-                stl_data[str(num)] = base64.b64encode(raw).decode()
-            except OSError:
-                continue
-            session_cells[num] = {"material": cd.get("material", "0"), "path": dst}
-        if stl_data:
-            _PREVIEW_CACHE_LATTICE.put(
-                fp, {"dir": session_dir, "cells": session_cells, "freecad": freecad_bin})
-        return stl_data
-    finally:
-        engine.cleanup()
+    for kind, (clip_lines, suffix) in candidates:
+        new_surf_text = str(surf_text).rstrip()
+        if clip_lines:
+            new_surf_text = (new_surf_text + "\n" + clip_lines) if new_surf_text else clip_lines
+        mod_cells = _mod_cells(suffix)
+        # 3. 指纹缓存（extra 含 pitch/height/裁剪种类 防脏命中）
+        fp = _PREVIEW_CACHE_LATTICE.fingerprint(
+            new_surf_text, mod_cells, tr_text,
+            extra={"u": str(u), "cellNum": cell_num, "clip": kind,
+                   "pitch": list(pitch), "height": height})
+        cached = _PREVIEW_CACHE_LATTICE.get(fp)
+        if cached is not None:
+            stls = _stls_base64(cached["cells"])
+            if stls or kind == "rpp":
+                return stls
+            continue
+        # 4. FreeCAD 构建
+        surfs = parse_surfaces(new_surf_text)
+        # 格阵 universe 裁剪 STL（_build_one_universe，/api/preview-lattice 内部用）：
+        # 项14/15（2026-08-24）：include_void=True——universe 叶 void 格元（material=0
+        # 无 fill 无 u）也产透明占位 STL（规则4，前端透明材质渲染）。STEP 导出保持
+        # include_void=False（void 无实体可导出，语义正确）。
+        cells_data = [cd for cd in build_cells_data(mod_cells, include_void=True)
+                      if cd.get("ast") is not None]
+        if not surfs or not cells_data:
+            continue
+        stl_data = _build_stls(surfs, cells_data, tr_cards, freecad_bin, fp)
+        if stl_data or kind == "rpp":
+            return stl_data
+        # 自身形状（RHP）在 OCC 侧无产出 → 自动回落 RPP 盒（旧行为，安全降级）
+    return {}
 
 
 def _find_lattice_cell_info_by_num(num, lattice_infos, sub_by_u) -> dict:
@@ -3744,11 +3832,33 @@ class MCNPHandler(BaseHTTPRequestHandler):
                     if fg is None or fg.kind != "lattice":
                         continue
                     info["trcl_deg"] = _cell_trcl_deg(info.get("trcl", ""), tr_cards)
+                    _lat = str(info.get("lat", ""))
+                    if _lat == "2":
+                        # 格阵基矢：a1/a2/pitch 由该 cell 曲面**顺序**决定（C810 3-29），
+                        # 不写死 a1=+x —— 否则第 1 面法向非 ±x 的合法卡整阵转 30°、格距错 15.47%。
+                        info["basis"] = lattice.hex_lattice_basis(
+                            info.get("surface_expr", ""), _lat, surf_text)
+                    elif _lat == "1":
+                        # lat=1 同样按曲面顺序定 a1/a2/a3（"第 1 张面之外是 (1,0,0)"）：
+                        # `20 0 50 -51 52 -53 lat=1`（50 = px -0.63 在前、取 +50）⇒ a1 = (−1.26,0,0)。
+                        info["basis"] = lattice.cuboid_basis(
+                            info.get("surface_expr", ""), _lat, surf_text)
                     info["extent"] = _resolved_extent(
                         lattice.lattice_cell_extent(
                             info.get("surface_expr", ""), info.get("lat", ""), surf_text),
                         info.get("lat", ""), req_pitch, req_height,
-                        surf_text, info, sub_by_u, lattice, cell_list)
+                        surf_text, info, sub_by_u, lattice, cell_list,
+                        basis=info.get("basis"))
+                    # 裁剪实体 = 格元自身形状：hex → 合成/复用 RHP；lat=1 轴对齐卡沿用 RPP 盒
+                    # （形状等价、且是既有经 FreeCAD 验证的路径），旋转/斜卡才用 BOX/ARB。
+                    _b = info.get("basis") or {}
+                    _ext = info.get("extent") or {}
+                    if _lat == "2":
+                        _pr = _b.get("prism") or lattice.hex_prism_from_basis(
+                            _b, _ext.get("z_min"), _ext.get("z_max"))
+                        info["clip"] = ("rhp", _pr) if _pr else None
+                    elif _lat == "1":
+                        info["clip"] = None if _b.get("axis_aligned") else _b.get("clip")
 
             # 3. compose 嵌套树/叶/各格阵 positions（outer 的 trcl_deg 已在上面子循环里算好）。
             #    外层格阵 = 未被任何其他格阵 fill 引用的格阵（全堆芯：堆芯 u=100，而非组件 u=201，
@@ -3816,6 +3926,9 @@ class MCNPHandler(BaseHTTPRequestHandler):
                     entry.get("num"), lattice_infos, sub_by_u)
                 fg = info.get("fill_grid")
                 box = _clip_box_from_extent(entry.get("extent"))
+                # 裁剪实体 = 格元自身形状（上面已按 lat 定好 info["clip"]：hex → RHP；
+                # lat=1 旋转/斜 → BOX/ARB；轴对齐 → None 走 RPP 盒兜底）。
+                clip_solid = (info or {}).get("clip")
                 universes = {}
                 if fg is not None:
                     seen = set()
@@ -3831,7 +3944,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
                         stls = _build_one_universe(
                             surf_text, tr_text, cell_list, u, box,
                             entry.get("num"), pitch, height, lattice,
-                            container_expr)
+                            container_expr, clip_solid=clip_solid)
                         if stls:
                             universes[u] = stls
                 entry["universes"] = universes
@@ -3862,12 +3975,16 @@ class MCNPHandler(BaseHTTPRequestHandler):
                         pin_box = _clip_box_from_extent(pin_entry.get("extent"))
                         _pitch = pin_entry.get("pitch", [1, 1, 1])
                         _height = pin_entry.get("height", 1.0)
+                        _pin_info = _find_lattice_cell_info_by_num(
+                            pin_entry.get("num"), lattice_infos, sub_by_u) or {}
+                        _pin_basis = _pin_info.get("basis") or {}
+                        _pin_clip = _pin_info.get("clip")
                         _univ = pin_entry.setdefault("universes", {})
                         for _u in leaf_us:
                             _st = _build_one_universe(
                                 surf_text, tr_text, cell_list, _u, pin_box,
                                 pin_entry.get("num"), _pitch, _height, lattice,
-                                container_expr)
+                                container_expr, clip_solid=_pin_clip)
                             if _st:
                                 _univ.setdefault(_u, {}).update(_st)
 

@@ -71,19 +71,19 @@ describe("composeNestedPositions（rect 基本）", () => {
     ],
   };
 
-  it("默认居中 origin：cell(0,0,0) 中心 = (-2,-2,0)，行主序", () => {
+  it("默认 origin = [0,0,0]（MCNP：(0,0,0) 格元 = 该 cell 自身）：格位 = 索引×格矢，行主序", () => {
     const { leafInstances } = composeNestedPositions(node);
     expect(leafInstances).toHaveLength(3); // void(0) 格位不产生叶
-    expect(leafInstances[0]).toMatchObject({ path: "0", u: "5", cellNum: "1", x: -2, y: -2, z: 0, depth: 0 });
+    expect(leafInstances[0]).toMatchObject({ path: "0", u: "5", cellNum: "1", x: 0, y: 0, z: 0, depth: 0 });
     // 条目 (dx dy dz) 偏移应用
-    expect(leafInstances[1]).toMatchObject({ path: "1", u: "6", cellNum: "2", x: 2 + 1, y: -2, z: 0 });
-    expect(leafInstances[2]).toMatchObject({ path: "3", u: "5", cellNum: "1", x: 2, y: 2, z: 0 });
+    expect(leafInstances[1]).toMatchObject({ path: "1", u: "6", cellNum: "2", x: 4 + 1, y: 0, z: 0 });
+    expect(leafInstances[2]).toMatchObject({ path: "3", u: "5", cellNum: "1", x: 4, y: 4, z: 0 });
   });
 
   it("NESTED 根盒 = 全部格元盒并集", () => {
     const { nested } = composeNestedPositions(node);
-    expect(nested.box.min).toEqual([-4, -4, -1]);
-    expect(nested.box.max).toEqual([4, 4, 1]);
+    expect(nested.box.min).toEqual([-2, -2, -1]);
+    expect(nested.box.max).toEqual([6, 6, 1]);
     expect(nested.leaves).toHaveLength(3);
     expect(nested.nested).toHaveLength(0);
   });
@@ -120,33 +120,33 @@ describe("composeNestedPositions（嵌套 fill 递归）", () => {
     expect(leafInstances).toHaveLength(10);
     const byPath = new Map(leafInstances.map((l) => [l.path, l]));
     // 契约（Python compose_lattice_tree 对齐）：子格阵整体居中于父格位中心——
-    // child origin = 父格位中心 + 子格默认居中偏移（子格 cell(0,0,0) = 父中心 − 子 pitch·(nx−1)/2）
+    // child origin = 父格位中心（MCNP：子格阵 cell(0,0,0) 就落在父格位中心，无居中偏移）
     // 外 idx0（父格位中心 (-2,-2,0) + 子默认 (-1,-1) = child origin (-3,-3,0)）
-    expect(byPath.get("0.0")).toMatchObject({ u: "5", x: -3, y: -3, z: 0, depth: 1 });
-    expect(byPath.get("0.1")).toMatchObject({ x: -1, y: -3, z: 0, depth: 1 });
-    expect(byPath.get("0.2")).toMatchObject({ x: -3, y: -1, z: 0, depth: 1 });
+    expect(byPath.get("0.0")).toMatchObject({ u: "5", x: 0, y: 0, z: 0, depth: 1 });
+    expect(byPath.get("0.1")).toMatchObject({ x: 2, y: 0, z: 0, depth: 1 });
+    expect(byPath.get("0.2")).toMatchObject({ x: 0, y: 2, z: 0, depth: 1 });
     // 条目偏移应用（dx=0.5, dy=0.5）
-    expect(byPath.get("0.3")).toMatchObject({ x: -0.5, y: -0.5, z: 0, depth: 1 });
+    expect(byPath.get("0.3")).toMatchObject({ x: 2.5, y: 2.5, z: 0, depth: 1 });
     // 直接叶
-    expect(byPath.get("1")).toMatchObject({ x: 2, y: -2, z: 0, depth: 0 });
-    expect(byPath.get("2")).toMatchObject({ x: -2, y: 2, z: 0, depth: 0 });
+    expect(byPath.get("1")).toMatchObject({ x: 4, y: 0, z: 0, depth: 0 });
+    expect(byPath.get("2")).toMatchObject({ x: 0, y: 4, z: 0, depth: 0 });
     // 外 idx3（父格位中心 (2,2,0) + 子默认 (-1,-1) = child origin (1,1,0)）
-    expect(byPath.get("3.0")).toMatchObject({ x: 1, y: 1, z: 0, depth: 1 });
-    expect(byPath.get("3.3")).toMatchObject({ x: 2 + 1 + 0.5, y: 2 + 1 + 0.5, z: 0, depth: 1 });
+    expect(byPath.get("3.0")).toMatchObject({ x: 4, y: 4, z: 0, depth: 1 });
+    expect(byPath.get("3.3")).toMatchObject({ x: 4 + 2 + 0.5, y: 4 + 2 + 0.5, z: 0, depth: 1 });
   });
 
   it("NESTED 树：根含 2 子节点（各 4 叶）+ 2 直接叶，child box 平移到父格位", () => {
     const { nested } = composeNestedPositions(node);
     expect(nested.leaves).toHaveLength(2);
     expect(nested.nested).toHaveLength(2);
-    // 外 idx0 子格阵 box（child origin = 父格位中心 + 子默认居中 = (-3,-3,0)；cellSize 2 半延展 1 → [-4,-4,-1]..[0,0,1]）
+    // 外 idx0 子格阵 box（child origin = 父格位中心 (0,0,0)；cellSize 2 半延展 1 → [-1,-1,-1]..[3,3,1]）
     const c0 = nested.nested[0];
     expect(c0.leaves).toHaveLength(4);
-    expect(c0.box.min).toEqual([-4, -4, -1]);
-    expect(c0.box.max).toEqual([0, 0, 1]);
+    expect(c0.box.min).toEqual([-1, -1, -1]);
+    expect(c0.box.max).toEqual([3, 3, 1]);
     // 根盒 = 外层格元盒并集
-    expect(nested.box.min).toEqual([-4, -4, -1]);
-    expect(nested.box.max).toEqual([4, 4, 1]);
+    expect(nested.box.min).toEqual([-2, -2, -1]);
+    expect(nested.box.max).toEqual([6, 6, 1]);
   });
 });
 
@@ -241,6 +241,56 @@ describe("buildLatticeInstances（总览模式）", () => {
       blockSize: { x: 2, y: 2, z: 2, hex: false },
     });
     expect(group.rotation.z).toBeCloseTo((30 * Math.PI) / 180, 9);
+  });
+
+  it("hex 色块几何 = 规范朝向（面法向 0/60/120°）：x 跨度 = pitch、y 跨度 = 2·pitch/√3", () => {
+    const pitch = 2;
+    const { group } = buildLatticeInstances({
+      positions,
+      universeStl: {},
+      cellMaterials: {},
+      palette,
+      overviewMode: true,
+      blockSize: { x: pitch, y: pitch, z: 1, hex: true },
+    });
+    const meshes = group.userData.instancedMeshes as THREE.InstancedMesh[];
+    const geo = meshes[0].geometry as THREE.BufferGeometry;
+    geo.computeBoundingBox();
+    const size = geo.boundingBox!.getSize(new THREE.Vector3());
+    // 旧实现（顶点在 0°）会得 x = 2·pitch/√3 = 2.309、y = pitch = 2（横向重叠 15.5%）
+    expect(size.x).toBeCloseTo(pitch, 6);
+    expect(size.y).toBeCloseTo((2 * pitch) / Math.sqrt(3), 6);
+  });
+
+  it("hexBasisDeg 让色块按格元真实方位旋转（30° 卡不再差 30°）", () => {
+    const { group } = buildLatticeInstances({
+      positions,
+      universeStl: {},
+      cellMaterials: {},
+      palette,
+      overviewMode: true,
+      blockSize: { x: 2, y: 2, z: 1, hex: true },
+      hexBasisDeg: 30,
+    });
+    const meshes = group.userData.instancedMeshes as THREE.InstancedMesh[];
+    const m = new THREE.Matrix4();
+    meshes[0].getMatrixAt(0, m);
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const scl = new THREE.Vector3();
+    m.decompose(pos, quat, scl);
+    const euler = new THREE.Euler().setFromQuaternion(quat, "XYZ");
+    expect(euler.z).toBeCloseTo((30 * Math.PI) / 180, 6);
+    // rect（hex:false）不吃 basisDeg：矩阵仍是纯平移
+    const rect = buildLatticeInstances({
+      positions, universeStl: {}, cellMaterials: {}, palette,
+      overviewMode: true, blockSize: { x: 2, y: 2, z: 1, hex: false }, hexBasisDeg: 30,
+    });
+    const rm = new THREE.Matrix4();
+    (rect.group.userData.instancedMeshes as THREE.InstancedMesh[])[0].getMatrixAt(0, rm);
+    const rq = new THREE.Quaternion();
+    rm.decompose(new THREE.Vector3(), rq, new THREE.Vector3());
+    expect(Math.abs(new THREE.Euler().setFromQuaternion(rq, "XYZ").z)).toBeLessThan(1e-9);
   });
 
 
@@ -382,8 +432,11 @@ function expandPositionsRef(s: any): { idx: number; x: number; y: number; z: num
   let py = span("y");
   const pz = span("z");
   if (s.lat === "2") {
-    // 面法向 0°/60°/120°：格距 = 平面对边距 = x 跨度（镜像 Python _lattice_pitch 修复）
-    const hp = px > 0 ? px : py > 0 ? py : 1;
+    // 兜底规则（无曲面卡时的 Python `_hex_pitch` 镜像）：格距 = AABB 两个跨度中较小者
+    // （六棱柱 AABB 最小跨度 = 2a = 中心距）。旧实现恒取 x 跨度 ⇒ 面序 30°/90°/… 的卡
+    // （x 跨度 = 2R = 1.1547·pitch）格距被撑大 15.47%。
+    const cands = [px, py].filter((v) => v > 0);
+    const hp = cands.length ? Math.min(...cands) : 1;
     px = hp;
     py = hp;
   }
@@ -397,15 +450,17 @@ function expandPositionsRef(s: any): { idx: number; x: number; y: number; z: num
         const idx = i + nx * (j + ny * k);
         let hx: number;
         let hy: number;
+        // MCNP 索引口径（C810 3-30）：索引 = 相对 (0,0,0) 格元的偏移；golden 样本的 FILL
+        // 范围均为 0:{n-1} ⇒ 索引 = 数组下标本身（后端 expand_positions 同口径）
         if (s.lat === "2") {
-          const h = hexCenter(i - (nx - 1) / 2, j - (ny - 1) / 2, px); // 居中偏移（与后端 expand_positions hex 分支一致）
+          const h = hexCenter(i, j, px);
           hx = h.x;
           hy = h.y;
         } else {
-          hx = (i - (nx - 1) / 2) * px;
-          hy = (j - (ny - 1) / 2) * py;
+          hx = i * px;
+          hy = j * py;
         }
-        const cz = (k - (nz - 1) / 2) * pz;
+        const cz = k * pz;   // 索引绝对值（MCNP：z 也不居中；z_origin 由后端按容器 z 中点叠加）
         out.push({ idx, x: hx * cosT - hy * sinT, y: hx * sinT + hy * cosT, z: cz });
       }
     }

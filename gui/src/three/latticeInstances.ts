@@ -12,10 +12,11 @@
  * positions/nested 段，后端产出后 TS/Python 双端断言；未产出时测试 skip）。
  *
  * 位置约定（与阶段2画布/子预览锁定一致）：
- *   - rect(lat=1)：格位中心 = origin + (i·px, j·py, k·pz)，默认 origin 使格阵居中
- *     （cell(0,0,0) 中心 = (-(nx-1)/2·px, -(ny-1)/2·py, -(nz-1)/2·pz)）。
- *   - hex(lat=2)：格位中心 = origin + hexCenter(i-(nx-1)/2, j-(ny-1)/2, pitch)，默认 origin=[0,0,0]
- *     （居中偏移使格阵几何中心落在原点，与后端 expand_positions 逐位一致；hexCenter 权威公式 golden 锁死）。
+ *   - 索引口径（MCNP 权威，C810 3-30）：**格元索引 = 相对 (0,0,0) 格元的位置偏移**
+ *     ⇒ 格位中心 = origin + (索引 · 格矢)，索引 = FILL 范围里的绝对值（range 0:1 → 0/1）；
+ *     默认 origin = [0,0,0]（(0,0,0) 格元 = 该格阵 cell 自身），**不做数组居中**。
+ *   - rect(lat=1)：格位中心 = origin + (i·px, j·py, k·pz)。
+ *   - hex(lat=2)：格位中心 = origin + hexCenter(i, j, pitch)（hexCenter 权威公式 golden 锁死）。
  *   - 格元盒（裁剪 bound）= {x: cellSize.x, y: (rect=cellSize.y / hex=cellSize.x), z: cellSize.z}。
  */
 import * as THREE from "three";
@@ -97,13 +98,10 @@ function nodeDims(node: LatticeComposeNode): [number, number, number] {
 }
 
 function defaultOrigin(node: LatticeComposeNode, dims: [number, number, number]): [number, number, number] {
-  if (node.lat === "2") return [0, 0, 0];
-  const [nx, ny, nz] = dims;
-  return [
-    (-(nx - 1) / 2) * node.cellSize.x,
-    (-(ny - 1) / 2) * node.cellSize.y,
-    (-(nz - 1) / 2) * node.cellSize.z,
-  ];
+  // MCNP 索引口径：格阵 cell 自身就是 (0,0,0) 格元 ⇒ 默认 origin = [0,0,0]
+  // （旧实现按 -(n-1)/2 让整个数组居中：对非对称 FILL range（如 fill=0:16）与 MCNP 差半个数组）
+  void dims;
+  return [0, 0, 0];
 }
 
 /** 格位中心（绝对坐标；rect 居中 / hex 居中，与后端 expand_positions 逐位一致） */
@@ -119,7 +117,7 @@ function gridCenter(
   const k = Math.floor(idx / (nx * ny));
   if (node.lat === "2") {
     // 居中偏移：MCNP LAT=2 对称索引以格阵中心格为原点（与 Python expand_positions hex 分支一致）
-    const h = hexCenter(i - (nx - 1) / 2, j - (ny - 1) / 2, node.cellSize.x);
+    const h = hexCenter(i, j, node.cellSize.x);   // 索引绝对值（range 起点折进 origin）
     return [origin[0] + h.x, origin[1] + h.y, origin[2] + k * node.cellSize.z];
   }
   return [
@@ -129,9 +127,11 @@ function gridCenter(
   ];
 }
 
-/** 格元盒（裁剪 bound）：hex 用 pitch×pitch（y 取 cellSize.x），rect 用 cellSize.x/y */
+/** 格元盒（裁剪 bound）：hex = pitch × (2·pitch/√3) —— x 半宽 = pitch/2（对边距）、
+ *  y 半宽 = pitch/√3（外接半径；与 `app/lattice.py::hex_half_extent` 同源，旧实现用
+ *  pitch×pitch 方盒，y 向少 13.4%）；rect 用 cellSize.x/y。 */
 function cellHalfExtents(node: LatticeComposeNode): [number, number, number] {
-  const y = node.lat === "2" ? node.cellSize.x : node.cellSize.y;
+  const y = node.lat === "2" ? (node.cellSize.x * 2) / Math.sqrt(3) : node.cellSize.y;
   return [node.cellSize.x / 2, y / 2, node.cellSize.z / 2];
 }
 
@@ -285,6 +285,10 @@ export interface LatticeInstancesOptions {
   overviewMode?: boolean;
   /** 总览色块尺寸（格元盒）；hex: true 用六棱柱块 */
   blockSize?: { x: number; y: number; z: number; hex?: boolean };
+  /** hex 色块的格元方位角（度）= 后端 `lattices[].basisDeg`（= a1 方位 = 第 1 面法向）。
+   *  程序化六棱柱块按规范朝向（第 1 面法向 ∥ x）建，非规范朝向（如 30°）必须整体旋转，
+   *  否则色块与真实格位差 30°（STL 详细模式不受影响：STL 已按卡的真实曲面建好）。 */
+  hexBasisDeg?: number;
   /** true=disc 降级（每 pin 单盘/外壳，不展开内部径向层；OWEN placePin disc）。
      详细模式专用：忽略 universeStl，每个 (u,cellNum) 分组用程序化盘几何实例化。 */
   disc?: boolean;
@@ -322,18 +326,26 @@ function buildDiscGeometry(block: { x: number; y: number; z: number; hex?: boole
   return geo;
 }
 
-/** pointy-top 六棱柱实心几何（顶点朝 +X，轴向 +Z；外接半径 R，宽(对边)≈2R·cos30°） */
+/** 六棱柱实心几何：**面法向 0°/60°/120°（顶点在 30°+k·60°）**，轴向 +Z，外接半径 R。
+ *
+ * ⚠ 修正（与 `hexCenter` / `hexPrism.ts` / `autoGenerateSurfaces` 对齐）：原实现顶点取
+ * `i/6·2π`（顶点在 0° = 面法向 30°/90°/…），比 MCNP/hexCenter 的格元方位**少 30°**；
+ * 且 x 半宽 = R = 0.5774·pitch > 0.5·pitch ⇒ 相邻色块在 x 向重叠 0.1547·pitch
+ * （用户看到的"六棱柱块互相穿插 / 与格位错位"）。MCNP 权威：第 1 个列出的面之外是
+ * (1,0,0)（C810 3-29）⇒ 规范朝向（第 1 面法向 = +x）下面法向 0°/60°/120°、
+ * x 半宽恰 = pitch/2（相邻格元共面）。非规范朝向（如 30°）由 `hexBasisDeg` 旋转对齐。
+ */
 function buildHexPrismGeometry(circumradius: number, height: number): THREE.BufferGeometry {
   const R = Math.max(circumradius, 1e-6);
   const half = height / 2;
   const pos: number[] = [];
   const idx: number[] = [];
   for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * Math.PI * 2;
+    const a = Math.PI / 6 + (i / 6) * Math.PI * 2;
     pos.push(Math.cos(a) * R, Math.sin(a) * R, half);
   }
   for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * Math.PI * 2;
+    const a = Math.PI / 6 + (i / 6) * Math.PI * 2;
     pos.push(Math.cos(a) * R, Math.sin(a) * R, -half);
   }
   pos.push(0, 0, half, 0, 0, -half); // 顶/底中心 = 12, 13
@@ -376,9 +388,16 @@ export function buildLatticeInstances(opts: LatticeInstancesOptions): LatticeIns
     const mesh = new THREE.InstancedMesh(geometry, material, Math.max(1, nonVoid.length));
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     const m = new THREE.Matrix4();
+    const hexRot = (block.hex ? (opts.hexBasisDeg ?? 0) : 0) * Math.PI / 180;
     for (let i = 0; i < nonVoid.length; i++) {
       const p = nonVoid[i];
-      m.makeTranslation(p.x, p.y, p.z);
+      if (hexRot) {
+        // 色块自身朝向先转 basisDeg，再平移到格位（STL 路径不需要：几何已按卡建好）
+        m.makeRotationZ(hexRot);
+        m.setPosition(p.x, p.y, p.z);
+      } else {
+        m.makeTranslation(p.x, p.y, p.z);
+      }
       mesh.setMatrixAt(i, m);
       mesh.setColorAt(i, new THREE.Color(getUniverseColor(p.u, opts.palette)));
     }
@@ -394,7 +413,7 @@ export function buildLatticeInstances(opts: LatticeInstancesOptions): LatticeIns
     const groups: { u: string; cellNum: string; items: LatticeInstance[] }[] = [];
     const byKey = new Map<string, { u: string; cellNum: string; items: LatticeInstance[] }>();
     for (const p of nonVoid) {
-      const key = `${p.u} ${p.cellNum}`;
+      const key = `${p.u} ${p.cellNum}`;
       let g = byKey.get(key);
       if (!g) {
         g = { u: p.u, cellNum: p.cellNum, items: [] };

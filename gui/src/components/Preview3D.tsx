@@ -585,7 +585,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   const [latticeOverview, setLatticeOverview] = useState(false); // 色块总览（手动切换）
   const latticeDataRef = useRef<{
     positions: any[]; overviewPositions: any[]; universeStl: any; cellMaterials: any;
-    palette: Record<string, string>; trclDeg: number; blockSize: any; count: number; detailViable: boolean; outerBound: any; disc: boolean; subPitch: number;
+    palette: Record<string, string>; trclDeg: number; blockSize: any; count: number; detailViable: boolean; outerBound: any; disc: boolean; subPitch: number; hexBasisDeg: number;
   } | null>(null);
   const [latticeDataVersion, setLatticeDataVersion] = useState(0); // 数据变更触发重建
   const seeThroughRef = useRef(false);
@@ -791,7 +791,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
               x: x.x + (x.dx ?? 0), y: x.y + (x.dy ?? 0), z: x.z + (x.dz ?? 0), depth: 1,
             }));
         const palette = buildUniversePalette((autoOverview ? overviewPositions : leaves).map((x: any) => x.u));
-        latticeDataRef.current = { positions: leaves, overviewPositions, universeStl, cellMaterials, palette, trclDeg: primary?.trclRotationDeg ?? 0, blockSize, count: n, detailViable, outerBound: r.outer_bound || null, disc: isDisc, subPitch };
+        latticeDataRef.current = { positions: leaves, overviewPositions, universeStl, cellMaterials, palette, trclDeg: primary?.trclRotationDeg ?? 0, blockSize, count: n, detailViable, outerBound: r.outer_bound || null, disc: isDisc, subPitch, hexBasisDeg: Number((primary as any)?.basisDeg ?? 0) || 0 };
         if (!cancelled) { setLatticeDataVersion(v => v + 1); setLatticeLoading(false); }
       } catch (e) { console.warn("[3D] lattice assembly load failed", e); if (!cancelled) setLatticeLoading(false); }
     })();
@@ -824,6 +824,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       palette: data.palette,
       materialMode: true,
       trclRotationDeg: data.trclDeg,
+      hexBasisDeg: data.hexBasisDeg,
       overviewMode: effOverview,
       blockSize: data.blockSize,
       disc: data.disc,

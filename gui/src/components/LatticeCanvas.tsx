@@ -91,9 +91,12 @@ export default function LatticeCanvas({ lat, dims, cells, palette, selectedU, on
     const minY = layerCells.length ? Math.min(...layerCells.map((c) => c.y)) : 0;
     const maxX = layerCells.length ? Math.max(...layerCells.map((c) => c.x)) : 0;
     const maxY = layerCells.length ? Math.max(...layerCells.map((c) => c.y)) : 0;
-    // 顶点+X 格元盒：顶点-顶点宽 = 2pitch/√3（=2R），flat-flat 高 = pitch
-    const cellW = (2 * pitch) / Math.sqrt(3);
-    const cellH = pitch;
+    // 规范朝向格元盒（面法向 0°/60°/120°，顶点在 30°+k·60°；与 hexCenter 同一套）：
+    //   flat-to-flat 宽 = 2a = pitch（对边距 = 格距）、vertex-to-vertex 高 = 2R = 2·pitch/√3。
+    //   旧实现写 width=2pitch/√3、height=pitch —— 与 clipPath（顶点在 12/6 点 = ±y）和
+    //   hexCenter 的格位间距**互为转置** ⇒ 六边形横向宽 15.5%、相邻格位互相重叠。
+    const cellW = pitch;
+    const cellH = (2 * pitch) / Math.sqrt(3);
     return (
       <div key={k} className="lattice-layer">
         {layers > 1 && <div className="lattice-layer-label">层 {k}</div>}

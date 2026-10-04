@@ -5,6 +5,7 @@ FillGrid JSON 往返 / hex_lattice 合成夹具 / validate_lattice_surfaces（�
 """
 
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from app.lattice import (
     parse_fill_tokens, parse_fill_entries, format_fill_cards,
     validate_lattice_surfaces,
     hex_ring_rows, hex_ring_cell_count, hex_center,
+    hex_lattice_basis, hex_position, hex_half_extent, hex_prism_from_basis, cuboid_basis, cuboid_extent, _lattice_pitch,
     lattice_cell_extent, expand_positions, compose_lattice_tree,
     MAX_EXPANDED_ENTRIES, MAX_LATTICE_DEPTH, MAX_TOTAL_INSTANCES, DETAIL_MAX_INSTANCES,
 )
@@ -222,7 +224,7 @@ def test_fill_grid_from_json_dirty_returns_none():
     assert FillGrid.from_json("[1,2]") is None
 
 
-# ── hex_lattice 合成夹具（lat=2，pointy-top + 轴向 +Z）──
+# ── hex_lattice 合成夹具（lat=2，30° 基矢 + 轴向 +Z）──
 def test_hex_lattice_fixture_parse():
     from tests.conftest import load_sample
     from app.generator.parsers import parse_inp_text
@@ -241,6 +243,30 @@ def test_hex_lattice_fixture_parse():
     assert [e.u for e in fg.cells] == ["1", "2", "1", "2"]
     assert "0:1" not in c.surface_expr, \
         f"surface_expr 被 FILL 范围串污染: {c.surface_expr!r}"
+
+
+def test_hex_lattice_fixture_is_valid_and_has_rotated_basis():
+    """夹具本身必须是**合法 MCNP 卡**（旧夹具三处非法：P 卡常数符号写反 ⇒ 六半空间交为空、
+    侧面书写顺序不是「成对互反」、底面 `-8` 从上方约束），且其 30° 基矢要能被正确读出。"""
+    from tests.conftest import load_sample
+    from app.generator.parsers import parse_inp_text
+    text = load_sample("hex_lattice.inp")
+    deck, _ = parse_inp_text(text)
+    lat = [c.cell for c in deck.cells if c.kind == "cell" and c.cell.fill_grid][0]
+    surf_text = deck.surfaces if isinstance(getattr(deck, "surfaces", None), str) else ""
+    if not surf_text:
+        surf_text = "\n".join(
+            ln for ln in text.splitlines()
+            if ln.strip() and ln.strip()[0].isdigit() and len(ln.split()) >= 2
+            and ln.split()[1].lower() in ("p", "px", "py", "pz", "rpp", "rhp", "hex"))
+    ok, msg = validate_lattice_surfaces(lat.surface_expr, lat.lat, surf_text)
+    assert ok, f"夹具格元卡应合法：{msg}"
+    b = hex_lattice_basis(lat.surface_expr, lat.lat, surf_text)
+    assert b is not None
+    assert b["basis_deg"] == pytest.approx(30.0, abs=1e-3)     # a1 = 第 1 面法向 = 30°
+    assert b["pitch"] == pytest.approx(1.7320508, abs=1e-6)    # = 2a（不是 x 跨度 2.0）
+    assert b["a1"] == pytest.approx((1.5, 0.8660254), abs=1e-5)
+    assert b["a2"] == pytest.approx((0.0, 1.7320508), abs=1e-6)
 
 
 def test_hex_lattice_fixture_roundtrip_stable():
@@ -269,8 +295,28 @@ def test_validate_lat1_single_box_macrobody():
 
 def test_validate_lat1_six_planes():
     st = "1 px -1\n2 px 1\n3 py -1\n4 py 1\n5 pz -1\n6 pz 1"
-    ok, msg = validate_lattice_surfaces("-1 2 -3 4 -5 6", "1", st)
+    # 面 1 = 低 x 面 ⇒ 取 +1（x > −1）；面 2 = 高 x 面 ⇒ 取 −2（x < 1）。
+    # 旧用例写 `-1 2 …` 是 x < −1 ∧ x > 1 = **空集**（旧校验器只看"成对±"就放行了）。
+    ok, msg = validate_lattice_surfaces("+1 -2 +3 -4 +5 -6", "1", st)
     assert ok, msg
+    empty, _m = validate_lattice_surfaces("-1 2 -3 4 -5 6", "1", st)
+    assert not empty, "空集六面体必须拒（新增半空间交集检查）"
+
+
+def test_validate_lat1_skew_hexahedron_ok():
+    """C810 3-29「The hexahedra **need not be rectangular**」：三对相同且平行的面即可，
+    斜的平行六面体合法（旧实现要求 PX/PY/PZ 按轴成对，一律拒）。"""
+    st = ("1 p 1 0 0 1\n2 p -1 0 0 1\n"
+          "3 p 0.5 0.8660254037844386 0 1\n4 p -0.5 -0.8660254037844386 0 1\n"
+          "5 pz 1\n6 pz -1")
+    ok, msg = validate_lattice_surfaces("-1 -2 -3 -4 -5 6", "1", st)
+    assert ok, msg
+    b = cuboid_basis("-1 -2 -3 -4 -5 6", "1", st)
+    assert b is not None
+    assert b["clip"][0] == "arb"                     # 非直角 ⇒ ARB（MCNP BOX 只收直角）
+    assert b["axis_aligned"] is False
+    assert b["a1"] == pytest.approx((2.0, -1.1547005, 0.0), abs=1e-6)   # 格矢 = 面间平移
+    assert b["a3"] == pytest.approx((0.0, 0.0, 2.0), abs=1e-9)          # 面 5（z<1）之外 = +z
 
 
 def test_validate_lat1_four_planes_2d():
@@ -290,19 +336,72 @@ def test_validate_lat2_single_hex():
     assert ok, msg
 
 
+HEX_CANON_SURF = (
+    "1 p 1 0 0 0.8660254037844386\n"
+    "2 p -1 0 0 0.8660254037844386\n"
+    "3 p 0.5 0.8660254037844386 0 0.8660254037844386\n"
+    "4 p -0.5 -0.8660254037844386 0 0.8660254037844386\n"
+    "5 p -0.5 0.8660254037844386 0 0.8660254037844386\n"
+    "6 p 0.5 -0.8660254037844386 0 0.8660254037844386\n"
+    "7 pz 0.5\n"
+    "8 pz -0.5"
+)
+
+
 def test_validate_lat2_six_p_plus_two_pz():
-    st = (
-        "1 p 0.866 0.5 0 -0.866\n"
-        "2 p 0.866 -0.5 0 -0.866\n"
-        "3 p 0 -1.0 0 -0.866\n"
-        "4 p -0.866 -0.5 0 -0.866\n"
-        "5 p -0.866 0.5 0 -0.866\n"
-        "6 p 0 1.0 0 -0.866\n"
-        "7 pz 0.5\n"
-        "8 pz -0.5"
-    )
-    ok, msg = validate_lattice_surfaces("-1 -2 -3 -4 -5 -6 -7 8", "2", st)
+    """MCNP 权威面序（C810 3-29）：第 1/2 面互反 = a1、第 3/4 面互反 = a2（相邻 60°）、
+    顶底 PZ 最后；P 卡常数 D = 面心距×|n| 必须为正（否则六半空间交为空集）。"""
+    ok, msg = validate_lattice_surfaces("-1 -2 -3 -4 -5 -6 -7 8", "2", HEX_CANON_SURF)
     assert ok, msg
+
+
+def test_validate_lat2_no_caps_ok():
+    """棱柱沿轴向无限时可不给 PZ（C810 3-29：A hexagonal prism lattice cell may be
+    infinite in the direction along the length of the prism）——旧实现强制 8 曲面。"""
+    ok, msg = validate_lattice_surfaces("-1 -2 -3 -4 -5 -6", "2", HEX_CANON_SURF)
+    assert ok, msg
+
+
+def test_validate_lat2_px_py_sides_ok():
+    """官方样例 u233-comp-therm-001-case-6.i cell 19 = 2 PX + 4 P + 无 PZ：
+    `-30 29 -32 34 -33 35`（a1 = +x 面之外、a2 = 60° 面之外）。"""
+    st = ("29 px -0.72517\n30 px 0.72517\n"
+          "32 p 1.0 1.7320508076 0.0 1.45034\n"
+          "33 p -1.0 1.7320508076 0.0 1.45034\n"
+          "34 p 1.0 1.7320508076 0.0 -1.45034\n"
+          "35 p -1.0 1.7320508076 0.0 -1.45034")
+    ok, msg = validate_lattice_surfaces("-30 29 -32 34 -33 35", "2", st)
+    assert ok, msg
+
+
+def test_validate_lat2_reject_empty_intersection():
+    """面卡常数符号写反（D = −面心距）⇒ 六个半空间交为空集：MCNP 里该格元不存在。
+    旧实现只查"法向均布 60°"，这种卡也放行，而 3D 预览的 AABB 照样是个六边形。"""
+    st = ("1 p 1 0 0 -0.866\n2 p -1 0 0 -0.866\n"
+          "3 p 0.5 0.8660254037844386 0 -0.866\n"
+          "4 p -0.5 -0.8660254037844386 0 -0.866\n"
+          "5 p -0.5 0.8660254037844386 0 -0.866\n"
+          "6 p 0.5 -0.8660254037844386 0 -0.866")
+    ok, msg = validate_lattice_surfaces("-1 -2 -3 -4 -5 -6", "2", st)
+    assert not ok
+    assert "交集为空" in msg, msg
+
+
+def test_validate_lat2_reject_wrong_surface_order():
+    """面序即格阵基矢：第 1/2 面必须互反（第 2 面之外 = (-1,0,0)）。
+    30°/330°/270°/210°/150°/90° 这种"顺时针六连"不是合法顺序（MCNP 无法据此定基矢）。"""
+    st = ("1 p 0.866 0.5 0 0.866\n2 p 0.866 -0.5 0 0.866\n3 p 0 -1.0 0 0.866\n"
+          "4 p -0.866 -0.5 0 0.866\n5 p -0.866 0.5 0 0.866\n6 p 0 1.0 0 0.866")
+    ok, msg = validate_lattice_surfaces("-1 -2 -3 -4 -5 -6", "2", st)
+    assert not ok
+    assert "反向平行" in msg, msg
+
+
+def test_validate_lat2_reject_caps_not_last():
+    """顶底必须是最后两个列出的曲面（曲面顺序决定 (0,0,1)/(0,0,-1) 方向）。"""
+    ok, msg = validate_lattice_surfaces("-7 8 -1 -2 -3 -4 -5 -6", "2", HEX_CANON_SURF)
+    assert not ok
+    assert "最后两个" in msg, msg
 
 
 def test_validate_reject_hash():
@@ -342,9 +441,10 @@ def test_validate_reject_unpaired_planes():
           "7 pz 0.5\n8 pz -0.5")
     ok, msg = validate_lattice_surfaces("-1 -2 -3 -4 -5 -6 -7 -8", "2", st)
     assert not ok
-    # lat=2：侧平面法向未均布 60°（第 6 个偏到 ~310°）
-    st = ("1 p 1 0 0 -1\n2 p 0.5 0.866 0 -1\n3 p -0.5 0.866 0 -1\n4 p -1 0 0 -1\n"
-          "5 p -0.5 -0.866 0 -1\n6 p 0.5 -0.6 0 -1\n7 pz 1\n8 pz -1")
+    # lat=2：侧面成对互反但第 1/第 3 面夹角 = 45°（非 60°，格元不是正六棱柱侧平面）
+    st = ("1 p 1 0 0 1\n2 p -1 0 0 1\n"
+          "3 p 0.7071068 0.7071068 0 1\n4 p -0.7071068 -0.7071068 0 1\n"
+          "5 p 0 1 0 1\n6 p 0 -1 0 1\n7 pz 1\n8 pz -1")
     ok, msg = validate_lattice_surfaces("-1 -2 -3 -4 -5 -6 -7 8", "2", st)
     assert not ok
 
@@ -493,15 +593,30 @@ def test_lattice_cell_extent_unparseable():
 
 
 # ── 阶段3：expand_positions（格位中心）────────────────────
+def test_expand_positions_index_origin_follows_fill_range():
+    """MCNP 索引口径（C810 3-30）：**格元索引 = 相对 (0,0,0) 格元的位置偏移**，索引值就是
+    FILL 范围里的绝对值 ⇒ 非对称 range 的格阵整体**偏在一侧**（不再按数组中心居中）；
+    对称 range 与旧行为逐位一致。"""
+    ext = {"x_min": -2, "x_max": 2, "y_min": -2, "y_max": 2, "z_min": None, "z_max": None}
+    # 0:1 ⇒ 索引 0,1 ⇒ 位置 0·4 与 1·4（格距 = x 跨度 4）
+    p0 = expand_positions(_fg("1", [2, 2, 1], ["1", "2", "1", "2"]), ext)
+    assert [(q["x"], q["y"]) for q in p0] == [(0.0, 0.0), (4.0, 0.0), (0.0, 4.0), (4.0, 4.0)]
+    # −1:0 ⇒ 索引 −1,0 ⇒ 位置 −4 与 0（对称 range 等价于旧的"居中"写法）
+    fgs = FillGrid(lat="1", kind="lattice", range_=["-1:0", "-1:0", "0:0"], dims=[2, 2, 1],
+                   cells=[FillEntry(u=str(u)) for u in ("1", "2", "1", "2")])
+    ps = expand_positions(fgs, ext)
+    assert [(q["x"], q["y"]) for q in ps] == [(-4.0, -4.0), (0.0, -4.0), (-4.0, 0.0), (0.0, 0.0)]
+
+
 def test_expand_positions_rect_2d():
-    fg = _fg("1", [2, 2, 1], ["1", "2", "1", "2"])
+    fg = _fg("1", [2, 2, 1], ["1", "2", "1", "2"])   # range 0:1（索引 0/1）
     ext = {"x_min": -2, "x_max": 2, "y_min": -2, "y_max": 2, "z_min": None, "z_max": None}
     pos = expand_positions(fg, ext)
     assert len(pos) == 4
-    assert pos[0] == {"idx": 0, "u": "1", "x": -2.0, "y": -2.0, "z": 0.0, "dx": 0.0, "dy": 0.0, "dz": 0.0}
-    assert pos[1]["x"] == 2.0 and pos[1]["y"] == -2.0
-    assert pos[2]["x"] == -2.0 and pos[2]["y"] == 2.0
-    assert pos[3]["x"] == 2.0 and pos[3]["y"] == 2.0
+    assert pos[0] == {"idx": 0, "u": "1", "x": 0.0, "y": 0.0, "z": 0.0, "dx": 0.0, "dy": 0.0, "dz": 0.0}
+    assert pos[1]["x"] == 4.0 and pos[1]["y"] == 0.0
+    assert pos[2]["x"] == 0.0 and pos[2]["y"] == 4.0
+    assert pos[3]["x"] == 4.0 and pos[3]["y"] == 4.0
 
 
 def test_expand_positions_rect_3d():
@@ -509,28 +624,25 @@ def test_expand_positions_rect_3d():
     ext = {"x_min": -0.5, "x_max": 0.5, "y_min": -0.5, "y_max": 0.5, "z_min": -0.5, "z_max": 0.5}
     pos = expand_positions(fg, ext)
     assert len(pos) == 8
-    assert pos[0]["x"] == -0.5 and pos[0]["y"] == -0.5 and pos[0]["z"] == -0.5
-    assert pos[7]["x"] == 0.5 and pos[7]["y"] == 0.5 and pos[7]["z"] == 0.5
+    assert pos[0]["x"] == 0.0 and pos[0]["y"] == 0.0 and pos[0]["z"] == 0.0
+    assert pos[7]["x"] == 1.0 and pos[7]["y"] == 1.0 and pos[7]["z"] == 1.0
 
 
 def test_expand_positions_hex_ring_order():
     """hex 用矩形盒模型（hexGrid 交错），角位 void 由 u="0" 承载（不排除）。
-    居中（2026-08-28）：hex 分支用 hex_center(i-(nx-1)/2, j-(ny-1)/2) 使格阵几何中心
-    落原点（与 rect 一致），不再全在正象限。"""
+    索引口径 = MCNP 绝对值（C810 3-30）：range 0:1 ⇒ 索引 0/1 ⇒ 格位从原点起、不居中。"""
     fg = _fg("2", [2, 2, 1], ["1", "2", "1", "2"])
-    # 面法向 0°/60°/120°：flat-to-flat=x（格距），pointy-to-pointy=y
+    # 面法向 0°/60°/120°：flat-to-flat=x（格距），point-to-point=y
     ext = {"x_min": -0.8660254037844386, "x_max": 0.8660254037844386,
            "y_min": -1, "y_max": 1, "z_min": -0.5, "z_max": 0.5}
     pos = expand_positions(fg, ext)
     assert len(pos) == 4
     assert [p["u"] for p in pos] == ["1", "2", "1", "2"]
-    # MCNP LAT=2 蜂窝（pitch=√3，x=(col+row/2)·√3, y=row·√3·√3/2=row·1.5），居中偏移
-    # (i-0.5, j-0.5)：idx0 (-1.299, -0.75)  idx1 (0.433, -0.75)  idx2 (-0.433, 0.75)
-    #   idx3 (1.299, 0.75)
-    assert pos[0]["x"] == pytest.approx(-1.299038105676658) and pos[0]["y"] == pytest.approx(-0.7499999999999999)
-    assert pos[1]["x"] == pytest.approx(0.4330127018922193) and pos[1]["y"] == pytest.approx(-0.7499999999999999)
-    assert pos[2]["x"] == pytest.approx(-0.4330127018922193) and pos[2]["y"] == pytest.approx(0.7499999999999999)
-    assert pos[3]["x"] == pytest.approx(1.299038105676658) and pos[3]["y"] == pytest.approx(0.7499999999999999)
+    # pitch=√3、x=(col+row/2)·√3、y=row·1.5；索引 (0,0)/(1,0)/(0,1)/(1,1)
+    assert pos[0]["x"] == pytest.approx(0.0) and pos[0]["y"] == pytest.approx(0.0)
+    assert pos[1]["x"] == pytest.approx(1.7320508075688772) and pos[1]["y"] == pytest.approx(0.0)
+    assert pos[2]["x"] == pytest.approx(0.8660254037844386) and pos[2]["y"] == pytest.approx(1.5)
+    assert pos[3]["x"] == pytest.approx(2.598076211353316) and pos[3]["y"] == pytest.approx(1.5)
 
 
 def test_expand_positions_trcl_90():
@@ -538,8 +650,8 @@ def test_expand_positions_trcl_90():
     fg = _fg("1", [2, 2, 1], ["1", "2", "1", "2"])
     ext = {"x_min": -2, "x_max": 2, "y_min": -2, "y_max": 2, "z_min": None, "z_max": None}
     pos = expand_positions(fg, ext, trcl_rotation_deg=90)
-    assert pos[0]["x"] == pytest.approx(2.0) and pos[0]["y"] == pytest.approx(-2.0)
-    assert pos[3]["x"] == pytest.approx(-2.0) and pos[3]["y"] == pytest.approx(2.0)
+    assert pos[0]["x"] == pytest.approx(0.0) and pos[0]["y"] == pytest.approx(0.0)
+    assert pos[3]["x"] == pytest.approx(-4.0) and pos[3]["y"] == pytest.approx(4.0)
 
 
 def test_expand_positions_too_many_returns_none():
@@ -604,9 +716,9 @@ def test_compose_lattice_tree_nested_10_leaves():
     coords = {(leaf["cellNum"], round(leaf["x"], 9), round(leaf["y"], 9), round(leaf["z"], 9))
               for leaf in r["leafInstances"]}
     expected = {
-        (101, -3, -3, 0), (102, -1, -3, 0), (103, -3, -1, 0), (104, -1, -1, 0),
-        (101, 1, -3, 0), (102, 3, -3, 0), (103, 1, -1, 0), (104, 3, -1, 0),
-        (201, -2, 2, 0), (301, 2, 2, 0),
+        (101, 0, 0, 0), (102, 2, 0, 0), (103, 0, 2, 0), (104, 2, 2, 0),
+        (101, 4, 0, 0), (102, 6, 0, 0), (103, 4, 2, 0), (104, 6, 2, 0),
+        (201, 0, 4, 0), (301, 4, 4, 0),
     }
     assert coords == expected
     # 双形态：lattices 去重（外层 110 + 内层 111 各一条），tree 保层次
@@ -649,19 +761,17 @@ def test_compose_lattice_tree_limits_constants():
 
 # ── 阶段3：跨语言 golden（positions / nested，前端 latticeGolden.json）──
 def _golden_positions_hex_fresh(s: dict) -> bool:
-    """golden positions 段 hex 条目是否已重算为居中公式值。
+    """golden positions 段 hex 条目是否已按**MCNP 索引口径**重算。
 
-    hex 居中（2026-08-28）：expand_positions/hexGrid/gridCenter 的 hex 分支改
-    hex_center(i-(nx-1)/2, j-(ny-1)/2) 使格阵几何中心落原点（与 rect 一致）。前端
-    Wave 写盘后 golden hex_2x2 期望值为居中值（idx1=(0.433,-0.75)）。未重算时仍为旧
-    正象限值 → 本条目 skip（沿用「未产出 skip」模式）。rect 段不受影响恒 fresh。
+    2026-10-04 改口径（C810 3-30：索引 = 相对 (0,0,0) 格元的偏移）：格位 = 索引 × 格矢，
+    不再按数组中心居中 ⇒ range 0:1 时 idx1 的期望值 = (pitch, 0) = (√3, 0)。
     """
     if s.get("lat") != "2":
         return True
     for exp in s.get("expected", []):
         if exp.get("idx") == 1:
-            return (exp["x"] == pytest.approx(0.4330127018922193, abs=1e-9)
-                    and exp["y"] == pytest.approx(-0.7499999999999999, abs=1e-9))
+            return (exp["x"] == pytest.approx(1.7320508075688772, abs=1e-6)
+                    and exp["y"] == pytest.approx(0.0, abs=1e-9))
     return False
 
 
@@ -1010,3 +1120,143 @@ def test_single_fill_assembly_golden():
                 "depth": l.get("depth")} for l in state["leaves"]]
         assert got == s.get("expected_leaves", []), (
             f"assembly {s.get('id', '?')}: 实际 {got} vs 期望 {s.get('expected_leaves')}")
+
+
+# ── hex 格阵基矢（MCNP 权威：曲面顺序决定 a1/a2，不写死 +x）──────────
+# 权威 = C810 3-29 / MCNP6.3 p.295-296：第 1 面之外 = (1,0,0)、第 2 面之外 = (-1,0,0)、
+# 第 3 面之外 = (0,1,0)（与第 1 面相邻 60°）；pitch = |a1| = 2a = 中心距。
+
+U233_SURF = ("29 px -0.72517\n30 px 0.72517\n"
+             "32 p 1.0 1.7320508076 0.0 1.45034\n"
+             "33 p -1.0 1.7320508076 0.0 1.45034\n"
+             "34 p 1.0 1.7320508076 0.0 -1.45034\n"
+             "35 p -1.0 1.7320508076 0.0 -1.45034")
+U233_EXPR = "-30 29 -32 34 -33 35"
+
+# 30° 旋转卡（面序 a1=30°/a2=90°，成对互反，D = +apo = +0.866）——合法 MCNP，但
+# 历史实现按「a1 恒 +x」排 ⇒ 整阵转 30°、且 pitch 取 x 跨度 2.0（真值 1.732051）。
+ROT_SURF = ("1 p 0.8660254037844386 0.5 0 0.8660254037844386\n"
+            "2 p -0.8660254037844386 -0.5 0 0.8660254037844386\n"
+            "3 p 0 1 0 0.8660254037844386\n"
+            "4 p 0 -1 0 0.8660254037844386\n"
+            "5 p -0.8660254037844386 0.5 0 0.8660254037844386\n"
+            "6 p 0.8660254037844386 -0.5 0 0.8660254037844386")
+ROT_EXPR = "-1 -2 -3 -4 -5 -6"
+
+
+def test_hex_lattice_basis_official_u233():
+    """官方样例 u233-comp-therm-001-case-6.i cell 19：a1 = (+1.45034, 0)、
+    a2 = 60° 方向 1.45034、apothem 0.72517、pitch = 1.45034。"""
+    b = hex_lattice_basis(U233_EXPR, "2", U233_SURF)
+    assert b is not None
+    assert b["source"] == "planes"
+    assert b["a1"] == pytest.approx((1.45034, 0.0), abs=1e-9)
+    assert b["a2"] == pytest.approx((0.72517, 1.2560314), abs=1e-6)
+    assert b["pitch"] == pytest.approx(1.45034, abs=1e-9)
+    assert b["apothem"] == pytest.approx(0.72517, abs=1e-9)
+    assert b["basis_deg"] == pytest.approx(0.0, abs=1e-9)
+    assert b["a12_deg"] == pytest.approx(60.0, abs=1e-6)
+    assert b["z"] == (None, None)          # 卡上无 PZ（棱柱沿 z 无限）
+    # 格位映射 = col·a1 + row·a2
+    assert hex_position(b, 1, 0) == pytest.approx((1.45034, 0.0), abs=1e-9)
+    assert hex_position(b, 0, 1) == pytest.approx((0.72517, 1.2560314), abs=1e-6)
+    assert hex_position(b, 2, 1) == pytest.approx((3.62585, 1.2560314), abs=1e-6)
+
+
+def test_hex_lattice_basis_rotated_deck_not_30deg_off():
+    """30° 旋转卡（第 1 面法向 30°）：a1 必须跟第 1 面走（30°），pitch = 2a = 1.732051，
+    而不是把 a1 当 +x、把 x 跨度 2.0 当格距（历史实现的 15.47% 撑大 + 30° 错位）。"""
+    b = hex_lattice_basis(ROT_EXPR, "2", ROT_SURF)
+    assert b is not None
+    assert b["basis_deg"] == pytest.approx(30.0, abs=1e-4)
+    assert b["pitch"] == pytest.approx(1.7320508, abs=1e-6)
+    assert b["a1"] == pytest.approx((1.5, 0.8660254), abs=1e-6)
+    assert b["a2"] == pytest.approx((0.0, 1.7320508), abs=1e-6)
+    # 真实 AABB：x 跨度 = 2R = 2p/√3 = 2.0、y 跨度 = 2a = 1.732051
+    e = lattice_cell_extent(ROT_EXPR, "2", ROT_SURF)
+    assert (e["x_max"] - e["x_min"]) == pytest.approx(2.0, abs=1e-6)
+    assert (e["y_max"] - e["y_min"]) == pytest.approx(1.7320508, abs=1e-6)
+    # 旧规则（pitch = x 跨度）会得 2.0；新兜底（AABB 最小跨度）得真值
+    px, py, _pz = _lattice_pitch(e, "2")
+    assert px == pytest.approx(1.7320508, abs=1e-6)
+    # 有 basis 时以 basis 为准（与 AABB 的最小跨度一致）
+    px2, py2, _pz2 = _lattice_pitch(e, "2", b)
+    assert px2 == pytest.approx(1.7320508, abs=1e-6) and py2 == pytest.approx(1.7320508, abs=1e-6)
+
+
+def test_hex_lattice_basis_rhp_macro():
+    """单 RHP/HEX 宏体：R1 即第一面面心矢量 ⇒ a1 = 2R1（与 MCNP 手册
+    `RHP 0 0 -4 0 0 8 0 2 0`（pitch=4）一致）。"""
+    b = hex_lattice_basis("-10", "2", "10 rhp 0 0 -5 0 0 10 0.8660254 0 0")
+    assert b is not None
+    assert b["source"] == "rhp"
+    assert b["a1"] == pytest.approx((1.7320508, 0.0), abs=1e-6)
+    assert b["a2"] == pytest.approx((0.8660254, 1.5), abs=1e-6)   # 绕轴 +60°
+    assert b["pitch"] == pytest.approx(1.7320508, abs=1e-6)
+    assert b["z"] == (-5.0, 5.0)
+    assert b["prism"][0] == (0.0, 0.0, -5.0) and b["prism"][1] == (0.0, 0.0, 10.0)
+    # 手册例：pitch 4
+    b4 = hex_lattice_basis("-1", "2", "1 rhp 0 0 -4 0 0 8 0 2 0")
+    assert b4["pitch"] == pytest.approx(4.0, abs=1e-9)
+    assert b4["a1"] == pytest.approx((0.0, 4.0), abs=1e-9)
+
+
+def test_hex_prism_from_basis_supplies_z():
+    """2D hex 格元（无 PZ，官方样例 u233 那种）的裁剪实体 z 由 extent 补 —— 否则拿不到
+    裁剪实体、只能回落 AABB 矩形盒（格元角部溢出到相邻格元）。"""
+    b = hex_lattice_basis(U233_EXPR, "2", U233_SURF)
+    assert b["z"] == (None, None) and b["prism"] is None      # 卡上无 PZ
+    pr = hex_prism_from_basis(b, -5.0, 5.0)
+    assert pr is not None
+    v, h, r1 = pr
+    assert v == (0.0, 0.0, -5.0) and h == (0.0, 0.0, 10.0)
+    assert r1 == pytest.approx((0.72517, 0.0, 0.0), abs=1e-9)
+    assert hex_prism_from_basis(b, None, None) is None        # z 仍无界 → 不产实体
+    # 自带 PZ 的卡：直接用卡上的 z
+    b2 = hex_lattice_basis("-1 -2 -3 -4 -5 -6 -7 8", "2", HEX_CANON_SURF)
+    assert b2["prism"] is not None
+    assert b2["prism"][0][2] == pytest.approx(-0.5) and b2["prism"][1][2] == pytest.approx(1.0)
+
+
+def test_hex_half_extent_follows_basis():
+    """格距 → AABB 半宽随朝向：规范朝向（a1∥x）= (p/2, p/√3)；a1∥30° 时 = (p/√3, p/2)。"""
+    p = 1.7320508075688772
+    hx, hy = hex_half_extent(p, None)
+    assert hx == pytest.approx(p / 2, abs=1e-9) and hy == pytest.approx(p / math.sqrt(3), abs=1e-9)
+    bc = hex_lattice_basis("-1 -2 -3 -4 -5 -6", "2", HEX_CANON_SURF)
+    hx2, hy2 = hex_half_extent(p, bc)
+    assert hx2 == pytest.approx(p / 2, abs=1e-6) and hy2 == pytest.approx(p / math.sqrt(3), abs=1e-6)
+    br = hex_lattice_basis(ROT_EXPR, "2", ROT_SURF)
+    hx3, hy3 = hex_half_extent(p, br)
+    assert hx3 == pytest.approx(p / math.sqrt(3), abs=1e-6)   # 顶点在 ±x
+    assert hy3 == pytest.approx(p / 2, abs=1e-6)
+    # 规范朝向（无 basis）下的 AABB 与 lattice_cell_extent 实测一致
+    e = lattice_cell_extent("-1 -2 -3 -4 -5 -6", "2", HEX_CANON_SURF)
+    assert (e["x_max"] - e["x_min"]) / 2 == pytest.approx(hx2, abs=1e-6)
+    assert (e["y_max"] - e["y_min"]) / 2 == pytest.approx(hy2, abs=1e-6)
+
+
+def test_expand_positions_hex_uses_basis_direction():
+    """给了 basis → 格位沿 a1/a2 排布（30° 旋转卡不再被摆成正朝向）。"""
+    br = hex_lattice_basis(ROT_EXPR, "2", ROT_SURF)
+    ext = lattice_cell_extent(ROT_EXPR, "2", ROT_SURF)
+    fg = _fg("2", [2, 2, 1], ["1", "2", "1", "2"])
+    pos = expand_positions(fg, ext, basis=br)
+    assert pos is not None
+    p = 1.7320508
+    # MCNP 索引口径：range 0:1 ⇒ 索引 (0,0)/(1,0)/(0,1)/(1,1) ⇒ 位置 = 索引 × a1/a2
+    assert pos[0]["x"] == pytest.approx(0.0, abs=1e-6)
+    assert pos[0]["y"] == pytest.approx(0.0, abs=1e-6)
+    assert pos[1]["x"] == pytest.approx(1.5, abs=1e-6)          # a1 = (1.5, 0.8660254)
+    assert pos[1]["y"] == pytest.approx(0.8660254, abs=1e-6)
+    assert pos[2]["x"] == pytest.approx(0.0, abs=1e-6) and pos[2]["y"] == pytest.approx(p, abs=1e-6)
+    # 相邻格位距 = pitch（真实中心距）
+    d = math.hypot(pos[1]["x"] - pos[0]["x"], pos[1]["y"] - pos[0]["y"])
+    assert d == pytest.approx(p, abs=1e-6)
+    # 无 basis（旧路径）会把它摆成正朝向、间距 2.0（x 跨度）—— 记录差异，防回退
+    pos_old = expand_positions(fg, ext)
+    d_old = math.hypot(pos_old[1]["x"] - pos_old[0]["x"], pos_old[1]["y"] - pos_old[0]["y"])
+    assert d_old == pytest.approx(1.7320508, abs=1e-6)   # 兜底已改为 AABB 最小跨度
+    assert (pos_old[1]["x"], pos_old[1]["y"]) != (pos[1]["x"], pos[1]["y"])   # 朝向不同
+
+

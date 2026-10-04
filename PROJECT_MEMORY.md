@@ -1,5 +1,24 @@
 # 项目记忆文档（AI 速查手册）
 
+> **★ 本批（2026-10-02）WebView2 运行时裁剪（交付体积）—— 已改 ✅ / **未提交** / **未重新打包交付目录** · 版本字段不动，仍 1.7.7（bug/构建批不升版）**
+> **用户原话**：「把那个 webview 的组件抽出来，做的尽可能小，从而达到让我的项目不再依赖 edge 浏览器」→ 追问后**用户选定口径 A**：包里自带内核、只削到最小（不是换内核）。
+> **做了什么**：新增深度模块 `gui/scripts/slim-webview2.mjs`（黑名单规则表 + `REQUIRED_CORE` 兜底 + 落盘复核 + `safe|max` 档 + `--dry-run`），
+> `build-release.mjs` 第 ③.5 步由"整目录 `cpSync`"改为调它 ⇒ **668.4 MB / 257 文件 → 433.7 MB / 29 文件**（−35.1%），
+> 运行时那部分的 zip **303.4 → 214.2 MB** ⇒ 交付包（原 `-bundle` 418.7 MB）预计 **≈330 MB**。
+> **关键依据（别凭印象删文件）**：`d3dcompiler_47.dll` 是 **WebGL 命脉**（ANGLE 的 D3D 后端只用 FXC，不用 DXC）；
+> `dxcompiler/dxil` 只服务 Dawn/D3D12（**WebGPU**），本机实测 `navigator.gpu` 存在且 `requestAdapter()` 成功 ⇒ 删它会硬失败，故只放进 `max` 档；
+> `Locales\en-US.pak` **缺了就启动即崩**（`LoadLocaleResources` → `NOTREACHED()`），只留 `en-US`+`zh-CN` 是官方推荐形态；
+> `msedge_100_percent.pak` 必需（`AddDataPackFromPath`），只有 200% 那份是 optional；`WidevineCdm\LICENSE` 按 EULA §3(c) 必须留。
+> **验证（都可复跑）**：① 自建最小 WebView2 宿主（wry，探针页 WebGL2 画三角形 + `readPixels`）⇒ 4 条 GPU 路径全绿（D3D11 / D3D11on12 / WARP / SwiftShader）；
+> ② 真交付 exe 端到端：进程 `ExecutablePath` 落在交付目录 `WebView2\`、CDP 报内核 `Edg/154.0.4258.37`（系统 Edge 是 `.53`）；
+> ③ CDP 逐子窗口：**6/6 打开 + 每窗口内 WebGL 现场校验通过**，示例卡导入后 **3D 预览真实渲染**（canvas 1250×961）；
+> ④ `npm run build:release` **EXIT 0 / 647 s**；门禁 `tsc` 0 + vitest **106 files / 953 passed**（新增 `webview2Slim` 18 例）。
+> **顺带补上一条此前完全缺失的官方要求**：Win10 上固定版 ≥120 需 AppContainer ACL（`icacls … *S-1-15-2-2:(OI)(CI)(RX)` 等），
+> 铺设后自动执行 + 手册 §6.5.4 写清"复制到交付目录后要重跑"（xcopy 不复制显式 ACE）。**未验证**：Win10 上的实际效果（本机 Win11 26200）。
+> **许可风险（如实登记，用户已决定接受）**：官方原文 *Include **all** of the decompressed Fixed Version binaries*，无官方"最小文件集"。
+> **顺手发现的既有缺陷（与裁剪无关，两个运行时同样复现）**：3D 预览窗口点「✂ 截面」时 `OPTIONS /api/cross-section` 返回 200 后**没有跟 POST**、
+> 页面报 `Uncaught (in promise)`、截面窗口多数情况不开 ⇒ 用**完整运行时做对照实验复现同样行为**，故判定为应用侧问题，未在本批处理。
+
 > **★ 本批（2026-09-26）三处用户实测 bug + 打包链修复 + v1.7.7 打包部署 & GitHub Release —— 已改 ✅ / 已提交 ✅（`83c5a20` + `b4d7d05`）/ 已 push ✅（→ `origin/main`）/ **已出 Release ✅（`v1.7.7`，资产 `MCNP-Input-Card-Generator-v1.7.7-win64.zip` 113.8 MB，SHA-256 `06f812ef…85b6f`）** / 已打包部署 ✅ · 版本 1.7.7（用户指定）**
 > **三条用户原话驱动的修复**（详情见 `## S11` 与 `docs/CHANGELOG.md` 2026-09-26 三条）：
 > ① 「计数卡的前缀，`*`号，解析时无法传入，自己点选后，点生成时也没有」—— 引擎侧本来是对的，漏的是**前后端缝**
@@ -1556,17 +1575,66 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
   → preview-3d 的唯一序列化口，契约见 `docs/contracts/api.yaml` 的 `deck.cells`）——
   **判据"读不到就放行"，所以序列化口漏一个键就等于该条规则静默失效。**
 
-- **⭐ hexCenter 权威公式（单一事实，2026-09-10 立此条目以防误用）**：
+- **⭐ hex 格阵权威语义（2026-10-04 重立，取代旧的"hexCenter 权威公式"条目；改 hex 任何代码前先读本节）**：
+  **MCNP 只规定了"曲面顺序 → 基矢"这一条规则**（C810 3-29 / MCNP6.3 p.295-296）：
+  `LAT=2` 时**第 1 个列出的侧面之外 = (1,0,0)**、第 2 个之外 = (−1,0,0)、第 3 个之外 = (0,1,0)
+  （必与第 1 面相邻、夹 60°）、第 5/6 个之外 = (−1,1,0)/(1,−1,0)，**最后两个必须是顶底**。于是
   ```
-  x = col * pitch + row * pitch / 2
-  y = row * pitch * √3 / 2
+  a1 = 2a·û₁（û₁ = 第 1 面**外向**单位法向）、a2 = 2a·û₂（第 3 面外向法向）
+  格位 (col,row) 中心 = col·a1 + row·a2 ；pitch = |a1| = 2a = 相邻格元中心距
   ```
-  代码权威在**两处且必须逐位一致**：`gui/src/utils/lattice.ts:130-137` ↔ `app/lattice.py:604-616`。
-  **⛔ 历史记录里的旧公式不要照抄**：本项目 2026-08-25 之前用的是"pointy-top 顶点+X"式
-  `x = i·p·√3/2, y = j·p + (i%2)·p/2`（差 30° 旋转），已全部替换。**本记忆文件 §1~§3 与 S1/S2 历史条目里、
-  以及 `docs/frontend-changes.md` / `docs/qa-report*.md` / `docs/backend-changes.md` / **`docs/contracts/lattice-fix15-design.md`（含 L1 锁死表）**
-  中出现的旧式写法均为历史残留**。⚠️ **L1 锁死表曾写错公式 —— 它是跨语言实现依据，写错会污染实现**（审计 TD-29）。
-  被反复"根因修复"过的高危公式，改前先查本节。
+  **pitch 与朝向无关**，`x 跨度 = pitch` 只在"第 1 面法向 = ±x"时成立 —— 这就是历史事故的根源：
+  把 a1 写死成 +x（`hex_center` 的 `x=col·p+row·p/2, y=row·p·√3/2` 只是**规范朝向**那一支）⇒
+  第 1 面法向非 ±x 的**合法**卡整阵转 30°、且按 x 跨度取格距偏大 **15.47%**（仓库自带夹具
+  `tests/fixtures/hex_lattice.inp` 就是这种卡：面法向 30°/90°/…，真格距 1.732051，旧码取 2.0）。
+  **唯一实现**：`app/lattice.py::hex_lattice_basis(surface_expr, lat, surfaces_text)`（由面序推
+  a1/a2/pitch/apothem/basis_deg/自身形状 RHP）+ `hex_position` / `hex_half_extent` /
+  `hex_prism_from_basis`；`_lattice_pitch`、`expand_positions`、`api_server._resolved_extent`
+  与前端色块方位（`lattices[].basisDeg`）全部消费它。`_hex_pitch` 已降级为**无曲面卡时的兜底**
+  （AABB 最小跨度），**不得**再当作权威。
+  **术语（⛔ 别再自造）**：规范朝向下是"面法向 0°/60°/120°、**顶点在 30°+k·60°**（±x 是平边、
+  ±y 有顶点）"；仓库历史文档里的"顶点+X flat-top"与"顶点+X pointy-top"**互斥且都不是 MCNP 术语**，
+  一律以"第 k 面法向"表述。官方样例 `u233-comp-therm-001-case-6.i` cell 19
+  （`-30 29 -32 34 -33 35`，2 PX + 4 P）实测：a1=(1.45034,0)、a2=(0.72517,1.25603)、pitch=1.45034。
+  **⛔ 历史记录里的旧公式不要照抄**：`docs/frontend-changes.md` / `docs/qa-report*.md` /
+  `docs/backend-changes.md` / `docs/contracts/lattice-fix15-design.md`（含 L1 锁死表）中的
+  `x = i·p·√3/2, y = j·p + (i%2)·p/2` 与"顶点+X"标签均为历史残留（审计 TD-29）。
+
+- **⭐ lat=2 的两处"硬缺陷"（2026-10-04 实证，改动前先读）**：
+  ① **P 卡常数符号**：`autoGenerateSurfaces` 曾写 `D = −(n·C) − apo`（六侧全负 ⇒ 应写 `+`）
+  ⇒ 六个半空间的交是**空集**，MCNP 里该格元**不存在**（FreeCAD 实测：正向 D 出体积 2.598076 的
+  六棱柱、反向 D **STL 空**）；而 3D 预览的 AABB 与"法向均布 60°"校验都看不出。现
+  `_validate_lat2` 增加**半空间交集非空**检查 + golden `lat2_empty_intersection` 反例。
+  ② **裁剪实体 = 格元自身形状**（不是矩形盒）：MCNP 语义是"格元就是该 cell 的几何"，但
+  FreeCAD/OCC 对「无界半空间 ∩ 平行轴平面」恒空 ⇒ 只能用**闭合实体**：单 RPP/BOX/RHP/HEX 宏体
+  直接复用，多平面合成 RHP（`_hex_clip_lines` + `hex_prism_from_basis`，2D 格元的 z 由 extent 补），
+  拿不到才回落 AABB 盒（且 RHP 无产出自动回落 RPP）。**实测**：同一 universe 自身形状裁 = 体积
+  2.598077、AABB 裁 = 3.464100（比 0.75）⇒ 旧实现把 33% 格元体积溢进相邻格元。斜六面体等一般
+  凸多面体需合成 `ARB`（worker 已支持），尚未实现。
+
+- **⭐ lat=1 的 i/j/k 方向：按 MCNP 还是按历史口径（2026-10-04 已决，别再问我）**：
+  MCNP 规则同 lat=2 —— **cell 卡上第一个列出的面，其外侧是 (1,0,0)**（C810 3-29）。多数 17×17/BEAVRS
+  卡写成 `20 0 50 -51 52 -53 lat=1` 且 `50 px -0.63`（低 x 面在前、取 `+50`）⇒ 第一张面的外侧是
+  **−x** ⇒ **按 MCNP，i 增大朝 −x、j 增大朝 −y**，而本程序历史口径恒为 i→+x、j→+y ⇒ 该形态的
+  预览相对 MCNP 是**绕 z 转 180°**（对称阵列不可见，非对称阵列摆错）。
+  **决定：不翻转轴对齐卡的既有口径**（`cuboid_basis()["axis_aligned"] == True` 时仍走历史排法 + RPP 裁剪），
+  只对**旋转/斜**格元走 basis（MCNP 顺序 + 自身形状 BOX/ARB）。理由：① 该差异是**纯预览语义、不影响
+  MCNP 计算**；② 对常见对称阵列不可见，翻转只会制造"看不出来的变化"，用户无从判断是修好还是弄坏；
+  ③ 翻转是单点改动（`cuboid_basis` 已给出顺序基矢，接线处一行即可切）。**要翻时的判据**：
+  拿一张**非对称**填充阵列的实卡，与 MCNP 出图对比一次再切。
+  （`cuboid_basis()` 已实现顺序基矢与 `("ref"|"box"|"arb")` 自身形状裁剪；**api_server 侧接线尚未完成** ——
+  lat=1 的 clip_solid 与 basis 摆位仍是 TODO，落地前 lat=1 斜/旋转卡预览仍按 AABB 盒画。）
+
+  **2026-10-04 更新（本批已落地）**：① 已实现 —— api_server 对 lat=1 也算 `cuboid_basis` 并喂给
+  `expand_positions`（方向跟曲面顺序与正负号）；轴对齐卡**仍用 RPP 盒**裁剪（形状等价、既有验证过的
+  路径），旋转/斜卡用 `BOX`/`ARB` 自身形状，`_build_one_universe` 支持 `clip_solid=("ref"|"rhp"|"box"|"arb")`
+  且无产出自动回落。**FreeCAD 实测**：转 45° 正交盒裁剪体积 8.0000 = 真值（旧 AABB 15.9999）、
+  斜 60° 平行六面体 9.2376 = 真值（旧 AABB 13.8564）。**③（非对称 FILL range 的 MCNP 索引语义）
+  已于同日完成**：格位 = (range 起始 + 数组下标) × 格矢（C810 3-30「indices … determined by its
+  location with respect to the (0,0,0) element」，`−5:5 / 0:10 / −10:0` 都是 11 个元素）——
+  `app/lattice.py::expand_positions`、TS `gridCenter`/`defaultOrigin` 与 golden 三段全部同步；
+  对称 range（BEAVRS 例 −8:8）逐位不变，非对称 range（owen 17×17 的 0:16）现在与 MCNP 一样偏在一侧。
+  **改前先读**：`defaultOrigin` 已取消"按 -(n-1)/2 居中"（子格阵 cell(0,0,0) 就落在父格位中心）。
 
 - **⭐ RHP/HEX 的 `r/s/t` = 面心矢量（边心距），不是顶点矢量（2026-09-20 立此条目，改六棱柱几何前先读）**：
   C810 p.3-21 原文「`r1 r2 r3` = vector from the axis to the **middle of the first facet**」，

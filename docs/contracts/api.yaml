@@ -1817,9 +1817,10 @@ paths:
         lattice_cell_extent 解析）。嵌套 fill 递归在后端 compose_lattice_tree
         完成。响应 {lattices, leafInstances, tree, count, detailViable, limit}：
         - lattices: 每格阵（含嵌套）{num,lat,kind,dims,range,center,pitch,height,
-          trclRotationDeg,positions,universes}，positions 含全部格位（hex 角位
+          trclRotationDeg,basisDeg,positions,universes}，positions 含全部格位（hex 角位
           void u="0" 前端跳渲染），universes = 该格阵直接引用叶 universe 的裁剪
-          STL {u:{cellNum: base64}}。
+          STL {u:{cellNum: base64}}。pitch = 相邻格元中心距（hex = 2a，由曲面顺序推出，
+          **不等于** AABB 某轴跨度）；basisDeg = hex a1 方位（lat=1 恒 0）。
         - leafInstances: FLAT 绝对坐标 [{path,u,cellNum,mat,x,y,z,depth}]。
         - tree: NESTED 保层次。count = 叶实例数。detailViable = count≤20000。
         - limit: "ok" | "depth_limit"（递归超 MAX_LATTICE_DEPTH=8）|
@@ -1864,6 +1865,12 @@ paths:
                             pitch: { type: array, items: { type: number }, description: [px,py,pz] }
                             height: { type: number }
                             trclRotationDeg: { type: number }
+                            basisDeg:
+                              type: number
+                              description: >-
+                                hex(lat=2) 格元方位角（度）= a1 方位 = 该 cell 第 1 个列出的侧面
+                                的外向法向（C810 3-29 曲面顺序即格阵基矢）；lat=1 恒 0。
+                                前端程序化六棱柱色块须按此角旋转，否则与真实格位差 30°。
                             positions:
                               type: array
                               items:
