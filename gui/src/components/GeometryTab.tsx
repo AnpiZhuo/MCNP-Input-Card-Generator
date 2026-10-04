@@ -631,7 +631,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
         {(gpuPrefMsg || (gpu && !gpu.discrete && !gpuPrefSel)) && (
           <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
             <span style={{ fontSize: 10, color: gpuPrefMsg ? gpuPrefMsg.color : "#b5881a" }}>
-              {gpuPrefMsg ? gpuPrefMsg.text : "当前 3D 走核显，可选「高性能独显」切换（重启生效）"}
+              {gpuPrefMsg ? gpuPrefMsg.text : "已默认设为「高性能独显」（首次运行写入，重启生效）；也可在此切换"}
             </span>
           </div>
         )}

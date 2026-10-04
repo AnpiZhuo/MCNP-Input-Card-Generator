@@ -1943,7 +1943,11 @@ class MCNPHandler(BaseHTTPRequestHandler):
             if pref not in ("high", "power", "default"):
                 pref = "high"
             res = gpu_pref.apply_gpu_preference(pref)
-            self._ok({"status": "ok", "preference": pref, **res})
+            # 回读校验：确认写到了正确目标（随包固定版 WebView2 优先）
+            readback = {}
+            for t in (res.get("targets") or [])[:6]:
+                readback[t] = gpu_pref.read_gpu_preference(t)
+            self._ok({"status": "ok", "preference": pref, "readback": readback, **res})
         except Exception as e:
             self._err(str(e))
 
@@ -4211,6 +4215,16 @@ def main(port: int | None = None):
     server = HTTPServer(("0.0.0.0", port), MCNPHandler)
     print(f"[API] MCNP API 服务启动 → http://localhost:{port}/api/generate")
     print(f"   Python 后端路径: {APP_DIR}")
+    # GPU 偏好：**首次运行自动写「高性能独显」**（用户已在界面/Windows 图形设置里选过则不动）。
+    # 必须在 WebView2 起来之前/尽早写，且只写"还没有值"的目标 ⇒ 不会覆盖用户显式选择；
+    # 写入值存 HKCU，下一次启动 WebView2 时生效（Windows per-app GPU 偏好机制）。
+    try:
+        gpu_pref = _import_app("gpu_pref")
+        res = gpu_pref.ensure_default_gpu_preference("high")
+        print(f"[GPU] 独显偏好：新写 {res.get('written')} 个目标、保留已选 {res.get('skipped')} 个"
+              f"（目标 {len(res.get('targets') or [])} 个；随包固定版 WebView2 已纳入）")
+    except Exception as e:  # 绝不因 GPU 偏好影响启动
+        print(f"[GPU] 独显偏好写入跳过：{e}")
     # 后台预热 pymcnp 曲面解析：启动即返回、不阻塞服务，
     # 让第一个曲面请求（preview-3d/export-step/cross-section）不再吃一次 2s 的冷水 import。
     try:

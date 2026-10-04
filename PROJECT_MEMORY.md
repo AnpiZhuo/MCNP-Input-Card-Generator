@@ -1,6 +1,28 @@
 # 项目记忆文档（AI 速查手册）
 
-> **★ 本批（2026-10-02）WebView2 运行时裁剪（交付体积）—— 已改 ✅ / **未提交** / **未重新打包交付目录** · 版本字段不动，仍 1.7.7（bug/构建批不升版）**
+> **★ 本批（2026-10-04）默认走高性能独显 —— 已改 ✅ / 已提交（见 git log）/ 已重新打包部署 ✅ · 版本仍 1.7.7（bug 批不升版）**
+> **用户原话**：「让程序默认走高性能独显」。**先查证再动手**：官方 WebView2 flags 清单**没有** `force_high_performance_gpu`，
+> 且该页明确 "For production apps, do not use these flags" ⇒ **不要用 Chromium flag**；正路是 Windows per-app GPU 偏好
+> `HKCU\Software\Microsoft\DirectX\UserGpuPreferences\<exe路径>` = `GpuPreference=2;`（=「设置 → 显示 → 图形」写的东西）。
+> **查出的两个真缺陷（改前先读这两条）**：
+> ① **写错目标**：本程序 2026-09-29 起改用**随包固定版**运行时 `<交付目录>\WebView2\msedgewebview2.exe`
+> （`main.rs::prefer_bundled_webview2()`），而 `app/gpu_pref.py::find_msedgewebview2_exe()` 只找**共享 Evergreen**
+> （`%ProgramFiles(x86)%\Microsoft\EdgeWebView\Application\<ver>\`）与"同目录直放"⇒ 偏好写给了**没在跑的那个进程**，
+> 用户点「高性能独显」实际不生效。**已加** `<sidecar 目录>\WebView2\` 探测并**优先返回**。
+> ② **不默认**：此前只有 GeometryTab 下拉框手动触发，而 README 早已宣称"默认走独显 GPU"。
+> **修法**：新增 `read_gpu_preference()`（回读）与 `ensure_default_gpu_preference("high")`——
+> **只写"还没有值"的目标**（用户在界面或 Windows 图形设置里选过的值一律保留，不被每次启动覆盖）；
+> 新增 `own_gpu_targets()`：自动默认**只写本程序自有目标**（随包固定版 + 打包时的应用主 exe），
+> **故意不含共享版 `msedgewebview2.exe`**——那是全机所有 WebView2 应用（Outlook/Teams…）共用的 exe，自动改它等于替别的程序改偏好；
+> 用户**显式**点选仍走原 `apply_gpu_preference()`（含共享版，语义=用户主动要求）。
+> `api_server.main()` 启动时调用（best-effort，异常只打印不影响启动）；`/api/set-gpu-preference` 响应新增 `readback` 回读各目标现值。
+> **生效时机**：值存 HKCU，**下次启动 WebView2 时才生效**（Windows 机制，界面原有"重启生效"提示不变）。
+> **验证**：`tests/unit/test_gpu_pref.py` **9 passed**（新增：随包固定版路径被发现且优先 / 读值解析 2·1·0 / 自有目标不含共享版且源码运行不含应用 exe /
+> 只写缺失值 / 全有值则一个都不写）；vitest 106 files / 956 passed；tsc 0；**实跑**：部署目录 sidecar 启动后注册表出现
+> `…\WebView2\msedgewebview2.exe` 与 `MCNP 输入卡生成器.exe` 两条 `GpuPreference=2;`（见本轮工具输出）。
+> **回滚**：删掉这两条注册表值即恢复系统默认（或界面下拉框选"系统默认"）。
+
+> **★ 本批（2026-10-02）WebView2 运行时裁剪（交付体积）—— 已改 ✅ / 已提交 ✅（`6f73e42`）/ 已重新打包部署 ✅ · 版本字段不动，仍 1.7.7（bug/构建批不升版）**
 > **用户原话**：「把那个 webview 的组件抽出来，做的尽可能小，从而达到让我的项目不再依赖 edge 浏览器」→ 追问后**用户选定口径 A**：包里自带内核、只削到最小（不是换内核）。
 > **做了什么**：新增深度模块 `gui/scripts/slim-webview2.mjs`（黑名单规则表 + `REQUIRED_CORE` 兜底 + 落盘复核 + `safe|max` 档 + `--dry-run`），
 > `build-release.mjs` 第 ③.5 步由"整目录 `cpSync`"改为调它 ⇒ **668.4 MB / 257 文件 → 433.7 MB / 29 文件**（−35.1%），
