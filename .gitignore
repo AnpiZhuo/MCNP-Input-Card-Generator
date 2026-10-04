@@ -55,3 +55,6 @@ release.bat
 启动FreeCAD预览.bat
 启动Python后端.bat
 启动MCNP输入卡生成器.bat
+
+# 根目录一次性中间产物（手册抽取/临时验证脚本与其 dump）：保留文件但不入库
+/__*
