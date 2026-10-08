@@ -1534,3 +1534,195 @@ GUI 侧把 keff 解析改成"玻璃卡 + 两个子按钮"（见 `docs/frontend-c
   "所有文件"兜底），`test_sidecar_spec_keep.py` 的 TD-34 闸门同时覆盖新登记项。
 
 
+---
+
+# AC. 材料库核素/密度口径整顿（2026-10-06）
+
+> 施工方：后端 + 前端 | 触发：用户「再检查一下材料库，其中材料的核素设置、密度设置，
+> 是否符合工程实践」→ 复核后「热散射卡先不管，其余该修的修复」。
+> 范围：内置 49 + PNNL-15870 精选 48 = 97 项预设；MT 卡本轮按用户指示不动。
+
+## AC.1 根因：`/api/expand-formula` 复用 `pymcnp.M_0.from_formula` 的 is_weight 分支
+
+一手证据（`D:\MCNP\PyMCNP\src\pymcnp\inp\M_0.py:184`）：
+
+```python
+compound_fraction = (composition[element].fraction if is_weight
+                     else composition[element].mass / formula.mass)
+```
+
+`molmass` 的 `Composition.fraction` 与 `mass/formula.mass` **是同一个量（质量分数）**，
+实测 `H2O`：`fraction = 0.111898`、`mass/formula.mass = 0.111898`。后果两条：
+
+| # | 后果 | 量化（实测） |
+| :-- | :-- | :-- |
+| 1 | `is_weight=False`（「原子份额」）只是把质量份额翻成正号，**不是原子份额** | H₂O 得 H 0.111886 / O 0.885944（H:O = 0.126）；真值 H 2/3、O 1/3（比 2.0）。MCNP 按正号读作原子份额 ⇒ 材料严重错误 |
+| 2 | `is_weight=True`（质量份额）下元素内同位素按 **NIST 原子丰度**分配，不是质量加权（`M_0.py:191`） | 天然硼 B-10 质量份额 0.199000（应 0.184309，**+8.0%**）；Li-6 0.0759（应 0.065785，**+15.4%**）；H-2 0.000115（应 0.000230，**−50%**）；Cl-37 −4.1%、N-15 −6.6%、O-18 −11.1% |
+
+元素级份额本来就对（空气 N 总量 = 0.752252 + 0.002748 = 0.755 ✓），错只错在**元素内分配**与
+**模式语义**。对含硼/含锂热中子吸收材料，B-10 高估 8% 是**非保守**偏差
+（`borated_pe` 预设 B-10 = 0.009950，应 0.009216；`boron_carbide` 0.155743，应 0.144269）。
+
+## AC.2 修法（`gui/backend/api_server.py`）
+
+新增模块级 `_expand_formula_member(species, ratio, is_weight)`：
+
+- 元素级份额：质量模式取 molmass `fraction`（元素质量分数）；原子模式取
+  `count / Σcount`（元素原子数占比）。
+- 元素内分配：质量模式 `w_i = w_el · x_i·A_i / Σ_j x_j·A_j`（取负号）；
+  原子模式 `n_i = n_el · x_i`（取正号）。`x_i`/`A_i` 取 `pymcnp._elements.ELEMENTS`
+  （与其原实现同一套 NIST 数据，保证核素集合与截断口径不变，`_ISO_CUTOFF = 1e-9`）。
+- 顺带支持 D/T 写法（molmass 把 D 记作元素 `2H`）：`D2O` → 只出 `1002`（−0.201133），
+  与 PNNL `d2o` 预设的 H-2 份额逐位一致。
+- **删除死代码**：原 `if xsdir_db.loaded and "." in zaid:` 的后缀改写分支永不触发
+  （`from_formula` 输出本就是裸 `001001` 形态，无库后缀）。ZAID 一律裸 `ZZZAAA`，
+  库选择交给 MCNP/xsdir；若要固定库（`.80c`）须显式追加，不做隐式改写。
+- 归一化（`abs-sum`）与 `fraction` 6 位小数格式**未动**。
+
+## AC.3 验收（实跑）
+
+- `tests/integration/test_api_expand_formula.py` 重写：**删除**把错误行为固化的旧断言
+  （原 ③「原子份额 == 负的质量份额」），改为物理断言 ——
+  质量模式 H₂O H 0.111898 / O 0.888102；原子模式 H 2/3、O 1/3、H:O = 2:1；
+  天然硼 B-10 质量 0.184309 / 原子 0.199；D₂O 只出 1002；两种模式 |Σf| = 1。**12 passed**。
+- 全量：pytest **1490 passed / 11 skipped**、vitest **106 files / 956 passed**、
+  `tsc --noEmit` EXIT 0。
+
+---
+
+## 2026-10-07 ~ 10-08 批：截面判据/精度 + STEP 交换坐标约定 + 方向预览 + 冻结版路径 + GEOUNED 相切退化
+
+> 逐条实测与证据链：`交接-截面修复-20261007.md` §1–§15；批次要点：`PROJECT_MEMORY.md` S14。
+
+### 1. 新增模块（都带"为什么单独一个"）
+| 模块 | 职责 | 为什么独立 |
+| :--- | :--- | :--- |
+| `app/cad_orientation.py` | CAD↔MCNP 交换约定单一来源：`{up:"Z"/"Y", azimuthDeg:0/90/180/270, origin:"keep"/"center"/"bottom"}` → **互逆**整数矩阵 + FreeCAD 逐步旋转 + 中文说明 | **STEP 文件本身不带上轴字段**（ISO 10303 只有坐标值 + 单位 + 放置坐标系），差异来自源软件默认坐标系 ⇒ 无法自动判断、只能显式指定；导入/导出两侧必须用同一份矩阵，否则往返翻 90° |
+| `app/stl_transform.py` | 二进制 STL 刚体变换 + 包围盒（纯 numpy，法向按绕向重算） | 方向预览"切换朝向"若每次重跑 FreeCAD（1–3 s）体验很差；镶嵌一次、切换只做矩阵（毫秒级） |
+| `app/tangent_fix.py` | 相切退化**判定**：`is_tangent_pair`/`shift_amount`/`is_safe`/`dedupe_spheres`/`describe_actions` | 判定逻辑必须能离线单测（FreeCAD 侧的几何操作不便测）；且"做了什么"的提示文案要有唯一来源 |
+| `app/_freecad_step_preview_worker.py` | 读 STEP → 镶嵌成 STL（**不做任何变换**） | 与 `_freecad_csg_worker` 同类：子进程只干"把 CAD 变成能看的网格" |
+| `app/section_region.py` | 判"截面这块是真区域，还是切割平面只沿边界面接触该栅元切出的伪影" | 纯几何判定，与渲染无关；判不了时**返回 True**（宁可多画，绝不静默删几何） |
+
+### 2. 端点
+- **新增 `POST /api/step-preview`**（`api.yaml` operationId `stepPreview`，契约漂移闸门已过）：两个方向共用同一套矩阵实现
+  —— `direction="cad2mcnp"`（默认，导入预览：`data`/`path` 传 STEP，镶嵌结果按 **内容 sha1 缓存**到 `%TEMP%\mcnp_step_preview\<sha1>`）
+  与 `direction="mcnp2cad"`（导出预览：`stl:[base64…]` 传 3D 预览给的每栅元 STL，**不需要 FreeCAD**）。响应 `{stl, bbox, solids, triangles, notes, direction}`。
+- **`POST /api/cross-section` 响应新增 `warnings: string[]`**（**只增字段**，旧前端忽略即兼容）：说明"哪些栅元因只沿边界面接触被剔除"。
+- `POST /api/export-step` 入参新增可选 `cad_orientation`，响应消息与文件名带上约定（`mcnp_export_upY_az90.step`）。
+
+### 3. 冻结版路径（**本轮实机报错驱动，两条都要记住**）
+- **脚本文件路径必须走 `api_server.app_script_path(filename)`**（冻结版 `sys._MEIPASS/app`、源码版 `APP_DIR`、都没有抛 `FileNotFoundError`）。
+  旧写法用 `APP_DIR`（= `PROJECT_DIR/app`，而 `PROJECT_DIR` 由 `api_server.__file__` 上溯两级）⇒ 冻结版算出 `D:\MCNP\app`（**不存在**）。
+  它之所以"看起来能用"：`mcnp_bridge` 早把 `sys._MEIPASS/app` 加进 `sys.path` ⇒ **import 找得到、取文件路径找不到**。
+- **FreeCAD 的 `python.exe` 只从 `freecad_locator.python_exe(bin_root=None)` 取**（便携版 python 与 freecad 同目录 / 安装版在 `bin\`；都没有返回 `None` 不猜）；
+  `GeoUnedConverter._find_python_exe` 保留原签名、转发到它（消除两份候选路径）。
+
+### 4. GEOUNED worker 前置步骤（顺序固定）
+`主流程`：`cad_orientation 旋转/平移` → `tangent_fix 破除退化相切` → `自适应实体预分解` → GEOUNED。
+每一步都守着同一条纪律：**失败一律回退原文件、原因经 `warnings` 一路传到界面、绝不中断导入**；
+且**没有实际改动就不重写 STEP**（避免 OCCT 往返给本来正确的几何引入副作用 —— 实测"纯往返重写"不能修好本例）。
+
+### 5. 解析切片精度
+`app/analytic_slice.py`：marching squares 的交点由"格子边中点"改为**二分细化到真实零水平集**（误差 ~1e-11、与分辨率无关；
+旧法 R=100 球 res=32/64/128/256 误差 3.17/1.35/0.78/0.40 cm）；网格改方形自适应；包围盒由 `model_bound()` 从曲面参数推导（不再硬编 500）。
+
+### 6. 门禁与部署校验（本轮实跑）
+- 后端相关 **59 passed**（新增 `test_cad_orientation`(10) / `test_stl_transform`(5) / `test_app_script_path`(4) / `test_freecad_python_exe`(8) / `test_tangent_fix`(5) + 契约漂移 3）。
+  **⚠️ 全量 pytest 在本机 scratch 环境不可信**（PyPI 版 pymcnp 与项目解析不兼容：`parse_surfaces("1 SO 5.0")` 即失败）⇒ 用 `PYTHONPATH=D:\MCNP\PyMCNP\src;…` 重跑。
+- 部署校验四项（已固化进 `PROJECT_MEMORY.md` §6）：交付 exe sha256 == `target/release` 的 exe；exe 时间戳在本次构建窗口内；
+  `target/release/_internal/app/*.py` 与源码逐个对拍 + `api_server.py` 修改时间早于 `target/release/python.exe`；`dist` 文本抽查本批特征串（本轮 1 命中 / 旧写法 0 命中）。
+
+---
+
+## 附录 G：STEP 导入两件事 —— 切分面数可键入 + 样条跳过而不是终止（2026-10-08 下午，分支 `main`，**未提交 / 未重打包**）
+
+> 用户原话：「设置一下 step 导入时 GEOUNED 切分面数用户可以自己键入，，遇到样条曲线了就跳过而不是终止或暂停，并报告」。
+
+### G.1 切分面数：**后端本来就认数字**，本次只动前端
+
+`cutDegree` 由三档下拉（coarse/medium/fine）改成自由数字后，`payload.cut.degree` 直接是**数字**（`12`），
+而 `app/adaptive_decompose.py::degree_to_face_limit` 早有 `(12, 12) / ("35", 35) / (30.7, 30)` 的用例
+⇒ **转发链一行未改**（`settings.get("cutDegree")` → `cut.degree` → `decompose(face_limit=…)`）。
+实测（真 worker + FreeCAD）：`degree=12` 时 warning = `实体预分解已生效：2 块，每块 3–6 面（上限 12），耗时 0.0 秒`。
+
+### G.2 样条曲面：新增 `app/spline_skip.py`（纯逻辑，不 import FreeCAD）
+
+**问题（源码级）**：GEOUNED 的 `spline_surfaces` 默认档是 `"stop"` —— `loadfile/load_step.py:69-71` 直接 `exit()`；
+worker 的 `SystemExit` 兜底只能吐一句 "GEOUNED 终止: None"（哪个实体有事、该怎么办全无信息）。
+
+**本程序的约定**：
+1. **默认档 = `remove`**（含样条面的实体不参与转换、其余照常转换，导入不中断）；
+2. **必须报告**：被跳过的**实体序号（0 起，与 `skip_solids` 同口径）+ 中文曲面类型 + 面数**进 `warnings` → 界面；
+3. 用户显式选「停止转换」时才停，且**停得具体**（"把这一档改成跳过即可继续"）；
+4. **全部实体都是样条** ⇒ 提前失败并给两条出路（回 CAD 换解析曲面 / 改「强行翻译」），**不给一份空卡**。
+
+**判据只有一份**：`geouned_worker._spline_kinds_per_solid()` 用
+`isinstance(surface, (Part.BSplineSurface, Part.SurfaceOfRevolution, Part.SurfaceOfExtrusion))`，
+与 GEOUNED `load_functions.spline()` **逐字一致**；`tests/unit/test_spline_skip.py` 里有一条
+**与已安装 GEOUNED 源码对照**的用例（没装则 skip），防两处漂移（本机 D:\MCNP\GEOUNED 在，实测跑过）。
+
+### G.3 顺手修掉的两条真实脆弱点
+
+1. **stdout 协议污染**：`remove` 档下 GEOUNED 会 `print`（`load_step.py:67` "following solids have Spline surfaces:"）到 **stdout**，
+   而 worker 的 stdout 是**协议通道**（结尾一行 JSON）⇒ 混进去就是"GEOUNED 输出非 JSON"、真实原因被盖掉。
+   新增 `geouned_worker._StdoutTee`：GEOUNED 期间 stdout 同时写 **stderr**（保协议干净）+ **内存缓冲**（裸 `exit()` 时判"它为什么退"）。
+   实测：全部场景 stdout 均为**纯 JSON**，GEOUNED 那句 print 出现在 stderr。
+2. **enclosure 路径不看档位**：GEOUNED 对 enclosure 里的"无形状实体"仍会 `exit()`（`core.py:335-338`）⇒
+   捕 SystemExit 后 `_strip_spline_solids()` **物理移除**样条实体再重试，并按前移量
+   `spline_skip.remap_skip_solids()` **重映射用户的 `skip_solids`**（错位 = 默默跳过另一个实体）。
+   **⚠️ 未验证**：这条触发路径本身没复现（需带 `enclosureNN_PP_` 标签树的 CAD），只验证了两个零件。
+
+### G.4 打包登记（差点漏掉 —— 属 TD-02 同族）
+
+`app/spline_skip.py` 被 `geouned_worker` 在**函数体里** import；`_keep_py` 名单以**数据文件**形态落盘
+⇒ PyInstaller 静态分析看不到这条边，既有的"传递闭包闸门"也**只看模块级 import** ⇒
+漏登记则**冻结版 STEP 导入直接 ImportError，而所有 dev 门禁全绿**。
+已登记进 `gui/mcnp_sidecar.spec`，并**新增闸门** `tests/unit/test_sidecar_spec_keep.py::test_keep_py_function_level_sibling_imports_are_registered`
+（扫全树、含函数体）。**红尺子实测**：把登记删掉后该闸门报 `{geouned_worker: ['spline_skip']}`。
+
+### G.5 门禁（实跑）
+
+`tests/unit/test_spline_skip.py` **19 passed**（默认档 = remove / 报告具体到序号 / 两条提前失败 / 编号重映射 / 判据对照 / 接线锁）；
+全量 pytest 见 `PROJECT_MEMORY.md` S15；另**顺手修绿**一条既存红门禁
+`test_geouned_settings_map.py::test_local_keys_are_exactly_the_two_groups`（上一批加了
+`cadUpAxis`/`cadAzimuthDeg`/`cadOrigin`/`tangentFix` 四个 `local` 键却漏改断言，与本批无关）。
+
+---
+
+## 附录 H：部署版冒烟查实 —— worker 的中文报错被"退出码 + JSON 转义碎片"顶掉（2026-10-08 晚，**已修并重打包部署**）
+
+> 触发场景：用户需求里「并报告」是硬要求，而**部署版**实测用户看到的是一串乱码。dev 单测与 dev 端到端**都看不见**这条缝。
+
+### H.1 现象（部署版原文）
+
+```
+GEOUNED 转换失败：GEOUNED worker 退出码 1
+stdout: 0c\u505c\u6b62\u8f6c\u6362\u300d\uff0c\u5bfc\u5165\u5df2\u7ec8\u6b62 …
+```
+
+worker 其实把原因写得好好的：`{"status":"error","message":"…把「样条曲面处理」改成「跳过该实体」即可继续…"}`。
+
+### H.2 根因（两条，都是"顺序/重复"级别的）
+
+1. `app/step_importer_geouned.py::GeoUnedConverter.run()` **先查 `returncode`**，
+   于是用"退出码 + `stdout` 末尾 300 字符"替换掉 JSON 信封 —— 而那 300 字符是 **JSON 转义后的碎片**。
+   worker 的**每条**失败路径都是"stdout 写 JSON 信封 + `sys.exit(1)`"，所以这不是样条专属问题，而是所有 worker 报错的通用缺陷。
+2. 我在修 (1) 时又加了 `"GEOUNED 转换失败："` 前缀，而外层 `run_step_converter` 也会加一次 ⇒ 出现
+   `GEOUNED 转换失败：GEOUNED 转换失败：…`（第 2 轮部署版冒烟看到）。
+
+### H.3 修法
+
+- **转换器：先解析 stdout 的 JSON 信封，再看退出码。** 能解析出 `dict` 且带 `message` ⇒ 用它；
+  解析不出 ⇒ **保留**旧的"退出码 + stdout/stderr 尾部"（不吞原始信息）；`returncode == 0` 而信封说 error ⇒ 照旧报 `GEOUNED 错误: …`。
+- **标签只由最外层加一次**：内层只回**原因原文**（`raise RuntimeError(envelope["message"])`）。
+- **`app/geouned_worker.py` 新增 `_UserFacing(RuntimeError)`**：**预期内**的提前失败
+  （样条档位=停止转换 / 全实体都是样条 / 加载阶段强制退出）只回 `message`、**不缀 traceback** ——
+  界面 alert 是整段原样显示的，一缀 traceback 就把该读的那句淹掉。真 bug 仍走 `except Exception`，保留 traceback。
+
+### H.4 回归与复核
+
+- 新增 `tests/unit/test_geouned_converter_errors.py` **7 例**：信封优先（**逐字等于**，且断言标签不重复）/
+  非 JSON 回落旧口径 / 退出码 0 的 error 信封 / 非 JSON / 缺文件 / 正常路径（返回路径 + `last_warnings`）/ 接线锁。
+- **真缝复核**（走真实 `GeoUnedConverter` + 真实 GEOUNED）：用户看到的消息为
+  `GEOUNED 转换失败：样条曲面：实体 1 共 1 个含样条类曲面（拉伸面，1 个面）。当前「样条曲面处理」设为「停止转换」，导入已终止 —— 把它改成「跳过该实体」即可继续：这 1 个实体不参与转换，其余实体照常转换。`
+- **部署版复核**（HTTP）：同一条消息（`status=error`），无转义碎片、无 traceback、标签只出现一次。

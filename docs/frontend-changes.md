@@ -2129,3 +2129,90 @@ warnings: ["MCCAD 切割已跳过：未找到 McCAD.exe。请把 McCAD.exe 放�
 且**不许在探针里预置本该由程序自己解析的环境变量**；
 ② **静默降级必须回传到用户可见处** —— 本次正是靠 `warnings` 一路回传到 API 响应，
 才一眼分清"跳过"与"没生效"。
+
+---
+
+## 2026-10-07 ~ 10-08 批：截面判据改奇偶 + 方向预览复用 3D 预览窗口 + 生成自检实时化 + 导出控件收进对话框
+
+> 逐条实测与证据链：`交接-截面修复-20261007.md` §1–§15；批次要点：`PROJECT_MEMORY.md` S14。
+
+### 1. 截面渲染的区域判据（用户报"洞被外材料盖住、悬停只报外材料"）
+- **判据改奇偶（even-odd）**：MCNP 语义是点在**奇数个**边界环内即属该栅元。**不能用环绕方向判** —— 实测环方向不可靠
+  （栅元 2 的洞环 −63.5 而外环 +78.4；栅元 1 三环同号）。`CrossSectionView.tsx` 每条栅元一条 `fill-rule="evenodd"` 路径，
+  悬停用同一规则（`utils/sectionHit.ts::pointInCell`）⇒ **图形与读数同源**。
+- **只标"≥2 个栅元同时认领"的重叠**（`utils/sectionConflicts.ts`：扫描线奇偶 × marching squares，MS 位序 bit0=(r,c)/bit1=(r,c+1)/bit2=(r+1,c+1)/bit3=(r+1,c) 写错会出 208 个一度顶点），
+  图例/计数/导出图注同步；**空白处一律不画**（用户裁决「**空腔就应该是空的**」）—— 此前我画的"空隙层"已删除。
+- **后端 `warnings` 上界面**：`CrossSectionWindow` 把 `/api/cross-section` 的 `warnings` 渲染成条（`data-section-warnings`），
+  说明"哪些栅元因只沿边界面接触被剔除"。`windows.ts::openCrossSection/readCrossSectionData` 相应透传。
+
+### 2. 方向预览：**复用 `Preview3D`，不自搓画布**（用户："不如直接用 3D 预览的窗口那一套"）
+- `Preview3D` 新增**可选** props：`preloadedStl`（给了就不调 `/api/preview-3d`，直接渲染这份 `{栅元号: base64 STL}`）、
+  `preloadToken`（网格换一份时重挂，避免把整个 STL 塞进依赖数组）、`titleOverride`（别显示"演示模式"）、`zIndex`（嵌在别的对话框里时传更高）。
+- **开的是与「3D 预览」完全相同的独立窗口**：复用 `windows.ts::openPreview3D` 的 localStorage 桥（`preloadedStl`/`preloadToken`/`titleOverride` 三个字段新增，
+  `deck` 改为可选、`materials` 可直接给）⇒ **未新增窗口 label**，`gui/test/volume/windowRouteConsistency.test.ts` 那套"label 两侧一致"闸门不受影响；
+  非 Tauri（浏览器调试）环境 `invoke` 返回 false ⇒ 回退到主窗口内的浮层（`StepPreview3D` 已删除，回退也走 `Preview3D`）。
+- 入口：导入对话框「👁 预览方向（用这个 STEP 生成）」（改上轴/方位/原点**自动重取**）、导出对话框「👁 预览方向（看导出后的样子）」。
+
+### 3. 导出控件收进对话框（用户："这三个键不要出现在这个页面"）
+几何页工具栏那一行**只留「📐 导出 STEP」**；点开是导出对话框（`FloatingDialog`），内含「CAD 上轴 / 原点口径 / 👁 预览方向」，
+底部「取消 / 📐 导出」，存好即关。约定写同一份 localStorage（`mcnp_cadUp_v1`/`mcnp_cadAz_v1`/`mcnp_cadOrigin_v1`），与导入侧共用。
+回归：`gui/test/geometryExportDialog.dom.test.tsx`（工具栏不出现这三个键 + 点开对话框三个键都在 + 选择落 localStorage）。
+
+### 4. 导入设置对话框：只留**一个**滚动条（用户："这个页面怎么有两个条"）
+根因：设置列表自己算高度（`maxHeight: calc(85vh - 190px)` 估算"除列表外的 chrome 高度"），而外层 `FloatingDialog` 的 body 是
+`flex:1 + overflow:auto` ⇒ 本批往列表里加了三块内容就把估算吃穿，里外同时出条。
+改法：列表**不再算 vh**，改为 flex 链（中间层 `display:flex; flexDirection:column; flex:1; minHeight:0; height:100%`，
+列表 `flex:1; minHeight:0; overflowY:auto`）⇒ 高度由对话框统一决定，外条不可能出现。
+回归：`gui/test/stepPreviewDialog.dom.test.tsx` 断言"设置列表是唯一滚动区、`maxHeight` 为空、内部不得再有 vh 形式的 maxHeight"。
+
+### 5. 生成时封闭性自检实时化（用户："没实时更新"）
+- `utils/cellClosure.ts` 新增**纯函数** `closureWarnText(report)`：坏栅元逐条列出（外无限/空/未解析/体素），**干净返回 `null`**；
+  另导出 `CLOSURE_WARN_PENDING`（"⏳ 正在按当前几何复核栅元封闭性…"）。
+- `App.tsx::runGenerateClosureCheck` 重写：**一律按当前几何重算**（旧实现先读 `deck.cellClosureReport`，**有缓存就永不重算**，
+  而那份缓存没有任何失效机制）+ **无条件写入** `setClosureGenerateWarn(closureWarnText(report))`（旧实现只在 `bad.length` 时设置 ⇒ 变干净不清空）
+  + 开头先给 pending + catch 里清空。注：几何页「封闭」列用的 `useCellClosure` **自带 `deckFingerprint` 守卫**（内容一致才复用），是对的，未改。
+- 回归：`gui/test/closureGenerateWarn.test.ts`（纯函数四态 + **源码级守卫**：不得再出现 `cellClosureReport || null` / `if (bad.length)`，catch 必须清空 + 防空对空自检）。
+
+### 6. 门禁（本轮实跑）
+前端 **114 文件 / 991 用例全过**（新增 `stepPreviewDialog.dom`(6) / `geometryExportDialog.dom`(3) / `closureGenerateWarn`(8) / `previewBridgePreload`(2) 等）；
+`tsc --noEmit` 与 `tsc -p tsconfig.test.json --noEmit` 两档 EXIT 0。构建 `build:release` 173–318 s EXIT 0（详见 `PROJECT_MEMORY.md` §6 的四项部署核对纪律）。
+
+---
+
+## 附录 H：导入对话框两处（切分面数可键入 + 样条默认跳过）（2026-10-08 下午，**未提交 / 未重打包**）
+
+> 用户原话：「设置一下 step 导入时 GEOUNED 切分面数用户可以自己键入，，遇到样条曲线了就跳过而不是终止或暂停，并报告」。均在 `gui/src/components/StepImportDialog.tsx`。
+
+### H.1 `cutDegree`：三档下拉 → **自由数字框**
+
+- `PARAM_SPECS` 里 `cutDegree` 改 `kind: "number"`、`def: "30"`、`check: 整数且 ≥ 1`；
+  三档（50/30/20）从"控件选项"变为**子弹框里的常用值**（实测数字仍写在那里）。
+- `buildSettings` 对 `number` 发**数字**（旧 `select` 发的是 `"fine"` 字符串）；
+  后端 `degree_to_face_limit` 两者都认，故只是语义更准（"这是面数，不是编号"）。
+- **旧记忆值迁移（不做就是 bug）**：老用户 localStorage 里存着 `"coarse"/"medium"/"fine"`，
+  直接塞进数字框 ⇒ 一开窗就躺着一个非数字、按下导入即被"请输入数字"拦住，而用户什么都没改。
+  新增 `CUT_DEGREE_LEGACY = {coarse: "50", medium: "30", fine: "20"}`，在 `initialState()` 里迁移一次。
+- 校验：非整数 / < 1 / 非数字 → 拦在导入前，给中文提示（沿用既有的 `numeric()` 表驱动校验）。
+
+### H.2 `splineSurfaces`：默认档显示为「跳过该实体」
+
+- 用户指定「遇到样条曲线了就跳过而不是终止或暂停，并报告」⇒ **留空（没动过）时本程序按 `remove` 发**
+  （决定权在 worker 的 `spline_skip.normalize_policy`，前端只负责把事实显示出来：空选项文案 = `默认（跳过该实体）`）。
+- 三个选项重排：跳过该实体（推荐）/ 停止转换（整份导入报错退出）/ 强行翻译（可能出错）；
+  子弹框写清"被跳过的实体序号与曲面类型会写在导入结果提示里"以及"全部实体都是样条时会失败并说明原因（不给空卡）"。
+- **用户显式选过的档位照旧发得出去**（"留空 = 不发送"的三态语义未被破坏）；有专门用例守这条。
+
+### H.3 回归
+
+`gui/test/stepImportDialog.dom.test.tsx`：把"三档下拉"两条换成
+「可自己键入数字（发数字 12）」+「0 / 小数 / 非数字被拦住」+「旧值 `"fine"` 迁移成 `"20"`」，
+另加两条守 `splineSurfaces` 的默认文案与"留空不发送 / 显式选择发得出去"。
+全量 vitest **114 文件 / 994 用例全过**、`tsc` 两档 EXIT 0。
+
+### H.4 部署（同日，用户指令「部署」）
+
+本附录三处改动**已随本批打包部署**：交付 exe 内 bundle 名为 `assets/index-CMSFcHOU.js`（与 `gui/dist/index.html` 引用一致），
+`dist/assets/*.js` 里能搜到本批两条新文案（"块数是被算出来的结果，不是你填的"、"跳过该实体（推荐）"）。
+**部署版冒烟（真 HTTP，不是界面截图）**：`/api/import-step` 喂"盒+拉伸样条"STEP，
+`cutDegree: 12`（数字档位）+ 样条留空 ⇒ `status=ok`、栅元数 4（跳过样条=4、强转才是 5），
+结果提示两条齐全。细节见 `PROJECT_MEMORY.md` S15 与 `docs/CHANGELOG.md` 同日"管理/构建"条。

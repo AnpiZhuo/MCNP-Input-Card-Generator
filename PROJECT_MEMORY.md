@@ -1,5 +1,68 @@
 # 项目记忆文档（AI 速查手册）
 
+> **★ 本批（2026-10-08 下午）STEP 导入两件事 —— 已改 ✅ / **已重打包并部署 ✅（三轮构建、一次终态交付）** / 未提交 · 版本仍 1.7.7**
+> **用户原话**：「设置一下 step 导入时 GEOUNED 切分面数用户可以自己键入，，遇到样条曲线了就跳过而不是终止或暂停，并报告」→ 随后「部署」→ 冒烟查到问题后「修好！」。短期批次记忆见 **S15**。
+> ① **切分面数自己键入**：`cutDegree` 三档下拉（coarse/medium/fine = 50/30/20）→ **数字框**（留空 = 30，校验"不小于 1 的整数"）。
+>    后端 `degree_to_face_limit` **本来就认数字**（早有用例 `(12,12)`/`("35",35)`）⇒ 转发链一行未动；另加**旧记忆值迁移** `"fine" → "20"`
+>    （不做的话老用户一开窗就躺着一个非数字、按导入即被校验拦住）。
+> ② **样条曲面：跳过而不是终止，并报告**：GEOUNED 默认档是 `stop`（`load_step.py:69-71` 直接 `exit()`，用户只看到"GEOUNED 终止: None"）
+>    ⇒ 本程序默认改 `remove`（跳过含样条面的实体、其余照常），并把**实体序号（0 起）+ 中文曲面类型 + 面数**写进界面提示；
+>    新增纯逻辑模块 `app/spline_skip.py`（可离线单测）；判据与 GEOUNED `load_functions.spline()` **逐字一致**且有对照测试。
+>    **两条提前失败**：显式选「停止转换」告诉你怎么改回来；**全部实体都是样条**给两条出路，**不给空卡**。
+>    顺手修掉一条真实脆弱点：GEOUNED 会把"哪些实体含样条面"`print` 到 **stdout**（= worker 的 JSON 协议通道）⇒ 新增 `_StdoutTee`
+>    把它同时写 stderr（保协议）+ 内存缓冲（判"为什么裸 exit"）；enclosure 路径上 GEOUNED 不看档位就 exit ⇒ 捕 SystemExit 后
+>    **自己物理移除样条实体再重试**，并按前移量**重映射 `skip_solids`**。
+> **实测（FreeCAD 1.1.1 + GEOUNED 真跑，自造 box+拉伸样条 STEP）**：默认档 `status=ok` + warning 点名实体 1，产物 **4 栅元 Vol 全 1.000**
+> （样条实体 0.562 cm³ 完全没进去）；对照组「强行翻译」出 **5 栅元含 Vol=0.562**；`stop`/全样条两档给出可操作报错；
+> `degree=12` 实测 `实体预分解已生效：2 块，每块 3–6 面（上限 12）`；全程 **stdout 纯 JSON**、GEOUNED 那句 print 在 stderr。
+> **⚠️ 未验证**：enclosure 触发路径本身没复现（需带 `enclosureNN_PP_` 标签树的 CAD + 样条实体），只验证了物理剔除与编号重映射两个零件。
+> **门禁（实跑）**：vitest **114 文件 / 994 用例全过**、tsc 两档 **EXIT 0**；`python -m pytest tests -q` **1564 passed / 11 skipped / 0 failed**；顺手修绿既存红门禁
+> `test_local_keys_are_exactly_the_two_groups`（上一批漏改断言，与本批无关）。
+
+> **★ 部署（同日，用户指令「部署」→ 冒烟后「修好！」）—— 已打包部署 ✅**
+> `build:release` **连打三轮**（**484 s / 229 s / 231 s，均 EXIT 0**；第 1 轮含 Rust 全量编译 2 m 40 s，第 2/3 轮增量 17 s）。
+> 交付目录 `D:\MCNP\MCNP输入卡生成器`：`_internal` **7879** / WebView2 **29** / 总计 **7913**，与构建产物**逐文件名+大小 0 差异**；
+> exe sha256 == `target/release`（`82B698EB…`）、时间戳 12:49:03 在窗口内；`python.exe` 32,670,407 B 与 `binaries/` 一致；
+> 三条链路文件与源码**哈希一致**；WebView2 显式 AppContainer ACE **2 条**（xcopy 后按 §6.5.4 重跑 icacls）。回滚点 `_backup_1.7.7_20261008_123432`（**本批改动前**）。
+> **部署版冒烟（真 HTTP）**：5001 就绪 **2 s**、xsdir 7925；**`msedgewebview2.exe` 7 个进程路径就在交付目录内**（自带运行时确实在用）；
+> `/api/import-step` 喂"盒+拉伸样条"STEP（`cutDegree:12` 数字、样条留空）⇒ `status=ok` + **栅元数 4**（跳过=4、强转=5）+ 两条提示；
+> 显式「停止转换」⇒ 干净可操作中文；收尾 5001/8100 全释放。**注意**：跑过冒烟后 `_internal\app\` 会多出运行时 `__pycache__`（清掉即回到 7913；
+> **但 `_internal\vendor\geouned\**` 那 60 个 `.pyc` 是构建产物自带的，不许一起删** —— 本批我就误删过一次，见 §6）。
+
+> **★ 部署版冒烟逮到并修掉一个真 bug（本批最值钱的一条）**：用户需求里"并报告"是硬要求，而真实链路上报告是**坏的** ——
+> `GeoUnedConverter.run()` **先查 returncode**，于是把 worker 写好的 `{"status":"error","message":"…改成「跳过该实体」即可继续…"}`
+> 换成"退出码 1 + stdout 末尾 300 字符"，而那 300 字符是 **JSON 转义碎片**（`0c\u505c\u6b62…`）。修法两条：① 转换器**先解析 stdout 的 JSON 信封再看退出码**
+> （解析不出才回落旧口径），且内层**不加标签**（外层已加一次，否则"…失败：…失败：…"）；② worker 新增 `_UserFacing`：预期内的提前失败只回原因、**不缀 traceback**。
+> **教训**：`dev 单测 + dev 端到端` 都看不见这类"只在部署形态下暴露"的缝 —— 出包后**必须**用部署版喂真输入走一遍用户路径。
+
+> **★ 本批（2026-10-07 ~ 10-08）截面判据/精度修复 + STEP 交换坐标约定与方向预览 + 冻结版路径 + GEOUNED 相切退化 + 生成自检实时化 —— 已改 ✅ / 已重新打包部署 ✅（多轮）/ 未提交 · 版本仍 1.7.7（bug 批不升版）**
+> **逐条实测与证据链见 `交接-截面修复-20261007.md` §1–§15**（本批所有数字都可在其中找到出处）；短期批次记忆见 **S14**。
+> 用户原话驱动的六件事：
+> ① **「截面里某块实际是其他材料，但被外材料覆盖、悬停只显示外材料名」** ⇒ 区域判据改**奇偶（even-odd）**（MCNP 语义：
+>    点在**奇数个**边界环内即属该栅元；实测环方向不可靠），每条栅元一条 `fill-rule="evenodd"` 路径、悬停同规则；
+>    **并删掉我自己画错的空隙图层**（用户裁决「**空腔就应该是空的**」）；后端新增 `app/section_region.py` 判"真区域还是
+>    只沿边界面接触切出的伪影"，原因经 `warnings` 上界面。
+> ② **解析切片精度**：`app/analytic_slice.py` 顶点改**二分细化到真实零水平集**（误差 ~1e-11，与分辨率无关）。
+> ③ **「STEP 数字对得上但模型躺倒、轴跟预览不一致；导入导出都是」** ⇒ **STEP 文件不带上轴字段**（ISO 10303 只有坐标值+单位），
+>    差异来自源软件默认坐标系（Y 朝上：SolidWorks/Inventor；Z 朝上：FreeCAD/UG/CATIA）⇒ **只能显式指定**；新增
+>    `app/cad_orientation.py`（互逆矩阵单一来源），导入在 GEOUNED 前转、导出在 exportStep 前反向转。
+> ④ **原点口径三选一**（用户指定）：按原本建模（默认）/ 体心归零 / 坐在底面上；"底面"跟随**目标坐标系**上轴。
+> ⑤ **方向预览**（用户："给个按钮，点一下先用 STEP 生成预览" → 追加「**不如直接用 3D 预览的窗口那一套**」）：
+>    `/api/step-preview`（STEP→STL 按 sha1 缓存，切换只做矩阵 ⇒ 毫秒级；导出侧同一端点 `direction=mcnp2cad`）；
+>    显示**复用 `Preview3D` 预置网格模式**、开**同一个独立窗口**（不新增窗口 label）—— **不自搓第二套画布**。
+> ⑥ **「生成时的警告…没实时更新」** ⇒ 生成路径**有缓存就永不重算**且"变干净不清空"两条陈旧缺陷，改为**一律按当前几何重算**
+>    + 纯函数 `closureWarnText`（干净返回 `null` ⇒ 必然清空）。
+> **期间查实的三个真缺陷（都已修）**：① 冻结版 worker 脚本路径用了 `APP_DIR` ⇒ 实机报
+> `can't open file 'D:\MCNP\app\_freecad_step_preview_worker.py'`，新增 `api_server.app_script_path()`；
+> ② FreeCAD `python.exe` 定位重复 ⇒ 收敛到 `freecad_locator.python_exe()`（便携版/安装版两布局）；
+> ③ **GEOUNED 相切退化**：用户文件里栅元 3/4 体积 28268/29424 cm³ 而 CAD 实体 3645.5/3629.6（**大 7.8/8.1 倍**）
+> 且 `3∩4` 重叠 7275 cm³ —— 源 CAD 干净（两两交集体积 0），根因是"圆柱被**同轴同半径球面**切掉"时 GEOUNED 丢一个定界面
+> （受控实验：球 r=50 丢边界、49.95/50.05 全对；真实文件上出问题的实体**恰好是唯一两个**含这种对的）。
+> 修法：球面沿径向外移 0.1%（`app/tangent_fix.py` + worker 前置步骤，带体积闸门与如实回报）⇒ 栅元 3/4 = **3645.1/3629.5**、**重叠清零**。
+> **门禁**：前端 **114 文件 / 991 用例全过** + tsc 两档 0；后端相关 **59 passed**（新增 5 个测试文件）；`build:release` 173–318 s 全绿。
+> **部署**：`D:\MCNP\MCNP输入卡生成器`（`_internal` 7878 文件 / WebView2 29）；旧版备份 `D:\MCNP\_backup_1.7.7_20261008_014145`。
+> **⚠️ 本轮两次差点交付错版本（旧界面 / 半新包）⇒ 新增部署纪律见 §6。**
+
 > **★ 本批（2026-10-04）默认走高性能独显 —— 已改 ✅ / 已提交（见 git log）/ 已重新打包部署 ✅ · 版本仍 1.7.7（bug 批不升版）**
 > **用户原话**：「让程序默认走高性能独显」。**先查证再动手**：官方 WebView2 flags 清单**没有** `force_high_performance_gpu`，
 > 且该页明确 "For production apps, do not use these flags" ⇒ **不要用 Chromium flag**；正路是 Windows per-app GPU 偏好
@@ -229,6 +292,218 @@
 # ◉ 短期记忆（工作记忆）—— 当前活跃上下文
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
+
+### S15（当前批次）STEP 导入两件事：GEOUNED **切分面数可自己键入** + **样条曲面跳过而不是终止**并报告（2026-10-08，**已改 ✅ / 已重打包部署 ✅ / 未提交 · 版本仍 1.7.7**）
+
+> **用户原话**：「设置一下 step 导入时 GEOUNED 切分面数用户可以自己键入，，遇到样条曲线了就跳过而不是终止或暂停，并报告」→「部署」→（冒烟查到问题后）「修好！」。
+> **门禁（实跑）**：`test_spline_skip.py` **19 passed**（含与已安装 GEOUNED 源码的判据对照）、`test_geouned_converter_errors.py` **7 passed**、
+> `test_geouned_settings_map.py` 21 passed；`python -m pytest tests -q` **1564 passed / 11 skipped / 0 failed**；vitest **114 文件 / 994 passed**；tsc 两档 EXIT 0。
+> **部署**：三轮 `build:release`（484/229/231 s，均 EXIT 0）+ 交付四项核对 + **部署版真 HTTP 冒烟**（细节见顶部横幅与 §6 新增两条纪律）。
+
+**① 切分面数用户自己键入**：`StepImportDialog` 的 `cutDegree` 由三档下拉（coarse/medium/fine = 50/30/20）改为**数字框**
+（留空 = 30，校验"不小于 1 的整数"）。**后端本来就认数字**（`degree_to_face_limit` 早有用例 `(12,12)` / `("35",35)`），
+转发链一行没动 ⇒ 本次只改控件 + 文案 + **旧值迁移**（老 localStorage 里的 `"fine"` → `"20"`，否则一开窗就是个非数字、按导入即被拦住）。
+
+**② 样条曲面：跳过 + 报告**（用户："跳过而不是终止或暂停，并报告"）
+- **问题（源码级）**：GEOUNED 默认档 `spline_surfaces="stop"` 在 `loadfile/load_step.py:69-71` 直接 `exit()`
+  ⇒ 用户只看到一句"GEOUNED 终止: None"，**哪个实体有事、该怎么办全无信息**。
+- **默认档改 `remove`**（跳过含样条面的实体、其余照常转换），并进 `warnings` → 界面 alert：
+  **实体序号（0 起，与「跳过实体编号」同口径）+ 中文曲面类型 + 面数**。
+- **判据只有一份**：worker 的 `isinstance((BSplineSurface, SurfaceOfRevolution, SurfaceOfExtrusion))`
+  与 GEOUNED `load_functions.spline()` **逐字一致**，并有一条**与已安装 GEOUNED 对照**的测试（没装则 skip）。
+- **新增纯逻辑模块 `app/spline_skip.py`**（不 import FreeCAD ⇒ 可离线单测）：报告文案、能否继续（`blocking_reason`）、
+  物理剔除后的**编号重映射**。**两条提前失败**：显式选「停止转换」⇒ 报错告诉你换哪一档能继续；
+  **全部实体都是样条** ⇒ 报错给两条出路，**不给一份空卡**。
+- **顺手修掉一条真实的协议脆弱点**：`remove` 档下 GEOUNED 会 `print` 到 **stdout**（`load_step.py:67`），
+  而 worker 的 stdout 是**协议通道**（结尾一行 JSON）⇒ 新增 `_StdoutTee` 把它同时写 stderr（保协议）+ 内存缓冲（判"为什么裸 exit"）。
+- **enclosure 最后一道**：GEOUNED 对 enclosure 里的无形状实体**不看档位**地 `exit()`（`core.py:335-338`）
+  ⇒ 捕 SystemExit → 自己物理移除样条实体 → 重试，并**重映射 `skip_solids`**（错位 = 默默跳过另一个实体）。
+
+**实测（FreeCAD 1.1.1 + GEOUNED 真跑，自造 `box(10mm) + 拉伸样条实体(0.562 cm³)`）**
+
+| 场景 | 结果 |
+| --- | --- |
+| 默认（留空） | `status=ok`；warning 点名"实体 1…（拉伸面，1 个面），已跳过"；产物 **4 栅元 Vol 全 1.000**（0.562 **没进去**） |
+| 对照「强行翻译」 | 同文件 **5 栅元、含 `Vol=0.562`** ⇒ "跳过"确实跳、"强转"确实转 |
+| 「停止转换」 | `status=error`：`…把它改成「跳过该实体」即可继续…` |
+| 全是样条 | `status=error`：`…跳过它们之后没有可转换的实体…` + 两条出路 |
+| 数字档位 `degree=12` | warning = `实体预分解已生效：2 块，每块 3–6 面（上限 12）` |
+| stdout/stderr | 全场景 **stdout 纯 JSON**；GEOUNED 那句 print 落在 **stderr** ⇒ 改道必要且生效 |
+| `_strip_spline_solids` | 剔除实体 1 → 剩 1 实体/体积 1.0 ✔；全剔光抛错 ✔ |
+
+**⚠️ 未验证**：enclosure 触发路径**没有复现**（需带 `enclosureNN_PP_` 标签树的 CAD + 样条实体），
+只验证了它的两个零件（物理剔除、编号重映射）。
+
+**打包前置（差点漏掉）**：新模块 `app/spline_skip.py` 是 `geouned_worker` 在**函数体里** import 的，
+而 `_keep_py` 名单是以**数据文件**形态落盘 ⇒ PyInstaller 静态分析看不到，既有的"传递闭包闸门"只看模块级 import
+也看不到 ⇒ **漏登记则冻结版 STEP 导入直接 ImportError、而所有 dev 门禁全绿**（TD-02 同族）。已登记进
+`gui/mcnp_sidecar.spec`，并**新增闸门** `test_keep_py_function_level_sibling_imports_are_registered`（扫全树含函数体），
+并用"删掉登记必须报红"实测过（`{geouned_worker: ['spline_skip']}`）。
+
+**顺手修绿一条既存红门禁**：`test_local_keys_are_exactly_the_two_groups` —— 上一批（坐标为约定/相切）加了
+`cadUpAxis`/`cadAzimuthDeg`/`cadOrigin`/`tangentFix` 四个 `local` 键却漏改断言（**与本批无关**），
+本批按**通道**补全，并加"每个流水线开关必须真的进 payload"的守卫（不是放宽）。
+
+**③ 部署冒烟查实：报告在真实链路上本来是坏的**（第 1 轮部署版实测）—— `GeoUnedConverter.run()` **先查 returncode**，
+把 worker 写好的 JSON 信封换成"退出码 1 + stdout 末尾 300 字符"（**JSON 转义碎片** `0c\u505c\u6b62…`）。
+修法：转换器**先解析 stdout 的 JSON 信封再看退出码**（解析不出才回落旧口径），内层**不加标签**（外层已加一次）；
+worker 新增 `_UserFacing`（预期内失败只回原因、不缀 traceback）。新增 `test_geouned_converter_errors.py` 7 例；
+真缝复核后用户看到的是 `GEOUNED 转换失败：样条曲面：实体 1 …把它改成「跳过该实体」即可继续…`。
+**教训**：这类"只在部署形态暴露"的缝，dev 单测与 dev 端到端**都看不见** ⇒ 出包后必须用部署版喂真输入走一遍用户路径。
+
+### S14（上一批次）截面判据/精度修复 + STEP 交换坐标约定与方向预览 + 冻结版路径 + **GEOUNED 相切退化** + 生成自检实时化（2026-10-07 ~ 10-08，**已改 ✅ / 已重新打包部署 ✅（多轮）/ 未提交 · 版本仍 1.7.7**）
+
+> **详细交接（逐条实测、含证据链）**：`交接-截面修复-20261007.md` §1–§15。**门禁（本轮实跑）**：
+> 前端 **114 文件 / 991 用例全过**、`tsc --noEmit` 与 `tsc -p tsconfig.test.json --noEmit` 两档 EXIT 0；
+> 后端相关 **59 passed**（新增 `test_cad_orientation`(10) / `test_stl_transform`(5) / `test_app_script_path`(4) /
+> `test_freecad_python_exe`(8) / `test_tangent_fix`(5) / 契约漂移 3 例）；构建 `build:release` **173–318 s EXIT 0**
+
+**用户原话驱动的六件事（按发生顺序）**
+
+1. **截面「洞被外材料盖住、悬停只报外材料」**：区域判据由"先声明者占有"改为 **奇偶（even-odd）** —— MCNP 语义是
+   点在**奇数个**边界环内即属该栅元（实测环方向不可靠：栅元 2 的洞环 −63.5 而外环 +78.4，栅元 1 三环同号）；
+   每个栅元一条 `fill-rule="evenodd"` 路径，悬停同规则。**并删掉我自己画错的空隙/裂缝图层**（用户裁决
+   「**空腔就应该是空的**」—— 不在空白处画任何东西）。后端新增 `app/section_region.py`：判定"这块是真区域还是
+   只沿边界面接触切出的伪影"，剔除后者并把原因经 **`warnings`** 上界面（`api.yaml` 已增字段）。
+2. **解析切片精度**：`app/analytic_slice.py` 的 marching squares 顶点改为**二分细化到真实零水平集**
+   （误差 ~1e-11，与网格分辨率无关；旧中点法在 R=100 球上 res=32/64/128/256 误差 3.17/1.35/0.78/0.40 cm）。
+3. **STEP 上轴/方位约定**（用户："数字对得上，但模型躺倒、轴跟预览不一致"→"导入导出都是"）：
+   **STEP 文件本身不带上轴字段**（ISO 10303 只有坐标值 + 单位 + 放置坐标系），差异来自源软件默认坐标系
+   （Y 朝上：SolidWorks/Inventor/Maya；Z 朝上：FreeCAD/UG/CATIA/Creo）⇒ **无法自动判断，只能显式指定**。
+   新增单一来源 `app/cad_orientation.py`（`{up, azimuthDeg, origin}` → cad→mcnp 与 mcnp→cad **互逆**矩阵 +
+   FreeCAD 逐步旋转 + 中文说明）；导入在 GEOUNED **之前**旋转，导出在 `exportStep` **之前**反向旋转。
+4. **原点口径三选一**（用户指定："体心、放置在底面上、按原本的建模，三种选项"）：`keep`（不平移，默认）/
+   `center`（体心归零）/ `bottom`（坐在底面上）。**"底面"跟随目标坐标系上轴** —— 导入到 MCNP 是 z=0；
+   导出到 Y 朝上的 CAD 是 y=0。
+5. **方向预览**（用户："给个按钮，点一下先用 STEP 生成预览，方便选 Y/Z 朝上" → 看过之后追加
+   「**不如直接用 3D 预览的窗口那一套**」）：新增端点 `/api/step-preview`（STEP→STL 镶嵌**按内容 sha1 缓存**，
+   切换朝向只做旋转矩阵 ⇒ 毫秒级；导出侧复用同一端点 `direction=mcnp2cad`，传 3D 预览给的每栅元 STL）；
+   显示**复用 `Preview3D` 预置网格模式**（`preloadedStl`/`preloadToken`/`titleOverride`/`zIndex`）——
+   **不再维护第二套画布**（我第一版自搓的画布连灯都没加，用户当场否掉）。开的是**与「3D 预览」完全相同的独立窗口**
+   （走 `windows.ts` 的 `openPreview3D` localStorage 桥，未新增窗口 label，`windowRouteConsistency` 闸门不受影响）；
+   非 Tauri 环境回退窗内浮层。控件落点按用户要求：**不占几何页工具栏**，收进「📐 导出 STEP」对话框与导入对话框各一行。
+6. **生成时「封闭性自检」警告不实时更新**（用户报）：根因两条 —— ① 生成路径先读 `deck.cellClosureReport`，
+   **有缓存就永不重算**（该缓存无任何失效机制；几何页用的 `useCellClosure` 自己有指纹守卫，是对的）；
+   ② 只在 `bad.length` 时 `setClosureGenerateWarn(...)`，**变干净时不清空** ⇒ 旧警告永久留在屏上。
+   改为：**一律按当前几何重算** + 文案唯一来源纯函数 `cellClosure.closureWarnText`（坏栅元逐条列出，
+   **干净返回 `null`**，调用方无条件写入 ⇒ 必然清空）+ 开头先给 `CLOSURE_WARN_PENDING`（"⏳ 正在按当前几何复核…"）
+   + 顺带补上原先漏掉的 `voxel` 状态。
+
+**期间查实的三个真缺陷（都已修）**
+
+- **冻结版 worker 脚本路径**：`/api/step-preview` 用 `APP_DIR`（= `PROJECT_DIR/app`，而 `PROJECT_DIR` 由
+  `api_server.__file__` 上溯两级）拼脚本路径 ⇒ 冻结版算出 `D:\MCNP\app\…`（不存在）。用户实机报错原文：
+  `can't open file 'D:\MCNP\app\_freecad_step_preview_worker.py': [Errno 2] No such file or directory`。
+  新增 `api_server.app_script_path()`：冻结版取 `sys._MEIPASS/app`，源码版取 `APP_DIR`，都没有就抛清楚错误。
+- **FreeCAD python.exe 定位重复**：handler 里又拼了一份候选路径 ⇒ 收敛到 `freecad_locator.python_exe()`
+  （**便携版** python 与 freecad 同目录 / **安装版** 在 `bin\` 子目录，两布局都覆盖；没有则返回 None 不猜）。
+  `GeoUnedConverter._find_python_exe` 改为转发它。
+- **GEOUNED 相切退化导致栅元体积暴增 + 互重叠**（用户报："导入 `筒子1.STEP` 栅元 3、4 出现 bug"）：
+  源 CAD 干净（6 实体全部闭合有效、**两两布尔交集体积 = 0**）；但转换后栅元 3 = **28268 cm³** 而 CAD 实体
+  **3645.5**（大 7.8 倍）、栅元 4 = **29424** 而实体 **3629.6**（大 8.1 倍），且 `3∩4 = 7275 cm³`、
+  `3∩5 = 35.4 cm³`（项目自己的 `/api/check-overlap`，severity=error）。**根因**：GEOUNED 把「圆柱被一个同轴、
+  同半径的球面切掉」当退化情形，CSG 提取时**丢一个定界面**（栅元 3 写成 `11 14 -5`，缺上界 `-13`；
+  而曲面表里 `PZ 0` 存在且栅元 5 在用）。**受控实验**（自造"圆柱 r=50 减同轴球"）：球 r **= 50** ⇒ 丢边界
+  （25664 vs 实体 3665）；r = 49.95 或 50.05（差 0.1%）⇒ 全对。真实文件面级诊断：出问题的 #3/#4 **恰好是唯一两个**
+  含"同轴同半径球/柱对"的实体（各 4 对）⇒ 因果闭合。**修法**：`app/tangent_fix.py`（判定逻辑，纯函数可测）+
+  `geouned_worker._break_tangent_sphere_cylinder()`（FreeCAD 侧，把该球面沿径向外移 0.1%）。**修复后实测**：
+  栅元 3 = **3645.1**、栅元 4 = **3629.5**（与实体吻合）、**error 级重叠清零**、其它栅元一字不变。
+  开关「相切退化自动修复」默认开（导入对话框「转换退化修复」组）。
+
+**部署（10-08，多轮重建；版本仍 1.7.7）**：`build:release` 173–318 s 全绿；交付目录
+`D:\MCNP\MCNP输入卡生成器`（`_internal` **7878 文件** / WebView2 29 文件）；旧版整卷改名备份
+`D:\MCNP\_backup_1.7.7_20261008_014145`。部署版冒烟：`/api/step-preview`（真 STEP 输入）`status=ok`
+且 `bbox` 正确、`/api/import-step` 对用户文件产出修复后的栅元 3/4、`/api/cross-section` 与 `/api/mcnp-detect` 正常；
+**A/B 对照**：`tangentFix=false` 时栅元 3/4 退回错误表达式、warnings 为空 ⇒ 开关有效且修复是原因。
+**⚠️ 新增部署纪律（本轮两次差点交付错版本）见 §6。**
+
+**遗留（诚实登记）**：① 相切修复是"球面外移 0.1%"的**微扰**（50 mm → 0.05 mm），修好了该几何，但**没有**从根上
+修好 GEOUNED 的 CSG 提取（编译过的第三方包，不动其内部）；若退化以锥面/环面相切等其它形式出现，本修复不覆盖，
+需按同一套方法（受控实验定位触发 → 带闸门的微扰 → 如实回报）再做。② 方向预览的**导出侧**只做了"按约定转好再显示"，
+没有做"导出前在 CAD 视角下的完整装配预览"。③ jsdom 无 WebGL ⇒ `Preview3D` 的 WebGL 挂载那一步仍靠实机（
+场景构建/解码/取景已由纯函数测试覆盖）。
+
+### S13（上一批次）材料库核素/密度口径整顿（2026-10-06，**已改 ✅ / 已打包部署 ✅ / 未提交 · 版本仍 1.7.7**）
+
+> 触发：用户「再检查一下材料库，其中材料的核素设置，密度设置，是否符合工程实践」→ 复核后
+> 「**热散射卡先不管，其余该修的修复**」→「**放入打包版**」。详细流水：`docs/CHANGELOG.md`
+> 2026-10-06 两条、后端设计 `docs/backend-changes.md` §AC。**门禁（实跑）**：pytest
+> **1490 passed / 11 skipped**、vitest **106 files / 956 passed**、`tsc --noEmit` EXIT 0。
+
+**打包部署（2026-10-06，`npm run build:release` EXIT 0 / 393 s；bug 修复批不升版 = 1.7.7）**：
+
+| 步 | 内容 | 结果 |
+| :-- | :-- | :-- |
+| ① | PyInstaller 6.21.0 → `dist_sidecar/python` | ✅ 7873 文件，python.exe 32,662,018 B |
+| ②③ | binaries 覆盖 + vite build | ✅ 1166 模块，`assets/index-CPhrepCi.js` 1,600.57 kB |
+| ④ | `tauri build` | ✅ Rust `Finished release 39.17 s`；exe 6,640,640 B（旧 6,640,128 B） |
+| ⑤ | WebView2 固定版裁剪铺设 + AppContainer ACL | ✅ 29 文件 / 433.7 MB（源 668.4 MB） |
+| ⑥⑦ | sync-sidecar --require-target + stage-selftest | ✅ 自检.bat 11595 B |
+| ⑧ | 备份 + 部署到 `D:\MCNP\MCNP输入卡生成器` | ✅ 备份 `_backup_1.7.7_20261006_143406`（7884 文件 / 242.6 MB，不含 WebView2） |
+| ⑨ | 交付目录 sidecar 运行期冒烟 | ✅ **SMOKE PASS**（见下） |
+| ⑩ | 前端进包判定 | ✅ 新 exe 内嵌 `assets/index-CPhrepCi.js`（= 本次 dist 产物，含 6 项新数据） |
+
+**部署后实测（交付目录 `python.exe` 真启动 + HTTP）**：质量份额 H₂O → H 合计 0.111899 / O 0.888102、
+H-2 −0.000026（质量加权）；**原子份额 → H 0.666667 / O 0.333333，H:O = 2.0000（修复前 0.126）**；
+天然硼 B-10 = **−0.184309**（修复前 −0.199000）；`D2O` → 只出 1002。交付 `python.exe` 与
+`target\release\python.exe` SHA256 一致、`_internal` 7873=7873、交付 exe 与构建 exe 哈希一致。
+
+**★顺带修掉上轮部署漏做的一步**：交付目录 `WebView2\` 此前**缺文档 §6.5.4/§7c 要求的两条显式
+AppContainer 授权**（只有继承 ACE），已补授并与构建产物逐条一致（各 2 条）。本机 Win11 不需它，
+但补上后拷到 Win10 也能开界面。
+
+**打包链上的两个新经验（可复用）**：
+- **exe 内嵌前端是压缩存储，别用明文 grep 判"有没有进包"**：新老 exe 都搜不到 `ICRU` 等中文字符串。
+  已验证有效的判据是**未压缩的资源键**（`assets/index-<hash>.js`）：旧包 `index-3ybFVgYs.js`、
+  新包 `index-CPhrepCi.js`，与 `gui/dist/assets/` 下产物同名即证明进包。**做这类判定务必先拿旧产物
+  做对照实验**，否则会把"方法无效"误判成"没进包"。
+- **验证 ACL 别用 `/sid`**（icacls 无此参数，会报 `Invalid parameter` 并返回 1，看起来像"没授权"）。
+  正确姿势是 `icacls <dir>` 数 `APPLICATION PACKAGE` 系列行数，或与 `target\release` 对照。
+
+**改了什么（按证据分级）**：
+
+| 级别 | 项 | 事实依据 | 处置 |
+| :-- | :-- | :-- | :-- |
+| 必须 | `/api/expand-formula` 的「原子份额」根本不是原子份额 | `pymcnp.inp.M_0.py:184` 两分支同取质量分数（molmass `fraction` == `mass/formula.mass`，H₂O 实测都 0.111898）⇒ H₂O「原子份额」得 H:O = 0.126（真值 2.0） | 新增 `_expand_formula_member()` 按定义展开；测试改物理断言（12 passed） |
+| 必须 | 质量模式下元素内同位素按**原子丰度**分配 | `M_0.py:191` 把 NIST 原子丰度直接当份额相乘：B-10 +8.0%、Li-6 +15.4%、H-2 −50% | 同上，质量模式改 `w_i = w_el·x_i·A_i/Σx_j·A_j` |
+| 应当 | `icru_soft` 描述错（写「四元素」实为 9 元素）、密度 1.00 | **数值本身正确**（= NIST Table 2 / ICRU-44 软组织），错的是描述与密度（ICRU-44 = **1.06**） | desc 改「ICRU-44 软组织（9 元素）」+ 密度 1.06 |
+| 应当 | `icru_bone` Na 0.002、密度 1.85 | NIST ICRU-44 皮质骨 Na **0.001**、ρ **1.92** | 改数据 + 密度 |
+| 应当 | `icru_lung` 名称/成分/密度三者口径不统一 | 旧值（含 Ca .002/Mg .001/Fe .001）实为 **ICRP-89 / PNNL 记录 356** 且 Ca/Mg/P/S/Fe 被改了一个量级；NIST ICRU-44 肺无 Ca/Mg/Fe、ρ=1.05 | 组成改 ICRU-44 肺；密度 0.26→**1.05**（充气肺 0.26 属 ICRP-89，已写进 desc） |
+| 应当 | `concrete`/`conc_shield` 9 项**无权威出处** | 子任务全文检索 PNNL-15870 Rev.2 + MCNP6.3 手册 + NIST 表 2，老那组数（H .01/O .529/Si .337…）**一条都对不上**；口径（质量份额）判断是对的 | 换 NIST 表 2「Concrete, Ordinary」= PNNL 记录 107 全 10 项（含 C .002484）；`borated_conc` 按「NIST 混凝土 + 1 wt% B」换算 |
+| 应当 | **`u_nat` 19.10 g/cm³ 无出处**，且与本库自相矛盾 | PNNL 记录 385 注明 18.95（取自 NIST）；本库 `u_leu` 18.9445 / `u_du` 18.9512 都是 18.95 一档 | 19.10→**18.95** |
+| 应当 | `h` 氢气密度 0.0001 与自身 desc（8.9e-5）都不对 | PNNL 记录 166 = **8.3748e-5**（20 °C/1 atm；0 °C 才是 8.99e-5） | 密度改 8.3748e-5、desc 写明温压 |
+| 应当 | PNNL `lih` 份额和 0.996552 | 其余 47 项偏差 ≤2e-4；归一后 Li 0.8731827 = LiH 化学计量值 | 归一为 1 |
+| 应当 | `inconel` 成分与描述（Inconel 625）不符 | 规格（Special Metals / HPA，UNS N06625）：Ni ≥58、Cr 20–23、Fe ≤5、Mo 8–10、Nb+Ta 3.15–4.15、Ti ≤0.4；原值 Fe **10%**、Nb 2%、Ti 1% | 按规格中值 + Ni 余量重填（Ni .624/Cr .215/Mo .09/Nb .0365/Fe .025/Mn .0025/Si .0025/Al .002/Ti .002/C .0005） |
+| 建议 | 气体密度无温压标注、`uo2` 未标 TD | PNNL 原文：He-3/BF₃「20 °C、1 atm、Van der Waals」、P-10「20 °C、1 atm、理想气体」；UO₂ 10.96 = 300 K 理论密度 | desc 补「20 °C、1 atm」/「100% 理论密度（95% TD ≈ 10.4）」 |
+| 建议 | 注释/文案过期 | 头注释「55 种」实为 49；UI「含 >0.1% 天然丰度组分」实为 cutoff 1e-9 全量 | 改为 49 种 /「含全部天然同位素组分」 |
+| 建议 | `air` 有效位不足、缺 CO₂ 碳 | NIST 全精度 N .755268/O .231781/Ar .012827/**C .000124**（和正好 1.000000）；干空气近海平面含 300–380 ppm CO₂ | 改 NIST 全精度 4 项 |
+| 建议 | `lead_glass` 组成非氧化物化学计量 | Pb/Si/K 反算 PbO 59.3 + SiO₂ 32.1 + K₂O 6.0 = 97.4% ≠ 100%，O 多 2.6 个百分点 | 按氧化物配平（O→0.2297）并整体归一 |
+| 建议 | 温度/口径标注缺失 | `d2o` 1.1044 是 **25 °C**（最大密度 11.23 °C = 1.1059），不是 20 °C；砂/LiH/SiO₂ 各有口径分支 | desc 逐条注明（砂 1.7 为工程堆积值、LiH 0.82 块体 vs 粉体 0.70、SiO₂ 2.32 非晶 vs 石英 2.648） |
+| 存疑未改 | `solder` 9.00 g/cm³、`zircaloy` 牌号、`stainless304/316` 份额和 0.9993/0.9973 | 混合律估 Sn60Pb40 ≈8.5；Zry-2/4 规格需厂家数据；304/316 是**规格值自身舍入且含平衡元素**，无精确化学计量目标 ⇒ 不擅改（与 LiH 归一 criterion 一致） | 如实登记，待来源 |
+
+**更正我上一轮的两处误判（自查）**：
+1. 曾判「`icru_soft` 数据来源不明、与 ICRU-44 不符」→ **错**。查 NIST Table 2 后确认其数值
+   与 ICRU-44 软组织逐位一致，真问题是描述写「四元素」+ 密度取 1.00。**改的是判断，不是事实。**
+2. 曾称「公式展开的 ZAID 被强制改成 xsdir 首匹配（.80c）」→ **错**。`from_formula` 输出本就是
+   裸 `001001` 形态，`if "." in zaid` 那段是**死代码**，已删除并更正记录。
+
+**同时更正子任务（数值核查）的两处口径误判**（不因"权威方这么说"就照抄）：
+- 它把干空气 0.001205 g/cm³ 与 H₂ 8.3748e-5 g/cm³ 都归为 **0 °C** 值。按理想气体实算：
+  干空气 0 °C = 1.2923e-3、20 °C = 1.2041e-3 ⇒ 1.205e-3 是 **20 °C**；H₂ 0 °C = 8.99e-5、
+  20 °C = 8.380e-5 ⇒ 8.3748e-5 是 **20 °C**（它自己报告里 20 °C 的实算值与这两个数吻合，
+  结论与自己的算术矛盾）。**按算术判定，标注保持 20 °C。**
+
+**未做（按用户指示）**：MT 热散射卡 —— 97/97 预设均未配（水/聚乙烯/石蜡/PMMA/石墨/ZrH₂/LiH
+受影响最大），用户本轮明确「先不管」。
+
+**本批可复用纪律**：
+- **第三方库的「模式参数」要自己验**：`is_weight=True/False` 名字看着对，实测两分支同值 ⇒
+  凡「由参数切换物理口径」的接口，必须用可判真假的期望值（如 H₂O 的 H:O = 2:1）实测一次。
+- **测试会把 bug 固化成契约**：旧 `test_api_expand_formula.py:75-88` 断言「原子 == 负质量」，
+  7 例全绿 ⇒ 修 bug 必须同批改断言，否则改动会被自己的测试判红。
+- **权威数据要查一手表**：NIST Table 2 一次给出 7 种组织/塑料的官方成分，直接终结了
+  「数值可疑」的猜测（其中 `icru_soft` 证明是我判断错、`icru_bone`/`icru_lung` 才是真偏差）。
+
 
 ### S12.3 复核后修复（2026-09-28，提交 `aafbce9`）—— 真 bug 三条 + 一条登记
 
@@ -841,7 +1116,7 @@ return fresh.map((c, i) => (prev[i] ? { ...prev[i] } : c));   // ← 扁平下�
 - **打包口径**：本次只改 `gui/src`（前端源码），`gui/dist` 由启动脚本每次自动构建；
   **不重打包 installer**（sidecar/后端逐字节未变，重打包是纯浪费）。
 
-## S6（当前批次）计数卡回显根因 + 出图全链 + 自审修复（2026-09-17，**版本仍 1.7.6**）
+## S6（历史批次，2026-09-17）计数卡回显根因 + 出图全链 + 自审修复（2026-09-17，**版本仍 1.7.6**）
 
 > **三态**：**已改 ✅ / 已提交 ✅ / 已打包部署 ⏳（本次打包）**
 
@@ -1073,7 +1348,7 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 
 > **教训**：不要用"再补一个更详细的 6.2 人工核对步骤"去修流程坑——那只是把坑描述得更清楚，坑还在。要把它变成**构建命令里的一步**（且校验失败能自己纠正/报错）。
 
-## S4（当前批次）STEP 导入 500 热修（2026-09-12，**仅重打包 sidecar 部署，未升版**）
+## S4（历史批次，2026-09-12）STEP 导入 500 热修（2026-09-12，**仅重打包 sidecar 部署，未升版**）
 
 > **用户报告**：「我导入 step 功能怎么炸了？」——部署版点「📥 导入 STEP」→ 后端 **HTTP 500**，前端弹出 `'CellRow' object has no attribute 'number'`。
 
@@ -1359,6 +1634,10 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 ## §2 当前状态快照（语义记忆）
 
 - **开发阶段**：**v1.7.7 已打包部署**（2026-09-26，**用户指定升版**）—— 本包含 **S11 三条修复（计数卡前缀 / 栅元 `#` / 截面拖动）+ S10 全量（GEOUNED 参数 UI · FreeCAD 自适应切分 · `P A B C D` 感度 · slab 覆盖 · 墓区过滤）+ 09-23 各批**。
+  > **2026-10-07/08 同版本重出包（版本恒 1.7.7，见 S14）**：交付目录 `D:\MCNP\MCNP输入卡生成器` 已多轮刷新
+  > （`_internal` **7878 文件** / WebView2 29 文件；旧版整卷备份 `D:\MCNP\_backup_1.7.7_20261008_014145`）。
+  > 含：截面奇偶判据与伪影剔除、解析切片二分精度、STEP 上轴/方位与原点口径、`/api/step-preview` 方向预览（复用 `Preview3D`）、
+  > 冻结版脚本路径与 FreeCAD python 定位修复、GEOUNED 相切退化微扰修复、生成时封闭性自检实时化。
   **部署版冒烟实测（2026-09-26，真跑 exe）**：5001 **2 s** 就绪；`/api/xsdir-check` `loaded=true`；`/api/parse-inp` 喂用户那张"手工折行、续行行首 `#`"的栅元卡 ⇒ **1 栅元 / 54 项 / 含 `#55` / 无 `#1#2` 粘连 / `imp:n=imp:p=1` / 注释在位**，回显 `F4.fn_prefix='*'`、`F5.number_suffix='X'`；`/api/generate` 回放 `*F4:N 1 2` + `F5X:N 0 0 0 1`；收尾 5001/8100/1420 全释放。
   **产物核对**：exe **6,622,208 B**、`python.exe` **32,622,751 B**（与 `src-tauri/binaries/` **哈希一致**）、`_internal` **7873 文件 / 214,820,150 B**、exe 内 bundle **`index-dO5WbQoY.js`**（旧包 `index-DA8CoYHE.js`）、PE 资源版本 **1.7.7**（UTF-16）；部署目录 `_internal\app\generator\parsers\lines.py` 与源码**哈希一致**。旧包已备份 `D:\MCNP\_backup_1.7.6_20260926_154504`（**整卷改名移动**，秒级可回滚）。
   **分发（2026-09-26）**：已提交 + 已 push `origin/main`，并出 **GitHub Release `v1.7.7`** —— 资产 **`MCNP-Input-Card-Generator-v1.7.7-win64.zip`（119,365,948 B = 113.8 MB）**，
@@ -1461,6 +1740,29 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
   - **AI 接入（MCP over HTTP）**（2026-09-04，1.7.5）：主程序启动时自动拉起 `--mcp-http`（本机环回 **8100** `/mcp` + `/workspace`），外部 AI agent 可直读直改程序当前工作区；前端「🤖 AI」面板给"给 AI 的自配置提示词"。**stdio 接入（`--mcp-server` / 注册MCP.bat）已于 09-04 移除**（reflog `:267`）——`mcnp_bridge.py` 对 `--mcp-server` 现为显式 `sys.exit(2)`（防止 fallthrough 起第二个 5001）。契约见 `inputcard_mcp/`、`AI接入.md`、`docs/inputcard-mcp.md`。
   - **栅元封闭性自检**（2026-09-09）：`/api/check-cell-closure` 判定 6 状态（closed / infinite / semi_infinite / empty / voxel / unresolvable），结果标在栅元列表「封闭」列；3D 预览顺带检测；深模块 `gui/src/utils/{cellClosure.ts,useCellClosure.ts}`。**展示语义（用户 2026-09-10 裁决）**：外无限 = 允许存在、仅提示**感叹号**；**唯有曲面不封闭 = 禁止**。⚠️ 触界判定依赖 bound（`app/_freecad_csg_worker.py:1122-1175`，tol = B×0.005）。
   - **校验规则补全 + 几何水密自检**（2026-09-09）：validator 6 条语法规则（ZAID 格式 / 份额正负号 / S(α,β) 目标核素 / 宏体参数个数 / 80-128 列 / 未定义引用）；几何页「🩺 几何自检」+ 栅元保存/生成 INP 自动触发（FreeCAD BRep 缝隙 + 重叠）。
+  - **截面区域判据修正 + 伪影剔除**（2026-10-07，**已打包部署 ✅**）：点在**奇数个**边界环内 ⇒ 属该栅元（even-odd，MCNP 语义；实测环方向不可靠），
+    悬停同规则（`gui/src/utils/sectionHit.ts` 的 `pointInCell`）；**只标"≥2 个栅元同时认领"的重叠**，空白处一律不画（用户裁决「空腔就应该是空的」）；
+    后端 `app/section_region.py` 判"真区域 vs 只沿边界面接触的伪影"并剔除后者，原因经响应新增字段 **`warnings`** 上界面（`api.yaml` 已登记）。
+  - **解析切片（GQ/SQ 及一切栅元）精度**（2026-10-07）：`app/analytic_slice.py` 的 marching squares 顶点改**二分细化到真实零水平集**
+    （误差 ~1e-11、与分辨率无关；旧中点法 R=100 球 res=32/64/128/256 误差 3.17/1.35/0.78/0.40 cm），网格改方形自适应、包围盒由 `model_bound()` 推导（不再硬编 500）。
+  - **STEP 交换坐标约定：上轴 / 方位角 / 原点口径**（2026-10-08，**已打包部署 ✅**）：单一来源 `app/cad_orientation.py`
+    —— `{up:"Z"|"Y", azimuthDeg:0/90/180/270, origin:"keep"|"center"|"bottom"}` → cad→mcnp 与 mcnp→cad **互逆**整数矩阵、FreeCAD 逐步旋转、中文说明；
+    导入在 GEOUNED 之前转（`geouned_worker` 前置写临时 STEP，"底面"落在 MCNP 的 z=0），导出在 `exportStep` 之前反向转（"底面"落在目标 CAD 上轴 = 0）。
+    **为什么必须显式指定**：STEP 文件本身不带"上轴"字段（ISO 10303 只有坐标值+单位），差异来自源软件默认坐标系。
+    控件：导入对话框「坐标约定（STEP 上轴）」组 + 几何页「📐 导出 STEP」对话框（**不占工具栏那一行**，用户要求）。
+  - **方向预览（导入/导出两侧）**（2026-10-08，**已打包部署 ✅**）：`POST /api/step-preview` —— STEP→STL 镶嵌按内容 **sha1 缓存**，
+    切换朝向只做旋转/平移矩阵（`app/stl_transform.py`，毫秒级）；导出侧同一端点 `direction="mcnp2cad"` 收 3D 预览给的每栅元 STL。
+    **显示复用 `Preview3D` 的预置网格模式**（`preloadedStl`/`preloadToken`/`titleOverride`/`zIndex`），开的是**与「3D 预览」同一个独立窗口**
+    （`windows.ts` 桥扩展，未新增窗口 label ⇒ `windowRouteConsistency` 闸门不变）；非 Tauri 回退窗内浮层。
+    入口：导入对话框「👁 预览方向（用这个 STEP 生成）」、导出对话框「👁 预览方向（看导出后的样子）」，改约定即自动重画。
+  - **GEOUNED 相切退化自动修复**（2026-10-08，**已打包部署 ✅**）：`app/tangent_fix.py`（纯判定）+ `geouned_worker._break_tangent_sphere_cylinder()`
+    —— 检测"球面与**同轴**圆柱面**半径相等**"的退化对，把球面沿径向外移 0.1%（`new = old ∪ (球_R − 球_{R(1−ε)})`，实体包围盒裁剪）。
+    三条纪律：只在退化相切时动手（无此对则**原样返回、绝不重写 STEP**）/ 单实体体积变化 >0.5% 放弃 / 动作如实写进导入提示。
+    开关「相切退化自动修复」默认开（导入对话框「转换退化修复」组）。实测：用户 `筒子1.STEP` 栅元 3/4 由 28268/29424 → **3645.1/3629.5**，error 级重叠清零（详见 S14、§6）。
+  - **生成时封闭性自检实时化**（2026-10-08，**已打包部署 ✅**）：`App.tsx` 生成路径**一律按当前几何重算**（旧实现"有 `deck.cellClosureReport` 缓存就永不重算"），
+    文案唯一来源纯函数 `cellClosure.closureWarnText`（坏栅元逐条列出、**干净返回 `null`** ⇒ 调用方无条件写入即清空）+ 开头 `CLOSURE_WARN_PENDING` + 补上漏掉的 `voxel`。
+  - **冻结版脚本路径与 FreeCAD python 定位收敛**（2026-10-08）：`api_server.app_script_path()`（冻结版取 `sys._MEIPASS/app`；旧写法用 `APP_DIR` 在冻结版指向不存在的 `D:\MCNP\app`）、
+    `freecad_locator.python_exe()`（便携版/安装版两种布局，唯一来源；`GeoUnedConverter._find_python_exe` 转发它）。
   - **参数扫描改造**（2026-09-09）：免正则选中即参数 + 多核并行 + 彩色行标记。
   - **源项编辑器权威化 + 主窗口等比缩放**（2026-09-09）：深模块 `sourceAdv.ts`（adv 权威）/ `useDeckSynced.ts` / `appScale.tsx`；源类型模板精简为单点源 / 多点源 / 高级自由（删除七种冗余模板与自动分布预设）。
   - **格阵 fill 三阶段 + 覆盖完整性检测**（2026-08-24~09-04）：`app/lattice.py` 深模块 + 编辑器 UI 画布 + 3D universe 实例化 + `/api/validate-universe-coverage`（红框预防）+ 切面导出（PNG/SVG + CSV，`gui/src/volume/sliceExport.ts`）。
@@ -1482,10 +1784,15 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 | `app/generator/inp_parser.py` | INP 解析入口 | 后端 |
 | `app/generator/parsers/{core,lines,sections,validator}.py` | 解析管线（行/分段/校验） | 后端 |
 | `app/generator/validator.py` | 校验逻辑 | 后端 |
-| `app/freecad_preview.py` / `_freecad_csg_worker.py` | FreeCAD 3D CSG 求值（子进程） | 后端 |
+| `app/freecad_preview.py` / `_freecad_csg_worker.py` | FreeCAD 3D CSG 求值（子进程）；**`build_geometry(..., cad_orientation=)` 新增（2026-10-08，只对 `fmt="step"` 生效）** | 后端 |
 | `app/stl_cross_section.py` / `_freecad_cross_section_worker.py` | 截面（numpy 切 STL，不依赖 FreeCAD） | 后端 |
-| `app/step_importer_geouned.py` / `geouned_worker.py` | GEOUNED STEP→MCNP 转换封装 | 后端 |
-| `app/step_importer.py` / `freecad_locator.py` | STEP 导入 / FreeCAD 定位唯一入口 | 后端 |
+| `app/analytic_slice.py` / `section_region.py` | **解析切片（GQ/SQ 及一切栅元；2026-10-07 起顶点二分细化到真实零水平集）** / **截面"真区域 vs 边界面伪影"判定（2026-10-07 新增；结果经 `/api/cross-section` 的 `warnings` 上界面）** | 后端 |
+| `app/cad_orientation.py` | **CAD↔MCNP 交换约定单一来源（2026-10-08 新增）**：`{up, azimuthDeg, origin}` → 互逆矩阵 / FreeCAD 逐步旋转 / 中文说明。导入导出共用，改这里两边一起变 | 后端 |
+| `app/stl_transform.py` | **二进制 STL 刚体变换与包围盒（2026-10-08 新增，纯 numpy）**：方向预览切换朝向时在主进程做矩阵，不必重跑 FreeCAD | 后端 |
+| `app/tangent_fix.py` | **相切退化修复的判定逻辑（2026-10-08 新增，纯函数）**：同轴同半径球/柱对 → 球面外移 0.1%；含体积闸门与"做了什么"的提示文案 | 后端 |
+| `app/_freecad_step_preview_worker.py` | **STEP→STL 镶嵌 worker（2026-10-08 新增）**：只做"STEP 变成能看的网格"，朝向变换在主进程 | 后端 |
+| `app/step_importer_geouned.py` / `geouned_worker.py` | GEOUNED STEP→MCNP 转换封装；**worker 前置步骤（2026-10-08）：先按 `cad_orientation` 旋进 MCNP 系，再跑 `tangent_fix` 破除退化相切，最后才是实体预分解** | 后端 |
+| `app/step_importer.py` / `freecad_locator.py` | STEP 导入 / FreeCAD 定位唯一入口；**`freecad_locator.python_exe(bin_root=None)`（2026-10-08 新增）= FreeCAD python.exe 的唯一定位来源（便携版/安装版两布局）** | 后端 |
 | `app/xsdir_db.py` / `material_presets.py` / `material_library.py` | xsdir 截面数据库 / 预设材料库 / **用户材料库持久化（深化，custom/override、导入导出、xsdir 反向索引、组成自洽）** | 后端 |
 | `app/outp_parser.py` | **OUTP 输出解析（纯 stdlib 容错，V1.7.2.2 新增）** | 后端 |
 | `app/mctal_parser.py` / `app/sweep.py` | **mctal 输出解析（k-eff/收敛/tally）** / **参数扫描纯函数（对齐 OWEN sweepCore）** | 后端 |
@@ -1496,7 +1803,9 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 | **前端（gui/src/）** | | |
 | `gui/src/App.tsx` | 主界面（顶栏/导入/生成/保存恢复/主题） | 前端 |
 | `gui/src/components/` | 标签页组件：BasicSettings/MaterialTab/GeometryTab/SourceTab/TallyTab/AdvancedTab/OutputTab。**TallyTab 的"前缀/环探测器轴"必须经 `utils/tallyBridge.ts` 落 deck**（2026-09-26 起，见 §6 接缝那条） | 前端 |
-| `gui/src/components/Preview3D.tsx` / `Preview3DWindow.tsx` | Three.js 3D 预览（独立窗口） | 前端 |
+| `gui/src/components/Preview3D.tsx` / `Preview3DWindow.tsx` | Three.js 3D 预览（独立窗口）。**预置网格模式（2026-10-08）：`preloadedStl`/`preloadToken`/`titleOverride`/`zIndex` —— 方向预览与正常预览复用同一个窗口，不再自搓第二套画布** | 前端 |
+| `gui/src/utils/windows.ts` | **弹出窗口桥（localStorage + Tauri `invoke`）**：`openPreview3D`/`openCrossSection`/`openVolume3D`/`openPtracWindow`… 及各自 `read*Data` 一次性消费。**2026-10-08：3D 预览桥扩展 `preloadedStl`/`preloadToken`/`titleOverride`（STEP 方向预览复用同一窗口、同一 label）** | 前端 |
+| `gui/src/utils/cellClosure.ts` / `useCellClosure.ts` | **栅元封闭性深模块**（6 状态 → 展示元数据）；**2026-10-08 新增 `closureWarnText(report)`：生成前复核文案的唯一来源，坏栅元逐条列出、干净返回 `null`（调用方据此必然清空旧警告）** + `CLOSURE_WARN_PENDING` | 前端 |
 | `gui/src/components/CrossSectionView.tsx` / `CrossSectionWindow.tsx` | 平面截面（独立窗口）；**视图变换/拖动换算一律走 `utils/sectionView.ts`**（2026-09-26 起：旋转中心不得含 `pan`） | 前端 |
 | `gui/src/three/` | 3D 深模块：cameraParams/renderGate/cellMaterial/TickGrid（`setLabelTheme` 屏幕·纸质两种标签底）/axisConfig（轴单一事实来源；**`color` 屏幕色 + `paperInk` 出图墨色**）/planeOffset（截面平面坐标换算）/quickCellPreview（快捷建栅元线框） | 前端 |
 | `gui/src/volume/` | 体积可视化 11 模块（volumeShader/VolumeRenderer/colorize/alignWorld/downsampleRequest/fmeshState/ColorLegend/FMeshForm/VolumeControlPanel/ResultWindow/surfacesAABB） | 前端 |
@@ -1712,6 +2021,63 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 - **测试时间限制（上级 2026-08-22）**：所有测试/构建命令必须加**硬性时间限制**——探活/HTTP 请求/PyInstaller 等长命令用 `Start-Process` + `WaitForExit(超时)` + `Kill`，超时即杀并明确报错，严禁无限挂起。
 
 ## §6 踩坑与排雷指南（情景记忆 · 经验教训）
+
+- **❗部署完必须核对"部署的那份就是刚构建的那份"，四项缺一不可（2026-10-08 本轮两次差点交付错版本）**：
+  ① **别只看"命令跑完了"**：本轮一条 `Remove-Item + Copy-Item` 命令**静默失败**（无输出、exit 1），交付目录里留着的还是
+  **上一版 exe**（时间戳 `01:46:54`，而本次链接时间是 `01:58:27`）—— 只看输出就会把**旧界面**当成"修好的界面"交付。
+  ⇒ **纪律**：部署后核对 **部署目录 exe 的 sha256 == `gui/src-tauri/target/release/` 的 exe**，且 exe 时间戳落在**本次构建窗口内**。
+  ② **`target/release/_internal/app/*.py` 可能与源码不一致**：PyInstaller 跑在你改代码**之前**时，`app/` 下会是旧的（本轮
+  `freecad_locator.py`/`step_importer_geouned.py` 就撞上了）⇒ 部署前逐个 **sha256 对拍**；同时核对
+  **`gui/backend/api_server.py` 的修改时间早于 `target/release/python.exe`**（api_server 进 PYZ，看不到散文件）。
+  ③ **前端改动要查 dist 文本**：`Select-String gui/dist/assets/*.js` 找本批新增的**特征字符串**（本轮查"正在按当前几何复核栅元封闭性"
+  命中 1 处、旧写法 `cellClosureReport||null` 命中 0 处）—— 只比较文件时间会被"vite 重建但没进 exe"骗过。
+  ④ 文件数基线：`_internal` **7879** / WebView2 **29**（WebView2 为裁剪档 `safe`；少了它精简版 Windows 双击打不开）。
+- **❗交付目录里别"按名字一刀切"删 `__pycache__`（2026-10-08 我自己踩的，已按构建产物复原）**：
+  构建产物 `_internal` **本来就有 60 个 `.pyc`**，全在 `vendor\geouned\**`（PyInstaller 把 vendored GEOUNED 目录**原样**拷进来，
+  而源目录 `D:\MCNP\GEOUNED` 早被用过、带着 `__pycache__`）。我误当成"跑冒烟产生的垃圾"删掉 ⇒ 交付目录比构建产物少 60 个文件。
+  **纪律**：① 要清就只清 **`_internal\app\__pycache__`**（那是**运行时**为松散 `.py` 生成的，构建产物里没有）；
+  ② 任何清理动作之后**必须与构建产物做一次"逐文件名+大小"对拍**（`Compare-Object`），差异必须为 0；③ 心里没底就别删，重铺权威副本即可。
+- **❗打包链跑着的时候不要并发跑 pytest（2026-10-08 实测报错）**：本机没有 `pytest.ini`/`testpaths`，从仓库根跑 `pytest -q` 会**递归到
+  `gui/dist_sidecar\python\_internal\**`** —— 而打包链正在重写那个目录 ⇒ 收集阶段直接
+  `PermissionError: [WinError 5] 拒绝访问 …\dist_sidecar\python\_internal\wcwidth`（`1 error during collection`，看起来像"全红"）。
+  **纪律**：门禁用**手册口径 `python -m pytest tests -q`**（不碰 `dist_sidecar`），且**与 `build:release` 串行跑**。
+- **❗"松散 `.py` 还是 PYZ 里的那份生效"—— 已实测（2026-10-08，用标记实验判定）**：`step_importer_geouned.py` / `step_importer.py`
+  **同时**存在于 `python.exe` 内的 PYZ 与 `_internal\app\` 松散副本（`spline_skip.py` / `geouned_worker.py` / `adaptive_decompose.py`
+  **只在**松散副本里）。用一次性标记写进交付目录的松散文件、重启后打同一请求：**标记出现在报错里** ⇒ **运行时取的是松散那份**
+  （`sys.path` 里 `_MEIPASS/app` 在前）⇒ §8 的"松散文件 sha256 对拍"口径**成立**。但**改这类模块仍要整链重打**：
+  PYZ 里那份会一直是旧的，单看松散文件不足以自证整包一致（本批就为 `step_importer_geouned.py` 重打了一轮）。
+- **❗冻结版里"能 import 到"≠"能拿到文件路径"（2026-10-08 用户实机报错）**：`APP_DIR = PROJECT_DIR/app` 而
+  `PROJECT_DIR` 由 `api_server.__file__` 上溯两级 —— 源码树里没问题，**冻结版里 `__file__` 指向 exe 旁的虚拟路径**，
+  算出 `D:\MCNP\app`（**不存在**）；它之所以"看起来能用"，只是因为 `mcnp_bridge` 早把 `sys._MEIPASS/app` 加进了 `sys.path`
+  ⇒ **import 找得到、取脚本文件路径找不到**。用户报错原文：
+  `can't open file 'D:\MCNP\app\_freecad_step_preview_worker.py': [Errno 2] No such file or directory`。
+  **纪律**：`app/` 下的**脚本文件**一律经 `gui/backend/api_server.py::app_script_path(filename)`
+  （冻结版取 `sys._MEIPASS/app`、源码版取 `APP_DIR`、都没有就抛 `FileNotFoundError`，别把 subprocess 的原始 stderr 糊给用户）；
+  **导入模块**仍走 `_import_app()`。同理 **FreeCAD 的 `python.exe` 只从 `freecad_locator.python_exe()` 取**
+  （便携版 python 与 freecad 同目录；安装版在 `bin\` 子目录）—— 别再在 handler 里拼候选路径，两份逻辑迟早漂移。
+- **❗第三方转换器（GEOUNED）产出错误几何时的定位法 + 微扰修复三纪律（2026-10-08，用户报"栅元 3、4 出现 bug"）**：
+  **定位顺序（每步都留了能红的尺子）**：① 先判**源 CAD 是否干净**（FreeCAD 逐实体 `isValid/isClosed` + **两两布尔交集体积**——
+  本例全 0，排除"装配重叠"）；② 再**扫参数**排除我们自己的设置（`compSolids`/`voidGen`/`simplify`/`spline_surfaces`/实体预分解，
+  本例表达式一字不差）；③ 再**单独导出该实体**排除"借邻居的面"（本例单独导入**同样错**）；④ 最后做**受控合成实验**找触发条件
+  （自造"圆柱 r=50 减同轴球"：球 r **= 50** ⇒ 丢一个定界面、体积 25664 vs 实体 3665；r=49.95 / 50.05 ⇒ 全对）；
+  ⑤ 回到真实文件做**面级诊断**验证因果闭合（出问题的实体**恰好是唯一两个**含"同轴同半径球/柱对"的，各 4 对）。
+  **结论**：GEOUNED 把「圆柱被**同轴同半径球面**切掉」当退化情形，CSG 提取时丢定界面 ⇒ 栅元沿轴向无限延伸。
+  **微扰修复三纪律**（`app/tangent_fix.py` + `geouned_worker._break_tangent_sphere_cylinder`）：
+  ① 只在**确证的退化条件**下动手，没有这种对就**原样返回、绝不重写 STEP**（避免 OCCT 往返给本来正确的几何引入副作用——
+  实测"纯往返重写"**不能**修好本例）；② **体积闸门**（单实体变化 >0.5% 放弃该处）；③ 动作**如实写进结果提示**
+  （实体号/外移量/体积变化百分比 + 可在设置里关掉）。**验证方式**：修复前后各跑一次体积与 `/api/check-overlap`，并做
+  开关 A/B 对照（本轮：修复开 ⇒ 3645.1/3629.5 + 重叠清零；`tangentFix=false` ⇒ 退回 `11 14 -5` 与 7275 cm³ 重叠）。
+- **❗"展示类缓存"必须带失效机制，"有坏才提示"必须配 else 清空（2026-10-08 用户报"没实时更新"）**：
+  `App.tsx` 生成路径先读 `deck.cellClosureReport`，**有缓存就永不重算**（该缓存无任何失效机制），且只在 `bad.length` 时
+  `setClosureGenerateWarn(...)`（**没有 else**）⇒ 几何变干净后旧警告永久留在屏上。**两条通用纪律**：
+  ① 任何"算一次给后面用"的结果都要么带**指纹**（参照 `useCellClosure` 的 `deckFingerprint`：内容一致才复用），要么**每次重算**；
+  ② "只在有问题时提示"的写法必须能**清空**（返回 `null`/`""` 并**无条件写入**，别用 `if (bad.length)` 包住 setter）。
+  提示文案抽成纯函数（`closureWarnText`）后，这两条都能被单测与**源码级守卫**锁住。
+- **❗别自搓第二套渲染/组件，先找项目里已有的那个（2026-10-08 用户当场否掉）**：给 STEP 方向预览写了个独立小画布（
+  `StepPreview3D`），用户看过之后一句「**不如直接用 3D 预览的窗口那一套**」—— 而且我的画布**连灯都没加**（`Preview3D` 有
+  `AmbientLight` + 两盏 `DirectionalLight`），渲染出来是一坨暗的。**纪律**：先 grep 有没有现成窗口/组件与其"预置数据"入口；
+  复用 = 观感一致 + 只维护一套 + 出图/坐标轴/轨道控制白拿。真要为复用改既有组件，就给它加**最小可选 props**
+  （如 `preloadedStl`），别复制粘贴。
 
 - **❗发 GitHub Release 的两条实情（2026-09-26 实测，发布 v1.7.7 时摸清）**：
   ① **本机 `gh` CLI 不可用**：`gh auth status` 报 `The token in keyring is invalid`，任何 API 调用 401 `Bad credentials`（要 `gh auth login` 重认证，需人工）。
@@ -2160,6 +2526,9 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 > 09-23 GEOUNED STEP 导入参数 UI → 09-23 MCCAD 实体预分解 → 09-23/24 子弹框两轮反馈 →
 > **09-24 实体预分解换血（MCCAD → FreeCAD 自适应）+ P 卡感度 + slab 覆盖 + 墓区过滤（S10）**。
 > **这条"同版本重出包"长链在 2026-09-26 终结：用户指定升版 v1.7.7**（含 S11 三条修复 + S10 全量）。
+> **v1.7.7 之后的同版本重出包（版本恒 1.7.7，纪律：bug 修复批不升版）**：
+> 2026-10-04 默认走高性能独显 → **10-06 材料库核素/密度口径整顿（S13）** →
+> **10-07/08 截面判据与精度修复 + STEP 交换坐标约定与方向预览 + 冻结版路径修复 + GEOUNED 相切退化修复 + 生成自检实时化（S14，多轮重建部署；详见 `交接-截面修复-20261007.md`）**。
 
 | 版本 | 时间 | 内容 |
 | :--- | :--- | :--- |
