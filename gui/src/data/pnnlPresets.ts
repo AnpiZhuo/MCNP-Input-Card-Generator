@@ -10,7 +10,7 @@ export interface PnnlPresetItem {
 }
 export const PNNL_CATEGORIES: [string, PnnlPresetItem[]][] = [
   ["核燃料", [
-    { key: "uo2", name: "二氧化铀（UO₂）", formula: "UO2", desc: "CAS # 1344-57-6", density: "-10.96", rows: [
+    { key: "uo2", name: "二氧化铀（UO₂）", formula: "UO2", desc: "CAS # 1344-57-6；10.96 g/cm³ 为 100% 理论密度（工程常用 95% TD ≈ 10.4）", density: "-10.96", rows: [
       ["8016", "-0.118212"], ["8017", "-4.7857e-05"], ["8018", "-0.000273364"], ["92234", "-0.000235352"], ["92235", "-0.026444"], ["92236", "-0.000121642"], ["92238", "-0.854666"]],
     },
     { key: "u_leu", name: "商用典型富集铀（LEU）", formula: "U", desc: "The above density is estimated to be accurate to 3 significant digits. Uncertain", density: "-18.9445", rows: [
@@ -45,13 +45,13 @@ export const PNNL_CATEGORIES: [string, PnnlPresetItem[]][] = [
     { key: "ne213", name: "NE-213 等效液体闪烁体", formula: "C8H10", desc: "", density: "-0.874", rows: [
       ["6012", "-0.894581"], ["6013", "-0.0104845"], ["1001", "-0.0949196"], ["1002", "-2.18172e-05"]],
     },
-    { key: "he3", name: "氦-3 正比计数气体", formula: "He", desc: "", density: "-0.000125265", rows: [
+    { key: "he3", name: "氦-3 正比计数气体", formula: "He", desc: "纯 ³He（20 °C、1 atm）", density: "-0.000125265", rows: [
       ["2003", "-1"]],
     },
-    { key: "bf3", name: "三氟化硼计数气体（BF₃）", formula: "BF3", desc: "The above density is estimated to be accurate to 4 significant digits. Uncertain", density: "-0.00283147", rows: [
+    { key: "bf3", name: "三氟化硼计数气体（BF₃）", formula: "BF3", desc: "The above density is estimated to be accurate to 4 significant digits. Uncertain；20 °C、1 atm", density: "-0.00283147", rows: [
       ["5010", "-0.0293852"], ["5011", "-0.130049"], ["9019", "-0.840529"]],
     },
-    { key: "p10", name: "P-10 正比计数气体", formula: "", desc: "", density: "-0.00156131", rows: [
+    { key: "p10", name: "P-10 正比计数气体", formula: "", desc: "90% Ar + 10% CH₄（体积比）；20 °C、1 atm", density: "-0.00156131", rows: [
       ["1001", "-0.0107325"], ["1002", "-2.46685e-06"], ["6012", "-0.0316092"], ["6013", "-0.000370462"], ["18036", "-0.0028753"], ["18038", "-0.000572209"], ["18040", "-0.953833"]],
     },
     { key: "czt", name: "碲锌镉半导体探测器（CZT）", formula: "CdZnTe", desc: "", density: "-5.78", rows: [
@@ -65,14 +65,14 @@ export const PNNL_CATEGORIES: [string, PnnlPresetItem[]][] = [
     },
   ]],
   ["屏蔽与慢化", [
-    { key: "d2o", name: "重水（D₂O）", formula: "H2O", desc: "CAS number 7789-20-0", density: "-1.1044", rows: [
+    { key: "d2o", name: "重水（D₂O）", formula: "D2O", desc: "CAS number 7789-20-0；1.1044 g/cm³ 为 25 °C 值（最大密度 11.23 °C 对应 1.1059）", density: "-1.1044", rows: [
       ["1002", "-0.201133"], ["8016", "-0.796703"], ["8017", "-0.000322538"], ["8018", "-0.00184237"]],
     },
     { key: "zrh2", name: "氢化锆（ZrH₂）", formula: "ZrH2", desc: "", density: "-5.6", rows: [
       ["1001", "-0.0216154"], ["1002", "-4.96829e-06"], ["40090", "-0.496096"], ["40091", "-0.109391"], ["40092", "-0.169045"], ["40094", "-0.175042"], ["40096", "-0.0288013"]],
     },
-    { key: "lih", name: "氢化锂（LiH）", formula: "LiH", desc: "", density: "-0.82", rows: [
-      ["1001", "-0.126351"], ["1002", "-2.90417e-05"], ["3006", "-0.057244"], ["3007", "-0.812928"]],
+    { key: "lih", name: "氢化锂（LiH）", formula: "LiH", desc: "块体密度 0.82 g/cm³（压制粉体取 0.70）", density: "-0.82", rows: [
+      ["1001", "-0.126788"], ["1002", "-2.9142e-05"], ["3006", "-0.0574421"], ["3007", "-0.8157406"]],
     },
     { key: "boral", name: "硼铝复合材料（Boral，65% Al–35% B₄C）", formula: "", desc: "The above density is estimated to be accurate to 3 significant digits. Uncertain", density: "-2.53", rows: [
       ["5010", "-0.0504892"], ["5011", "-0.223448"], ["6012", "-0.0751204"], ["6013", "-0.000880416"], ["13027", "-0.65"]],
@@ -111,13 +111,13 @@ export const PNNL_CATEGORIES: [string, PnnlPresetItem[]][] = [
     },
   ]],
   ["气体与冷却剂", [
-    { key: "helium", name: "氦气（天然氦）", formula: "He", desc: "", density: "-0.000166322", rows: [
+    { key: "helium", name: "氦气（天然氦）", formula: "He", desc: "20 °C、1 atm", density: "-0.000166322", rows: [
       ["2003", "-1.00971e-06"], ["2004", "-0.999999"]],
     },
-    { key: "co2", name: "二氧化碳（CO₂）", formula: "CO2", desc: "The above density is estimated to be accurate to 4 significant digits. Uncertain", density: "-0.00184212", rows: [
+    { key: "co2", name: "二氧化碳（CO₂）", formula: "CO2", desc: "The above density is estimated to be accurate to 4 significant digits. Uncertain；20 °C、1 atm", density: "-0.00184212", rows: [
       ["6012", "-0.269751"], ["6013", "-0.0031615"], ["8016", "-0.72512"], ["8017", "-0.000293559"], ["8018", "-0.00167684"]],
     },
-    { key: "argon", name: "氩气（Ar）", formula: "Ar", desc: "The above density is estimated to be accurate to 4 significant digits. Uncertain", density: "-0.00166201", rows: [
+    { key: "argon", name: "氩气（Ar）", formula: "Ar", desc: "The above density is estimated to be accurate to 4 significant digits. Uncertain；20 °C、1 atm", density: "-0.00166201", rows: [
       ["18036", "-0.0030036"], ["18038", "-0.000597741"], ["18040", "-0.996394"]],
     },
   ]],
@@ -134,7 +134,7 @@ export const PNNL_CATEGORIES: [string, PnnlPresetItem[]][] = [
     { key: "adipose", name: "脂肪组织（ICRP）", formula: "", desc: "The above density is estimated to be accurate to 2 significant digits. Uncertain", density: "-0.92", rows: [
       ["1001", "-0.119445"], ["1002", "-2.74545e-05"], ["6012", "-0.629865"], ["6013", "-0.00738206"], ["7014", "-0.00793885"], ["7015", "-3.1068e-05"], ["8016", "-0.231703"], ["8017", "-9.38032e-05"], ["8018", "-0.000535813"], ["11023", "-0.0005"], ["12024", "-1.55897e-05"], ["12025", "-2.05598e-06"], ["12026", "-2.35394e-06"], ["15031", "-0.00016"], ["16032", "-0.000691363"], ["16033", "-5.62934e-06"], ["16034", "-3.28636e-05"], ["16036", "-8.18772e-08"], ["17035", "-0.00088927"], ["17037", "-0.000300778"], ["19039", "-0.000297399"], ["19040", "-3.8269e-08"], ["19041", "-2.25631e-05"], ["20040", "-1.93324e-05"], ["20042", "-1.35472e-07"], ["20043", "-2.89407e-08"], ["20044", "-4.57563e-07"], ["20046", "-9.17285e-10"], ["20048", "-4.47483e-08"], ["26054", "-1.12911e-06"], ["26056", "-1.83804e-05"], ["26057", "-4.32075e-07"], ["26058", "-5.8509e-08"], ["30064", "-9.61577e-06"], ["30066", "-5.59232e-06"], ["30067", "-8.2712e-07"], ["30068", "-3.83363e-06"], ["30070", "-1.30482e-07"]],
     },
-    { key: "teg_methane", name: "甲烷基组织等效气体（TEG: MB）", formula: "", desc: "The above density is estimated to be accurate to 4 significant digits. Uncertain", density: "-0.00106409", rows: [
+    { key: "teg_methane", name: "甲烷基组织等效气体（TEG: MB）", formula: "", desc: "The above density is estimated to be accurate to 4 significant digits. Uncertain；20 °C、1 atm", density: "-0.00106409", rows: [
       ["1001", "-0.101842"], ["1002", "-2.34084e-05"], ["6012", "-0.4509"], ["6013", "-0.00528457"], ["7014", "-0.0350345"], ["7015", "-0.000137105"], ["8016", "-0.405678"], ["8017", "-0.000164235"], ["8018", "-0.000938128"]],
     },
     { key: "c552", name: "C-552 空气等效塑料", formula: "", desc: "The above density is estimated to be accurate to 3 significant digits. Uncertain", density: "-1.76", rows: [
@@ -142,7 +142,7 @@ export const PNNL_CATEGORIES: [string, PnnlPresetItem[]][] = [
     },
   ]],
   ["通用材料", [
-    { key: "silica", name: "二氧化硅（硅石）", formula: "SiO2", desc: "Note that there are 12 minerals listed for SiO2 at MatWeb.com.", density: "-2.32", rows: [
+    { key: "silica", name: "二氧化硅（硅石）", formula: "SiO2", desc: "非晶/一般 SiO₂（2.32 g/cm³）；α-石英取 2.648。Note that there are 12 minerals listed for SiO2 at MatWeb.com.", density: "-2.32", rows: [
       ["8016", "-0.531126"], ["8017", "-0.000215022"], ["8018", "-0.00122823"], ["14028", "-0.42942"], ["14029", "-0.0225943"], ["14030", "-0.0154249"]],
     },
     { key: "sic", name: "碳化硅（六方晶型）", formula: "SiC", desc: "", density: "-3.21", rows: [
@@ -160,7 +160,7 @@ export const PNNL_CATEGORIES: [string, PnnlPresetItem[]][] = [
     { key: "polystyrene", name: "聚苯乙烯（PS）", formula: "C8H8", desc: "", density: "-1.06", rows: [
       ["1001", "-0.0774055"], ["1002", "-1.77916e-05"], ["6012", "-0.911897"], ["6013", "-0.0106875"]],
     },
-    { key: "sand", name: "砂（天然砂）", formula: "", desc: "", density: "-1.7", rows: [
+    { key: "sand", name: "砂（天然砂）", formula: "", desc: "堆积密度工程取值 1.7 g/cm³（区间：普通砂 1.59 / 干砂 1.76 / 细砂 2.00）；PNNL-15870 无独立砂条目", density: "-1.7", rows: [
       ["1001", "-0.00783093"], ["1002", "-1.79994e-06"], ["6012", "-0.00332111"], ["6013", "-3.89237e-05"], ["8016", "-0.5347"], ["8017", "-0.000216469"], ["8018", "-0.00123649"], ["11023", "-0.017063"], ["13027", "-0.034401"], ["14028", "-0.33538"], ["14029", "-0.0176463"], ["14030", "-0.012047"], ["19039", "-0.0108011"], ["19040", "-1.38988e-06"], ["19041", "-0.000819465"], ["20040", "-0.0108377"], ["20042", "-7.59456e-05"], ["20043", "-1.62242e-05"], ["20044", "-0.00025651"], ["20046", "-5.1423e-07"], ["20048", "-2.50859e-05"], ["26054", "-0.00075024"], ["26056", "-0.0122128"], ["26057", "-0.000287092"], ["26058", "-3.88763e-05"]],
     },
     { key: "caco3", name: "碳酸钙（CaCO₃）", formula: "CaCO3", desc: "The above density is estimated to be accurate to 2 significant digits. Uncertain", density: "-2.8", rows: [

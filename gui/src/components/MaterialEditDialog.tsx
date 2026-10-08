@@ -419,7 +419,7 @@ export default function MaterialEditDialog({ matNum, name, nuclides: initial, de
               `份额 = ${shareModeLabel(shareMode)} · ${SIGN_CONVENTION_NOTE} · ${SHARE_CONVERSION_NOTE}`,
             ),
             parsed && React.createElement("div", { style: { fontSize: 11, color: "var(--text-tertiary)", marginBottom: 8 } },
-              `共 ${parsed.length} 个核素（含 >0.1% 天然丰度组分）`,
+              `共 ${parsed.length} 个核素（含全部天然同位素组分）`,
             ),
             // 归一化提示：份额总和恒为 1；化学式:比例 只影响各成分相对比例，结果仍会归一化
             parsed && React.createElement("div", { style: { fontSize: 10, color: "var(--text-tertiary)", marginBottom: 8, lineHeight: 1.5 } },

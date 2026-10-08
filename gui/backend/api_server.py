@@ -1855,6 +1855,74 @@ def _fmt_num(v) -> str:
     return "" if s in ("", "nan", "None") else s
 
 
+# ── 化学式 → 核素展开（份额口径在本模块按定义实现）────────────────────
+# 为什么不用 pymcnp.inp.M_0.from_formula 的 is_weight 分支：
+#   1) 该函数两个分支取的是同一个量（molmass Composition.fraction 与
+#      mass/formula.mass 都是「质量分数」，见 pymcnp/inp/M_0.py:184，实测
+#      H2O：fraction == mass/formula.mass == 0.111898），因此 is_weight=False
+#      只是把质量份额翻成正号，并非原子份额——H2O 会得到 H:O = 0.126（真值 2.0）；
+#   2) 它把 NIST **原子**丰度直接当份额相乘，质量份额模式下元素内同位素分配
+#      不是质量加权：B-10 偏 +8.0%、Li-6 偏 +15.4%、H-2 偏 −50%。
+# 本实现：元素级份额按模式取质量分数 / 原子数占比；元素内按
+#   质量模式 w_i = w_el · x_i A_i / Σ x_j A_j（负号 = MCNP 质量份额）
+#   原子模式 n_i = n_el · x_i            （正号 = MCNP 原子份额）
+_PURE_ISOTOPES = {"2H": ("H", 2), "3H": ("H", 3), "D": ("H", 2), "T": ("H", 3)}
+_ISO_CUTOFF = 1e-9
+
+
+def _zaid_zzzaaa(z: int, a: int) -> str:
+    """ZAID 的 ZZZAAA 零填充写法（与 pymcnp.types.Zaid 输出一致）。"""
+    return f"{z:03d}{a:03d}"
+
+
+def _expand_formula_member(species: str, ratio: float, is_weight: bool) -> list:
+    """单个化学式组分 → [(ZZZAAA, 带符号份额)]，未归一化（调用方按 |Σf| 归一）。
+
+    is_weight=True → 质量份额（负号）；is_weight=False → 原子份额（正号）。
+    """
+    import molmass
+    from pymcnp import _elements as _pym_elements
+
+    comp = molmass.Formula(species).composition()
+    if is_weight:
+        elem_frac = {el: comp[el].fraction for el in comp}          # 元素质量分数
+    else:
+        counts = {el: float(comp[el].count) for el in comp}          # 元素原子数
+        total_n = sum(counts.values()) or 1.0
+        elem_frac = {el: counts[el] / total_n for el in comp}        # 元素原子占比
+
+    rows = []
+    for el, ef in elem_frac.items():
+        base = ef * ratio
+        pure = _PURE_ISOTOPES.get(el)                                # D/T 写法：只出该同位素
+        if pure is not None:
+            sym, a = pure
+            data = _pym_elements.ELEMENTS[sym]
+            if abs(base) > _ISO_CUTOFF:
+                rows.append((_zaid_zzzaaa(data["z"], a),
+                             -base if is_weight else base))
+            continue
+        data = _pym_elements.ELEMENTS.get(el)
+        if not data:
+            raise ValueError(f"无法识别的元素: {el}")
+        abundance = data["fraction"]        # NIST 原子丰度
+        amass = data["mass"]
+        if is_weight:
+            denom = sum(x * amass[a] for a, x in abundance.items() if a in amass)
+            for a, x in abundance.items():
+                if a not in amass or not denom:
+                    continue
+                frac = base * (x * amass[a] / denom)                 # 元素内按质量加权
+                if frac > _ISO_CUTOFF:
+                    rows.append((_zaid_zzzaaa(data["z"], a), -frac))
+        else:
+            for a, x in abundance.items():
+                frac = base * x                                      # 元素内按原子丰度
+                if frac > _ISO_CUTOFF:
+                    rows.append((_zaid_zzzaaa(data["z"], a), frac))
+    return rows
+
+
 # ===== HTTP 服务 =====
 
 class MCNPHandler(BaseHTTPRequestHandler):
@@ -2449,7 +2517,6 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 is_weight = True
             elif isinstance(is_weight, str):
                 is_weight = is_weight.strip().lower() not in ("", "0", "false", "no")
-            import pymcnp
             formulas = {}
             for line in text.split("\n"):
                 for part in line.split(","):
@@ -2461,19 +2528,14 @@ class MCNPHandler(BaseHTTPRequestHandler):
                     else:
                         tok = part.split()
                         formulas[tok[0]] = float(tok[1]) if len(tok) > 1 else 1
+            # 展开：质量/原子份额口径由 _expand_formula_member 按定义实现
+            # （不再走 pymcnp.M_0.from_formula 的 is_weight 分支，原因见该函数注释）。
+            # ZAID 一律输出裸 ZZZAAA（不带库后缀），库选择交给 MCNP/xsdir；
+            # 如需固定库（如 .80c）应在此显式追加，而不是隐式改写。
             all_rows = []
             for sym, ratio in formulas.items():
-                sub = pymcnp.inp.M_0.from_formula({sym: 1}, is_weight=is_weight, cutoff=1e-9)
-                parts = str(sub).replace("&", " ").replace("\n", " ").split()
-                for k in range(1, len(parts)-1, 2):  # 跳过 m1 标签
-                    zaid = parts[k]
-                    frac = float(parts[k+1]) * ratio
-                    if xsdir_db.loaded and "." in zaid:
-                        num = zaid.split(".")[0]
-                        matches = [z for z in xsdir_db.zaids if z.split(".")[0] == num]
-                        if matches: zaid = matches[0]
-                    all_rows.append((zaid, frac))
-            if not all_rows: raise ValueError("pymcnp 返回空")
+                all_rows += _expand_formula_member(sym, ratio, is_weight)
+            if not all_rows: raise ValueError("化学式未展开出任何核素")
             total = sum(abs(f) for _, f in all_rows)
             if total > 0 and abs(total-1) > 1e-9:
                 all_rows = [(z, f/total) for z, f in all_rows]
