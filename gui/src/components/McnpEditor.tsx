@@ -3,7 +3,13 @@
  *
  * Monaco 使用单一 TextModel 同时负责文本、光标、选区和复制。
  * 曲面/TR 提示通过 inline completion（ghost text）绘制，不再叠加第二份正文。
+ * 语法与幽灵提示在 `mcnpCardSyntax.ts`（纯数据，可离线逐行断言）。
+ *
+ * ⚠️ `./monacoLocal` 是副作用导入，必须保留：它把**随包打包**的 monaco 交给 loader 并自带
+ * worker，否则 monaco 会在运行时去 jsdelivr CDN 下载 —— 本程序不能联网，那样编辑器会直接不可用。
  */
+import "./monacoLocal";
+
 import React, { useEffect, useRef } from "react";
 import Editor, { type Monaco, type OnMount } from "@monaco-editor/react";
 import type { IDisposable, Position, editor } from "monaco-editor";
@@ -170,6 +176,9 @@ export default function McnpEditor({
         value={value}
         onChange={(next) => onChange?.(next ?? "")}
         onMount={handleMount}
+        // 加载期文案（默认是英文 "Loading..."）。monaco 现在随包，正常只闪一下；但万一编辑器
+        // 起不来，这行字至少让用户看出「卡在编辑器本身」，而不是一片空白。
+        loading={<span style={{ color: "#9CA3AF", fontSize: 12 }}>编辑器加载中…</span>}
         wrapperProps={{ "data-placeholder": placeholder }}
         options={{
           minimap: { enabled: false },
