@@ -1,6 +1,23 @@
 # 项目记忆文档（AI 速查手册）
 
-> **★ 本批（2026-10-08 下午）STEP 导入两件事 —— 已改 ✅ / **已重打包并部署 ✅（三轮构建、一次终态交付）** / 已提交 `d6cee53`（未 push）· 版本仍 1.7.7**
+> **★ 本批（2026-10-08 晚）卡片编辑器断网化（Monaco 本地化 + 去字体外链）+ 曲面卡「只有第一行着色」修复 —— 已改 ✅ / 已重新打包并部署 ✅ / 已提交 `75f9b58` + `8f07e12` + `ecd9172`（未 push）· 版本仍 1.7.7（bug 批不升版）**
+> **用户原话**：「我的项目不能联网」+「以及，曲面卡现在貌似只有第一行，曲面号和转换卡会正常着色」。短期批次记忆见 **S16**。
+> ① **断网可用**：编辑器原走 `@monaco-editor/react` → `@monaco-editor/loader` 的**内置默认 CDN**（jsdelivr 上的 monaco），断网时 `Editor` 只 `console.error`、
+>    `isEditorReady` 恒 false ⇒ 编辑区空白 + 永久停在英文 `Loading...`；`index.html` 另从 fonts.googleapis.com 拉 Inter 字体。
+>    修法：新增 `src/components/monacoLocal.ts`（`loader.config({ monaco })` 把**随包** monaco 交给 loader + 自带 `MonacoEnvironment.getWorker`）；字体改系统栈。
+>    ② **顺带砍掉 monaco 自带语言服务（省约 10 MB）**：`languages/features/<服务>/workerManager.js` 里的 `new Worker(new URL('ts.worker.js', import.meta.url))`
+>    被 Vite **静态识别并直接产出 worker chunk**（ts.worker 7.0 MB + css 1.06 + html 0.72 + json 0.41 ≈ 9.2 MB）—— 与 `getWorker` 覆写**无关**；
+>    故新增 Vite 插件把 `languages/{features,definitions}/**` 置空，并带 `closeBundle` 闸门（产物里再出现语言服务 worker 即构建失败）。**dist 1.9 MB → 6.4 MB**（未裁剪时 16 MB）。
+> ③ **曲面卡着色**：Monarch 的状态**跨行保持**，旧语法 root→surfaceAfterId→surfaceBody 三层跳转且都没在行尾回 root ⇒ 第 1 行读完卡在子状态，
+>    **第 2 行起行首曲面号掉成 number（绿）、注释行不再着色**；TR 卡语法本来就只有一个状态，所以当时正常（= 用户「转换卡正常」的观察）。改为**单状态**，
+>    并把语法与幽灵提示抽成 `src/components/mcnpCardSyntax.ts`（纯数据 + 纯函数 ⇒ 可用 `monaco.editor.tokenize()` 离线逐行断言）。
+> **部署版实测（CDP 直连交付 exe，不是看截图猜）**：几何页打开后资源列表**零外部主机**（只有 `tauri.localhost` 与本机 5001/8100）；
+>    逐行 token 实测 —— `1 3 -5 10 5.0` / `2 PX -9 $ X垂面` / `C 注释行` / `3 SO 5.0` / `900 RPP …` **每行行首都是 surface-id(琥珀)**、注释行整行灰、TR 引用仍青色；
+>    第 5 行末尾出现幽灵提示 `$ 长方体`（inline completion 正常）。CDP 报内核 `Edg/154.0.4258.37` = **随包固定版**（系统 Edge 是 `.62`）⇒ 自带运行时确实在用。
+> **门禁**：vitest **118 文件 / 1017 例全过**、`tsc` 两档 EXIT 0、`build:release` **399 s EXIT 0**；交付四项核对（exe sha256 `61001EA0…`、`python.exe` 32,670,407 B、
+>    `自检.bat` `1C982B35…`、`_internal` **7879 文件 0 差异**、WebView2 **29 文件 0 差异**）+ 总计 **7913**、AppContainer ACL 两条已在交付目录。回滚点 `_backup_1.7.7_20261008_184439`。
+
+> **★ 上一批（2026-10-08 下午）STEP 导入两件事 —— 已改 ✅ / **已重打包并部署 ✅（三轮构建、一次终态交付）** / 已提交 `d6cee53`（未 push）· 版本仍 1.7.7**
 > **用户原话**：「设置一下 step 导入时 GEOUNED 切分面数用户可以自己键入，，遇到样条曲线了就跳过而不是终止或暂停，并报告」→ 随后「部署」→ 冒烟查到问题后「修好！」。短期批次记忆见 **S15**。
 > ① **切分面数自己键入**：`cutDegree` 三档下拉（coarse/medium/fine = 50/30/20）→ **数字框**（留空 = 30，校验"不小于 1 的整数"）。
 >    后端 `degree_to_face_limit` **本来就认数字**（早有用例 `(12,12)`/`("35",35)`）⇒ 转发链一行未动；另加**旧记忆值迁移** `"fine" → "20"`
@@ -35,7 +52,7 @@
 > （解析不出才回落旧口径），且内层**不加标签**（外层已加一次，否则"…失败：…失败：…"）；② worker 新增 `_UserFacing`：预期内的提前失败只回原因、**不缀 traceback**。
 > **教训**：`dev 单测 + dev 端到端` 都看不见这类"只在部署形态下暴露"的缝 —— 出包后**必须**用部署版喂真输入走一遍用户路径。
 
-> **★ 本批（2026-10-07 ~ 10-08）截面判据/精度修复 + STEP 交换坐标约定与方向预览 + 冻结版路径 + GEOUNED 相切退化 + 生成自检实时化 —— 已改 ✅ / 已重新打包部署 ✅（多轮）/ 已提交 `d6cee53`（未 push）· 版本仍 1.7.7（bug 批不升版）**
+> **★ 上一批（2026-10-07 ~ 10-08）截面判据/精度修复 + STEP 交换坐标约定与方向预览 + 冻结版路径 + GEOUNED 相切退化 + 生成自检实时化 —— 已改 ✅ / 已重新打包部署 ✅（多轮）/ 已提交 `d6cee53`（未 push）· 版本仍 1.7.7（bug 批不升版）**
 > **逐条实测与证据链见 `交接-截面修复-20261007.md` §1–§15**（本批所有数字都可在其中找到出处）；短期批次记忆见 **S14**。
 > 用户原话驱动的六件事：
 > ① **「截面里某块实际是其他材料，但被外材料覆盖、悬停只显示外材料名」** ⇒ 区域判据改**奇偶（even-odd）**（MCNP 语义：
@@ -293,7 +310,63 @@
 
 > 只保留"正在处理"的信息。**批次完成后，本区随 CHANGELOG 归档一起刷新。**
 
-### S15（当前批次）STEP 导入两件事：GEOUNED **切分面数可自己键入** + **样条曲面跳过而不是终止**并报告（2026-10-08，**已改 ✅ / 已重打包部署 ✅ / 已提交 `d6cee53`（未 push）· 版本仍 1.7.7**）
+### S16（当前批次）卡片编辑器断网化（Monaco 本地化 + 去字体外链）+ 曲面卡「只有第一行着色」修复（2026-10-08 晚，**已改 ✅ / 已重新打包部署 ✅ / 已提交 `75f9b58` + `8f07e12` + `ecd9172` · 版本仍 1.7.7**）
+
+> **用户原话**：「我的项目不能联网」→（查清编辑器要联网后）「直接关掉并部署」；另报「曲面卡现在貌似只有第一行，曲面号和转换卡会正常着色」。
+> **三条提交**：`75f9b58` 曲面卡语法改单状态 + 语法抽成可测模块 / `8f07e12` Monaco 本地化 + 去字体外链 + 裁掉语言服务 / `ecd9172` 语法测试类型修正。
+
+> **① 断网可用（本批主线）**
+> **怎么发现的**：`@monaco-editor/loader` 的默认 `paths.vs` 指向 jsdelivr 上的 monaco（`node_modules/@monaco-editor/loader/lib/es/config/index.js:3`），
+> 而我们一行覆写都没有 ⇒ **联网时完全正常**，只有断网才暴露：`Editor` 的 `loader.init()` 失败只 `console.error`、`isEditorReady` 恒 false ⇒
+> 编辑区 `display:none` + 中间永久挂着英文 `Loading...`（`tauri.conf.json` 的 `csp: null` 也不会提前拦）。已构建产物 `dist/assets/index-*.js` 里**就写着那串地址**。
+> **第二条同类**：`gui/index.html` 从 `fonts.googleapis.com` 拉 Inter 字体，跟着进 dist → 进 exe。
+> **修法**：`src/components/monacoLocal.ts`（副作用模块，被 `McnpEditor` 导入）= `loader.config({ monaco })`（把随包的 monaco 交给 loader ⇒ 它不再注入任何 script）
+> + `self.MonacoEnvironment = { getWorker: () => new editorWorker() }`；`global.css` 的 `--font` 去掉首位 `"Inter"` 改系统栈；
+> `<Editor>` 补中文 `loading` 文案（否则失败时是一片空白 + 英文 Loading，用户看不出卡在编辑器）。
+> 配套：新增 `src/vite-env.d.ts`（引 `vite/client`，`?worker` 的类型来源）、`vite.config.ts` 的 `defineConfig` 改从 `vitest/config` 引（容 `test` 段）。
+> **顺手修掉一处旧伤**：`index.html` 的 `<title>` 在磁盘上就是**六个字面问号**（`MCNP ??????`，自 v1.6.0 起；只因窗口标题由 `tauri.conf.json` 覆盖而没人发现）。
+
+> **② 顺带省掉 10 MB（方案里判断错、靠实测纠正的一条）**
+> 我原以为"自己接管 `getWorker` 就不会把语言服务 worker 打进包"，**实测是错的**：`languages/features/<服务>/workerManager.js` 里的
+> `new Worker(new URL('ts.worker.js', import.meta.url), { type: "module" })` 会被 **Vite 静态识别并直接产出 worker chunk**
+> （ts 7.0 MB / css 1.06 / html 0.72 / json 0.41 ≈ **9.2 MB**）—— 与 `getWorker` 是**两条独立路径**。首次构建 dist 从 1.9 MB 涨到 **16 MB**。
+> **修法**：`vite.config.ts` 新增 `dropMonacoLanguageServices()` 把 `languages/{features,definitions}/**` 置空。安全性有据：前者在聚合入口里是
+> **命名空间再导出**（`import * as X …; export { X as css }` ⇒ 空模块只是空命名空间，语法合法）、后者是**副作用导入**；我们要用的补全/幽灵提示都在主线程
+> `editor/contrib/**`（**未动**），且全树无任何语言服务 API。**dist 16 MB → 6.4 MB**（净增 4.5 MB）。
+> ⚠️ 该裁剪依赖 monaco 目录约定、失效会**静默**胖 10 MB ⇒ 插件自带上闸门（`closeBundle` 扫 `dist/assets`，除 `editor.worker` 外出现语言服务 worker 即**构建失败**）。
+
+> **③ 曲面卡「只有第一行着色」**
+> 根因：**Monarch 的 tokenizer 状态跨行保持**，旧语法 `root → surfaceAfterId → surfaceBody` 三层跳转且**都没有行尾回 root 的规则** ⇒ 第 1 行读完卡在
+> `surfaceBody`：第 2 行起行首曲面号落到 `number`（绿）而非 `surface-id`（黄），且 `^\s*[Cc]` 注释规则只在 root 里 ⇒ 注释行也不再着色。
+> TR 卡语法只有一个 state，所以它当时正常 —— 与用户「转换卡正常」的观察吻合。
+> 修法：曲面卡改**只有 root 一个状态**；行首「曲面号 +（可选）变换号」用一条两捕获组规则 `["surface-id","tr-reference"]` 保留 TR 引用配色。
+> **抽模块的理由就是这次的 bug**：语法埋在组件里时**没法测**（Monarch 写错只表现为"某几行不着色"），故抽成 `src/components/mcnpCardSyntax.ts`（纯数据 + 纯函数）
+> 并新增 `gui/test/mcnpCardSyntax.test.ts`（12 例：`monaco.editor.tokenize()` 逐行断言 + 把"不得有子状态"钉成不变量 + 覆盖此前零测试的 `ghostForLine`）。
+> **该测试对修复前的语法是红的**（已实测：旧规则第 2 行行首 token 是 `number`，第一条断言即失败）。
+> ⚠️ 该测试约 10–15 秒（要加载 monaco 本体换真实 Monarch 行为），文件顶部写明"不要为了提速换成手写正则模拟"。
+
+> **测试基建（此前项目没有任何 vitest 配置）**：本地化后，渲染整个几何页的 4 个 dom 用例会连带把 monaco 真初始化 ⇒ jsdom 缺 `matchMedia`/`ResizeObserver`/真实布局，
+> 实测 **6 例失败 / 17 个错误、collect 24 s → 81 s**。故新增 `test/setup/monacoLocalStub.ts`（桩掉 monacoLocal，恢复"编辑器在 dom 用例里不必初始化"的旧态）
+> 并在 `vite.config.ts` 配 `test.setupFiles`；要验真行为的那条单独放 `test/monacoLocalWiring.test.ts`（文件内 `vi.unmock` 取消全局桩）。
+> 另新增 `test/monacoOffline.test.ts`：全 `gui/src` 扫**运行时远程外链**（排除本机 `127.0.0.1` 与 XML/SVG 命名空间两类不出网情形；白名单只放 GeometryTab 的 FreeCAD 官网链接并写明理由）
+> + `index.html` 无 `https://` + 本地化接线未被删。**这把尺子能红已实测**（注入一行带引号的 CDN 地址即失败，随后还原）。
+
+> **一处如实登记**：产物里 `grep cdn.jsdelivr` 仍有 **1 个文件**命中 —— 那是 loader 的**内置默认值字符串**，改不掉（`loader.config` 只是让 `init()` 不走那条路）。
+> 所以「产物里没有 jsdelivr」这条查不了，改为查**行为**（`monacoLocalWiring.test.ts`：loader 已拿到随包实例 ⇒ `init()` 直接 resolve、且文档里没被注入任何外部 script）。
+
+> **门禁（实跑）**：vitest **118 文件 / 1017 例全过**；`tsc --noEmit` 与 `tsc -p tsconfig.test.json --noEmit` 两档 **EXIT 0**；`build:release` **399 s EXIT 0**。
+
+> **部署与冒烟（本批新增验证手段：CDP 直连交付 exe，而不是只看截图猜）**
+> 交付目录 `D:\MCNP\MCNP输入卡生成器`：exe sha256 `61001EA0…` == `target/release`；`python.exe` 32,670,407 B 与 `binaries/` 一致；`自检.bat` `1C982B35…` 一致；
+> `_internal` **7879 文件**、WebView2 **29 文件**，**逐文件名+大小 0 差异**；总计 **7913**；交付目录 WebView2 上 **AppContainer ACL 两条已复核在**（`ALL APPLICATION PACKAGES` + `所有受限制的应用程序包`，子文件继承）。
+> 回滚点 `_backup_1.7.7_20261008_184439`（本批改动前）。版本仍 **1.7.7**。
+> **冒烟**：5001 **6 s** 就绪、xsdir 7925；CDP 报内核 **`Edg/154.0.4258.37`** = 随包固定版（系统 Edge 是 `.62`）⇒ 自带运行时确实在用；
+> **几何页打开后资源列表零外部主机**（只有 `tauri.localhost` 与本机 5001/8100）—— 这是"断网可用"的直接证据（修复前这一步就会去 jsdelivr 取 monaco）；
+> **逐行 token 实测**（真实鼠标事件点进编辑器 + `Input.insertText` 换成受控卡）：5 行行首全是 surface-id(琥珀)、注释行整行灰、TR 引用青色、第 5 行末尾出现幽灵提示 `$ 长方体`；截图留档。
+> 收尾：主程序 / MCP 子进程 / 端口全释放；`_internal` 与构建产物重做对拍仍 **0 差异**。
+> ⚠️ **一条运维事实**：冒烟前交付版**正在运行**（用户开着），按手册 §7a 先关掉了它；关的时候 **8100 上的 `--mcp-http` 子进程不会随主程序退出**，必须按 PID 单独清（§6 坑 10 的老问题，仍未根治）。
+
+### S15（上一批次）STEP 导入两件事：GEOUNED **切分面数可自己键入** + **样条曲面跳过而不是终止**并报告（2026-10-08，**已改 ✅ / 已重打包部署 ✅ / 已提交 `d6cee53`（未 push）· 版本仍 1.7.7**）
 
 > **用户原话**：「设置一下 step 导入时 GEOUNED 切分面数用户可以自己键入，，遇到样条曲线了就跳过而不是终止或暂停，并报告」→「部署」→（冒烟查到问题后）「修好！」。
 > **门禁（实跑）**：`test_spline_skip.py` **19 passed**（含与已安装 GEOUNED 源码的判据对照）、`test_geouned_converter_errors.py` **7 passed**、

@@ -6,7 +6,7 @@
 >
 > **详细设计变更**：后端见 `docs/backend-changes.md`、前端见 `docs/frontend-changes.md`、代码历史见 `git log`。
 >
-> **门禁基线沿革**：pytest 343 → 465 → 512 → 528 → 573 → 587 → 632 → 673 → 703 → 737 → 741 → 752 → 765 → 875（2026-09-10 实跑）→ 900（2026-09-11 实跑：`python -m pytest tests -q` = 900 passed / 0 failed / 0 skipped；含 +25 例 `test_mcnp_tasks.py`）→ **982 passed / 1 failed（最新，2026-09-17 实跑：`python -m pytest tests/ -q`；唯一失败 `test_meshtal_worker.py::test_worker_spawn_dev_mode_bad_tally_error` 为 **既有 GBK 解码环境问题**，`git stash` 复核与本批无关）**；vitest 118 → 327 → 358 → 412 → 449 → 466 → 476 → 512 → 546 → 554 → 587+4 → 625（2026-09-10 实跑）→ **644（2026-09-17 实跑：82 files / 644 tests passed / 0 skip）→ 737（2026-10-15 实跑：90 files / 737 tests passed / 0 skip）→ **953（2026-10-02 实跑：106 files / 953 tests passed / 0 skip；含新增 `gui/test/webview2Slim.test.ts` 18 例）** → **991（2026-10-08 实跑：114 files / 991 tests passed / 0 skip；含本批新增 `stepPreviewDialog`/`geometryExportDialog`/`closureGenerateWarn`/`previewBridgePreload` 等；本轮用 `node node_modules/vitest/vitest.mjs run` 直接跑，绕开本机 `npm.ps1` 执行策略拦截）**。
+> **门禁基线沿革**：pytest 343 → 465 → 512 → 528 → 573 → 587 → 632 → 673 → 703 → 737 → 741 → 752 → 765 → 875（2026-09-10 实跑）→ 900（2026-09-11 实跑：`python -m pytest tests -q` = 900 passed / 0 failed / 0 skipped；含 +25 例 `test_mcnp_tasks.py`）→ **982 passed / 1 failed（最新，2026-09-17 实跑：`python -m pytest tests/ -q`；唯一失败 `test_meshtal_worker.py::test_worker_spawn_dev_mode_bad_tally_error` 为 **既有 GBK 解码环境问题**，`git stash` 复核与本批无关）**；vitest 118 → 327 → 358 → 412 → 449 → 466 → 476 → 512 → 546 → 554 → 587+4 → 625（2026-09-10 实跑）→ **644（2026-09-17 实跑：82 files / 644 tests passed / 0 skip）→ 737（2026-10-15 实跑：90 files / 737 tests passed / 0 skip）→ **953（2026-10-02 实跑：106 files / 953 tests passed / 0 skip；含新增 `gui/test/webview2Slim.test.ts` 18 例）** → **991（2026-10-08 实跑：114 files / 991 tests passed / 0 skip；含本批新增 `stepPreviewDialog`/`geometryExportDialog`/`closureGenerateWarn`/`previewBridgePreload` 等；本轮用 `node node_modules/vitest/vitest.mjs run` 直接跑，绕开本机 `npm.ps1` 执行策略拦截）** → **1017（2026-10-08 晚 实跑：118 files / 1017 tests passed / 0 skip；含本批新增 `mcnpCardSyntax` 12 例 / `monacoOffline` 6 例 / `monacoLocalWiring` 3 例；同轮 `tsc` 两档与 `vite build` 均 EXIT 0）**。
 > **⚠️ 2026-10-07/08 本批的 pytest 全量数字缺失（如实登记）**：本机 scratch 环境（`%TEMP%\dsh_pyenv` 的 PyPI 版 pymcnp）**与项目解析不兼容**（`parse_surfaces("1 SO 5.0")` 直接失败）⇒ 该环境下的全量 pytest 结果**不可信**（实测 62 failed 中含大量环境假阳性，且 3 条格阵契约失败同源）；本批只报了**与改动直接相关的 59 passed**。**下次跑全量前**把项目自带源码排在前面：`PYTHONPATH=D:\MCNP\PyMCNP\src;%TEMP%\dsh_pyenv;…` 再 `pytest -q tests`。
 > **计数口径（2026-09-10 补）**：上列与总表各行的 pytest/vitest 计数**均为该批当时快照**；当前权威值 = 上列两个"最新"数字（2026-09-17：pytest **982/1**、vitest **644**）。**2026-09-10 起该口径已从"静态抄录"升级为"实跑结果"**（见下条）。
 > **验证批次（2026-09-10，接手方**有 shell**）**：按 `docs/fix-verification.md` **实跑全部门禁，全绿** —— pytest 875/0/0、`tsc --noEmit` EXIT 0、`tsc -p tsconfig.test.json --noEmit` EXIT 0、vitest 625/0、`vite build` EXIT 0。**先决条件实测**：5001 空闲；`pytest-timeout` **未装**（故全程不用 `--timeout`）；`npm.ps1` 被执行策略拦截（改用 `npm.cmd`/`npx.cmd`）。**新依赖（已获用户批准）**：`@types/node@^22.20.2`（devDependency）。**跑门禁抓出 5 个静态审计看不见的真缺陷**（详见 `docs/fix-verification.md` §7 与 `PROJECT_MEMORY.md` S1.0）：`meshtal_cache.py:136` 缩进错误致全量 pytest **收集阶段中断**、`CellEditDialog.tsx:174` 多余三元分支致该文件**无法编译**、`source_sampler._summarize` **丢弃单能 δ 分布真实能量**、`test_sidecar_spec_keep._parse_hidden` 正则**静默丢内容**、spec `_keep_py` **误列 `_cross_section_helper.py`**。
@@ -15,6 +15,81 @@
 ---
 
 ## 一、批次详情档案（原 PROJECT_MEMORY.md 顶部修复横幅，含独有验收细节）
+
+### 🔧 卡片编辑器断网化（Monaco 本地化 + 去字体外链 + 顺带省 10 MB）+ 曲面卡「只有第一行着色」修复【2026-10-08 晚，**已改 ✅ / 已重新打包并部署 ✅ / 已提交 `75f9b58` + `8f07e12` + `ecd9172`（未 push）· 版本仍 1.7.7（bug 批不升版）**】
+
+> 用户原话：「我的项目不能联网」（前一条：编辑器换 Monaco 后我查到的 CDN 依赖）→「直接关掉并部署」；
+> 另报：「以及，曲面卡现在貌似只有第一行，曲面号和转换卡会正常着色」。
+> 批次要点与逐条证据见 `PROJECT_MEMORY.md` 顶部横幅与 **S16**。
+
+**① 断网可用 —— 编辑器在运行时从 jsdelivr 下载 monaco**
+`@monaco-editor/react` 背后是 `@monaco-editor/loader`，其**内置默认** `paths.vs` 指向 jsdelivr 上的 monaco
+（`node_modules/@monaco-editor/loader/lib/es/config/index.js:3`），而我们一行覆写都没有；`monaco-editor` 在源码里只有
+`import type`（编译期擦除）。**已构建产物 `dist/assets/index-*.js` 里就写着那串地址**。
+断网表现：`Editor` 的 `loader.init()` 失败只 `console.error`、`isEditorReady` 恒 false ⇒ 编辑区 `display:none`、
+中间**永久**停在英文 `Loading...`（`tauri.conf.json` 的 `csp: null` 也不会提前拦下）。
+**第二条同类**：`gui/index.html` 从 fonts.googleapis.com 拉 Inter 字体，跟着进 dist → 进 exe。
+**修法**：新增 `gui/src/components/monacoLocal.ts`（副作用模块，被 `McnpEditor` 导入）：
+```ts
+self.MonacoEnvironment = { getWorker: () => new editorWorker() };
+loader.config({ monaco });   // 唯一目的：切断 loader 的 jsdelivr 默认值
+```
+`global.css` 的 `--font` 去掉首位 `"Inter"` 改系统栈；`<Editor>` 补中文 `loading` 文案（否则失败时是一片空白 + 英文 Loading）。
+配套：新增 `src/vite-env.d.ts`（引 `vite/client`，`?worker` 的类型来源）、`vite.config.ts` 的 `defineConfig` 改从 `vitest/config` 引（容 `test` 段）。
+**顺手修掉一处旧伤**：`index.html` 的 `<title>` 在磁盘上就是**六个字面问号**（`MCNP ??????`，自 v1.6.0 起；只因窗口标题由
+`tauri.conf.json` 覆盖而没人发现）。
+
+**② 顺带砍掉 monaco 自带语言服务（省约 10 MB；我方案里的判断被实测纠正）**
+我原以为"自己接管 `getWorker` 就不会把语言服务 worker 打进包"——**实测是错的**：`languages/features/<服务>/workerManager.js` 里的
+`new Worker(new URL('ts.worker.js', import.meta.url), { type: "module" })` 会被 **Vite 静态识别并直接产出 worker chunk**
+（ts 7.0 MB + css 1.06 + html 0.72 + json 0.41 ≈ **9.2 MB**）—— 这与 `getWorker` 是**两条独立路径**。首次构建 dist 从 1.9 MB 涨到 **16 MB**。
+**修法**：`vite.config.ts` 新增 `dropMonacoLanguageServices()` 插件，把 `languages/features/**` 与 `languages/definitions/**` 置空。
+安全性的三条依据：① 前者在聚合入口里是**命名空间再导出**（`import * as X …; export { X as css }` ⇒ 空模块只是空命名空间，语法合法）；
+② 后者是**副作用导入**；③ 我们要用的补全与幽灵提示都在主线程 `editor/contrib/**`（**未动**），且全树无任何语言服务 API。
+**dist 16 MB → 6.4 MB**（净增 4.5 MB；`dist/assets` 文件数 101 → 10，worker 只剩 `editor.worker-*.js` 276 KB）。
+⚠️ 该裁剪依赖 monaco 目录约定、失效会**静默**胖 10 MB ⇒ 插件自带上闸门：`closeBundle` 扫 `dist/assets`，除 `editor.worker` 外出现语言服务 worker 就**让构建失败**。
+
+**③ 曲面卡「只有第一行着色」（用户报）**
+根因：**Monarch 的 tokenizer 状态是跨行保持的**（行尾停在哪个状态，下一行就从那里开始）。旧语法
+`root → surfaceAfterId → surfaceBody` 三层跳转，两个子状态**都没有"行尾回 root"的规则** ⇒ 第 1 行读完卡在 `surfaceBody`：
+第 2 行起行首曲面号落到 `number`（绿）而非 `surface-id`（黄），且 `^\s*[Cc]` 注释规则只在 root 里 ⇒ 注释行也不再着色。
+TR 卡语法本来就只有一个状态、无跳转，所以它当时正常 —— 与用户「转换卡正常」的观察完全吻合。
+**修法**：曲面卡改**只有 root 一个状态**；行首「曲面号 +（可选）变换号」用一条两捕获组规则
+`[new RegExp("^(\\s*[+*]?\\d+)(\\s+[+-]?\\d+)(?=\\s|$)"), ["surface-id", "tr-reference"]]` 保留 TR 引用配色。
+**抽模块的理由就是这次的 bug**：语法埋在组件里时**没有任何办法测**（Monarch 写错只表现为"某几行不着色"，只能肉眼看界面），
+故抽成 `gui/src/components/mcnpCardSyntax.ts`（纯数据 + 纯函数）并新增 `gui/test/mcnpCardSyntax.test.ts`（12 例：
+`monaco.editor.tokenize()` 逐行断言 + 把"语法只能有 root 一个状态"钉成不变量 + 覆盖此前零测试的 `ghostForLine`）。
+**该测试对修复前的语法是红的**（已实测：旧规则第 2 行行首 token 是 `number`，第一条断言即失败）。
+⚠️ 该测试约 10–15 秒（要加载 monaco 本体换真实 Monarch 行为），文件顶部写明"不要为了提速换成手写正则模拟"。
+
+**④ 测试基建（此前项目没有任何 vitest 配置）**
+本地化后，渲染整个几何页的 4 个 dom 用例会连带把 monaco **真初始化** ⇒ jsdom 缺 `matchMedia`/`ResizeObserver`/真实布局，
+实测 **6 例失败 / 17 个错误、collect 24 s → 81 s**。故新增 `gui/test/setup/monacoLocalStub.ts`（桩掉 monacoLocal，恢复
+"编辑器在 dom 用例里不必初始化"的旧态）并在 `vite.config.ts` 配 `test.setupFiles`；要验真行为的那条单独放
+`gui/test/monacoLocalWiring.test.ts`（文件内 `vi.unmock` 取消全局桩）。
+另新增 `gui/test/monacoOffline.test.ts`：全 `gui/src` 扫**运行时远程外链**（排除本机 `127.0.0.1` 与 XML/SVG 命名空间两类
+不出网情形；白名单只放 GeometryTab 的 FreeCAD 官网链接并写明理由）+ `index.html` 无 `https://` + 本地化接线未被删。
+**这把尺子能红已实测**（注入一行带引号的 CDN 地址即失败，随后还原）。
+
+**一处如实登记**：产物里 `grep cdn.jsdelivr` 仍有 **1 个文件**命中 —— 那是 loader 的**内置默认值字符串**，改不掉
+（`loader.config` 只是让 `init()` 不走那条路）。所以「产物里没有 jsdelivr」这条查不了，改为查**行为**
+（`monacoLocalWiring.test.ts`：loader 已拿到随包实例 ⇒ `init()` 直接 resolve、且文档里没被注入任何外部 script）。
+
+**门禁（实跑）**：vitest **118 文件 / 1017 例全过**；`tsc --noEmit` 与 `tsc -p tsconfig.test.json --noEmit` 两档 **EXIT 0**；
+`vite build` 34.7 s / `build:release` **399 s，均 EXIT 0**。
+
+**部署与冒烟（本批新增验证手段：CDP 直连交付 exe，而不是只看截图猜）**
+交付目录 `D:\MCNP\MCNP输入卡生成器`：exe sha256 `61001EA0…` == `target/release`；`python.exe` 32,670,407 B 与 `binaries/` 一致；
+`自检.bat` `1C982B35…` 一致；`_internal` **7879 文件**、WebView2 **29 文件**，**逐文件名+大小 0 差异**；总计 **7913**；
+交付目录 WebView2 上 **AppContainer ACL 两条已复核在**（`ALL APPLICATION PACKAGES` + `所有受限制的应用程序包`，子文件继承 `(I)(RX)`）。
+回滚点 `_backup_1.7.7_20261008_184439`（本批改动前）。版本仍 **1.7.7**。
+**冒烟**：5001 **6 s** 就绪、xsdir 7925；CDP 报内核 **`Edg/154.0.4258.37`** = 随包固定版（系统 Edge 是 `.62`）⇒ 自带运行时确实在用；
+**几何页打开后资源列表零外部主机**（只有 `tauri.localhost` 与本机 5001/8100）—— 这是"断网可用"的直接证据（修复前这一步就会去 jsdelivr 取 monaco）；
+**逐行 token 实测**（用真实鼠标事件点进编辑器 + `Input.insertText` 换成受控卡）：`1 3 -5 10 5.0` / `2 PX -9 $ X垂面` / `C 注释行` /
+`3 SO 5.0` / `900 RPP -1 1 -1 1 -1 1` **五行行首全是 surface-id(琥珀)**、注释行整行灰、TR 引用青色、第 5 行末尾出现幽灵提示 `$ 长方体`；截图留档。
+收尾：主程序 / MCP 子进程 / 端口全释放；`_internal` 与构建产物重做对拍仍 **0 差异**。
+⚠️ **一条运维事实**：冒烟前交付版**正在运行**（用户开着），按手册 §7a 先关掉了它；关的时候 **8100 上的 `--mcp-http` 子进程不会随主程序退出**，
+必须按 PID 单独清（§6 坑 10 的老问题，仍未根治）。
 
 ### 🔧 STEP 导入两件事：GEOUNED 切分面数可自己键入 + 样条曲面跳过而不是终止（+ 部署冒烟查实的报错可读性修复）【2026-10-08，**已改 ✅ / 已重打包并部署 ✅ / 已提交 `d6cee53`（未 push）· 版本仍 1.7.7（bug 批不升版）**】
 

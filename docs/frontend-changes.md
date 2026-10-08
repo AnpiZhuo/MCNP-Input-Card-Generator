@@ -2216,3 +2216,72 @@ warnings: ["MCCAD 切割已跳过：未找到 McCAD.exe。请把 McCAD.exe 放�
 **部署版冒烟（真 HTTP，不是界面截图）**：`/api/import-step` 喂"盒+拉伸样条"STEP，
 `cutDegree: 12`（数字档位）+ 样条留空 ⇒ `status=ok`、栅元数 4（跳过样条=4、强转才是 5），
 结果提示两条齐全。细节见 `PROJECT_MEMORY.md` S15 与 `docs/CHANGELOG.md` 同日"管理/构建"条。
+
+---
+
+## 附录 I：卡片编辑器断网化 + 曲面卡着色修复（2026-10-08 晚，**已提交 `75f9b58` + `8f07e12` + `ecd9172` / 已打包部署**）
+
+> 用户原话：「我的项目不能联网」+「以及，曲面卡现在貌似只有第一行，曲面号和转换卡会正常着色」。
+
+### I.1 曲面卡「只有第一行着色」—— Monarch 状态跨行保持（`75f9b58`）
+
+- **根因**：`mcnp-surface-card` 语法旧实现是 `root → surfaceAfterId → surfaceBody` 三状态跳转，两个子状态都**没有「行尾回 root」的规则**；
+  而 **Monarch 的 tokenizer 状态是跨行保持的**（行尾停在哪个状态，下一行就从那个状态开始）⇒ 第 1 行读完卡在 `surfaceBody`，
+  于是**第 2 行起行首曲面号落到 `number`（绿）而不是 `surface-id`（黄）**，且 `^\s*[Cc]` 注释规则只在 root 里 ⇒ **注释行也不再着色**。
+  `mcnp-tr-card` 语法只有一个 state、无跳转 ⇒ 当时正常（= 用户「转换卡正常」的观察）。
+- **改法**：曲面卡改**只有 root 一个状态**；行首「曲面号 +（可选）变换号」用一条两捕获组规则
+  `["surface-id", "tr-reference"]` 保留原有 TR 引用配色（MCNP 语义：曲面号后面紧跟的整数就是 TR 引用）；
+  注释 / `$` 注释 / 曲面类型 / 数字各自成规则。
+- **抽模块**：语法与幽灵提示迁到新文件 `gui/src/components/mcnpCardSyntax.ts`（`surfaceTokenizer()` / `trTokenizer()` /
+  `ghostForLine()` / `completionWords()` / `completionDetail()` + `SURFACE_DESCS`）。**理由就是这次的 bug** —— 语法埋在组件里时
+  **没有任何办法测**，Monarch 写错只表现为"某几行不着色"，只能靠肉眼在界面上发现。`McnpEditor.tsx` 改为只负责把这份纯数据接到
+  Monaco 上（净 −119 行）。
+- **回归**：新增 `gui/test/mcnpCardSyntax.test.ts`（12 例）—— 用 `monaco.editor.tokenize()` **逐行**断言：多行曲面卡**每行行首都是
+  `surface-id`**、注释行在任意位置都是 `comment`、TR 引用观感不退化、TR 卡多行都拿得到 `tr-id`；另把「语法只能有 `root` 一个状态」
+  钉成不变量（比"扫源码里有没有 @xxx"更直接），并覆盖此前零测试的 `ghostForLine`（5 例）。
+  **该测试对修复前的语法是红的**（实测：旧规则第 2 行行首 token 为 `number`，第一条断言即失败）。
+  ⚠️ 该文件约 10–15 秒（要加载 monaco 本体换真实 Monarch 行为），顶部写明"不要为了提速换成手写正则模拟"。
+
+### I.2 断网可用（`8f07e12`）
+
+- **编辑器**：`@monaco-editor/react` → `@monaco-editor/loader` 的**内置默认** `paths.vs` 指向 jsdelivr 上的 monaco
+  （`node_modules/@monaco-editor/loader/lib/es/config/index.js:3`），我们一行覆写都没有；断网时 `Editor` 只 `console.error`、
+  `isEditorReady` 恒 false ⇒ 编辑区 `display:none` + 中间**永久**停在英文 `Loading...`（`csp: null` 也不拦）。
+  新增 `gui/src/components/monacoLocal.ts`（副作用模块，`McnpEditor` 顶部 `import "./monacoLocal"`）：
+  `loader.config({ monaco })` 把**随包** monaco 交给 loader + `self.MonacoEnvironment = { getWorker: () => new editorWorker() }`。
+  `<Editor>` 补中文 `loading` 文案（失败时不再是"一片空白 + 英文 Loading"）。
+- **字体**：`index.html` 删掉 fonts.googleapis.com 两行（改注释说明），`global.css` 的 `--font` 首位 `"Inter"` 换系统栈
+  （`system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC"`）。
+  **顺手修掉** `index.html` 里 `<title>` 的**六个字面问号**（`MCNP ??????`，自 v1.6.0 起；只因窗口标题由 `tauri.conf.json` 覆盖而没人发现）。
+- **裁掉 monaco 语言服务（省约 10 MB）**：`languages/features/<服务>/workerManager.js` 里的
+  `new Worker(new URL('ts.worker.js', import.meta.url), { type: "module" })` 会被 **Vite 静态识别并直接产出 worker chunk**
+  （ts 7.0 / css 1.06 / html 0.72 / json 0.41 ≈ 9.2 MB）—— 与 `getWorker` 覆写**无关**（两条独立路径）。
+  ⇒ 新增 Vite 插件 `dropMonacoLanguageServices()`（`vite.config.ts`）把 `languages/{features,definitions}/**` 置空，
+  并带 `closeBundle` 闸门（产物里再出现语言服务 worker ⇒ **构建失败**）。**dist 1.9 MB → 6.4 MB**（未裁剪时 16 MB；
+  `dist/assets` 文件数 101 → 10；worker 只剩 `editor.worker` 276 KB）。
+- **清掉旧编辑器的遗留 CSS**：`global.css` 里 `.mcnp-editor-input` / `.mcnp-ghost` / `.mcnp-autocomplete-item` / `.mcnp-textarea`
+  四条规则（旧 textarea + 高亮层那版）已无任何产出方，删除并加注说明。
+
+### I.3 测试基建（此前项目**没有任何** vitest 配置）
+
+- 本地化后，4 个渲染整个几何页的 dom 用例会连带把 monaco **真初始化** ⇒ jsdom 缺 `matchMedia`/`ResizeObserver`/真实布局
+  （实测 6 例失败 / 17 个错误、collect 24 s → 81 s）。新增 `gui/test/setup/monacoLocalStub.ts` 桩掉 monacoLocal，
+  在 `vite.config.ts` 配 `test.setupFiles`；要验真实行为的那条单独放 `gui/test/monacoLocalWiring.test.ts`（文件内 `vi.unmock` 取消全局桩）。
+- 新增 `gui/test/monacoOffline.test.ts`：全 `gui/src` 扫运行时的**远程**外链（排除本机 `127.0.0.1` 与 XML/SVG 命名空间两类
+  不出网情形；白名单仅 GeometryTab 的 FreeCAD 官网链接并写明理由）+ `index.html` 无 `https://` + 本地化接线未被删。**能红已实测**。
+- `vite.config.ts` 的 `defineConfig` 改从 `vitest/config` 引；新增 `src/vite-env.d.ts`（`/// <reference types="vite/client" />`，
+  `?worker` 的类型声明来源）。
+
+### I.4 一处如实登记
+
+产物里 `grep cdn.jsdelivr` 仍有 **1 个文件**命中 —— 那是 loader 的**内置默认值字符串**，改不掉
+（`loader.config` 只是让 `init()` 不走那条路）。所以「产物里没有 jsdelivr」这条查不了，改为查**行为**
+（`monacoLocalWiring.test.ts`：loader 已拿到随包实例 ⇒ `init()` 直接 resolve；且文档里没有被注入任何外部 script）。
+
+### I.5 部署版实测（CDP 直连交付 exe，不是只看截图猜）
+
+5001 **6 s** 就绪、xsdir 7925；CDP 报内核 **`Edg/154.0.4258.37`** = 随包固定版（系统 Edge 是 `.62`）⇒ 自带运行时确实在用；
+**几何页打开后资源列表零外部主机**（只有 `tauri.localhost` 与本机 5001/8100）—— 这是"断网可用"的直接证据
+（修复前这一步就会去 jsdelivr 取 monaco）。**逐行 token 实测**（真实鼠标事件点进编辑器 + `Input.insertText` 换成受控卡）：
+五行行首全是 surface-id(琥珀)、注释行整行灰、TR 引用青色、末行出现幽灵提示 `$ 长方体`。
+门禁 vitest **118 文件 / 1017 例全过**、`tsc` 两档 EXIT 0、`build:release` **399 s EXIT 0**。
