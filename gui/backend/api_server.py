@@ -37,6 +37,29 @@ def _import_app(module, base_dir=APP_DIR):
     return __import__(module)
 
 
+def app_script_path(filename: str) -> str:
+    """定位 `app/` 下的**脚本文件**（worker 之类），返回绝对路径。
+
+    ⚠️ 为什么不能直接用 `APP_DIR`（2026-10-08 实测踩坑）：`PROJECT_DIR` 是拿
+    `api_server.__file__` 往上两级算的；冻结版里 `__file__` 指向 exe 旁的虚拟路径，
+    算出来是 `D:\\MCNP\\app` —— **那个目录根本不存在**（用户报错原文：
+    `can't open file 'D:\\MCNP\\app\\_freecad_step_preview_worker.py'`）。
+    它能"看起来正常"只是因为 `mcnp_bridge` 已经把 `sys._MEIPASS/app` 加进了 sys.path，
+    于是**import 能找到、取文件路径找不到**。
+    ⇒ 取脚本文件一律走本函数：冻结版用 `sys._MEIPASS/app`（松散 .py 的实际落点），
+    源码版用 `APP_DIR`。找不到就抛 FileNotFoundError，让调用方报清楚，而不是把
+    subprocess 的原始 stderr 糊到界面上。
+    """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        cand = os.path.join(sys._MEIPASS, "app", filename)
+        if os.path.isfile(cand):
+            return cand
+    cand = os.path.join(APP_DIR, filename)
+    if os.path.isfile(cand):
+        return cand
+    raise FileNotFoundError(f"未找到脚本 {filename}（已找过 {sys._MEIPASS if hasattr(sys, '_MEIPASS') else '-'}/app 与 {APP_DIR}）")
+
+
 from models import (
     BasicSettings, CellData, CellRow, FmeshDefinition, MaterialData, MaterialRow,
     PTRACSettings, SourceData, TallySettings, TallyDefinition, AdvancedSettings, DeckData
@@ -1961,6 +1984,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
             "/api/parse-keff": self._handle_parse_keff,
             "/api/xsdir-search": self._handle_xsdir_search,
             "/api/export-step": self._handle_export_step,
+            "/api/step-preview": self._handle_step_preview,
             "/api/preview-3d": self._handle_preview_3d,
             "/api/serve-file": self._handle_serve_file,
             "/api/cross-section": self._handle_cross_section,
@@ -3119,9 +3143,13 @@ class MCNPHandler(BaseHTTPRequestHandler):
 
             # 与 3D 预览同一条路线：build_geometry(fmt="step", single_file=True)
             # bound 用与预览一致的默认值(500)，避免巨大空盒导致几何不一致
+            # cad_orientation：CAD 上轴/方位约定（用户 2026-10-08：SolidWorks 类 Y 朝上
+            # ⇒ 不转的话在他们 CAD 里模型躺倒 90°）。默认不旋转 = 旧行为不变。
+            cad_orientation = data.get("cad_orientation")
             engine = FreeCADEngine(freecad_bin)
             result_map = engine.build_geometry(surfs, cells_data, tr_cards,
-                                               bound=500, fmt="step", single_file=True)
+                                               bound=500, fmt="step", single_file=True,
+                                               cad_orientation=cad_orientation)
             content = b''
             if result_map:
                 step_file = list(result_map.values())[0]
@@ -3132,7 +3160,25 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 self._ok({"status": "error", "message": "STEP 生成失败"})
                 return
             b64 = base64.b64encode(content).decode()
-            self._ok({"file": "mcnp_export.step", "data": b64, "message": "STEP 文件已导出"})
+            # 把"按哪种上轴约定转过"写进可见提示 —— 拿到一份 STEP 才说得清它的坐标系
+            note = ""
+            try:
+                from cad_orientation import describe as _describe
+            except ImportError:
+                try:
+                    from app.cad_orientation import describe as _describe
+                except ImportError:
+                    _describe = None
+            if _describe is not None:
+                try:
+                    txt = _describe(cad_orientation, "mcnp2cad")
+                    if "未旋转" not in txt:
+                        note = f"（{txt}）"
+                except Exception:
+                    note = ""
+            self._ok({"file": "mcnp_export.step", "data": b64,
+                      "message": f"STEP 文件已导出{note}",
+                      "cad_orientation": cad_orientation})
         except Exception as e:
             import traceback
             self._err(str(e) + " | " + traceback.format_exc())
@@ -3296,8 +3342,6 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 session_cells = dict(_STL_SESSION.get("cells") or {})
                 deck = _STL_SESSION.get("deck") or {}
 
-            # GQ/SQ 栅元走解析切片（精确轮廓，不依赖 STL 网格分辨率）；
-            # deck 快照由 preview-3d 写入会话，缺失时回退 STL 切。
             deck_surfs = {}
             for s in deck.get("surfaces", []):
                 try:
@@ -3312,6 +3356,28 @@ class MCNPHandler(BaseHTTPRequestHandler):
                     continue
             deck_tr = deck.get("tr_cards", {})
 
+            # ── 截面几何来源（三条，各司其职）──────────────────────────────
+            # 1) 网格切 `stl_cross_section`：**几何忠实**，薄特征不依赖采样步长；
+            # 2) 解析切片 `analytic_slice`：仅对含 GQ/SQ 的栅元（预览 STL 是体素近似）；
+            # 3) 定义判定 `section_region`：网格切出来的那块到底是**真区域**还是
+            #    **边界伪影** —— 切割平面与栅元边界面重合时，网格会把那张边界面当区域
+            #    （2026-10-07 用户卡 Z=0 上栅元 3/4/5 各切出一块不存在的盘）。
+            analytic_cross_section = None
+            region_present = None
+            bound = 500.0
+            warnings: list = []
+            try:
+                _asl = _import_app("analytic_slice")
+                analytic_cross_section = _asl.analytic_cross_section
+                bound = _asl.model_bound(deck_surfs)   # 求值盒随模型量级走（不写死 500）
+            except Exception as e:
+                warnings.append(f"解析切片不可用：{type(e).__name__}: {e}")
+            try:
+                region_present = _import_app("section_region").region_present
+            except Exception as e:
+                warnings.append(f"栅元区域判定不可用（保持原行为，不剔除）：{type(e).__name__}: {e}")
+
+            plane = {"A": A, "B": B, "C": C, "D": D}
             slices = []
             for num in cell_nums:
                 num = int(num)
@@ -3323,35 +3389,48 @@ class MCNPHandler(BaseHTTPRequestHandler):
                     continue  # 真空 STL 不参与截面
 
                 ast = (deck_cells.get(num) or {}).get("ast")
-                use_analytic = False
-                if ast:
+                path = info.get("path")
+                mesh_polys = cross_section_from_stl(path, A, B, C, D) if (
+                    path and os.path.isfile(path)) else []
+
+                polys = mesh_polys
+                # GQ/SQ 栅元的预览 STL 是体素近似 ⇒ 有解析轮廓就换成解析的（精确边界）
+                if ast and analytic_cross_section is not None:
                     try:
                         from voxel_csg import _ast_surf_nums
-                        use_analytic = any(
-                            str(deck_surfs.get(n, {}).get("type", "")).upper()
-                            in ("GQ", "SQ")
-                            for n in _ast_surf_nums(ast)
-                        )
+                        quadric = any(
+                            str(deck_surfs.get(n, {}).get("type", "")).upper() in ("GQ", "SQ")
+                            for n in _ast_surf_nums(ast))
                     except Exception:
-                        use_analytic = False
+                        quadric = False
+                    if quadric:
+                        try:
+                            got = analytic_cross_section(ast, deck_surfs, deck_tr, plane,
+                                                         bound=bound)
+                            if got:
+                                polys = got
+                        except Exception as e:
+                            warnings.append(
+                                f"栅元 {num} 解析切片失败，用网格切：{type(e).__name__}: {e}")
 
-                polys = []
-                if use_analytic:
+                # 定义判定：网格给的这块是不是真区域（边界伪影整块剔除）
+                if polys and ast and region_present is not None:
                     try:
-                        from analytic_slice import analytic_cross_section
-                        polys = analytic_cross_section(
-                            ast, deck_surfs, deck_tr,
-                            {"A": A, "B": B, "C": C, "D": D}, bound=500.0)
-                    except Exception:
-                        polys = []
-                if not polys:
-                    # 非 GQ/SQ 或解析失败：回退 STL 切（原行为）
-                    path = info.get("path")
-                    if path and os.path.isfile(path):
-                        polys = cross_section_from_stl(path, A, B, C, D)
+                        if not region_present(ast, deck_surfs, deck_tr, plane, hint_loops=polys):
+                            warnings.append(
+                                f"栅元 {num}：与切割平面只沿边界面接触（该平面上它不存在），"
+                                f"已剔除切出的边界伪影")
+                            polys = []
+                    except Exception as e:
+                        warnings.append(
+                            f"栅元 {num}：区域判定出错（保留网格结果）：{type(e).__name__}: {e}")
+
                 if polys:
                     slices.append({"number": num, "material": material, "polygons": polys})
-            self._ok({"slices": slices, "count": len(slices)})
+            out = {"slices": slices, "count": len(slices)}
+            if warnings:
+                out["warnings"] = warnings
+            self._ok(out)
         except Exception as e:
             import traceback
             self._err(str(e) + " | " + traceback.format_exc())
@@ -3364,6 +3443,172 @@ class MCNPHandler(BaseHTTPRequestHandler):
             self._ok({"status": "ok"})
         except Exception as e:
             self._err(str(e))
+
+    def _handle_step_preview(self):
+        """STEP 方向预览：把上传的 STEP 镶嵌成 STL（或直接用给定的 STL），按约定转好返回。
+
+        为什么拆成"一次镶嵌 + 每次只做矩阵"（用户 2026-10-08：给个按钮，点一下先用 STEP
+        生成预览，方便选 Y/Z 朝上）：
+          · 镶嵌（FreeCAD 子进程）一次 1–3 s ⇒ 按文件内容 sha1 缓存；
+          · 切换上轴只做旋转/平移（app/stl_transform.py，毫秒级）⇒ 边看边切不卡。
+
+        **两个方向共用本端点**（同一套矩阵/平移实现，避免两处漂移）：
+          · 导入预览（默认 ``direction="cad2mcnp"``）：STEP → 镶嵌 → 显示"导入到 MCNP 后"的样子；
+          · 导出预览（``direction="mcnp2cad"``）：把 3D 预览给的**每栅元 STL** 传进来
+            （``stl`` 为 base64 数组，可多个），显示"导出到目标 CAD 后"的样子。
+
+        入参：{"data": <base64 STEP>|"path": <服务端路径>|"stl": [<base64 STL>...],
+               "cad_orientation"?, "direction"?: "cad2mcnp"|"mcnp2cad"}
+        出参：{"stl": <base64 STL>, "bbox": [[..],[..]], "solids": N, "triangles": M,
+               "notes": [...]}
+        """
+        try:
+            import base64, hashlib, subprocess, tempfile
+            data = self._read_body()
+            raw_b64 = data.get("data")
+            path = (data.get("path") or "").strip()
+            stl_in = data.get("stl")
+            spec = data.get("cad_orientation")
+            direction = str(data.get("direction") or "cad2mcnp").strip().lower()
+            if direction not in ("cad2mcnp", "mcnp2cad"):
+                self._ok({"status": "error", "message": "direction 只能是 cad2mcnp / mcnp2cad"})
+                return
+            tmp_root = os.path.join(tempfile.gettempdir(), "mcnp_step_preview")
+            os.makedirs(tmp_root, exist_ok=True)
+
+            try:
+                _cad = _import_app("cad_orientation")
+                _stl = _import_app("stl_transform")
+            except Exception as e:
+                self._ok({"status": "error", "message": f"方向约定不可用：{type(e).__name__}: {e}"})
+                return
+
+            # ── 导出预览：输入直接是 STL（3D 预览给的），不需要 FreeCAD ──
+            if stl_in and direction == "mcnp2cad":
+                blobs = stl_in if isinstance(stl_in, list) else [stl_in]
+                tris = [_stl.parse_binary_stl(base64.b64decode(b)) for b in blobs if b]
+                tris = [t for t in tris if t.size]
+                if not tris:
+                    self._ok({"status": "error", "message": "没有可用的 STL 网格"})
+                    return
+                import numpy as _np
+                merged = _np.vstack(tris)
+                raw = _stl.write_binary_stl(merged)
+                matrix = _cad.matrix_mcnp_to_cad(spec)     # 导出方向 = 逆变换
+                moved = _stl.transform(raw, matrix)
+                bbox = _stl.bbox_of(_stl.parse_binary_stl(moved))
+                origin = _cad.parse(spec)["origin"]
+                if bbox and origin != "keep":
+                    # 目标 CAD 的上轴：up="Y" ⇒ "坐在底面上" 就是坐在 y=0 上
+                    shift = _cad.translation_for_spec(bbox, spec)
+                    moved = _stl.transform(moved, ((1, 0, 0), (0, 1, 0), (0, 0, 1)), shift)
+                    bbox = _stl.bbox_of(_stl.parse_binary_stl(moved))
+                lo = [float(v) for v in (bbox[0] if bbox else (0.0, 0.0, 0.0))]
+                hi = [float(v) for v in (bbox[1] if bbox else (0.0, 0.0, 0.0))]
+                self._ok({
+                    "status": "ok",
+                    "stl": base64.b64encode(moved).decode(),
+                    "bbox": [lo, hi],
+                    "solids": len(tris),
+                    "triangles": int(merged.shape[0]),
+                    "notes": [_cad.describe(spec, "mcnp2cad")],
+                    "direction": direction,
+                })
+                return
+
+            if raw_b64:
+                blob = base64.b64decode(raw_b64)
+            elif path and os.path.isfile(path):
+                with open(path, "rb") as f:
+                    blob = f.read()
+            else:
+                self._ok({"status": "error", "message": "缺少 STEP 内容（data 或 path）"})
+                return
+
+            key = hashlib.sha1(blob).hexdigest()[:16]
+            cache_dir = os.path.join(tmp_root, key)
+            stl_path = os.path.join(cache_dir, "step_preview.stl")
+            meta_path = os.path.join(cache_dir, "meta.json")
+            meta = None
+            if os.path.isfile(stl_path) and os.path.isfile(meta_path):
+                try:
+                    with open(meta_path, encoding="utf-8") as f:
+                        meta = json.load(f)
+                except Exception:
+                    meta = None
+
+            notes: list = []
+            if meta is None:
+                # ① 一次性镶嵌（FreeCAD 子进程，原始坐标系）
+                freecad_bin = _import_app("step_importer").StepImporter.detect_freecad()
+                if not freecad_bin:
+                    self._ok({"status": "error", "message": "需要 FreeCAD"})
+                    return
+                # python.exe 的定位走 freecad_locator 单一来源（便携版 / 安装版两种布局），
+                # 不在 handler 里自己拼路径 —— 见 app/freecad_locator.python_exe 的注释。
+                py = _import_app("freecad_locator").python_exe(freecad_bin)
+                if not py:
+                    self._ok({"status": "error",
+                              "message": f"FreeCAD 目录下没找到 python.exe：{freecad_bin}"})
+                    return
+                os.makedirs(cache_dir, exist_ok=True)
+                src_path = os.path.join(cache_dir, "source.step")
+                with open(src_path, "wb") as f:
+                    f.write(blob)
+                worker = app_script_path("_freecad_step_preview_worker.py")
+                proc = subprocess.run(
+                    [py, worker],
+                    input=json.dumps({"step_path": src_path, "output_dir": cache_dir}),
+                    capture_output=True, text=True, timeout=180,
+                )
+                if proc.returncode != 0:
+                    self._ok({"status": "error",
+                              "message": f"STEP 预览镶嵌失败：{proc.stderr[-300:]}"})
+                    return
+                try:
+                    res = json.loads(proc.stdout)
+                except json.JSONDecodeError:
+                    self._ok({"status": "error", "message": "STEP 预览输出无法解析"})
+                    return
+                if res.get("status") != "ok":
+                    self._ok({"status": "error", "message": res.get("message", "预览失败")})
+                    return
+                notes.extend(res.get("warnings") or [])
+                meta = {"bbox": res.get("bbox"), "solids": res.get("solids"),
+                        "triangles": res.get("triangles")}
+                with open(meta_path, "w", encoding="utf-8") as f:
+                    json.dump(meta, f, ensure_ascii=False)
+
+            # ② 每次只做矩阵：按约定旋转（cad→mcnp，与真正导入同一口径）+ 原点口径平移
+            # ② 每次只做矩阵：按约定旋转（cad→mcnp，与真正导入同一口径）+ 原点口径平移
+            matrix = _cad.matrix_cad_to_mcnp(spec)
+            describe = _cad.describe(spec, "cad2mcnp")
+            origin = _cad.parse(spec)["origin"]
+
+            with open(stl_path, "rb") as f:
+                stl_blob = f.read()
+            rotated = _stl.transform(stl_blob, matrix)
+            bbox = _stl.bbox_of(_stl.parse_binary_stl(rotated))
+            if bbox and origin != "keep":
+                # 预览显示的是"导入到 MCNP 之后"的样子 ⇒ 原点口径在 MCNP 系（Z 朝上）里算
+                shift = _cad.translation_for(bbox, origin, "Z")
+                rotated = _stl.transform(rotated, ((1, 0, 0), (0, 1, 0), (0, 0, 1)), shift)
+                bbox = _stl.bbox_of(_stl.parse_binary_stl(rotated))
+            lo = [float(v) for v in (bbox[0] if bbox else (0.0, 0.0, 0.0))]
+            hi = [float(v) for v in (bbox[1] if bbox else (0.0, 0.0, 0.0))]
+            self._ok({
+                "status": "ok",
+                "stl": base64.b64encode(rotated).decode(),
+                "bbox": [lo, hi],
+                "solids": (meta or {}).get("solids"),
+                "triangles": (meta or {}).get("triangles"),
+                "notes": [describe] + notes,
+                "orientation": spec,
+                "direction": direction,
+            })
+        except Exception as e:
+            import traceback
+            self._err(str(e) + " | " + traceback.format_exc())
 
     def _handle_mcnp_detect(self):
         """列出这台机器上**全部** MCNP —— MCNP5 与 MCNP6 同时装了必须都能选。
@@ -4277,6 +4522,10 @@ def main(port: int | None = None):
     server = HTTPServer(("0.0.0.0", port), MCNPHandler)
     print(f"[API] MCNP API 服务启动 → http://localhost:{port}/api/generate")
     print(f"   Python 后端路径: {APP_DIR}")
+    # 冻结版 APP_DIR 是"import 用的路径"，取脚本文件要用 _MEIPASS/app（见 app_script_path）——
+    # 这里把两者都打出来，免得下次又拿前者去拼文件路径。
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        print(f"   脚本文件目录: {os.path.join(sys._MEIPASS, 'app')}")
     # GPU 偏好：**首次运行自动写「高性能独显」**（用户已在界面/Windows 图形设置里选过则不动）。
     # 必须在 WebView2 起来之前/尽早写，且只写"还没有值"的目标 ⇒ 不会覆盖用户显式选择；
     # 写入值存 HKCU，下一次启动 WebView2 时生效（Windows per-app GPU 偏好机制）。

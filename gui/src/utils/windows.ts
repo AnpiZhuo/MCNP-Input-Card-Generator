@@ -79,14 +79,31 @@ export async function openPreview3D(data: {
   cells: any[];
   surfaces: string;
   trCards: string;
-  deck: DeckData;
+  /** 旧签名：带 deck 时从中取材料表（新调用方可直接用 materials） */
+  deck?: DeckData;
+  /** 材料表（{number, comment, density}）——独立窗口没有 deck，必须显式给 */
+  materials?: { number: number; comment?: string; density?: string }[];
+  /**
+   * **预置网格**（STEP 方向预览，2026-10-08）：给了就让独立窗口直接渲染这份
+   * {栅元号: base64 STL}，不再调 `/api/preview-3d`。
+   * 于是方向预览与正常 3D 预览**开的是同一个独立窗口、同一套渲染**。
+   */
+  preloadedStl?: Record<string, string>;
+  /** 预置网格版本号（变了就重新挂网格） */
+  preloadToken?: string;
+  /** 预置模式下的窗口标题 */
+  titleOverride?: string;
 }): Promise<boolean> {
   try {
     localStorage.setItem(KEY_PREVIEW3D, JSON.stringify({
       cells: data.cells,
       surfaces: data.surfaces,
       trCards: data.trCards,
-      materials: (data.deck.materials || []).map((m) => ({ number: m.number, comment: m.comment })),
+      materials: data.materials
+        ?? (data.deck ? (data.deck.materials || []).map((m) => ({ number: m.number, comment: m.comment, density: m.density })) : []),
+      preloadedStl: data.preloadedStl,
+      preloadToken: data.preloadToken,
+      titleOverride: data.titleOverride,
     }));
   } catch (e) {
     console.warn("preview3d bridge write failed", e);
@@ -105,6 +122,8 @@ export async function openCrossSection(data: {
   center?: { x: number; y: number; z: number };
   /** 材料页材料表（{number, comment}）：材料图例注释来源（与 3D 预览同口径） */
   materials?: { number: number; comment?: string }[];
+  /** 后端 `/api/cross-section` 的 warnings（"只沿边界面接触，已剔除伪影"等）——界面必须解释这些 */
+  warnings?: string[];
 }): Promise<boolean> {
   try {
     localStorage.setItem(KEY_CROSS, JSON.stringify(data));
@@ -116,7 +135,11 @@ export async function openCrossSection(data: {
 
 /** 读取 3D 预览桥数据（新窗口一次性消费） */
 export function readPreview3DData(): {
-  cells: any[]; surfaces: string; trCards: string; materials: { number: number; comment?: string }[];
+  cells: any[]; surfaces: string; trCards: string;
+  materials: { number: number; comment?: string; density?: string }[];
+  preloadedStl?: Record<string, string>;
+  preloadToken?: string;
+  titleOverride?: string;
 } | null {
   try {
     const raw = localStorage.getItem(KEY_PREVIEW3D);
@@ -228,6 +251,7 @@ export function readCrossSectionData(): {
   cellNums?: number[];
   center?: { x: number; y: number; z: number };
   materials?: { number: number; comment?: string }[];
+  warnings?: string[];
 } | null {
   try {
     const raw = localStorage.getItem(KEY_CROSS);
@@ -240,22 +264,22 @@ export function readCrossSectionData(): {
   }
 }
 
-/** 3D 窗口 → 主窗口：材料改号回写（localStorage + storage 事件） */
-export function emitMaterialChange(cellNum: string, newMat: string): void {
+/** 3D 窗口 → 主窗口：材料改号和密度回写（localStorage + storage 事件） */
+export function emitMaterialChange(cellNum: string, newMat: string, density: string): void {
   try {
-    localStorage.setItem(KEY_MAT_CHANGE, JSON.stringify({ cellNum, newMat, ts: Date.now() }));
+    localStorage.setItem(KEY_MAT_CHANGE, JSON.stringify({ cellNum, newMat, density, ts: Date.now() }));
   } catch (e) {
     console.warn("material-change emit failed", e);
   }
 }
 
-/** 主窗口：监听其它窗口发来的材料改号事件 */
-export function onMaterialChange(cb: (cellNum: string, newMat: string) => void): () => void {
+/** 主窗口：监听其它窗口发来的材料改号和密度事件 */
+export function onMaterialChange(cb: (cellNum: string, newMat: string, density: string) => void): () => void {
   const handler = (e: StorageEvent) => {
     if (e.key !== KEY_MAT_CHANGE || !e.newValue) return;
     try {
       const j = JSON.parse(e.newValue);
-      if (j && j.cellNum != null) cb(String(j.cellNum), String(j.newMat));
+      if (j && j.cellNum != null) cb(String(j.cellNum), String(j.newMat), String(j.density ?? ""));
     } catch {}
   };
   window.addEventListener("storage", handler);

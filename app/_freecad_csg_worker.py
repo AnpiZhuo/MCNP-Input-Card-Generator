@@ -49,6 +49,12 @@ except ImportError:  # 测试/直接 import app 包时 mc 在 app/ 下
     from app import mc as _mc
 
 try:
+    # CAD 上轴/方位约定（纯 stdlib，单一来源；导入导出两侧共用）。见 app/cad_orientation.py
+    from cad_orientation import freecad_steps as _cad_steps, translation_for_spec as _cad_shift
+except ImportError:
+    from app.cad_orientation import freecad_steps as _cad_steps, translation_for_spec as _cad_shift
+
+try:
     from spatial_index import grid_candidates
     from overlap_classify import cap_by_bbox_volume, classify_overlaps
     from overlap_probe import sample_overlap
@@ -1416,7 +1422,22 @@ def main():
                 scaled = [shape.copy() for _, _, shape in export_data]
                 for s in scaled:
                     s.scale(SCALE)
-                Part.makeCompound(scaled).exportStep(single_path)
+                compound = Part.makeCompound(scaled)
+                # CAD 上轴/方位约定（2026-10-08 用户实测："数字对得上但模型躺倒"）：
+                # STEP 文件**不带**上轴信息，差别来自源软件默认坐标系（Y 朝上：SolidWorks/
+                # Inventor 类；Z 朝上：FreeCAD/UG/CATIA 类）。本程序与 MCNP 是 Z 朝上 ⇒
+                # 导出按 mcnp2cad 反向转、导入按 cad2mcnp 正向转，两者互为逆（见 app/cad_orientation.py）。
+                for axis, deg in _cad_steps(data.get("cad_orientation"), "mcnp2cad"):
+                    compound.rotate(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(*axis), deg)
+                # 原点口径（用户 2026-10-08：体心 / 坐在底面上 / 按原本建模）：
+                # 在**目标 CAD 坐标系**里算 —— 所以"坐在底面上"= 坐在该 CAD 上轴 = 0 的平面上。
+                bb = compound.BoundBox
+                shift = _cad_shift(((bb.XMin, bb.YMin, bb.ZMin),
+                                    (bb.XMax, bb.YMax, bb.ZMax)),
+                                   data.get("cad_orientation"))
+                if any(abs(v) > 1e-12 for v in shift):
+                    compound.translate(FreeCAD.Vector(*[float(v) for v in shift]))
+                compound.exportStep(single_path)
                 files["0"] = "geometry.step"
             except Exception as e:
                 warnings.append(f"导出 STEP 失败: {e}")

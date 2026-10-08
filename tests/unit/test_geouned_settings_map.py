@@ -246,10 +246,28 @@ def test_frontend_and_backend_key_sets_agree():
 
 
 def test_local_keys_are_exactly_the_two_groups():
-    """`local` 键集不许静默膨胀 —— 每加一个都要先想清它走哪条通道。"""
+    """`local` 键集不许静默膨胀 —— 每加一个都要先想清它走哪条通道。
+
+    当前 9 个，按**通道**分四组（断言跟着分组走，不是一坨名字）：
+      · 材料名 / 密度 / TMP                     → 本程序填料（导入结果回填）
+      · cutSolids / cutDegree                   → payload 的 `cut` 段（实体预分解）
+      · cadUpAxis / cadAzimuthDeg / cadOrigin   → payload 的 `cad_orientation` 段
+      · tangentFix                              → payload 的 `tangent_fix` 开关
+
+    ⚠️ 2026-10-08：后四条是上一批（STEP 上轴/原点口径/相切修复）加进界面的，那一批漏改了
+    这条断言 ⇒ 门禁一直是红的（与本次改动无关）。这里按通道补全，**不是放宽**：
+    「界面上的 GEOUNED 参数 == 后端白名单」仍由上面一条守着。
+    """
     specs = _frontend_specs()
     local = {k for k, is_local in specs.items() if is_local}
-    assert local == {"materialName", "density", "tmp", "cutSolids", "cutDegree"}
+    assert local == {"materialName", "density", "tmp", "cutSolids", "cutDegree",
+                     "cadUpAxis", "cadAzimuthDeg", "cadOrigin", "tangentFix"}
+    # 还要"真的走通道"：每个流水线开关都必须在转换器里被读出来，否则就是
+    # "界面能填、后端收不到"的哑巴 bug（本测试存在的理由）。
+    src = (PROJECT_DIR / "app" / "step_importer_geouned.py").read_text(encoding="utf-8")
+    for key in ("cutSolids", "cutDegree", "cadUpAxis", "cadAzimuthDeg",
+                "cadOrigin", "tangentFix"):
+        assert f'settings.get("{key}"' in src, f"{key} 没有进入 payload"
 
 
 def test_pipeline_flags_never_reach_the_geouned_mapping():

@@ -10,6 +10,7 @@ import PtracWindow from "./ptrac/PtracWindow";
 import SourceDemoWindow from "./source/SourceDemoWindow";
 import { generateInp } from "./utils/dataCollector";
 import { currentWindowLabel, clearStlSession } from "./utils/windows";
+import { closureWarnText, CLOSURE_WARN_PENDING } from "./utils/cellClosure";
 
 import { DeckProvider, useDeck } from "./utils/DeckContext";
 import { useAiWorkspace } from "./hooks/useAiWorkspace";
@@ -444,36 +445,35 @@ function AppInner() {
   };
 
   // 生成后封闭性复核（后台平行；有未封闭/空/未解析栅元才提示）
+  //
+  // 用户 2026-10-08 报：「生成时的警告…没实时更新」。根因两条，都在本函数里：
+  //   ① 先读 `deck.cellClosureReport`，**有缓存就永不重算** —— 而那份缓存没有任何失效机制
+  //      （几何页改了几何、导入了新 STEP，它还是旧的）；
+  //   ② 只有 `bad.length` 时才 setClosureGenerateWarn(...)，**变干净时旧警告留在屏幕上不走**。
+  // 改法：一律按**当前几何**重算（本来就是这个 body 的内容，谈不上浪费）；提示文案由纯函数
+  // `closureWarnText` 产出并**无条件写入**（干净 → null ⇒ 必然清空）；开头先放"复核中"，
+  // 让"是否已按当前几何更新"一眼可见。
   const runGenerateClosureCheck = async (body: any, inp: string) => {
+    setClosureGenerateWarn(CLOSURE_WARN_PENDING);
     try {
-      let report: any = (deck as any).cellClosureReport || null;
-      if (!report || Object.keys(report).length === 0) {
-        const r = await fetch(apiUrl("/api/check-cell-closure"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            surfaces: body.surfaces || "",
-            cells: body.cells || [],
-            tr_cards: body.tr_cards || "",
-          }),
-        });
-        const j = await r.json();
-        if (j.status !== "ok") return;
-        report = j.closure_report || {};
-        patch({ cellClosureReport: report });
-      }
-      const bad: string[] = [];
-      for (const [num, info] of Object.entries(report || {})) {
-        const st = (info as any)?.status;
-        if (st === "infinite" || st === "semi_infinite") bad.push(`栅元 ${num}（外无限）`);
-        else if (st === "empty") bad.push(`栅元 ${num}（空/退化）`);
-        else if (st === "unresolvable") bad.push(`栅元 ${num}（未解析）`);
-      }
-      if (bad.length) {
-        setClosureGenerateWarn(`⚠ 生成前封闭性自检发现：${bad.join("、")}。` +
-          "外无限栅元若为模型边界（imp=0 包围）属正常；空/未解析栅元请检查几何。");
-      }
-    } catch { /* 后端不可用 → 静默 */ }
+      const r = await fetch(apiUrl("/api/check-cell-closure"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          surfaces: body.surfaces || "",
+          cells: body.cells || [],
+          tr_cards: body.tr_cards || "",
+        }),
+      });
+      const j = await r.json();
+      if (j.status !== "ok") { setClosureGenerateWarn(null); return; }
+      const report = j.closure_report || {};
+      patch({ cellClosureReport: report });
+      setClosureGenerateWarn(closureWarnText(report));
+    } catch {
+      // 后端不可用 → 清掉提示，绝不留一条来路不明的旧警告
+      setClosureGenerateWarn(null);
+    }
   };
 
   const handleImport = () => { setViewMode("raw"); setRawInp("粘贴 INP 内容..."); };

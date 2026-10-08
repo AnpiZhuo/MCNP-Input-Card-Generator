@@ -213,6 +213,50 @@ def test_keep_py_transitive_sibling_imports_are_registered():
         "（先例：mcnp_locator.py → user_config.py）")
 
 
+def test_keep_py_function_level_sibling_imports_are_registered():
+    """**函数内 import 闸门**：`_keep_py` 模块在**函数体里** import 的兄弟模块也必须登记。
+
+    为什么需要（上面那条只看模块级，看不见这一类）：
+    `geouned_worker.py` 这类"以**数据文件**形态落盘、再由 FreeCAD python **当脚本跑**"的模块，
+    习惯在函数里 `import spline_skip`（这样模块顶层不碰 FreeCAD/兄弟模块，单测才好导入）。
+    PyInstaller 的静态分析**看不到**这条边，上一条闸门也只看 `ast.parse(...).body` ⇒
+    漏登记 = 冻结版 worker 一进那个函数就 `ImportError`、**STEP 导入整条路挂掉**，
+    而 dev 模式与全部 dev 门禁**都复现不了**（本批新增 `app/spline_skip.py` 正属此类）。
+
+    判据与上一条同一套：顶层名兄弟 `.py` 存在、又不在 `_keep_py`、也不被 `_keep_dirs` 覆盖 ⇒ 红。
+    """
+    spec_text = SPEC_PATH.read_text(encoding="utf-8")
+    keep_py = {f[:-3] for f in _parse_keep_py(spec_text) if f.endswith(".py")}
+    keep_dirs = set(_parse_keep_dirs(spec_text))
+    app_src = PROJECT_DIR / "app"
+
+    missing: dict[str, list[str]] = {}
+    for name in sorted(keep_py):
+        f = app_src / f"{name}.py"
+        if not f.is_file():
+            continue
+        deps: set[str] = set()
+        for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):   # ← 全树，含函数体
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    deps.add(a.name.split(".")[0])
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                deps.add(node.module.split(".")[0])
+        for d in sorted(deps):
+            if d in keep_py or d in keep_dirs:
+                continue
+            if (app_src / f"{d}.py").is_file() or (app_src / d).is_dir():
+                missing.setdefault(name, []).append(d)
+
+    assert not missing, (
+        "以下 `_keep_py` 模块在**函数里** import 了未登记的兄弟模块 ⇒ 冻结包一旦走到那行就 "
+        "ImportError（而 dev 模式永不复现）：\n"
+        f"  {missing}\n"
+        f"  _keep_py（去 .py）= {sorted(keep_py)}\n"
+        "修法：把缺的那个也加进 gui/mcnp_sidecar.spec 的 `_keep_py`"
+        "（先例：本批 spline_skip.py ← geouned_worker.py）")
+
+
 def test_no_keep_py_entry_is_missing_on_disk():
     """反向方向：`_keep_py` 里每一项都要真的存在，否则 spec 悄悄失效（打进去一个不存在的东西）。"""
     app_src = PROJECT_DIR / "app"

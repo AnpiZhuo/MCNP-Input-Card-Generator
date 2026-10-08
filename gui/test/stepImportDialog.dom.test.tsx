@@ -259,6 +259,31 @@ describe("StepImportDialog 留空 = 不发送 = 用 GEOUNED 默认", () => {
     expect(val("真空栅元最大曲面数").value).toBe("");
     expect(screen.getByText(/全部使用 GEOUNED 默认/)).toBeTruthy();
   });
+
+  it("样条曲面处理：默认档显示「跳过该实体」，留空即跳过（不发送该键）", () => {
+    // 用户指定：「遇到样条曲线了就跳过而不是终止或暂停」。本程序默认 = remove；
+    // 留空（没动过）由 worker 的默认档决定，前端只负责把这个事实显示出来。
+    const onImport = importSpy();
+    render(React.createElement(Harness, { onImport }));
+    pickFile();                       // 文件框只在「基本」页上，必须先选文件再切页
+    gotoCommon();
+    const sel = val("样条曲面处理") as unknown as HTMLSelectElement;
+    const options = Array.from(sel.querySelectorAll("option"));
+    expect(options[0].textContent).toBe("默认（跳过该实体）");
+    expect(options.map((o) => o.value)).toEqual(["", "remove", "stop", "ignore"]);
+    fireEvent.click(btn());
+    expect(onImport.mock.calls[0][0].splineSurfaces).toBeUndefined();
+  });
+
+  it("样条曲面处理：显式选的档位照旧发得出去（用户的选择不被默认值顶掉）", () => {
+    const onImport = importSpy();
+    render(React.createElement(Harness, { onImport }));
+    pickFile();
+    gotoCommon();
+    fireEvent.change(val("样条曲面处理"), { target: { value: "stop" } });
+    fireEvent.click(btn());
+    expect(onImport.mock.calls[0][0].splineSurfaces).toBe("stop");
+  });
 });
 
 describe("StepImportDialog 校验与子弹框", () => {
@@ -449,21 +474,46 @@ describe("StepImportDialog 实体预分解开关", () => {
     expect(onImport.mock.calls[1][0].cutSolids).toBe(false);
   });
 
-  it("每块面数上限下拉：选「较细（20 面）」发送 fine", () => {
+  it("每块面数上限可以自己键入数字（用户指定：不再只有三档下拉）", () => {
     const onImport = importSpy();
     render(React.createElement(Harness, { onImport }));
     pickFile();
-    fireEvent.change(val("每块面数上限"), { target: { value: "fine" } });
+    // 是文本框（不是 select）：用户可以填任意面数
+    expect(val("每块面数上限").tagName).toBe("INPUT");
+    expect(val("每块面数上限").placeholder).toBe("30");
+    fireEvent.change(val("每块面数上限"), { target: { value: "12" } });
     fireEvent.click(btn());
-    expect(onImport.mock.calls[0][0].cutDegree).toBe("fine");
+    expect(onImport.mock.calls[0][0].cutDegree).toBe(12);     // 发数字，不是 "12"
   });
 
-  it("三档下拉的取值必须是后端认得的 coarse/medium/fine", () => {
-    render(React.createElement(Harness, { onImport: importSpy() }));
-    const sel = val("每块面数上限") as unknown as HTMLSelectElement;
-    const values = Array.from(sel.querySelectorAll("option")).map((o) => o.value);
-    // 第一项是"留空"（值为空串）
-    expect(values).toEqual(["", "coarse", "medium", "fine"]);
+  it("面数上限填 0 / 小数 / 非数字 → 拦住导入并给中文提示", () => {
+    const onImport = importSpy();
+    render(React.createElement(Harness, { onImport }));
+    pickFile();
+    fireEvent.change(val("每块面数上限"), { target: { value: "0" } });
+    fireEvent.click(btn());
+    expect(onImport).not.toHaveBeenCalled();
+    expect(screen.getByText("⚠ 应为不小于 1 的整数")).toBeTruthy();
+
+    fireEvent.change(val("每块面数上限"), { target: { value: "12.5" } });
+    fireEvent.click(btn());
+    expect(onImport).not.toHaveBeenCalled();
+
+    fireEvent.change(val("每块面数上限"), { target: { value: "abc" } });
+    fireEvent.click(btn());
+    expect(onImport).not.toHaveBeenCalled();
+    expect(screen.getByText(/请输入数字/)).toBeTruthy();
+  });
+
+  it("旧版三档下拉记住的值会被迁移成面数（老用户开窗不被自己的记忆拦住）", () => {
+    localStorage.setItem("mcnp_step_import_v1",
+      JSON.stringify({ version: 1, vals: { cutSolids: true, cutDegree: "fine" } }));
+    const onImport = importSpy();
+    render(React.createElement(Harness, { onImport }));
+    expect(val("每块面数上限").value).toBe("20");            // fine → 20 面
+    pickFile();
+    fireEvent.click(btn());
+    expect(onImport.mock.calls[0][0].cutDegree).toBe(20);
   });
 
   it("子弹框写清作用、实测效果与代价（不再提 MCCAD）", () => {
@@ -477,12 +527,12 @@ describe("StepImportDialog 实体预分解开关", () => {
     expect(screen.queryByText(/MCCAD/)).toBeNull();                     // 外部程序已彻底移除
   });
 
-  it("面数上限是「结果指标」而不是「深度」—— 文案要说清并给出切不动的情形", () => {
+  it("面数上限是「结果指标」而不是「块数输入」—— 文案要说清并给出切不动的情形", () => {
     render(React.createElement(Harness, { onImport: importSpy() }));
     fireEvent.click(screen.getByRole("button", { name: "每块面数上限 的详细说明" }));
     expect(screen.getByText("【每块面数上限】")).toBeTruthy();
-    expect(screen.getByText(/块数是被算出来的结果，不是输入项/)).toBeTruthy();
-    expect(screen.getByText(/可能切不动/)).toBeTruthy();                 // 较细档的诚实提示
+    expect(screen.getByText(/块数是被算出来的结果，不是你填的/)).toBeTruthy();
+    expect(screen.getByText(/2 块切不动/)).toBeTruthy();                 // 较细档的诚实提示
     expect(screen.getByText(/不假装达标/)).toBeTruthy();
   });
 });

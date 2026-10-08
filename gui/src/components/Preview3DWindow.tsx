@@ -17,10 +17,10 @@ export default function Preview3DWindow() {
   const [trCards, setTrCards] = useState(() => data?.trCards || "");
 
   // 材料改号 → 通过 storage 事件回写主窗口
-  const handleMaterialChange = (cellNum: string, newMat: string) => {
+  const handleMaterialChange = (cellNum: string, newMat: string, density: string) => {
     // 宿主层：先回写主窗口（emitMaterialChange），Preview3D 自身 onMaterialChange
     // 已处理窗口内视觉。主窗口通过 storage 事件收到后 patch deck。
-    import("../utils/windows").then((m) => m.emitMaterialChange(cellNum, newMat));
+    import("../utils/windows").then((m) => m.emitMaterialChange(cellNum, newMat, density));
   };
 
   const handleQuickCellGenerate = (result: QuickCellResult) => {
@@ -56,6 +56,10 @@ export default function Preview3DWindow() {
       surfaces,
       trCards,
       materials: data.materials,
+      // STEP 方向预览走同一条桥：预置网格直接渲染（不调后端），标题换成方向说明
+      preloadedStl: data.preloadedStl,
+      preloadToken: data.preloadToken,
+      titleOverride: data.titleOverride,
       onClose: () => { clearStlSession(); closeCurrentWindow(); },
       onMaterialChange: handleMaterialChange,
       onQuickCellGenerate: handleQuickCellGenerate,

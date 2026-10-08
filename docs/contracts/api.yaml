@@ -88,8 +88,13 @@ paths:
     post:
       operationId: expandFormula
       tags: [source]
-      summary: 化学式 → 核素列表（pymcnp M_0.from_formula）
-      description: 入参 data.get("formula")，返回核素 ZAID+份额（api_server.py:606-651）。
+      summary: 化学式 → 核素列表（本模块按定义展开，_expand_formula_member）
+      description: |
+        入参 data.get("formula")，返回核素 ZAID+份额（api_server.py `_handle_expand_formula`）。
+        展开口径由本模块实现，**不再复用** pymcnp `M_0.from_formula` 的 is_weight 分支
+        （该函数两分支同为质量分数，且把 NIST 原子丰度直接当份额相乘）：
+        质量模式元素内按 w_i = w_el·x_i·A_i / Σ x_j·A_j 质量加权；原子模式按 n_i = n_el·x_i。
+        ZAID 输出裸 ZZZAAA（不带库后缀），库选择交给 MCNP/xsdir。
       requestBody:
         required: true
         content:
@@ -103,9 +108,11 @@ paths:
                   default: true
                   description: |
                     true=质量份额（fraction 带负号，MCNP 约定 负=质量），
-                    false=原子份额（fraction 带正号，MCNP 约定 正=原子）。
-                    缺省/true 保持向后兼容（与既有行为一致）；仅控制符号语义，
-                    不改变份额归一化（abs-sum 归一行为不变）。
+                    元素内同位素按质量加权（如天然硼 B-10 = 0.184309，非原子丰度 0.199）。
+                    false=原子份额（fraction 带正号，MCNP 约定 正=原子），
+                    元素内按原子丰度分配（H2O → H 2/3、O 1/3）。
+                    缺省/true 保持向后兼容（与既有行为一致）；两种模式都按 abs-sum
+                    归一（行为不变）。
       responses:
         '200':
           description: 展开成功（_ok({"nuclides": …})）
@@ -757,6 +764,55 @@ paths:
                           properties:
                             zaid: { type: string }
                       error: { type: string, description: 异常分支出现 }
+
+  /api/step-preview:
+    post:
+      operationId: stepPreview
+      tags: [geometry]
+      summary: 方向预览（STEP→STL 或直接给 STL，按「上轴/原点」约定转好；导入导出共用）
+      description: |
+        用途：导入 STEP 前"看着选"上轴（用户 2026-10-08 指定：给个按钮，点一下先用 STEP
+        生成预览），以及**导出前**看"到目标 CAD 里会是什么样"。**两个方向共用本端点与同一套
+        矩阵实现**（避免两处漂移）：
+          · direction=cad2mcnp（默认，导入预览）：入参 {"data": <base64 STEP>} 或 {"path": ...}；
+          · direction=mcnp2cad（导出预览）：入参 {"stl": [<base64 STL>...]}（3D 预览给的每栅元 STL）。
+        可选 cad_orientation={"up":"Z"|"Y","azimuthDeg":0|90|180|270,"origin":"keep"|"center"|"bottom"}。
+        实现：STEP 的镶嵌（FreeCAD 子进程）按文件内容 sha1 缓存，**切换朝向只做旋转/平移矩阵**
+        （app/stl_transform.py）⇒ 边看边切不卡。返回的 STL 已是"目标坐标系里的样子"
+        （与真正导入/导出一致）。无 FreeCAD / 无可用网格时 HTTP 200 下返回
+        {"status":"error","message"}。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                data: { type: string, description: base64 编码的 STEP 内容（导入预览） }
+                path: { type: string, description: 服务端可读的 STEP 路径（与 data 二选一） }
+                stl: { type: array, items: { type: string }, description: base64 STL 列表（导出预览） }
+                direction: { type: string, enum: [cad2mcnp, mcnp2cad], default: cad2mcnp }
+                cad_orientation: { type: object }
+      responses:
+        '200':
+          description: |
+            成功: {"status":"ok","stl":base64,"bbox":[[x0,y0,z0],[x1,y1,z1]],
+            "solids":N,"triangles":M,"notes":[...],"orientation":{...}}；
+            失败: {"status":"error","message"}（HTTP 200）
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - { $ref: '#/components/schemas/OkEnvelope' }
+                      - type: object
+                        properties:
+                          stl: { type: string }
+                          bbox: { type: array }
+                          solids: { type: integer }
+                          triangles: { type: integer }
+                          orientation: { type: object }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
 
   /api/export-step:
     post:

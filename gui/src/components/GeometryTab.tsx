@@ -21,6 +21,7 @@ import { useCellClosure } from "../utils/useCellClosure";
 import { closureMeta } from "../utils/cellClosure";
 import { apiUrl } from "../utils/api";
 import { useSectionTextMode } from "../utils/useSectionTextMode";
+import { normalizeImportedCardText } from "../utils/mcnpText";
 import { useDeckSynced } from "../utils/useDeckSynced";
 import { useAppScale, getAppPortalRoot } from "../utils/appScale";
 import { textToSection } from "../utils/sectionConvert";
@@ -104,6 +105,87 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const [showStepDlg, setShowStepDlg] = useState(false);
   // STEP 转换进行中：窗口点导入即关，用工具栏按钮当"还在转"的指示 + 防重复点
   const [stepBusy, setStepBusy] = useState(false);
+  /**
+   * STEP 导出的「CAD 上轴/方位」约定（持久化，键 mcnp_cadUp_v1 / mcnp_cadAz_v1）。
+   *
+   * 为什么需要（2026-10-08 用户实测）：STEP 文件**不带**上轴信息（ISO 10303 只有坐标值+单位），
+   * 差别来自源软件默认坐标系 —— Z 朝上：FreeCAD/UG/CATIA/Creo 类；Y 朝上：SolidWorks/Inventor 类。
+   * 本程序与 MCNP 都是 Z 朝上，所以往 Y 朝上的 CAD 导出时必须绕 X 转 −90°，否则模型在那边躺倒。
+   * 导入侧按逆变换转回来（app/cad_orientation.py 是两侧共用的单一来源）。
+   */
+  const [cadUpAxis, setCadUpAxis] = useState<string>(() => {
+    try { return localStorage.getItem("mcnp_cadUp_v1") || "Z"; } catch { return "Z"; }
+  });
+  const [cadAzimuth, setCadAzimuth] = useState<string>(() => {
+    try { return localStorage.getItem("mcnp_cadAz_v1") || "0"; } catch { return "0"; }
+  });
+  /** 原点口径：keep 按原本建模 / center 体心归零 / bottom 坐在底面上（用户 2026-10-08 指定三选一） */
+  const [cadOrigin, setCadOrigin] = useState<string>(() => {
+    try { return localStorage.getItem("mcnp_cadOrigin_v1") || "keep"; } catch { return "keep"; }
+  });
+  const cadOrientation = () => ({ up: cadUpAxis, azimuthDeg: Number(cadAzimuth) || 0, origin: cadOrigin });
+  const setCadOrient = (up: string, az: string) => {
+    setCadUpAxis(up); setCadAzimuth(az);
+    try {
+      localStorage.setItem("mcnp_cadUp_v1", up);
+      localStorage.setItem("mcnp_cadAz_v1", az);
+    } catch { /* 隐私模式等：不持久化也能用 */ }
+  };
+  const setCadOriginPersist = (o: string) => {
+    setCadOrigin(o);
+    try { localStorage.setItem("mcnp_cadOrigin_v1", o); } catch { /* 同上 */ }
+  };
+  /**
+   * 导出方向预览（与导入侧同一个端点、同一套矩阵）：
+   * ① 走现有 `/api/preview-3d` 拿每栅元 STL（MCNP 坐标系）；
+   * ② 交 `/api/step-preview`（direction=mcnp2cad）按导出约定转成"目标 CAD 里"的样子；
+   * ③ 用**真正的 3D 预览窗口**（Preview3D，预置网格模式）显示 —— 点一下就能看出"导出去会不会躺倒"。
+   */
+  const [expPv, setExpPv] = useState<{ stl: string; notes: string[]; token: string; windowed: boolean } | null>(null);
+  const [expPvBusy, setExpPvBusy] = useState(false);
+  const [expPvErr, setExpPvErr] = useState("");
+  /** 导出 STEP 对话框：上轴 / 原点 / 方向预览都收在这里（不占工具栏那一行） */
+  const [exportDlg, setExportDlg] = useState(false);
+  const handlePreviewExport = async () => {
+    if (!fc.require()) return;
+    setExpPvBusy(true);
+    setExpPvErr("");
+    setExpPv(null);
+    try {
+      const r = await fetch(apiUrl("/api/preview-3d"), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ surfaces: surfText, cells: cells, tr_cards: trText }),
+      });
+      const j = await r.json();
+      const stls = Object.values((j.stl_data || {}) as Record<string, string>);
+      if (!stls.length) { setExpPvErr(j.message || "没有可预览的几何（先生成 3D 预览）"); return; }
+      const r2 = await fetch(apiUrl("/api/step-preview"), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stl: stls, cad_orientation: cadOrientation(), direction: "mcnp2cad",
+        }),
+      });
+      const j2 = await r2.json();
+      if (j2.status !== "ok" || !j2.stl) { setExpPvErr(j2.message || "方向预览失败"); return; }
+      const tok = String(Date.now());
+      const title = "📐 导出方向预览 — " + ((j2.notes || [])[0] || "");
+      // 与「3D 预览」同一个独立窗口；非 Tauri 环境退回窗内浮层
+      const opened = await openPreview3D({
+        cells: [{ num: "1", mat: "1", density: "", surfaces: "", comment: "从 MCNP 几何导出（已按导出方向约定转好）", render: true }],
+        surfaces: "",
+        trCards: "",
+        materials: [],
+        preloadedStl: { "1": j2.stl },
+        preloadToken: tok,
+        titleOverride: title,
+      });
+      setExpPv({ stl: j2.stl, notes: j2.notes || [], token: tok, windowed: opened });
+    } catch (e: any) {
+      setExpPvErr(e?.message || "方向预览请求失败");
+    } finally {
+      setExpPvBusy(false);
+    }
+  };
   const [quickCellOpen, setQuickCellOpen] = useState(false);
   // 格阵 fill 阶段2：栅格编辑器 + 按 U 分组显示
   const [latticeOpen, setLatticeOpen] = useState(false);
@@ -185,7 +267,11 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
       });
       const j = await r.json();
       if (j.status === "ok" && j.deck) {
-        patch({ surfaces: j.deck.surfaces || "", tr_cards: j.deck.tr_cards || "", cells: j.deck.cells || [] });
+        patch({
+          surfaces: normalizeImportedCardText(j.deck.surfaces || ""),
+          tr_cards: normalizeImportedCardText(j.deck.tr_cards || ""),
+          cells: j.deck.cells || [],
+        });
         // 后端流水线提示（例：实体预分解已生效（块数与面数）/ 已跳过及原因）—— 必须让用户看见，
         // 否则分不清"切割没生效"和"切割开了但看不出差别"。
         const notes: string[] = Array.isArray(j.warnings) ? j.warnings : [];
@@ -237,9 +323,10 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   const handleExportSTEP = async () => {
     if (!fc.require()) return;
     try {
-      const r = await fetch(apiUrl("/api/export-step"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({surfaces:surfText,cells:cells,tr_cards:trText})});
+      const r = await fetch(apiUrl("/api/export-step"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({surfaces:surfText,cells:cells,tr_cards:trText,cad_orientation:cadOrientation()})});
       const j = await r.json();
       if (j.status !== "ok") { alert(j.message || "导出失败"); return; }
+      if (j.message) console.info("[export-step]", j.message);
       // 获取文件内容（支持新旧格式）
       let content: string;
       if (j.data) {
@@ -252,14 +339,19 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
       const buf = new Uint8Array(content.length);
       for (let i = 0; i < content.length; i++) buf[i] = content.charCodeAt(i);
       const blob = new Blob([buf], { type: "model/step" });
+      // 文件名带上上轴约定：拿到一份 STEP 时说得清它的坐标系（STEP 文件本身不带上轴信息）
+      const name = cadUpAxis === "Y" || cadAzimuth !== "0"
+        ? `mcnp_export_up${cadUpAxis}${cadAzimuth !== "0" ? `_az${cadAzimuth}` : ""}.step`
+        : "mcnp_export.step";
       if ((window as any).showSaveFilePicker) {
-        const handle = await (window as any).showSaveFilePicker({ suggestedName: "mcnp_export.step", types: [{ description: "STEP 文件", accept: { "model/step": [".step", ".stp"] } }] });
+        const handle = await (window as any).showSaveFilePicker({ suggestedName: name, types: [{ description: "STEP 文件", accept: { "model/step": [".step", ".stp"] } }] });
         const ws = await handle.createWritable();
         await ws.write(blob);
         await ws.close();
       } else {
-        const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "mcnp_export.step"; a.click();
+        const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click();
       }
+      setExportDlg(false);   // 存好即关（导出对话框）
     } catch(e) { alert("导出失败: " + ((e as any)?.message || e)); }
   };
   const handleRawCells = (t: string) => patch({ rawOverrides: { ...deck.rawOverrides, cells: t } });
@@ -334,8 +426,10 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
   };
 
   // 3D 预览里点击材料号改材料 → 更新本地 cells，local→deck 同步自动 patch
-  const handleCellMaterialChange = (cellNum: string, newMat: string) => {
-    setCells(prev => prev.map(c => c.kind === "cell" && c.cell.num === cellNum ? { ...c, cell: { ...c.cell, mat: newMat } } : c));
+  const handleCellMaterialChange = (cellNum: string, newMat: string, density: string) => {
+    setCells(prev => prev.map(c => c.kind === "cell" && c.cell.num === cellNum
+      ? { ...c, cell: { ...c.cell, mat: newMat, density } }
+      : c));
   };
 
   // 主页面栅元表：点击材料号选材料 → 更新材料号 + 自动填充该材料密度
@@ -417,8 +511,10 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
 
   // 独立 3D 窗口里改材料号 → storage 事件回写主窗口（双向同步）
   useEffect(() => {
-    const offMat = onMaterialChange((cellNum, newMat) => {
-      setCells(prev => prev.map(c => c.kind === "cell" && c.cell.num === cellNum ? { ...c, cell: { ...c.cell, mat: newMat } } : c));
+    const offMat = onMaterialChange((cellNum, newMat, density) => {
+      setCells(prev => prev.map(c => c.kind === "cell" && c.cell.num === cellNum
+        ? { ...c, cell: { ...c.cell, mat: newMat, density } }
+        : c));
     });
     // 独立 3D 窗口里快捷建栅元 → storage 事件回写主窗口（追加曲面/TR/栅元）
     const offQuick = onQuickCellGenerate(handleQuickCellGenerate);
@@ -624,7 +720,8 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
           {fc.status === "missing" && <button className="btn btn-ghost btn-xs" onClick={fc.pickPath}>指定 FreeCAD 路径</button>}
           <button className="btn btn-ghost btn-xs" onClick={() => setShowStepDlg(true)} disabled={stepBusy}>{stepBusy ? "⏳ STEP 转换中…" : "📥 导入 STEP"}</button>
           <button className="btn btn-primary btn-xs" onClick={handlePreview3D}>🔍 3D 预览</button>
-          <button className="btn btn-ghost btn-xs" onClick={handleExportSTEP}>📐 导出 STEP</button>
+          {/* 上轴/原点/方向预览都收进「导出 STEP」对话框里（用户 2026-10-08：这三个键不要出现在这一行） */}
+          <button className="btn btn-ghost btn-xs" onClick={() => { setExpPvErr(""); setExportDlg(true); }}>📐 导出 STEP</button>
         </div>
         {/* 栅元封闭性检测结果（3D 预览后自动获得；无面板，直接在栅元行标注） */}
         {/* GPU 偏好提示（独占一行，右对齐，位于按钮行下方）：自检 / 设置结果 */}
@@ -746,6 +843,76 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
       {doc && <DocViewer path={doc.path} title={doc.title} onClose={() => setDoc(null)} />}
       {show3D && <Preview3D cells={cells.filter(c => c.kind === "cell").map(c => ({ num: c.cell.num, mat: c.cell.mat, density: c.cell.density, surfaces: c.cell.surfaces, comment: c.cell.comment, render: c.cell.render, u: c.cell.u, fill: c.cell.fill, lat: c.cell.lat, trcl: c.cell.trcl, fill_grid: c.cell.fill_grid, impN: c.cell.impN, impP: c.cell.impP, impE: c.cell.impE }))} surfaces={surfText} trCards={trText} onClose={() => setShow3D(false)} onMaterialChange={handleCellMaterialChange} onQuickCellGenerate={handleQuickCellGenerate} />}
       {showStepDlg && <StepImportDialog onImport={handleStepImport} onClose={() => setShowStepDlg(false)} />}
+      {/* 导出 STEP 对话框：上轴 / 原点 / 方向预览都收在这里 ——
+          用户 2026-10-08：「这三个键不要出现在这个页面」（工具栏那行） */}
+      {exportDlg && <FloatingDialog
+        title="📐 导出 STEP"
+        width={580}
+        onClose={() => setExportDlg(false)}
+        footer={React.createElement(React.Fragment, null,
+          React.createElement("div", { style: { flex: 1, fontSize: 10, color: "var(--text-tertiary)" } },
+            "上轴/原点与导入侧共用同一约定，往返自洽"),
+          React.createElement("button", { className: "btn btn-ghost btn-sm", onClick: () => setExportDlg(false) }, "取消"),
+          React.createElement("button", {
+            className: "btn btn-primary btn-sm", onClick: () => { void handleExportSTEP(); },
+          }, "📐 导出"),
+        )}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 12 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ width: 62, color: "var(--text-secondary)", flexShrink: 0 }}>CAD 上轴</span>
+            <select
+              className="form-input"
+              style={{ flex: 1, fontSize: 11, height: 26, padding: "0 6px" }}
+              value={`${cadUpAxis}/${cadAzimuth}`}
+              onChange={(e) => { const [u, a] = e.target.value.split("/"); setCadOrient(u, a); }}
+            >
+              <option value="Z/0">Z 朝上（不旋转）—— FreeCAD / UG(NX) / CATIA / Creo 类</option>
+              <option value="Y/0">Y 朝上 —— SolidWorks / Inventor / Maya 类</option>
+              <option value="Z/90">Z 朝上 + 绕上轴 90°</option>
+              <option value="Z/180">Z 朝上 + 绕上轴 180°</option>
+              <option value="Z/270">Z 朝上 + 绕上轴 270°</option>
+              <option value="Y/90">Y 朝上 + 绕上轴 90°</option>
+              <option value="Y/180">Y 朝上 + 绕上轴 180°</option>
+              <option value="Y/270">Y 朝上 + 绕上轴 270°</option>
+            </select>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ width: 62, color: "var(--text-secondary)", flexShrink: 0 }}>原点口径</span>
+            <select
+              className="form-input"
+              style={{ flex: 1, fontSize: 11, height: 26, padding: "0 6px" }}
+              value={cadOrigin}
+              onChange={(e) => setCadOriginPersist(e.target.value)}
+            >
+              <option value="keep">按原本建模（不平移，CAD 坐标 = MCNP 坐标）</option>
+              <option value="center">体心归零（包围盒中心搬到原点）</option>
+              <option value="bottom">坐在底面上（水平居中，底在目标 CAD 的上轴 0 平面上）</option>
+            </select>
+          </div>
+          <div style={{ fontSize: 10, color: "var(--text-tertiary)", lineHeight: 1.7 }}>
+            STEP 文件本身不带"上轴"信息 —— 差异来自源软件自己的默认坐标系：Z 朝上（FreeCAD/UG/CATIA/Creo 类）、
+            Y 朝上（SolidWorks/Inventor/Maya 类）。选错不报错，只是方向不对，改一下重导即可。
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button className="btn btn-ghost btn-xs" onClick={() => { void handlePreviewExport(); }} disabled={expPvBusy}>
+              {expPvBusy ? "⏳ 生成预览…" : "👁 预览方向（看导出后的样子）"}
+            </button>
+            <span style={{ fontSize: 10, color: "var(--text-tertiary)" }}>
+              先用现有 3D 预览算出网格，再按上面的约定转一次；改上轴/原点后重新点
+            </span>
+          </div>
+          {expPvErr ? <div style={{ fontSize: 11, color: "#e53935" }}>{expPvErr}</div> : null}
+          {/* 预览用**真正的 3D 预览窗口**（与正常 3D 预览完全同一套），网格是后端按导出约定转好的 */}
+          {(expPv && !expPv.windowed) ? React.createElement(Preview3D, {
+            cells: [{ num: "1", mat: "1", density: "", surfaces: "", comment: "从 MCNP 几何导出（已按导出方向约定转好）", render: true }],
+            preloadedStl: { "1": expPv.stl },
+            preloadToken: expPv.token,
+            titleOverride: "📐 导出方向预览 — " + ((expPv.notes || [])[0] || ""),
+            zIndex: 1300,
+            onClose: () => setExpPv(null),
+          }) : null}
+        </div>
+      </FloatingDialog>}
       {fc.showDialog && <FloatingDialog title="⚠ 需要 FreeCAD" onClose={fc.closeDialog} width={460}
         footer={React.createElement("button", { className: "btn btn-primary btn-sm", onClick: fc.closeDialog }, "知道了")}>
         <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.7 }}>
@@ -756,3 +923,4 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     </>
   );
 }
+

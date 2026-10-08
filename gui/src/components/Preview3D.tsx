@@ -57,12 +57,25 @@ interface Preview3DProps {
   surfaces?: string;
   trCards?: string;
   onClose: () => void;
-  /** 用户改了某个栅元的材料号后回调（num=栅元号, newMat=新材料号） */
-  onMaterialChange?: (cellNum: string, newMat: string) => void;
-  /** 独立窗口模式：由宿主传入材料列表（{number, comment}），替代 useDeck() */
-  materials?: { number: number; comment?: string }[];
+  /** 用户改了某个栅元的材料号后回调（num=栅元号, newMat=新材料号, density=材料密度） */
+  onMaterialChange?: (cellNum: string, newMat: string, density: string) => void;
+  /** 独立窗口模式：由宿主传入材料列表（{number, comment, density}），替代 useDeck() */
+  materials?: { number: number; comment?: string; density?: string }[];
   /** 快捷建栅元生成结果回调（宿主把曲面/TR/栅元写回 deck） */
   onQuickCellGenerate?: (result: QuickCellResult) => void;
+  /**
+   * **预置网格**（STEP 方向预览，2026-10-08 用户要求"直接用 3D 预览的窗口那一套"）：
+   * 给了就不再调 `/api/preview-3d`，直接渲染这份 {栅元号: base64 STL}。
+   * 于是方向预览与正常 3D 预览**共用同一个窗口**（灯光/坐标轴/刻度/轨道控制/材料色板/出图全一致），
+   * 不再维护第二套画布。
+   */
+  preloadedStl?: Record<string, string>;
+  /** 预置网格的版本号：变了就重新取网格（避免把整个 STL 塞进依赖数组） */
+  preloadToken?: string;
+  /** 预置模式下替换标题（别显示"演示模式"这类会误导的字样） */
+  titleOverride?: string;
+  /** 窗口层级（默认 1000；嵌在别的对话框里时传更高的值，保证盖在它上面） */
+  zIndex?: number;
 }
 
 /* ---- 色板（10 色，按材料号取模） ---- */
@@ -547,7 +560,7 @@ function initScene(
 }
 
 /* ---- React 组件 ---- */
-export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose, onMaterialChange, materials, onQuickCellGenerate }: Preview3DProps) {
+export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose, onMaterialChange, materials, onQuickCellGenerate, preloadedStl, preloadToken, titleOverride, zIndex }: Preview3DProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const ctrlRef = useRef<ReturnType<typeof initScene> | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -600,8 +613,8 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   const [genTick, setGenTick] = useState(0);
   const [wireSpec, setWireSpec] = useState<{ shape: QuickShape; config: any; material: string } | null>(null);
   const wirePreviewRef = useRef<ReturnType<typeof buildQuickCellPreview> | null>(null);
-  const propsRef = useRef({ cells: rawCells, surfaces: surfaces || "", trCards: trCards || "" });
-  propsRef.current = { cells: rawCells, surfaces: surfaces || "", trCards: trCards || "" };
+  const propsRef = useRef({ cells: rawCells, surfaces: surfaces || "", trCards: trCards || "", preloadedStl });
+  propsRef.current = { cells: rawCells, surfaces: surfaces || "", trCards: trCards || "", preloadedStl };
 
   /* ── 重合检测（异步自动触发 + 面板 + 点击高亮）── */
   const [overlapResult, setOverlapResult] = useState<{
@@ -695,6 +708,9 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
           center: center,
           // 材料页注释（图例注释的权威来源）随桥传给截面窗口
           materials: (matList || []).map((m: any) => ({ number: m.number, comment: m.comment })),
+          // 后端 warnings（"与切割平面只沿边界面接触，已剔除边界伪影"等）一并过桥：
+          // 它是"这个平面上为什么看着不对"的唯一解释来源，别再丢掉（2026-10-08 用户实测）
+          warnings: (j.warnings || []) as string[],
         }).then(function(opened) {
           if (!opened) setCsSlices(j.slices);
         });
@@ -712,6 +728,13 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
     // 用最新曲面/栅元/TR 调用后端生成 STL；生成新栅元后 genTick++ 重拉
     setLoading(true);
     var p = propsRef.current;
+    // 预置网格模式（STEP 方向预览）：网格由宿主算好（后端按约定转过）直接渲染，不调后端。
+    if (p.preloadedStl) {
+      setStlData(p.preloadedStl);
+      setFreecadStatus(" 已按当前方向约定转好");
+      setLoading(false);
+      return;
+    }
     // 格阵装配：universe 栅元（u 非空）不单独摆（经装配出现），从 preview-3d 排除
     var cellsForBackend = p.cells.filter(function(c) { return !(hasLattice && c.u); }).map(function(c) {
       return { number: parseInt(c.num) || 0, material: c.mat, density: (c as any).density || "", surface_expr: (c as any).surfaces || (c as any).surface_expr || "" };
@@ -734,7 +757,8 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         setFreecadStatus("  ");
       }
       }).catch(function() { setFreecadStatus("  "); }).finally(function() { setLoading(false); });
-  }, [genTick, hasLattice]);
+    // preloadToken：预置网格换了一份时重挂（不把整个 STL 塞进依赖数组）
+  }, [genTick, hasLattice, preloadToken]);
 
   /* 格阵装配：把 universe 实例化装配融进主 3D 预览场景（用户要求唯一 3D 预览，
      显示 MCNP 真实装配——pin 到位、fill 容器不出实体）。universe 栅元已从
@@ -995,11 +1019,15 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   const applyMaterial = useCallback((i: number, newMat: string) => {
     const m = newMat.trim();
     if (!m || !cellViews[i]) return;
+    const selectedMaterial = m === "0"
+      ? undefined
+      : matList.find((mt) => String(mt.number) === m);
+    const density = selectedMaterial?.density || "";
     setCellViews((prev) => prev.map((cv, ci) => ci === i ? { ...cv, mat: m, color: getColor(m) } : cv));
     ctrlRef.current?.setColor(i, getColor(m));
-    onMaterialChange?.(cellViews[i].num, m);
+    onMaterialChange?.(cellViews[i].num, m, density);
     setMatPicker(null);
-  }, [cellViews, onMaterialChange]);
+  }, [cellViews, matList, onMaterialChange]);
 
   // 材料可选项：材料列表（独立窗口用 props，主窗口用 deck）+ 真空 M0
   const materialOptions: { num: string; label: string }[] = [
@@ -1073,7 +1101,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
     style: {
       position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
       backdropFilter: "blur(8px)", display: "flex",
-      flexDirection: "column", zIndex: 1000,
+      flexDirection: "column", zIndex: zIndex ?? 1000,
     } as React.CSSProperties,
   },
     /* 顶部标题栏 */
@@ -1086,7 +1114,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
     },
       React.createElement("span", {
         style: { fontSize: 14, fontWeight: 600, color: "rgba(241,241,249,0.85)" },
-      }, "🎨 3D 预览 — 演示模式"),
+      }, titleOverride || "🎨 3D 预览 — 演示模式"),
       React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
         React.createElement(ExportButton, {
           build: () => {

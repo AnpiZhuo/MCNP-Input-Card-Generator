@@ -17,6 +17,17 @@ GUI_BACKEND = os.path.join(PROJECT, "gui", "backend")
 _keep_py = [
     "models.py", "preview_cache.py", "freecad_preview.py", "_freecad_csg_worker.py",
     "quadric.py", "voxel_csg.py", "mc.py", "analytic_slice.py",
+    "section_region.py",          # 截面「这块是真区域还是边界面伪影」的判定（_import_app 动态导入 → 必须登记，
+                                  # 否则冻结版 /api/cross-section 的判定分支 ImportError，见 TD-02/BE-05 前科）
+    "cad_orientation.py",         # CAD↔MCNP 上轴/方位约定（导入 worker 与导出 worker 都在 app 目录里 import 它；
+                                  # 漏登记则冻结版的 STEP 导入/导出会在 FreeCAD 子进程里 ImportError）
+    "stl_transform.py",           # STEP 预览的旋转/平移 + 包围盒（主进程用；纯 numpy）
+    "tangent_fix.py",             # 相切退化修复的判定逻辑（geouned_worker 在 FreeCAD python 里 import）
+    "spline_skip.py",             # 样条实体「跳过而不是终止」的报告/决策（同上：geouned_worker 在函数里
+                                  # import 它，PyInstaller 静态分析看不到这条边 ⇒ 漏登记则冻结版
+                                  # STEP 导入直接 ImportError。闸门见 test_sidecar_spec_keep.py 的
+                                  # test_keep_py_function_level_sibling_imports_are_registered）
+    "_freecad_step_preview_worker.py",  # STEP→STL 镶嵌 worker（子进程执行体，与 _freecad_csg_worker 同类）
     "mctal_parser.py", "sweep.py",
     "overlap_classify.py", "spatial_index.py", "overlap_probe.py",
     "freecad_locator.py", "step_importer_geouned.py", "geouned_worker.py",

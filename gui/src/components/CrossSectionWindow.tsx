@@ -16,6 +16,8 @@ export default function CrossSectionWindow() {
   const [init] = useState(() => readCrossSectionData());
   const [slices, setSlices] = useState<any[] | null>(init?.slices || null);
   const [plane, setPlane] = useState(init?.plane || { A: 0, B: 0, C: 1, D: 0 });
+  /** 后端 warnings：步进换平面后必须跟着更新（"该平面上栅元 X 不存在"是逐平面的事实） */
+  const [warnings, setWarnings] = useState<string[]>(init?.warnings || []);
   /** 由 CrossSectionView 在挂载后回填："把当前这张矢量图变成导出请求" */
   const buildExportRef = useRef<(() => ExportFigureRequest) | null>(null);
 
@@ -35,6 +37,7 @@ export default function CrossSectionWindow() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cellNums: cellNums, plane: planeRaw }),
     }).then((r) => r.json()).then((j) => {
+      setWarnings((j.warnings || []) as string[]);
       if (j.slices && j.slices.length > 0) setSlices(j.slices);
       else setSlices(null);
     }).catch(() => {});

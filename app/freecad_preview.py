@@ -600,7 +600,8 @@ class FreeCADEngine:
                        check_overlaps: bool = False,
                        focus_num: int | None = None,
                        focus_nums: list[int] | None = None,
-                       check_closure: bool = False) -> dict[int, str]:
+                       check_closure: bool = False,
+                       cad_orientation: dict | str | None = None) -> dict[int, str]:
         """从 pymcnp 对象和栅元数据构建各栅元的 CSG 几何。
 
         Args:
@@ -614,6 +615,9 @@ class FreeCADEngine:
             focus_num / focus_nums: 重合检测聚焦栅元（可选）
             check_closure: True=同时做每个栅元的封闭性判定（closed/infinite/
                 empty/voxel/unresolvable），结果存 self.closure_report
+            cad_orientation: 导出 STEP 时的「CAD 上轴/方位」约定
+                （``{"up":"Z"|"Y","azimuthDeg":0|90|180|270}``，见 app/cad_orientation.py）。
+                **只对 fmt="step" 生效**，默认不变（= 不旋转）。
 
         Returns:
             {cell_number: 输出文件路径}
@@ -681,6 +685,8 @@ class FreeCADEngine:
             "single_file": single_file,
             "check_overlaps": check_overlaps,
             "check_closure": check_closure,
+            # 导出 STEP 的 CAD 上轴/方位约定（仅 fmt="step" 时 worker 会采纳；缺省不旋转）
+            "cad_orientation": cad_orientation,
             "focus_nums": focus_nums if focus_nums is not None
             else ([focus_num] if focus_num is not None else None),
         }

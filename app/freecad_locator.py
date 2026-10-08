@@ -193,6 +193,35 @@ def bin_dir() -> Optional[str]:
     return d
 
 
+def python_exe(bin_root: Optional[str] = None) -> Optional[str]:
+    """FreeCAD 自带的 python.exe —— **定位它的唯一来源**（便携版与安装版两种布局都覆盖）。
+
+    为什么要单独一个函数（2026-10-08）：STEP 方向预览需要拿 FreeCAD 的 python 跑一个小 worker，
+    当时在 handler 里自己拼了一遍"候选路径"，与 GEOUNED 转换器那份重复 ⇒ 两份逻辑迟早漂移。
+    现在两处都走这里：
+
+    * **便携版（免安装）**：`freecad.exe` 与 `python.exe` 同在根目录
+      （如 `D:\\FreeCAD\\FreeCAD_1.1.1-...\\bin\\python.exe`，`bin_dir()` 已把它算准）；
+    * **安装版**：调用方可能拿到的是安装根（`…\\FreeCAD 1.1\\`），python 在 `bin\\` 子目录。
+
+    传入 `bin_root`（例如 `StepImporter.detect_freecad()` 的返回值）时只在该目录找；
+    不传则先 `bin_dir()` 自行定位。找不到返回 None —— **不猜、不硬编任何盘符或目录名**。
+    """
+    roots = []
+    if bin_root:
+        roots.append(bin_root)
+    else:
+        d = bin_dir()
+        if d:
+            roots.append(d)
+    for root in roots:
+        for rel in ("python.exe", os.path.join("bin", "python.exe")):
+            cand = os.path.join(root, rel)
+            if os.path.isfile(cand):
+                return cand
+    return None
+
+
 def reset_cache() -> None:
     global _cache_state, _cache_path
     _cache_state, _cache_path = 0, None

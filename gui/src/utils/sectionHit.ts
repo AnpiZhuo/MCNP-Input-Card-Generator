@@ -65,10 +65,41 @@ export function pointInPolygon(poly: readonly { x: number; y: number }[], px: nu
 }
 
 /**
+ * 栅元区域判定：点是否属于该栅元 —— 环集合的**奇偶**规则。
+ *
+ * ## 为什么必须是奇偶，而不是"落在任意一个环里"
+ * 后端返回的 `polygons` 是**一串闭合环**，没有"谁是外圈、谁是洞"的标记。环只是
+ * **边界曲线**，所以区域内部 = 被**奇数条**环套住的点。于是：
+ *   · 内孔：被外圈 + 孔圈套住 = 2 层（偶）⇒ **不属于**该栅元；
+ *   · 孔里的孤岛（同一栅元的不连通并集）：外圈 + 孔圈 + 孤岛圈 = 3 层（奇）⇒ 属于。
+ * 2026-10-07 用户实测的 bug 正是这条没做：栅元 6（水体）的截面是"一大片 + ρ<6 的孔"，
+ * 旧判据"落在任意一环内即命中"把孔也算成水 ⇒ 孔里的石墨/聚乙烯被水色盖住，悬停报水。
+ *
+ * ## 为什么不用绕向（winding）
+ * 环的方向**不可信**：实测同一张卡里，栅元 2 的孔环与外环反号（−63.5 / +78.4），
+ * 而栅元 1 的三个环全为正号 ⇒ 只能按包含关系取奇偶。
+ *
+ * 与 `fill-rule="evenodd"` 严格同义 —— 渲染与命中因此可以共用这一条规则。
+ */
+export function pointInCell(
+  loops: readonly (readonly { x: number; y: number }[])[],
+  px: number,
+  py: number,
+): boolean {
+  let inside = false;
+  for (const lp of loops) {
+    if (lp.length >= 3 && pointInPolygon(lp, px, py)) inside = !inside;
+  }
+  return inside;
+}
+
+/**
  * 命中检测：返回**最上面**那个包含该点的栅元（与绘制次序严格一致）。
  *
  * 从绘制次序的**末尾**往前找：末尾画得最晚 ⇒ 视觉最上层 ⇒ 优先报它。
- * 没有任何多边形包含该点 → `null`（宿主据此隐藏悬停框）。
+ * "包含该点"用 `pointInCell`（奇偶）——与渲染的 even-odd 填充同源，
+ * 否则会出现"图上这块是空的，悬停却报某个栅元"。
+ * 没有任何栅元包含该点 → `null`（宿主据此隐藏悬停框）。
  */
 export function topMostHit<T extends SectionCellLike>(
   cells: readonly T[],
@@ -77,9 +108,7 @@ export function topMostHit<T extends SectionCellLike>(
   py: number,
 ): T | null {
   for (let i = cells.length - 1; i >= 0; i--) {
-    for (const poly of polygonsOf(cells[i])) {
-      if (pointInPolygon(poly, px, py)) return cells[i];
-    }
+    if (pointInCell(polygonsOf(cells[i]), px, py)) return cells[i];
   }
   return null;
 }

@@ -24,6 +24,15 @@ interface Props {
   cellComments?: { number: number; comment?: string }[];
   /** 材料页材料表（{number, comment}）：材料图例注释的**权威来源**；缺省回退 useDeck() */
   materials?: { number: number; comment?: string }[];
+  /**
+   * 后端 `/api/cross-section` 的 `warnings`（只增字段）。
+   *
+   * 为什么必须送到界面上：它是"这个平面为什么看着不对"的**唯一解释来源**，例如
+   * 「栅元 3：与切割平面只沿边界面接触（该平面上它不存在），已剔除切出的边界伪影」——
+   * 2026-10-08 用户实测「空腔内有莫名其妙的东西，鼠标悬停无显示」，真因就是
+   * 标注/剔除都没被解释。丢掉这段文字，用户只能看到结果、看不到原因。
+   */
+  warnings?: string[];
   /** 标题栏里的导出按钮（由宿主给，保持本组件不依赖出图链路） */
   exportButton?: React.ReactNode;
   /**
@@ -40,7 +49,8 @@ import { MaterialLegend, CellList } from "./MaterialPanel";
 import { materialLegendEntries } from "../utils/materialLegend";
 import { PlaneControls } from "./PlaneControls";
 import { snapshotSvg } from "../export/captureFrame";
-import { topMostHit } from "../utils/sectionHit";
+import { topMostHit, pointInCell } from "../utils/sectionHit";
+import { sectionConflicts } from "../utils/sectionConflicts";
 import { panAfterDrag, sliceGroupTransform, sliceViewBoxString } from "../utils/sectionView";
 import { build2dSpec, subtitleOf } from "../export/figureSpecs";
 import type { ExportFigureRequest } from "../export/exportFigure";
@@ -96,8 +106,37 @@ function makeProjector(base: { u: number[]; v: number[]; ox: number; oy: number;
   });
 }
 
+/* ---- 栅元 → 单条 even-odd 路径 ---- */
+/**
+ * 一个栅元的全部环合成**一条** path 的 `d`（每个环一个子路径）。
+ *
+ * 为什么必须是"一条 path + even-odd"而不是"每个环一个多边形"：
+ * 后端返回的环里，**内孔环**和**外轮廓环**没有区别标记。旧实现逐环各画一个填充多边形，
+ * 于是孔也被涂成该栅元的材料色 ⇒ 孔里的另一种材料被盖住、两层半透明色叠在一起，
+ * 悬停还报外部材料（2026-10-07 用户实测："中间有某块实际上是其他材料，但被材料覆盖了，
+ * 两者共同显示颜色，鼠标悬停时只显示外部材料的名称"）。
+ * 填充规则交给 SVG 的 `evenodd`：被奇数条边界套住 ⇒ 在该栅元内，孔自然被挖掉，
+ * 孔里的孤岛仍然保留。判据与 `sectionHit.pointInCell` 严格同义（读数与图形同源）。
+ */
+/** 一组环 → 单条 path 的 `d`（每个环一个子路径，配合 fillRule 决定内外） */
+function cellPathData(loops: { x: number; y: number }[][]): string {
+  const parts: string[] = [];
+  for (const lp of loops) {
+    if (lp.length < 3) continue;
+    parts.push("M" + lp.map((p) => `${p.x},${p.y}`).join("L") + "Z");
+  }
+  return parts.join("");
+}
+
+/** 面积显示（用户坐标 = cm） */
+function fmtArea(a: number): string {
+  if (a >= 1000) return `${(a / 1000).toFixed(1)}e3`;
+  if (a >= 10) return a.toFixed(0);
+  return a.toFixed(1);
+}
+
 /* ---- 主组件（SVG 渲染） ---- */
-export default function CrossSectionView({ slices, plane, onClose, onPlaneChange, cellComments, materials, exportButton, registerExportBuilder }: Props) {
+export default function CrossSectionView({ slices, plane, onClose, onPlaneChange, cellComments, materials, warnings, exportButton, registerExportBuilder }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const groupRef = useRef<SVGGElement>(null);
   // 主/子窗口等比缩放时，悬停标签定位用「真实像素」坐标而容器走缩放后坐标系，需除以 scale。
@@ -108,7 +147,12 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
   const [dragging, setDragging] = useState(false);
   const [rotation, setRotation] = useState(0);
   const [step, setStep] = useState(1);
-  const [hoverInfo, setHoverInfo] = useState<{ num: number; mat: string; x: number; y: number; z: number } | null>(null);
+  const [hoverInfo, setHoverInfo] = useState<{
+    num: number; mat: string; x: number; y: number; z: number;
+    /** 命中的是重叠区而不是单个栅元 —— 此时 `num/mat` 无意义，改用 `claimants` 列出认领者 */
+    conflict?: "overlap";
+    claimants?: string[];
+  } | null>(null);
   const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
   const dragStart = useRef({ x: 0, y: 0, px: 0, py: 0 });
   // 从 deck 查栅元注释（slice 数据不带注释）；独立窗口用 props，否则回退 useDeck
@@ -135,6 +179,21 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
     });
     return { number: s.number, material: s.material, color, comment: commentOf(s.number), polygons: poly2d, allPts };
   });
+
+  /**
+   * 重叠区（MCNP 口径：每一点应当**恰好**属于一个栅元）。
+   *
+   * ⚠️ 只标**重叠**，不标"无栅元的空白"（2026-10-08 用户裁决：**"空腔就应该是空的"**）。
+   * 上一版把"被材料围住、不属于任何栅元"的空白也标成"空隙"，正好把用户模型里本该为空的
+   * 空腔涂上了标记 ⇒ 用户看到"空腔里有个莫名其妙的东西、悬停没读数"。空白一律留空。
+   * 判断"栅元在该平面上在不在"是后端按定义做的事（`app/section_region.py`），
+   * 界面把它的 `warnings` 显示出来解释即可。
+   */
+  const conflicts = React.useMemo(
+    () => sectionConflicts(cellData.map((cd) => ({ polygons: cd.polygons }))),
+    [slices, plane.A, plane.B, plane.C, plane.D],
+  );
+  const hasOverlap = conflicts.overlapLoops.length > 0;
 
   // 自动缩放（仅挂载时执行一次）
   useEffect(() => {
@@ -211,6 +270,24 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
       y: baseProj.oy + mx * baseProj.u[1] + my * baseProj.v[1],
       z: baseProj.oz + mx * baseProj.u[2] + my * baseProj.v[2],
     };
+    /**
+     * 重叠区优先解释：**把同时认领这块地方的栅元都列出来**。
+     *
+     * 为什么不只报"重叠"两个字：用户既要看到"这里有错"，也要知道"是谁跟谁"。
+     * 也不退回"只报最上面那个栅元"：那正是用户最初抱怨的"被覆盖、只显示外部材料名"。
+     * 按绘制次序**从上层往下**列（与图上叠放次序一致）。
+     * ⚠️ 空白（空腔）不给提示 —— 空腔本来就该是空的（2026-10-08 用户裁决）。
+     */
+    const inOverlap = pointInCell(conflicts.overlapLoops, mx, my);
+    if (inOverlap) {
+      const claimants: string[] = [];
+      for (let i = cellData.length - 1; i >= 0; i--) {
+        const cd = cellData[i];
+        if (pointInCell(cd.polygons, mx, my)) claimants.push(`${cd.number} · M${cd.material}`);
+      }
+      setHoverInfo({ num: 0, mat: "", conflict: "overlap", claimants, ...p3d });
+      return;
+    }
     setHoverInfo(found ? { ...found, ...p3d } : null);
   };
   const handleSvgMouseLeave = () => setHoverInfo(null);
@@ -251,11 +328,23 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
      */
     const panels = svg ? [{ svg }] : [];
     /**
-     * 材料图例：**带色块的图例**，不是一行材料名清单。
-     * 原来只把材料名拼进 caption ⇒ 黑白打印后读者无法把图里的颜色对应到材料，
-     * 而"图内符号必须有说明"是期刊硬要求。
-     * 几何面板保持**矢量**（截面本来就是多边形，栅格化会把文字与轮廓糊掉）。
+     * 图注口径（2026-10-07 修正）：旧图注写"同一平面内重叠区按先声明者占有显示"——
+     * 与渲染次序（**后**声明者画在上层）相反，是错的。现在按 MCNP 口径如实表述：
+     * 每一点应当恰好属于一个栅元；不成立处（重叠/空隙）在图上以斜纹标出。
      */
+    /**
+     * 图注口径（2026-10-07/08 修正）：
+     * · 旧图注写"同一平面内重叠区按先声明者占有显示"——与渲染次序（**后**声明者在上层）相反，是错的；
+     * · 无栅元的空白**不标**（"空腔就应该是空的"），只标重叠；
+     * · 后端 `warnings`（例如"某栅元与切割平面只沿边界面接触"）进图注，否则读者不知道
+     *   为什么图上少了一块。
+     */
+    const notes = [
+      ...(hasOverlap
+        ? [`⚠ 重叠 ${fmtArea(conflicts.overlapArea)} cm²（≥2 个栅元认领，红斜纹；采样估计，长边 240 格）`]
+        : []),
+      ...(warnings && warnings.length ? [`后端提示：${warnings.join("；")}`] : []),
+    ];
     return {
       view: "截面",
       nameParts: [`${plane.A}/${plane.B}/${plane.C}`, plane.D],
@@ -264,7 +353,7 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
         subtitle: subtitleOf([`切割平面 ${planeLabel}`, `栅元 ${cellData.length} 个 / 多边形 ${totalPolys} 个`]),
         panels,
         legend: legend.length ? legend : undefined,
-        caption: "材料配色与屏幕一致；同一平面内重叠区按先声明者占有显示",
+        caption: ["材料配色与屏幕一致；同一栅元的内孔按奇偶规则挖空", ...notes].join("；"),
       }),
     };
   };
@@ -297,6 +386,18 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
           "滚轮缩放 · 拖拽平移"),
         React.createElement("span", { style: { fontSize: 11, color: "var(--text-tertiary)" } },
           `${cellData.length} 栅元 / ${totalPolys} 多边形`),
+        (hasOverlap || (warnings && warnings.length > 0))
+          ? React.createElement("span", {
+              "data-conflict-count": "1",
+              title: hasOverlap
+                ? "重叠区：同一块地方被 ≥2 个栅元认领（MCNP 口径：每点应恰好属于一个栅元）"
+                : (warnings || []).join("\n"),
+              style: { fontSize: 11, fontWeight: 600, color: "#FFB300" },
+            }, [
+              hasOverlap ? `⚠ 重叠 ${fmtArea(conflicts.overlapArea)} cm²` : "",
+              (warnings && warnings.length) ? `⚠ ${warnings.length} 条提示` : "",
+            ].filter(Boolean).join(" · "))
+          : null,
         exportButton ?? null,
         React.createElement("button", {
           className: "btn btn-ghost btn-xs", onClick: onClose,
@@ -321,43 +422,69 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
       },
         React.createElement("g", { ref: groupRef, transform: groupTransform },
           cellData.map(cd =>
-            cd.polygons.map((poly, pi) =>
-              React.createElement("polygon", {
-                key: `${cd.number}-${pi}`,
-                points: poly.map(p => `${p.x},${p.y}`).join(" "),
-                fill: cd.color,
-                fillOpacity: 0.45,
-                stroke: cd.color,
-                /**
-                 * ── 描边为什么这么定（2026-09-19 用户实测"材料边界描边还是太重"）──
-                 *
-                 * 旧实现 `1.5 / zoom`：数值**写在用户坐标里**，于是
-                 *   ① 视图缩放到 0.9 时线反而**变粗**（1.5/0.9 = 1.67 用户单位）；
-                 *   ② 滚轮拉近（zoom→1.5）线**变细**；拉远（zoom→0.2）线粗到 6.5 用户单位
-                 *      —— **缩放时线宽自己乱变**，这是当初"加粗"观感的来源。
-                 *   ③ 导出到矢量面板时，整张 SVG 还要被 `panelTransform` 缩放，
-                 *      描边**再被放大一次** ⇒ 导出图里的边界比屏幕上更重（用户这次报的就是它）。
-                 *
-                 * 现在：**屏幕空间恒定** —— 用 `vector-effect="non-scaling-stroke"` 把线宽锚在
-                 * 屏幕像素上（1.2px，细而清楚），缩放时线宽不再漂移；
-                 * 导出时 `snapshotSvg({ strokeScale })` 会把该属性摘掉并**换算成用户坐标**
-                 * （`1.2 / strokeScale`），保证导出图里边界同样是 1.2px 的细线。
-                 */
-                strokeWidth: 1.2,
-                vectorEffect: "non-scaling-stroke",
-                strokeOpacity: 0.85,
-              })
-            )
+            React.createElement("path", {
+              key: String(cd.number),
+              d: cellPathData(cd.polygons),
+              fill: cd.color,
+              /** 洞由填充规则挖掉（= sectionHit.pointInCell 的奇偶规则） */
+              fillRule: "evenodd",
+              fillOpacity: 0.45,
+              stroke: cd.color,
+              /**
+               * ── 描边为什么这么定（2026-09-19 用户实测"材料边界描边还是太重"）──
+               *
+               * 旧实现 `1.5 / zoom`：数值**写在用户坐标里**，于是
+               *   ① 视图缩放到 0.9 时线反而**变粗**（1.5/0.9 = 1.67 用户单位）；
+               *   ② 滚轮拉近（zoom→1.5）线**变细**；拉远（zoom→0.2）线粗到 6.5 用户单位
+               *      —— **缩放时线宽自己乱变**，这是当初"加粗"观感的来源。
+               *   ③ 导出到矢量面板时，整张 SVG 还要被 `panelTransform` 缩放，
+               *      描边**再被放大一次** ⇒ 导出图里的边界比屏幕上更重（用户这次报的就是它）。
+               *
+               * 现在：**屏幕空间恒定** —— 用 `vector-effect="non-scaling-stroke"` 把线宽锚在
+               * 屏幕像素上（1.2px，细而清楚），缩放时线宽不再漂移；
+               * 导出时 `snapshotSvg({ strokeScale })` 会把该属性摘掉并**换算成用户坐标**
+               * （`1.2 / strokeScale`），保证导出图里边界同样是 1.2px 的细线。
+               */
+              strokeWidth: 1.2,
+              vectorEffect: "non-scaling-stroke",
+              strokeOpacity: 0.85,
+            })
+          ),
+          /* 冲突层：只标重叠区（红斜纹）。**空白一律不画** —— 空腔就应该是空的。 */
+          hasOverlap ? React.createElement("path", {
+            "data-conflict": "overlap",
+            d: cellPathData(conflicts.overlapLoops),
+            fill: "url(#cs-overlap-hatch)",
+            fillRule: "evenodd",
+            stroke: "#FF5252",
+            strokeWidth: 1.2,
+            vectorEffect: "non-scaling-stroke",
+            pointerEvents: "none",
+          }) : null,
+        ),
+        /* 斜纹图案（userSpaceOnUse：随截面坐标走，缩放不糊） */
+        React.createElement("defs", null,
+          React.createElement("pattern", {
+            id: "cs-overlap-hatch", width: 8, height: 8,
+            patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)",
+          },
+            React.createElement("rect", { width: 8, height: 8, fill: "rgba(255,82,82,0.12)" }),
+            React.createElement("line", { x1: 0, y1: 0, x2: 0, y2: 8, stroke: "#FF5252", strokeWidth: 1.6, strokeOpacity: 0.9 }),
           ),
         ),
       ),
       hoverInfo ? React.createElement("div", {
+        "data-hover-tip": hoverInfo.conflict ? hoverInfo.conflict : "cell",
         style: {
           position: "absolute", left: hoverPos.x, top: hoverPos.y, pointerEvents: "none",
-          background: "rgba(0,0,0,0.8)", color: "#fff", fontSize: 11, padding: "4px 8px",
-          borderRadius: 4, whiteSpace: "nowrap", zIndex: 10, border: "1px solid rgba(255,255,255,0.15)",
+          background: "rgba(0,0,0,0.85)", color: "#fff", fontSize: 11, padding: "4px 8px",
+          borderRadius: 4, whiteSpace: "nowrap", zIndex: 10,
+          border: `1px solid ${hoverInfo.conflict ? "rgba(255,179,0,0.6)" : "rgba(255,255,255,0.15)"}`,
         } as React.CSSProperties,
-      }, `${hoverInfo.num} · M${hoverInfo.mat} · (${hoverInfo.x.toFixed(1)}, ${hoverInfo.y.toFixed(1)}, ${hoverInfo.z.toFixed(1)})`) : null,
+      }, hoverInfo.conflict === "overlap"
+          ? `⚠ 重叠：${(hoverInfo.claimants || []).join("、") || "≥2 个栅元"} 同时认领`
+            + ` · (${hoverInfo.x.toFixed(1)}, ${hoverInfo.y.toFixed(1)}, ${hoverInfo.z.toFixed(1)})`
+          : `${hoverInfo.num} · M${hoverInfo.mat} · (${hoverInfo.x.toFixed(1)}, ${hoverInfo.y.toFixed(1)}, ${hoverInfo.z.toFixed(1)})`) : null,
       /* 右侧控制面板 */
       React.createElement("div", {
         style: {
@@ -380,6 +507,38 @@ export default function CrossSectionView({ slices, plane, onClose, onPlaneChange
             materials ?? (deck as any)?.materials,
           ),
         }),
+        /* 重叠标注图例（只此一条；空白不标，见 `sectionConflicts` 头注释） */
+        hasOverlap
+          ? React.createElement("div", {
+              "data-conflict-legend": "1",
+              style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 8, lineHeight: 1.6 },
+            },
+              React.createElement("div", null,
+                React.createElement("span", {
+                  style: {
+                    display: "inline-block", width: 10, height: 10, marginRight: 6,
+                    background: "repeating-linear-gradient(45deg, rgba(255,82,82,0.9) 0 2px, rgba(255,82,82,0.12) 2px 6px)",
+                    border: "1px solid #FF5252", verticalAlign: "middle",
+                  },
+                }),
+                `重叠区 ${fmtArea(conflicts.overlapArea)} cm²（≥2 个栅元认领）`),
+              React.createElement("div", { style: { opacity: 0.75 } }, "悬停到重叠区会提示原因"),
+            )
+          : null,
+        /**
+         * 后端 `warnings` 上界面：它是"这个平面为什么看着不对"的唯一解释来源
+         * （例如"栅元 3：与切割平面只沿边界面接触，已剔除边界伪影"）。
+         */
+        (warnings && warnings.length > 0)
+          ? React.createElement("div", {
+              "data-section-warnings": "1",
+              title: warnings.join("\n"),
+              style: {
+                fontSize: 11, color: "#FFB300", marginTop: 8, lineHeight: 1.5,
+                whiteSpace: "pre-wrap", maxHeight: 132, overflowY: "auto",
+              },
+            }, `⚠ ${warnings.length} 条提示：\n` + warnings.map((w) => `· ${w}`).join("\n"))
+          : null,
         /* 平面 + 步进（共享控件：方程解析/步长语义与 3D 预览、切面面板完全一致）
            stacked：本栏窄，步长与步进拆成上下两行，避免 274px 的行宽撑破 280px 的面板 */
         React.createElement(PlaneControls, {

@@ -32,6 +32,9 @@ import { createPortal } from "react-dom";
 import FloatingDialog from "./FloatingDialog";
 import { getAppPortalRoot, useAppScale } from "../utils/appScale";
 import { loadPrefs, savePrefs } from "../utils/stepImportPrefs";
+import { openPreview3D } from "../utils/windows";
+import { apiUrl } from "../utils/api";
+import Preview3D from "./Preview3D";
 
 // ─────────────────────────── 类型 ───────────────────────────
 
@@ -221,23 +224,85 @@ const PARAM_SPECS: ParamSpec[] = [
     },
   },
   {
-    key: "cutDegree", label: "每块面数上限", local: true,
+    key: "cadUpAxis", label: "STEP 上轴", local: true,
     geouned: "（本程序流水线，不传给 GEOUNED）",
-    kind: "select", def: "适中 · 每块 30 面",
+    kind: "select", def: "Z 朝上（不旋转）",
     choices: [
-      { value: "coarse", label: "较粗（50 面）" },
-      { value: "medium", label: "适中（30 面）" },
-      { value: "fine", label: "较细（20 面）" },
+      { value: "Z", label: "Z 朝上 —— FreeCAD / UG(NX) / CATIA / Creo 类（不旋转）" },
+      { value: "Y", label: "Y 朝上 —— SolidWorks / Inventor / Maya 类（绕 X 转 90°）" },
     ],
     tip: {
-      role: "切分的收敛目标：每块最多允许多少个面。块数是被算出来的结果，不是输入项 —— 每块自己判断还要不要再切一刀。",
+      role: "源 CAD 的默认「上」方向。STEP 文件本身没有这个字段，无法自动判断，只能你告诉程序：选 Y 时，导入会先绕 X 转 +90°（CAD 的 +Y 变成 MCNP 的 +Z），导出 STEP 时按逆变换转出去，两个方向互为逆、往返自洽。",
       options: [
-        { label: "较粗（50 面）", desc: "块数最少（实测 9 块），单块最复杂" },
-        { label: "适中（30 面）", desc: "默认。实测 18 块，每块 19–30 面" },
-        { label: "较细（20 面）", desc: "实测 41 块，单块最简单，但结构刁钻的块可能切不动" },
+        { label: "Z 朝上", desc: "FreeCAD / UG(NX) / CATIA / Creo / Solid Edge / AutoCAD / 3ds Max —— 与 MCNP 一致，不旋转（默认）" },
+        { label: "Y 朝上", desc: "SolidWorks / Inventor / Maya / Unity —— 不选它，模型在你的 CAD 里会躺倒 90°" },
       ],
-      blank: "留空 = 适中（每块最多 30 面）",
-      note: "只在「启用实体预分解」打开时才有意义。切不到上限的块会在结果提示里报出来（不假装达标）。",
+      blank: "留空 = Z 朝上（不旋转，与旧行为一致）",
+      note: "选错不会报错，只是方向不对（看着躺倒或转了头）—— 换个选项重导即可；结果提示里会写明本次按哪种约定转过。",
+    },
+  },
+  {
+    key: "cadAzimuthDeg", label: "绕上轴方位角", local: true,
+    geouned: "（本程序流水线，不传给 GEOUNED）",
+    kind: "select", def: "0°（不转）",
+    choices: [
+      { value: "0", label: "0°（不转）" },
+      { value: "90", label: "90°" },
+      { value: "180", label: "180°" },
+      { value: "270", label: "270°" },
+    ],
+    tip: {
+      role: "把上轴摆正之后，再绕上轴（MCNP 的 Z）转一个整直角 —— 用于「立起来了但转过头/朝向不对」的情况。上轴本身不受它影响。",
+      blank: "留空 = 0°",
+      note: "四个离散值：0 / 90 / 180 / 270。",
+    },
+  },
+  {
+    key: "cadOrigin", label: "原点口径", local: true,
+    geouned: "（本程序流水线，不传给 GEOUNED）",
+    kind: "select", def: "按原本建模（不平移）",
+    choices: [
+      { value: "keep", label: "按原本建模 —— CAD 坐标 = MCNP 坐标（不平移，默认）" },
+      { value: "center", label: "体心归零 —— 包围盒中心搬到原点" },
+      { value: "bottom", label: "坐在底面上 —— 水平居中、底在 z=0 平面上" },
+    ],
+    tip: {
+      role: "决定这套几何的原点落在哪。三个口径见下；预览/3D 窗口显示的永远是**真实坐标**，不做归一化，所以选完能直接看到效果。",
+      options: [
+        { label: "按原本建模（keep）", desc: "不平移。CAD 里的坐标就是 MCNP 里的坐标 —— 逐字对应、往返自洽，也便于拿 CAD 标注核对卡（默认）" },
+        { label: "体心归零（center）", desc: "包围盒中心搬到原点。MCNP 里坐标小、对称，适合新建独立模型" },
+        { label: "坐在底面上（bottom）", desc: "水平两轴居中、竖直方向从 0 起（导入到 MCNP 即 z=0）。符合 CAD「坐在原点平面上」的习惯" },
+      ],
+      blank: "留空 = 按原本建模（不平移）",
+      note: "体心/底面都要先量一次整体包围盒 —— 若含墓区等巨型真空实体，中心会被它们带偏；这种卡建议先只导入实体，或就用默认的按原本建模。",
+    },
+  },
+  {
+    key: "tangentFix", label: "相切退化自动修复", local: true,
+    geouned: "（本程序流水线，不传给 GEOUNED）",
+    kind: "toggle", def: true,
+    tip: {
+      role: "当某个零件的外圆柱面与一个**同轴、同半径**的球面正好相切时，GEOUNED 会丢掉一个定界面，产出的栅元沿轴向无限延伸（体积暴涨、与邻居重叠，MCNP 会丢粒子）。开启后，导入前把那个球面沿径向**外移 0.1%**，破除这个退化。",
+      open: "● 开 —— 只在检测到「同轴同半径的球/柱相切」时动手，其余几何一字不改；做了什么会写进导入结果（默认）",
+      shut: "○ 关 —— 原样交给 GEOUNED（这类零件会得到体积错误且互相重叠的栅元）",
+      blank: "默认 = 开",
+      tune: "实测（用户文件 筒子1.STEP / 6 实体）：出问题的恰好是唯一两个含这种相切的实体 —— 栅元 3 体积 28268 cm³ 而 CAD 实体 3645（大 7.8 倍），栅元 4 为 29424 而实体 3630（大 8.1 倍），且 3∩4 重叠 7275 cm³、3∩5 重叠 35.4 cm³。修复后：栅元 3 = 3645.1、栅元 4 = 3629.5（与实体吻合），error 级重叠清零，每个实体体积只变化 0.0215%。受控实验：球半径与柱半径相等 ⇒ 丢边界；差 0.1%（49.95 或 50.05）⇒ 转换正确。",
+      note: "代价极小但确实动了 CAD 几何 0.1%（50 mm 球 → 外移 0.05 mm）。因此有三条纪律：只在退化相切时动手、单个实体体积变化超 0.5% 就放弃、把改动如实写进结果提示。不接受就关掉。",
+    },
+  },
+  {
+    key: "cutDegree", label: "每块面数上限", local: true,
+    geouned: "（本程序流水线，不传给 GEOUNED）",
+    // 用户 2026-10-08：「切分面数用户可以自己键入」—— 三档下拉（50/30/20）改成自由数字框。
+    // 为什么 kind 是 number 而不是 int：buildSettings 对 number 发**数字**、对 int 发字符串，
+    // 而后端 degree_to_face_limit 两者都认；发数字语义更准（"这是面数，不是编号"）。
+    kind: "number", def: "30",
+    check: numeric((n) => Number.isInteger(n) && n >= 1, "应为不小于 1 的整数"),
+    tip: {
+      role: "切分的收敛目标：每块最多允许多少个面。自己填数字（切分逐块判断还要不要再切一刀）。",
+      blank: "留空 = 30 面",
+      tune: "常用值：50（较粗，块数最少）/ 30（默认）/ 20（较细，单块最简单）。实测 274 m³ 厂房模型（3 个实体）：上限 50 → 9 块、上限 30 → 18 块、上限 20 → 41 块（其中 2 块切不动）。",
+      note: "块数是被算出来的结果，不是你填的 —— 同一个上限在不同模型上的块数完全不同。填得比 4 还小基本无意义（切不出那么简单的块），切不到的块会在结果提示里如实报出来（不假装达标）。只在「启用实体预分解」打开时才有意义。",
     },
   },
 
@@ -264,21 +329,25 @@ const PARAM_SPECS: ParamSpec[] = [
   },
   {
     key: "splineSurfaces", label: "样条曲面处理", geouned: "load_step_file.spline_surfaces",
-    kind: "select", def: "停止转换",
+    // 用户 2026-10-08：「遇到样条曲线了就跳过而不是终止或暂停，并报告」——
+    // 留空（= 没动过）时**本程序**按「跳过该实体」发（worker 的默认档），
+    // 而不是 GEOUNED 自己的默认档「停止转换」（它直接 exit()，用户只看到一句
+    // "GEOUNED 终止: None"）。前端这里只负责把「默认 = 跳过」显示出来。
+    kind: "select", def: "跳过该实体",
     choices: [
-      { value: "stop", label: "停止转换" },
-      { value: "remove", label: "剔除该实体" },
+      { value: "remove", label: "跳过该实体（推荐）" },
+      { value: "stop", label: "停止转换（整份导入报错退出）" },
       { value: "ignore", label: "强行翻译（可能出错）" },
     ],
     tip: {
-      role: "STEP 里含有样条（NURBS）曲面时怎么办 —— GEOUNED 无法把样条面转成 MCNP 曲面。",
+      role: "STEP 里含样条（NURBS / 旋转面 / 拉伸面）曲面时怎么办 —— GEOUNED 无法把样条面写成 MCNP 曲面。默认「跳过该实体」：含样条面的实体不参与转换，其余实体照常转换，导入**不会被中断**。",
       options: [
-        { label: "停止转换", desc: "遇到含样条面的实体就终止并报错（最安全）" },
-        { label: "剔除该实体", desc: "跳过含样条面的实体，其余照常转换" },
-        { label: "强行翻译（可能出错）", desc: "把样条面并入转换，可能产出错误的几何" },
+        { label: "跳过该实体（本程序默认）", desc: "含样条面的实体整块不转换，其余照常；被跳过的实体序号与曲面类型会写在导入结果提示里" },
+        { label: "停止转换", desc: "一遇到含样条面的实体就终止整份导入并报错（GEOUNED 自己的默认档）" },
+        { label: "强行翻译（可能出错）", desc: "把样条面并入转换，几何可能有误 —— 事后务必核对体积与重叠" },
       ],
-      blank: "留空 = 停止转换（GEOUNED 默认）",
-      note: "这是 STEP 导入失败最常见的原因 —— 如果转换报「样条曲面」相关错误，试试「剔除该实体」。",
+      blank: "留空 = 跳过含样条面的实体（本程序默认；GEOUNED 原生的默认是「停止转换」）",
+      note: "若整份 STEP 的实体**全部**含样条面，跳过之后就没有可转换的东西了 —— 这时导入会失败并写明原因（不会给你一份空卡）。被跳过的实体序号从 0 开始，与「跳过实体编号」是同一口径。",
     },
   },
   {
@@ -620,6 +689,7 @@ const SPEC_BY_KEY: Record<string, ParamSpec> = Object.fromEntries(
 // （校验报错跳到错的页、改动计数记到错的页签）。
 type Block =
   | { t: "file" }
+  | { t: "stepPreview" }
   | { t: "row"; keys: string[] }
   | { t: "group"; title: string; hint?: string }
   | { t: "note"; text: string }
@@ -641,6 +711,13 @@ const PAGE_LAYOUT: Record<PageId, Block[]> = {
     // 真空栅元切割三件套**已搬到「常用调节」页**；这里只留实体预分解
     { t: "group", title: "实体预分解", hint: "先用 FreeCAD 把实体按「每块面数上限」切开，再交给 GEOUNED 转换：每个块独立成栅元，单栅元面数大幅下降；代价是栅元数变多" },
     { t: "row", keys: ["cutSolids", "cutDegree"] },
+    { t: "group", title: "转换退化修复", hint: "GEOUNED 对某些退化几何会丢定界面（栅元体积暴涨并与邻居重叠）。这里的开关在导入前先把退化破除，做了什么都写在结果提示里" },
+    { t: "row", keys: ["tangentFix"] },
+    { t: "group", title: "坐标约定（STEP 上轴）", hint: "STEP 文件**不带上轴信息**（ISO 10303 只有坐标值+单位），差别来自源软件默认坐标系。本程序与 MCNP 都是 Z 朝上，所以源文件是 Y 朝上的软件（SolidWorks/Inventor/Maya）导出的，就要选 Y 才会「立着」进来" },
+    { t: "row", keys: ["cadUpAxis", "cadAzimuthDeg"] },
+    { t: "group", title: "原点口径", hint: "三个选项：按原本建模（不平移，默认）/ 体心归零 / 坐在底面上。预览与 3D 窗口始终显示真实坐标，不做归一化，选完直接看得出效果" },
+    { t: "row", keys: ["cadOrigin"] },
+    { t: "stepPreview" },
   ],
   common: [
     { t: "group", title: "真空栅元切割", hint: "三项需同时超限才触发切割；数值越小，真空栅元切得越细" },
@@ -828,6 +905,18 @@ function pristineState(): Record<string, Val> {
 }
 
 /**
+ * 旧版「每块面数上限」是三档下拉（coarse/medium/fine），现在是自由数字框。
+ * 不迁移的话，老用户下次打开对话框会看到输入框里躺着 "coarse" —— 一按导入就被
+ * 校验拦住（"请输入数字"），而他还什么都没改。迁移 = 把旧档位换成它对应的面数。
+ */
+const CUT_DEGREE_LEGACY: Record<string, string> = { coarse: "50", medium: "30", fine: "20" };
+
+function migrate(key: string, v: Val): Val {
+  if (key !== "cutDegree" || typeof v !== "string") return v;
+  return CUT_DEGREE_LEGACY[v.trim().toLowerCase()] ?? v;
+}
+
+/**
  * 初始值 = 全默认状态 + **上次记住的设置**。
  *
  * 只接受元数据表里存在、且不是 `always` 的键 —— 材料名/密度/TMP 是"本次导入的内容"
@@ -837,7 +926,7 @@ function initialState(): Record<string, Val> {
   const init = pristineState();
   for (const [k, v] of Object.entries(loadPrefs())) {
     const spec = SPEC_BY_KEY[k];
-    if (spec && !spec.always) init[k] = v;
+    if (spec && !spec.always) init[k] = migrate(k, v);
   }
   return init;
 }
@@ -856,6 +945,15 @@ function persistable(vals: Record<string, Val>): Record<string, string | boolean
 
 export default function StepImportDialog({ onImport, onClose }: Props) {
   const [file, setFile] = useState<File | null>(null);
+  /**
+   * STEP 方向预览（用户 2026-10-08：「给个按钮，点一下先用 STEP 生成预览，方便选上轴」）。
+   * 点按钮才生成；此后改「上轴/方位/原点」会立即重取 —— 后端把镶嵌结果按文件 sha1 缓存，
+   * 每次切换只做旋转/平移矩阵（毫秒级），所以边看边切不卡。
+   */
+  const [pvOpen, setPvOpen] = useState(false);
+  const [pvBusy, setPvBusy] = useState(false);
+  const [pv, setPv] = useState<{ stl: string; bbox: number[][]; notes?: string[]; token: string; windowed: boolean } | null>(null);
+  const [pvErr, setPvErr] = useState("");
   const [page, setPage] = useState<PageId>("basic");
   const [riskOpen, setRiskOpen] = useState(false);
   const [vals, setVals] = useState<Record<string, Val>>(initialState);
@@ -1115,7 +1213,93 @@ export default function StepImportDialog({ onImport, onClose }: Props) {
     );
   };
 
+  /** 取一份「按当前约定转好」的预览网格：读文件 → POST /api/step-preview */
+  const loadPreview = React.useCallback(async () => {
+    if (!file) { setPvErr("请先选择 STEP 文件"); return; }
+    setPvBusy(true);
+    setPvErr("");
+    try {
+      const dataUrl: string = await new Promise((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(String(fr.result || ""));
+        fr.onerror = () => rej(new Error("读取文件失败"));
+        fr.readAsDataURL(file);
+      });
+      const b64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+      const r = await fetch(apiUrl("/api/step-preview"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          data: b64,
+          cad_orientation: {
+            up: String(vals.cadUpAxis || "Z"),
+            azimuthDeg: Number(vals.cadAzimuthDeg || 0),
+            origin: String(vals.cadOrigin || "keep"),
+          },
+        }),
+      });
+      const j = await r.json();
+      if (j.status !== "ok" || !j.stl) {
+        setPv(null);
+        setPvErr(j.message || "预览失败");
+        return;
+      }
+      const token = String(Date.now());
+      const title = "📐 STEP 方向预览 — " + ((j.notes || [])[0] || "");
+      // 与「3D 预览」同一个独立窗口（用户 2026-10-08：要新窗口，不是主窗口里的浮层）：
+      // 预置网格随数据桥带过去，窗口里不再调后端。非 Tauri 环境退回窗内浮层。
+      const opened = await openPreview3D({
+        cells: [{ num: "1", mat: "1", density: "", surfaces: "", comment: "STEP 模型（已按当前方向约定转好）", render: true }],
+        surfaces: "",
+        trCards: "",
+        materials: [],
+        preloadedStl: { "1": j.stl },
+        preloadToken: token,
+        titleOverride: title,
+      });
+      setPv({ stl: j.stl, bbox: j.bbox, notes: j.notes, token, windowed: opened });
+    } catch (e: any) {
+      setPv(null);
+      setPvErr(e?.message || "预览请求失败");
+    } finally {
+      setPvBusy(false);
+    }
+  }, [file, vals.cadUpAxis, vals.cadAzimuthDeg, vals.cadOrigin]);
+
+  // 预览已开时，改「上轴/方位/原点」立即重取（后端按文件 sha1 缓存镶嵌结果，切换只做矩阵）
+  useEffect(() => {
+    if (pvOpen && file) void loadPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vals.cadUpAxis, vals.cadAzimuthDeg, vals.cadOrigin]);
+
   const renderBlock = (b: Block, i: number) => {
+    if (b.t === "stepPreview") {
+      return React.createElement("div", { key: "stepPreview", style: { marginTop: 8 } },
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+          React.createElement("button", {
+            type: "button", className: "btn btn-ghost btn-xs",
+            "data-step-preview": "1",
+            disabled: pvBusy || !file,
+            onClick: () => { setPvOpen(true); void loadPreview(); },
+            style: { fontSize: 11 },
+          }, pvBusy ? "⏳ 生成预览…" : "👁 预览方向（用这个 STEP 生成）"),
+          React.createElement("span", { style: { fontSize: 10, color: "var(--text-tertiary)" } },
+            file ? "看它在这个约定下长什么样；换上面的上轴/原点会立即重画" : "先选 STEP 文件"),
+        ),
+        pvErr ? React.createElement("div", { style: { fontSize: 11, color: "#e53935", marginTop: 4 } }, pvErr) : null,
+        /* 预览用**真正的 3D 预览窗口**（用户 2026-10-08：别自己搓画布，直接用 3D 预览那一套）——
+           灯光/坐标轴/刻度/轨道控制/材料色板/出图全部与正常 3D 预览一致。
+           网格是后端按当前方向约定转好的，所以窗口里看到的就是"导入到 MCNP 之后"的样子。 */
+        (pv && !pv.windowed) ? React.createElement(Preview3D, {
+          cells: [{ num: "1", mat: "1", density: "", surfaces: "", comment: "STEP 模型（已按当前方向约定转好）", render: true }],
+          preloadedStl: { "1": pv.stl },
+          preloadToken: pv.token,
+          titleOverride: "📐 STEP 方向预览 — " + ((pv.notes || [])[0] || ""),
+          zIndex: 1300,
+          onClose: () => setPv(null),
+        }) : null,
+      );
+    }
     if (b.t === "file") {
       return React.createElement("div", {
         key: "file", style: { marginBottom: 10 },
@@ -1196,7 +1380,15 @@ export default function StepImportDialog({ onImport, onClose }: Props) {
   }, "💡 鼠标停在参数右侧的 ? 上，可查看该参数的中文详细释义");
 
   const content = React.createElement("div", {
-    style: { maxHeight: "calc(85vh - 190px)", overflowY: "auto", overflowX: "hidden" },
+    // 只留**一个**滚动条（2026-10-08 用户报「这个页面怎么有两个条」）：
+    // 旧写法用 `maxHeight: calc(85vh - 190px)` 估算"除列表外的 chrome 高度"，一旦参数变多
+    // （新增坐标约定/原点口径/预览块）这个估算就被吃穿 ⇒ 外层 FloatingDialog 的 body
+    // （flex:1 + overflow:auto）与这里同时出条。
+    // 改法：本块不再自己算 vh，而是 flex 链里"吃剩下的高度"（flex:1 + minHeight:0），
+    // 高度由对话框统一决定 ⇒ 外条不可能出现，列表内部照旧可滚。
+    // `data-step-settings-scroll` 给测试用：断言"这里是唯一的滚动区、且不许再用 vh 估算"。
+    "data-step-settings-scroll": "1",
+    style: { flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" },
     onScroll: closeTip,
   },
     riskCollapsed
@@ -1244,7 +1436,13 @@ export default function StepImportDialog({ onImport, onClose }: Props) {
     width: 660,
     footer,
   },
-    React.createElement("div", { style: { padding: 0 } },
+    React.createElement("div", {
+      // flex 链的中间层：tabBar / hintLine 固定（flexShrink:0），content 吃剩余高度并自己滚
+      style: {
+        padding: 0, display: "flex", flexDirection: "column",
+        flex: 1, minHeight: 0, height: "100%",
+      },
+    },
       tabBar, hintLine, content,
       tip ? React.createElement(TipBubble, { spec: tip.spec, anchor: tip.anchor }) : null,
     ),
@@ -1260,3 +1458,4 @@ const FILE_TIP: ParamSpec = {
     note: "未选文件时「导入」按钮不可点。转换在后台进行，小件 3~4 秒，真实装配体可能到分钟级。",
   },
 };
+

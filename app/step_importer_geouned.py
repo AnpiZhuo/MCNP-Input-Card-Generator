@@ -379,6 +379,17 @@ class GeoUnedConverter:
                 "enabled": bool(settings.get("cutSolids", False)),
                 "degree": settings.get("cutDegree") or None,
             },
+            # CAD 上轴/方位约定（**不是** GEOUNED 参数，故不进 _PARAM_TABLE）：
+            # STEP 文件不带上轴信息，差别来自源软件默认坐标系；本程序与 MCNP 是 Z 朝上，
+            # 所以导入时按这个约定旋进 MCNP 系（导出侧按逆变换转出去）。默认不旋转。
+            "cad_orientation": {
+                "up": settings.get("cadUpAxis") or "Z",
+                "azimuthDeg": settings.get("cadAzimuthDeg") or 0,
+                # 原点口径：keep 按原本建模 / center 体心归零 / bottom 坐在底面上（MCNP 的 z=0）
+                "origin": settings.get("cadOrigin") or "keep",
+            },
+            # 相切退化修复（流水线开关，**不是** GEOUNED 参数）：默认开。见 app/tangent_fix.py
+            "tangent_fix": settings.get("tangentFix", True) is not False,
             **_map_app_settings_to_geouned(settings),
         })
 
@@ -392,17 +403,35 @@ class GeoUnedConverter:
             env=os.environ,
         )
 
+        # ⚠️ **先**解析 stdout 的 JSON 信封，再看退出码 —— 顺序反了就会把 worker 写好的
+        # 中文原因换成一句乱码（2026-10-08 部署版冒烟实测）：
+        # worker 的每条失败路径都会把 `{"status":"error","message":…}` 写进 **stdout**
+        # （那是它唯一的协议通道），而它同时会以 `sys.exit(1)` 退出。旧写法先查 returncode
+        # 就 raise"退出码 1 + stdout 末尾 300 字符"，用户看到的是 JSON 转义碎片
+        # （`0c\u505c\u6b62\u8f6c\u6362\u300d…`）而不是"把「样条曲面处理」改成「跳过该实体」即可继续"。
+        envelope = None
+        try:
+            parsed = json.loads((proc.stdout or "").strip())
+            if isinstance(parsed, dict):
+                envelope = parsed
+        except json.JSONDecodeError:
+            envelope = None
+
         if proc.returncode != 0:
+            if envelope and envelope.get("message"):
+                # ⚠️ 这里**不要**自己加"GEOUNED 转换失败："前缀：外层 `run_step_converter` 已经加了
+                # 一次，再加就出现"GEOUNED 转换失败：GEOUNED 转换失败：…"（2026-10-08 部署版冒烟看到）。
+                # 纪律：内层只回**原因原文**，标签由最外层加一次。
+                raise RuntimeError(envelope["message"])
             raise RuntimeError(
                 f"GEOUNED worker 退出码 {proc.returncode}\n"
                 f"stdout: {proc.stdout[-300:]}\n"
                 f"stderr: {proc.stderr[-300:]}"
             )
-        try:
-            result = json.loads(proc.stdout.strip())
-        except json.JSONDecodeError:
+        if envelope is None:
             raise RuntimeError(
                 f"GEOUNED 输出非 JSON: {proc.stdout[:500]}")
+        result = envelope
         if result.get("status") != "ok":
             raise RuntimeError(
                 f"GEOUNED 错误: {result.get('message', '未知')}")
@@ -418,15 +447,13 @@ class GeoUnedConverter:
 
     @staticmethod
     def _find_python_exe(freecad_bin: str) -> str | None:
-        """在 FreeCAD 目录中查找 python.exe（支持便携版）。"""
-        candidates = [
-            os.path.join(freecad_bin, "python.exe"),
-            os.path.join(freecad_bin, "bin", "python.exe"),
-        ]
-        for p in candidates:
-            if os.path.isfile(p):
-                return p
-        return None
+        """在 FreeCAD 目录中查找 python.exe（便携版 / 安装版两种布局）。
+
+        2026-10-08：实现统一挪到 `freecad_locator.python_exe()` —— STEP 方向预览也要用它，
+        两份候选路径逻辑重复迟早漂移。这里保留原签名，只做转发。
+        """
+        from freecad_locator import python_exe
+        return python_exe(freecad_bin)
 
     def _get_freecad_bin(self) -> Optional[str]:
         if self._freecad_bin:

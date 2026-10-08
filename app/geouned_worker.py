@@ -19,6 +19,11 @@ stdin 收 JSON 配置，stdout 回 JSON 结果（与 _freecad_csg_worker 同一�
 
     `cut` 是流水线开关（先按面数上限切分实体，再交给 GEOUNED），**任何失败都回退原
     文件、绝不中断导入**，但原因会经 `warnings` 一路传到界面上。
+
+    **唯一的例外是 `load_step.spline_surfaces`**：缺省时本 worker 按「跳过该实体」
+    （`remove`）走，而不是 GEOUNED 的默认档「停止转换」（它直接 `exit()`，用户只看到
+    一句"GEOUNED 终止: None"）。见 `app/spline_skip.py` 顶部：跳过 + 如实报告哪个实体
+    被跳、什么曲面、多少个面。
 """
 import os
 import re
@@ -170,6 +175,254 @@ def _maybe_predecompose(step_path: str, output_dir: str, cut: dict):
     return result.path, notes
 
 
+def _orient_step_into_mcnp(step_path: str, output_dir: str, spec, notes: list) -> str:
+    """按「CAD 上轴/方位」约定把 STEP 的几何**旋进 MCNP 系（Z 朝上）**，返回要转换的路径。
+
+    为什么需要（2026-10-08 用户实测："STEP 数字对得上，但模型躺倒、轴跟预览不一致"）：
+    STEP 文件**不带**上轴信息，差别来自源软件默认坐标系（Y 朝上：SolidWorks/Inventor 类；
+    Z 朝上：FreeCAD/UG/CATIA 类）。本程序与 MCNP 都是 Z 朝上 ⇒ 导入时按约定转一次，
+    导出时按逆变换转回去（见 app/cad_orientation.py），两侧互为逆、往返自洽。
+
+    为什么另写一个 STEP 而**不**去动 GEOUNED：GEOUNED 装进 FreeCAD、是编译过的包，
+    不该碰它内部；本文件已有同样的先例（实体预分解也是写临时 STEP 再交给 GEOUNED）。
+    读/写方式与 adaptive_cut_freecad.py 一致（FreeCAD python 里的 Part.Shape().read）。
+
+    任何失败都**回退原文件**并留一条提示，绝不中断导入（与实体预分解同一纪律）。
+    """
+    try:
+        from cad_orientation import describe, freecad_steps, parse, translation_for
+    except ImportError:
+        from app.cad_orientation import describe, freecad_steps, parse, translation_for
+
+    steps = freecad_steps(spec, "cad2mcnp")
+    org = parse(spec)["origin"]
+    if not steps and org == "keep":
+        return step_path
+    try:
+        import FreeCAD
+        import Part
+
+        shape = Part.Shape()
+        shape.read(step_path)
+        solids = list(getattr(shape, "Solids", []) or [])
+        if not solids:
+            notes.append("上轴约定：旋转跳过（STEP 里没读到实体），按原样转换")
+            return step_path
+        out = []
+        for sol in solids:
+            s = sol.copy()
+            for axis, deg in steps:
+                s.rotate(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(*axis), deg)
+            out.append(s)
+        # 原点口径：在**目标 MCNP 系（Z 朝上）**里算 ⇒ "坐在底面上" = 坐在 MCNP 的 z=0 上。
+        # （up="Y" 时 CAD 的 Y=0 平面经旋转后正是 MCNP 的 z=0，两种说法一致。）
+        if org != "keep":
+            compound = Part.makeCompound(out)
+            bb = compound.BoundBox
+            shift = translation_for(((bb.XMin, bb.YMin, bb.ZMin),
+                                     (bb.XMax, bb.YMax, bb.ZMax)), org, "Z")
+            for s in out:
+                s.translate(FreeCAD.Vector(*[float(v) for v in shift]))
+        dst = os.path.join(output_dir, "step_oriented_for_mcnp.step")
+        Part.makeCompound(out).exportStep(dst)
+        notes.append(describe(spec, "cad2mcnp"))
+        return dst
+    except Exception as e:  # noqa: BLE001 —— 一律回退原文件，但原因要留痕
+        notes.append(f"上轴/原点约定处理失败，按原样转换：{type(e).__name__}: {e}")
+        return step_path
+
+
+def _break_tangent_sphere_cylinder(step_path: str, output_dir: str, notes: list) -> str:
+    """破除「同轴同半径球面/圆柱面」的退化相切（GEOUNED 会因此丢定界面）。
+
+    根因见 app/tangent_fix.py 顶部：用户文件里**只有**含这种相切的两个实体转错
+    （体积大 7.8 / 8.1 倍 + 互相重叠），把球面沿径向外移 0.1% 后体积回到实体值、重叠清零。
+
+    纪律：
+      * 只在"半径相等且同轴"时动手 —— 没有这种对的模型**原样返回、绝不重写 STEP**
+        （避免 OCCT 往返对本来正确的几何引入副作用）；
+      * 每处修复都有体积闸门（>0.5% 放弃），并在 `notes` 里如实回报；
+      * 任何失败都回退原文件、不中断导入。
+    """
+    try:
+        try:
+            from tangent_fix import describe_actions, dedupe_spheres, is_safe, is_tangent_pair, shift_amount
+        except ImportError:
+            from app.tangent_fix import (describe_actions, dedupe_spheres, is_safe,
+                                         is_tangent_pair, shift_amount)
+        import FreeCAD
+        import Part
+
+        shape = Part.Shape()
+        shape.read(step_path)
+        solids = list(getattr(shape, "Solids", []) or [])
+        if not solids:
+            return step_path
+
+        out, actions, changed = [], [], False
+        for idx, sol in enumerate(solids, 1):
+            spheres, cyls = [], []
+            for f in sol.Faces:
+                surf = f.Surface
+                cn = surf.__class__.__name__
+                if "Sphere" in cn:
+                    spheres.append((surf.Center, float(surf.Radius)))
+                elif "Cylinder" in cn:
+                    ax = getattr(surf, "Axis", None)
+                    pt = getattr(surf, "Center", None)
+                    if ax is not None and pt is not None:
+                        cyls.append((ax, pt, float(surf.Radius)))
+            pairs = []
+            for c, rs in spheres:
+                for ax, pt, rc in cyls:
+                    n = FreeCAD.Vector(ax.x, ax.y, ax.z)
+                    if n.Length < 1e-12:
+                        continue
+                    n.normalize()
+                    v = FreeCAD.Vector(c.x - pt.x, c.y - pt.y, c.z - pt.z)
+                    dist = (v - n * v.dot(n)).Length
+                    if is_tangent_pair(rs, rc, dist):
+                        pairs.append(([c.x, c.y, c.z], rs, rc))
+            if not pairs:
+                out.append(sol)
+                continue
+            new = sol
+            for center, rs, rc in dedupe_spheres(pairs):
+                try:
+                    c = FreeCAD.Vector(*center)
+                    sliver = Part.makeSphere(rs, c).cut(Part.makeSphere(rs * (1.0 - 0.001), c))
+                    bb = sol.BoundBox
+                    clip = Part.makeBox(bb.XLength, bb.YLength, bb.ZLength,
+                                        FreeCAD.Vector(bb.XMin, bb.YMin, bb.ZMin))
+                    cand = new.fuse(sliver.common(clip))
+                    dvol = abs(cand.Volume - new.Volume) / max(new.Volume, 1e-9)
+                    if bool(cand.isValid()) and is_safe(dvol):
+                        new = cand
+                        changed = True
+                        actions.append({"solid": idx, "sphereR": rs, "cylR": rc,
+                                        "shift": shift_amount(rs), "dvol": dvol})
+                except Exception as e:  # noqa: BLE001 —— 单处失败不影响其它实体
+                    notes.append(f"相切退化修复：实体 {idx} 单处失败，已跳过（{type(e).__name__}: {e}）")
+            out.append(new)
+
+        if not changed:
+            return step_path
+        dst = os.path.join(output_dir, "step_tangent_fixed.step")
+        Part.makeCompound(out).exportStep(dst)
+        notes.append(describe_actions(actions))
+        return dst
+    except Exception as e:  # noqa: BLE001 —— 一律回退原文件，但原因要留痕
+        notes.append(f"相切退化修复失败，按原样转换：{type(e).__name__}: {e}")
+        return step_path
+
+
+def _load_shape(step_path: str):
+    """读 STEP，返回 (Part 模块, shape, solids 列表)。
+
+    ⚠️ `import FreeCAD` 必须早于 `import Part`（与 `_bbox_of` 同一条实测纪律：
+    FreeCAD 的 python.exe 裸跑 `import Part` 会 ModuleNotFoundError）。
+    """
+    import FreeCAD  # noqa: F401  —— 必须早于 Part
+    import Part
+    shape = Part.Shape()
+    shape.read(step_path)
+    return Part, shape, list(getattr(shape, "Solids", []) or [])
+
+
+def _spline_kinds_per_solid(step_path: str):
+    """每个实体的**样条面类型名**（空列表 = 该实体没有样条面）；读不出来返回 None。
+
+    判据与 GEOUNED `loadfile/load_functions.py::spline()` **逐字相同** —— 那才是
+    "GEOUNED 会跳过谁"的唯一权威（本函数只负责读，不另立判据）：
+
+        isinstance(f.Surface, (Part.BSplineSurface, Part.SurfaceOfRevolution,
+                               Part.SurfaceOfExtrusion))
+
+    报告与决策交给 `app/spline_skip.py`（纯逻辑，可离线单测）。
+    """
+    try:
+        Part, _shape, solids = _load_shape(step_path)
+    except Exception:  # noqa: BLE001 —— 读不出来不该阻断导入，调用方按"没检查"处理
+        return None
+    out = []
+    for sol in solids:
+        row = []
+        for f in sol.Faces:
+            surf = f.Surface
+            if isinstance(surf, (Part.BSplineSurface, Part.SurfaceOfRevolution,
+                                 Part.SurfaceOfExtrusion)):
+                row.append(type(surf).__name__)
+        out.append(row)
+    return out
+
+
+def _strip_spline_solids(step_path: str, output_dir: str, indices, notes: list):
+    """把含样条面的实体**物理**从 STEP 里删掉；返回 (新文件路径, 被删的原序号列表)。
+
+    什么时候才走到这里：GEOUNED 的 `remove` 档对普通实体够用，但它的 enclosure 路径
+    **不看档位**地对"无形状实体"直接 `exit()`（core.py:335-338）—— 当 enclosure 命名
+    约定（`enclosureNN_PP_`）恰好落在一个样条实体上时，导入仍会终止。用户要的是
+    "跳过而不是终止"，所以这里自己动手删：删完再交给 GEOUNED，它眼里根本没有样条实体，
+    也就无从 exit。
+
+    代价（必须如实回报）：实体序号会前移 ⇒ 调用方要重映射 `skip_solids`
+    （`spline_skip.remap_skip_solids`），报告里也写明前移。
+    """
+    Part, _shape, solids = _load_shape(step_path)
+    drop = {int(i) for i in indices}
+    keep = [s for i, s in enumerate(solids) if i not in drop]
+    if not keep:
+        raise RuntimeError(f"剔除含样条面的实体（{sorted(drop)}）之后，STEP 里没有剩下任何实体")
+    dst = os.path.join(output_dir, "step_without_spline.step")
+    Part.makeCompound(keep).exportStep(dst)
+    removed = sorted(drop)
+    notes.append("样条实体在 enclosure 路径上仍会让 GEOUNED 强制退出，已直接从 STEP 里移除实体 "
+                 + "、".join(str(i) for i in removed) + "（其后实体的序号相应前移）")
+    return dst, removed
+
+
+class _UserFacing(RuntimeError):
+    """**预期内**的失败，原因本身就是写给用户看的（例：样条档位 = 停止转换 / 全实体都是样条）。
+
+    为什么要单独一类（2026-10-08 部署版冒烟实测）：`__main__` 的兜底会给任何异常后缀一整段
+    traceback，而界面 alert 是**整段原样显示**的 ⇒ 用户会看到"RuntimeError: …"加一堆调用栈，
+    真正该读的那句"把「样条曲面处理」改成「跳过该实体」即可继续"被淹掉。
+    预期内的失败只回 message；真 bug 走 `Exception` 分支、保留 traceback（那条对排查有用）。
+    """
+
+
+class _StdoutTee:
+    """把 GEOUNED 打到 stdout 的东西**同时**写到 stderr 与内存缓冲。
+
+    为什么要改道：本进程的 stdout 是**协议通道**（结尾要写一行 JSON），而 GEOUNED
+    会往 stdout 直接 print，例如 `load_step.py:67` 的
+    "following solids have Spline surfaces:" —— 混进 JSON 里就是一句
+    "GEOUNED 输出非 JSON"，把真实原因盖掉。
+    为什么要留缓冲：GEOUNED 有时裸调 `exit()`（`core.py:337`），届时唯一能说明
+    "它为什么退"的就是它自己打的那句话。
+    """
+
+    def __init__(self, real):
+        self._real = real
+        self.chunks: list = []
+
+    def write(self, s):
+        self.chunks.append(s)
+        return self._real.write(s)
+
+    def flush(self):
+        return self._real.flush()
+
+    def isatty(self) -> bool:
+        return False
+
+    def text(self) -> str:
+        return "".join(self.chunks)
+
+    def __getattr__(self, name):        # encoding / errors 等属性转发给真 stderr
+        return getattr(self._real, name)
+
+
 def main():
     data = json.load(sys.stdin)
 
@@ -190,8 +443,39 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     os.chdir(output_dir)
 
+    # CAD 上轴/方位约定：**先**旋进 MCNP 系，后面所有步骤（含预分解）都在 MCNP 系里做。
+    notes: list = []
+    step_path = _orient_step_into_mcnp(step_path, output_dir,
+                                       data.get("cad_orientation"), notes)
+
+    # 相切退化修复（默认开，可用设置关掉）：破除"同轴同半径球面/圆柱面"，
+    # 否则 GEOUNED 会丢定界面 ⇒ 栅元体积暴增并与邻居重叠（见 app/tangent_fix.py）。
+    if data.get("tangent_fix", True):
+        step_path = _break_tangent_sphere_cylinder(step_path, output_dir, notes)
+
     # 可选的实体预分解（基本页「启用实体预分解」）。失败一律回退原文件。
-    step_path, notes = _maybe_predecompose(step_path, output_dir, data.get("cut") or {})
+    step_path, cut_notes = _maybe_predecompose(step_path, output_dir, data.get("cut") or {})
+    notes.extend(cut_notes)
+
+    # ── 样条曲面：**跳过而不是终止**，并如实报告（用户指定；见 app/spline_skip.py）──
+    # 扫描的是"接下来真要交给 GEOUNED 的那个文件"（预处理之后的），所以报告里的实体序号
+    # 与 GEOUNED 的 skip_solids 是**同一口径**。
+    try:
+        import spline_skip
+    except ImportError:
+        from app import spline_skip
+
+    policy = spline_skip.normalize_policy(load_step.get("spline_surfaces"))
+    spline_report = spline_skip.scan(_spline_kinds_per_solid(step_path))
+    if spline_report is None:
+        notes.append("样条曲面检查已跳过：这个 STEP 读不出来（按原样交给 GEOUNED）")
+    else:
+        blocked = spline_skip.blocking_reason(spline_report, policy)
+        if blocked:
+            # 早失败：与其让 GEOUNED 裸 exit()（用户只看到"GEOUNED 终止: None"），
+            # 不如在这里把"哪个实体、什么面、换哪一档能继续"一次说清。
+            raise _UserFacing(blocked)
+        notes.extend(spline_skip.describe(spline_report, policy))
 
     # geouned 包所在父目录（打包后为 _internal/vendor；开发环境为安装目录）
     if geouned_path not in sys.path:
@@ -209,23 +493,57 @@ def main():
         options=Options(**options),
         tolerances=Tolerances(**tolerances),
     )
-    geo.load_step_file(
-        filename=step_path,
-        skip_solids=load_step.get("skip_solids", []),
-        spline_surfaces=load_step.get("spline_surfaces", "stop"),
-    )
-    geo.start()
-    geo.export_csg(
-        title=data.get("title", "Converted with GEOUNED"),
-        geometryName=geometry_name,
-        outFormat=("mcnp",),
-        volCARD=True,                              # 本程序依赖 VOL 卡，不对外开放
-        volSDEF=export.get("volSDEF", False),
-        UCARD=export.get("UCARD"),                  # None = 不写宇宙卡
-        dummyMat=export.get("dummyMat", False),
-        cellCommentFile=export.get("cellCommentFile", False),
-        cellSummaryFile=export.get("cellSummaryFile", True),
-    )
+
+    skip_solids = list(load_step.get("skip_solids") or [])
+    # GEOUNED 期间把 stdout 改道（见 _StdoutTee）：它的 print 会污染本进程的 JSON 协议。
+    real_stdout, tee = sys.stdout, _StdoutTee(sys.stderr)
+    sys.stdout = tee
+    try:
+        try:
+            geo.load_step_file(
+                filename=step_path,
+                skip_solids=skip_solids,
+                spline_surfaces=policy,
+            )
+        except SystemExit:
+            # 兜底：enclosure 里含样条实体时，GEOUNED **不看档位**地 exit()
+            # （core.py:335-338）⇒ 自己把那些实体物理删掉再来一次。
+            text = tee.text()
+            if not (policy == "remove" and spline_report and spline_report.solids
+                    and "spline" in text.lower()):
+                raise _UserFacing(
+                    "GEOUNED 在加载 STEP 阶段强制退出（无法继续）。它自己的输出："
+                    + (text.strip()[-300:] or "（无）"))
+            step_path, removed = _strip_spline_solids(step_path, output_dir,
+                                                      spline_report.indices, notes)
+            skip_solids, redundant = spline_skip.remap_skip_solids(skip_solids, removed)
+            if redundant:
+                notes.append("「跳过实体编号」里的 " + "、".join(str(i) for i in redundant)
+                             + " 已在样条实体剔除中一并移除，无需再跳")
+            try:
+                geo.load_step_file(
+                    filename=step_path,
+                    skip_solids=skip_solids,
+                    spline_surfaces="remove",
+                )
+            except SystemExit:
+                raise _UserFacing(
+                    "GEOUNED 在剔除含样条面的实体后仍然强制退出。它自己的输出："
+                    + (tee.text().strip()[-300:] or "（无）"))
+        geo.start()
+        geo.export_csg(
+            title=data.get("title", "Converted with GEOUNED"),
+            geometryName=geometry_name,
+            outFormat=("mcnp",),
+            volCARD=True,                              # 本程序依赖 VOL 卡，不对外开放
+            volSDEF=export.get("volSDEF", False),
+            UCARD=export.get("UCARD"),                  # None = 不写宇宙卡
+            dummyMat=export.get("dummyMat", False),
+            cellCommentFile=export.get("cellCommentFile", False),
+            cellSummaryFile=export.get("cellSummaryFile", True),
+        )
+    finally:
+        sys.stdout = real_stdout
 
     mcnp_output = os.path.join(output_dir, f"{geometry_name}.mcnp")
     if not os.path.isfile(mcnp_output):
@@ -245,9 +563,14 @@ def main():
 
 
 if __name__ == "__main__":
-    # SystemExit: geouned 对 spline 曲面 / 空实体会裸调 exit()
+    # SystemExit: geouned 在若干分支里裸调 exit()（样条/enclosure/空实体）。
+    # 样条那条路已经在 main() 里被**具体地**接管（跳过 + 报告），这里只是最后一道兜底。
     try:
         main()
+    except _UserFacing as e:
+        # 预期内的失败：只回原因，不缀 traceback（界面 alert 会整段给用户看）
+        print(json.dumps({"status": "error", "message": str(e)}))
+        sys.exit(1)
     except SystemExit as e:
         print(json.dumps({"status": "error",
                           "message": f"GEOUNED 终止: {e}"}))

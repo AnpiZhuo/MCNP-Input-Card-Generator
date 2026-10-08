@@ -8,14 +8,16 @@
  *
  * 本文件锁两条不变量：
  *  1. `topMostHit` 返回的是**绘制次序里最后**（= 视觉最上层）那个包含点的栅元；
- *  2. `topMostHit` 报的那个栅元，与**渲染出来的 SVG 里最后一个覆盖该点的 `<polygon>`**
- *     所属栅元一致 —— 即"读数与图形同源"，改绘制次序时读数自动跟随。
+ *  2. `topMostHit` 报的那个栅元，与**渲染出来的 SVG 里最后一个覆盖该点的着色元素**
+ *     所属栅元一致 —— 即"读数与图形同源"，改绘制次序或填充规则时读数会自动跟随。
  */
 import { describe, it, expect } from "vitest";
 import { render, fireEvent, cleanup } from "@testing-library/react";
 import React from "react";
 import CrossSectionView from "../src/components/CrossSectionView";
 import { paintOrder, pointInPolygon, topMostHit } from "../src/utils/sectionHit";
+import { getMatColor } from "../src/utils/materialColors";
+import { elementPaints } from "./svgPaint";
 
 /** 生成一个以 (cx,cy) 为心、半径 r 的正 n 边形（2D） */
 function disk(cx: number, cy: number, r: number, n = 64) {
@@ -132,19 +134,19 @@ describe("CrossSectionView 悬停读数与图形同源", () => {
     const svg = container.querySelector("svg") as SVGSVGElement;
     expect(svg).toBeTruthy();
 
-    // 先确认"图形"这一侧的次序：多边形按 slice 数组次序画 ⇒ 最后一个覆盖中心的应是 cell3
-    const polys = Array.from(svg.querySelectorAll("polygon"));
-    expect(polys.length).toBe(2);
-    const localPolys = polys.map((el) =>
-      el.getAttribute("points")!.trim().split(/\s+/).map((s) => {
-        const [x, y] = s.split(",").map(Number);
-        return { x, y };
-      }),
-    );
-    // 画在最后的多边形 = 视觉最上层；让它就是"覆盖中心"的那个
-    const topPolyIdx = localPolys.length - 1;
-    expect(pointInPolygon(localPolys[topPolyIdx], 0, 0)).toBe(true);
-    const expectedTopCell = slices[topPolyIdx].number; // 渲染次序与 slice 次序一致
+    /* 图形这一侧：按**渲染次序**取全部着色元素（2026-10-07 起每栅元一条
+       `fill-rule="evenodd"` 的 path，孔由填充规则挖掉），用 SVG 自己的填充规则求值，
+       找出"图上最后一个盖住中心点的"元素属于哪个栅元 —— 不依赖元素类型/结构。
+       冲突层（重叠/空隙）用 `data-conflict` 标记且不吃鼠标，不计入栅元着色。 */
+    const shapes = (Array.from(svg.querySelectorAll("polygon, path")) as Element[])
+      .filter((el) => !el.hasAttribute("data-conflict"));
+    expect(shapes.length).toBe(slices.length);
+    const covering = shapes.filter((el) => elementPaints(el, { x: 0, y: 0 }));
+    expect(covering.length).toBeGreaterThan(0);
+    const topFill = (covering[covering.length - 1].getAttribute("fill") || "").toUpperCase();
+    const expectedTopCell = slices.find(
+      (s) => getMatColor(s.material).toUpperCase() === topFill,
+    )!.number;
 
     const g = svg.querySelector("g") as SVGGElement;
     expect(g).toBeTruthy();

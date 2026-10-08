@@ -901,6 +901,35 @@ def eval_cell_field(ast, fns, X, Y, Z):
     raise ValueError(f"未知 AST 节点: {tag}")
 
 
+def eval_cell_field3(ast, fns, X, Y, Z):
+    """递归求值栅元表达式 → **三值**场（int8）：1 = 内部、0 = 恰在曲面上、−1 = 外部。
+
+    为什么布尔版不够（2026-10-07 截面"假几何"修复）：MCNP 的曲面感度是**严格**的 ——
+    恰在曲面上的点不属于任何一侧。布尔版表达不了这件事：`unary neg` 写成 `~field`
+    会把 `f == 0` 算成"负侧之内"。实测后果：栅元 5（`112 -109 -115`，z=0 是它的下界）
+    在 Z=0 截面上会被判成"整块半径 0.5 的盘"，而按定义它在该平面上不存在。
+
+    三值逻辑就是集合的"内部/边界/外部"，交并取 min/max 即得：
+      intersect：任一侧 ≤0 就不在内部（`min`）；union：任一侧 >0 就在内部（`max`）。
+    取"在栅元内"请用 ``== 1``（严格内部）；``== 0`` 表示只与边界接触，
+    对截面而言是"该平面恰好贴着这个栅元的边界面"。
+    """
+    tag = ast[0]
+    if tag == "surf":
+        f = fns[ast[1]](X, Y, Z)
+        return np.where(f > 0.0, 1, np.where(f < 0.0, -1, 0)).astype(np.int8)
+    if tag == "unary":
+        v = eval_cell_field3(ast[1], fns, X, Y, Z)
+        return (-v).astype(np.int8) if ast[2] in ("neg", "complement") else v
+    if tag == "intersect":
+        return np.minimum(eval_cell_field3(ast[1], fns, X, Y, Z),
+                          eval_cell_field3(ast[2], fns, X, Y, Z))
+    if tag == "union":
+        return np.maximum(eval_cell_field3(ast[1], fns, X, Y, Z),
+                          eval_cell_field3(ast[2], fns, X, Y, Z))
+    raise ValueError(f"未知 AST 节点: {tag}")
+
+
 def _clip_aabb_to_bound(aabb, B):
     """把 cell_aabb 结果裁剪到 [-B, B]³，返回 (lo3, hi3)。"""
     if aabb is None:
