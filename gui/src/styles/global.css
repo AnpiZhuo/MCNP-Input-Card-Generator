@@ -196,6 +196,9 @@ table input[type=number]{-moz-appearance:textfield;width:100%}
 .mcnp-editor-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(255,0,128,0.10)}
 .mcnp-ghost{color:rgba(241,241,249,0.2);font-style:italic;pointer-events:none;user-select:none}
 .mcnp-autocomplete-item:hover{background:rgba(255,0,128,0.15)}
+/* textarea 只负责编辑/选区，文字由下方高亮层绘制；否则选中时浏览器会把透明文字强制显出，造成重影 */
+.mcnp-textarea::selection{color:transparent;background:rgba(37,99,235,0.28)}
+.mcnp-textarea::-moz-selection{color:transparent;background:rgba(37,99,235,0.28)}
 
 /* ===== Markdown 文档（GitHub 风格）===== */
 .markdown-body{font-size:14px;line-height:1.7;color:var(--text-primary)}
