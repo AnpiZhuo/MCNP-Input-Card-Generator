@@ -19,7 +19,8 @@ import {
   trTokenizer,
 } from "../src/components/mcnpCardSyntax";
 
-let monaco: typeof import("monaco-editor");
+// 类型要对准**实际导入的那个入口**（裁剪的 editor.api，不含 lsp/css/html/json/typescript）
+let monaco: typeof import("monaco-editor/editor/editor.api.js");
 
 /** 每行 → [{ 列, token 种类 }]，种类已去掉 monaco 追加的语言后缀。 */
 function tokenize(text: string, mode: "surface" | "tr") {
