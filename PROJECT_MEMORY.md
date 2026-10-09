@@ -38,6 +38,9 @@
 > ⚠️ **本轮自己踩的两个坑（已进 §6）**：① 端点验收必须用**前端真实载荷形状**（否则测的是缝，不是真路径 —— 正是本批 ① 的来源）；
 >    ② 同仓库端点**返回形状不一致**（`/api/parse-inp` 返回 `{kind,cell}` 信封、`/api/import-step` 返回扁平）—— 我冒烟时按扁平读信封，
 >    `surface_expr` 全空 ⇒ 后端答"没有可预览的栅元"，**差点把自己的脚本 bug 当成产品缺陷**。
+> **分发（2026-10-10 收尾）**：6 个提交 **已 push `origin/main`**（`a9a5659..8997791`）；**README 两份按实测计数重写**（顺带修掉 1.7.3 徽章 / "All Rights Reserved" / "8 个标签页" / "40 项参数" / "97 种核素" 等滞后表述）；
+> **GitHub Release `v1.7.7` 资产原位替换**为本包（**339,387,252 B** / SHA-256 `E8E6D353…`，与官方 `digest` 一致），说明正文改为"最新一节在最上、历史降级保留"。
+> 关于"资产按时间排、最新在最上"：**GitHub 做不到**（实测升序 + 无重排接口）；本 release 只有 1 个资产故不适用，Releases 列表页 v1.7.7 本就恒在第一条。
 
 > **★ 上一批（2026-10-09）用户 4 条 bug 报告：3 条已修（各带红证）/ 1 条查实为「GEOUNED 设置决定的写法差异，非本程序丢失」—— 已改 ✅ / 已重新打包并部署 ✅（`build:release` EXIT 0 / 480 s）/ 已提交见文末 · 版本仍 1.7.7（bug 批不升版）**
 > **用户原话**（`vendor/bug报告`，逐字）：「1. 在3D预览过程中，似乎新加入的集合体未能被纳入几何重叠检测。／2. 在曲面卡编辑过程中，宏体未能根据指定的关键词进行颜色变化。／3. 在编辑sdef卡时，文本模式无法键入空格。建议文本键入框全改用现在sdef输入卡的架构吗？／4. GEOUNED生成的文件，写入程序的栅元卡时，是不是把括号吞了？」短期批次记忆见 **S17**。
@@ -1783,6 +1786,10 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 ## §2 当前状态快照（语义记忆）
 
 - **开发阶段**：**v1.7.7 已打包部署**（2026-09-26，**用户指定升版**）—— 本包含 **S11 三条修复（计数卡前缀 / 栅元 `#` / 截面拖动）+ S10 全量（GEOUNED 参数 UI · FreeCAD 自适应切分 · `P A B C D` 感度 · slab 覆盖 · 墓区过滤）+ 09-23 各批**。
+  > **2026-10-10 分发（同版本 1.7.7，未升版）**：6 个提交已 **push `origin/main`**（`a9a5659..8997791`）；**README 两份全部重写**
+  > （主 README 374 行 + 包内速览 150 行，按实测计数改写：7 页签 / 6 独立窗口 / 常用预设 49 条·PNNL 48 条 133 核素 / MCP 6 工具）；
+  > **GitHub Release `v1.7.7` 的资产已原位替换**为本次构建 → 资产 `MCNP-Input-Card-Generator-v1.7.7-win64.zip` **339,387,252 B**、
+  > SHA-256 `E8E6D353…`（= 官方 `digest`，上传 107.4 s / 3.0 MB/s）、说明正文更新为"2026-10-10 节在最上 + 历史降级保留"；旧资产（10-04/10-05 那版）已留底且与本地 `1.7.7.zip` 逐字节一致。
   > **2026-10-10 同版本重出包（版本恒 1.7.7，见文首「★ 本批（2026-10-10）」）**：续批修三件事 ——
   > 3D 预览「墓地照画」回归（前端 preview-3d 只发 4 字段 ⇒ item-14 跳过规则全失效，实测墓地 `Graveyard` 被裁成 1000³ 塞进预览）／
   > `check-overlap` 缓存永不命中（两端口径不一致，已统一指纹；部署版实测 2.2 s → 0.0 s）／按用户指示去掉「生成真空栅元」并默认不生成（产物 9 → 6 栅元）。
@@ -2181,6 +2188,13 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 
 ## §6 踩坑与排雷指南（情景记忆 · 经验教训）
 
+- **❗改写"只在远端"的长文本时，破坏性正则必须先做"历史串还在"的断言（2026-10-10，差点把 93% 的 release 正文删掉）**：
+  改 v1.7.7 release 说明正文（4 KB，含 09-26 首发历史段）时写了
+  `re.compile(r"> \*\*本资产已于 2026-10-04 原位更新\*\*.*?\n(?:> .*\n)*", re.S)` ——
+  **`re.S` 让 `.` 跨行 + `.*` 贪婪** ⇒ 一次吃掉 **3821/4096 字符**（横幅、10-04 段、09-26 段全没了），只剩 579 字符。
+  救回来的是**动手前的断言**：先 `assert 关键历史串 in new_body`（"2026-09-26 首次发布…保留备查"、"119,365,948 字节"、旧 SHA `06f812ef…`），
+  断言不过就退出 ⇒ **远端始终没被改写**。**纪律**：① 行内匹配一律用 `[^\n]*`，**不要** `.*` + `re.S`；
+  ② 对远端/不可逆文本的改写，先 dry-run 并把"必须保留的历史片段"列成断言；③ 改已发布 release 的顺序必须是"先转草稿、再删、再传、校验 digest、转正"。
 - **❗端点验收必须用「前端的真实载荷形状」跑，不能只按"完整载荷"打端点（2026-10-10，用户可见回归的来源）**：
   2026-09-24 那批修「3D 预览一坨（墓地栅元被渲染、相机被撑到 ±2000）」时，验收是**直接拿完整 cell 载荷打 `/api/preview-3d`** 量的 ——
   而前端真实请求（`Preview3D.tsx`）当时**只发 4 个字段**（`number/material/density/surface_expr`），item-14 的跳过规则全靠
@@ -2815,11 +2829,22 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 ### 版本发布纪律
 
 - **发 GitHub Release（v1.7.7 起固化的三步）**：① 先 `gh auth status` —— **本机 gh 令牌已失效**，不可用则走"git 凭据 + REST API"（`git credential fill` 取令牌，**不打印不落盘**）；
-  ② **建草稿 → 上传资产 → 校验 → 转正**（`POST /releases` 用 **40 位全 SHA** 作 `target_commitish`；资产用 `POST https://uploads.github.com/.../assets?name=…` + `-InFile` + `application/octet-stream`）；
+  ② **建草稿 → 上传资产 → 校验 → 转正**（`POST /releases` 用 **40 位全 SHA** 作 `target_commitish`；资产用 `POST https://uploads.github.com/.../assets?name=…` + **`Content-Type: application/octet-stream` + 原始字节流**（不必 multipart），可流式传 300+ MB）；
   ③ 资产名对齐约定 **`MCNP-Input-Card-Generator-v<版本>-win64.zip`**（中文名会被 GitHub 规范化掉），并在说明里附 **SHA-256**（官方的 `digest` 字段可自证上传一致）。
   参考：v1.7.7 → <https://github.com/AnpiZhuo/MCNP-Input-Card-Generator/releases/tag/v1.7.7>（113.8 MB 上传耗时 12.2 s）。
+- **原位替换已发布 release 的资产（2026-10-10 实操，脚本 `__release_v177_replace.py` 留档）**：**必须先 `PATCH draft=true` 再删旧传新**（否则公开页会有一段"资产消失"的窗口）；
+  **删旧资产之前必须确认本地留底**（本次实测：本地 `D:\MCNP\MCNP输入卡生成器 1.7.7.zip` 与远端旧资产的 `digest` **逐字节一致** ⇒ 不需下载即可留底）；
+  收尾 `PATCH draft=false` **并把新正文一起提交**（正文与资产同刻上线）。实测：324 MB（339,387,252 B）上传 **107.4 s（3.0 MB/s）**，转正后 `digest` = `sha256:e8e6d353…` 与本地一致。
+  ⚠️ **转正会把 `published_at` 刷成当下**（`created_at` 不变）⇒ release 在列表里显得"刚更新"，版本号不变。
+  ⚠️ 本次替换后的权威数字：资产 **339,387,252 B** / SHA-256 `E8E6D353479CCE067C61EEF70CA486AA8FAB23699EE23CA0D8873DA53C4DEA84`（提交 `8997791`）；
+  被替换掉的是 10-04/10-05 那版 **338,334,529 B** / `31C71ABF…`（正文里降级为"上一版，保留备查"）；09-26 首发的 **119,365,948 B** / `06f812ef…` 属更早历史，仅存正文。
+- **GitHub 资产（assets）顺序：没有重排接口（2026-10-10 实测）**：API 与页面**都按创建时间升序**（最老的在最上；实测 PowerToys 一个 7 资产 release 全部同刻、`Compare-Object` 判升序 True）。
+  想"最新排最上"**做不到**——上传只能追加（排到最下），事后重排只能把资产全删重传。**本仓库每个 release 只有 1 个资产 ⇒ 不适用**；
+  仓库 Releases **列表页**按 `created_at` 倒序，v1.7.7（`created_at` 10-04）本就恒在第一条。用户若真想要"最新包独占一条且在最上"，只能像 `v1.7.6.2` 那样**另发一个 release**（= 升版式标签，需用户明确指定）。
 - **推送到远端**：`git push origin main`。⚠️ 本机**默认 HTTP/2 直连 github 常常失败**（`Could not connect to server`，而 `Test-NetConnection` 又是通的）⇒ 改用
   **`git -c http.version=HTTP/1.1 push origin main`**（2026-09-26 实测：默认失败、HTTP/1.1 成功）。只读探活：`git -c http.version=HTTP/1.1 ls-remote --heads origin`。
+  **2026-10-10 实测补充**：默认与 HTTP/1.1 **都失败过一次**（`Failed to connect to github.com port 443 after 21 s`），**几分钟后重试默认即成功** ⇒ 属**瞬时抖动，重试即可**；
+  同一时刻 `api.github.com` / `objects.githubusercontent.com` / `release-assets.githubusercontent.com` 仍可达（`curl` 下资产却报连不上 github.com ⇒ CDN 重定向链路也会抽风）。
 - bug 修复批**默认严禁升版**；升版仅限**上级（用户）指定**——**2026-09-26 例外经用户明确指定升到 1.7.7**（此前 09-12~09-24 一长串 bug 修复批全部恒 1.7.6，纪律不变）。
 - 版本**六处同步、实为 7 个字段**：`tauri.conf.json`（`package.version`）/ `package.json` / **`package-lock.json`（顶层 `version` + `packages[""].version` 两处）** / `Cargo.toml` / `Cargo.lock`（`name="mcnp-ui"`）/ README 徽章；改完**复查零个旧版本号残留**（`Select-String -Pattern '1\.7\.6'` 那六个文件）。
 - 侧边栏版本号来自 `Sidebar.tsx` 直接 `import pkg from "../../package.json"`（单一来源，升版不再破）—— ⚠️ **构建期打进 bundle**，故**升版后必须重新 `vite build`**，否则界面仍显示旧版本。
