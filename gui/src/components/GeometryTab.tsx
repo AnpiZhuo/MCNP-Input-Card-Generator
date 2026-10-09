@@ -593,7 +593,10 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
             <td style={{ textAlign: "center" }}>{renderClosureStatus(r.num)}</td>
             <td style={{ fontSize: 11, color: "var(--text-secondary)" }}>{r.mat}</td>
             <td>{r.density}</td>
-            <td>
+            {/* 长几何表达式（GEOUNED 的并集常带括号，如 `7 -8 9 (-1:-3:-5:6:4:2)`）在窄窗口下会
+                撑出横向滚动、行尾被容器裁掉；这里允许在任意位置断行 + 悬停看完整原文，
+                免得"行尾的括号"被误判成"导入时把括号吞了"（文本层实测逐字保留）。 */}
+            <td title={r.surfaces} style={{ overflowWrap: "anywhere" }}>
               {r.fill_grid ? <span style={badgeStyle}>格阵</span> : null}
               {r.surfaces}
             </td>
@@ -823,7 +826,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
                     )}
                   </td>
                   <td>{c.cell.density}</td>
-                  <td style={{ position: "relative" }}>
+                  <td style={{ position: "relative", overflowWrap: "anywhere" }} title={c.cell.surfaces}>
                     {c.cell.fill_grid ? <span className="lattice-badge" style={{ display: "inline-block", marginRight: 4, padding: "0 4px", borderRadius: 3, fontSize: 10, fontWeight: 600, background: "rgba(76,159,232,0.18)", color: "#7db8f0", border: "1px solid rgba(76,159,232,0.4)", verticalAlign: "1px" }}>格阵</span> : null}
                     {c.cell.surfaces}
                   </td>

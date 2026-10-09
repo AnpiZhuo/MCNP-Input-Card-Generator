@@ -86,3 +86,67 @@ describe("DistributionEditor raw 模式：卡名徽标外置 + 纯文本内容�
     expect(textareas[0].value).toContain("64");
   });
 });
+
+/** 受控宿主：模拟真实使用（onChange 回灌 entry，触发重渲染） */
+function Harness({ initial }: { initial: DistEntry }) {
+  const [e, setE] = React.useState<DistEntry>(initial);
+  return React.createElement(DistributionEditor, {
+    entry: e, onChange: (n: DistEntry) => setE(n), onDelete: () => {},
+  });
+}
+
+describe("原文模式：行尾空格必须留得住（2026-10-08 用户报「文本模式无法键入空格」）", () => {
+  it("往内容末尾敲空格：rawText 存住，且框里回显也留得住", () => {
+    render(React.createElement(Harness, { initial: rawEntry("SI1  1.0") }));
+    const area = screen.getAllByRole("textbox")[0] as HTMLTextAreaElement;
+    expect(area.value).toBe("1.0");
+    // 用户敲下空格键
+    fireEvent.change(area, { target: { value: "1.0 " } });
+    // 修复前：rawText 是 "SI1  1.0 "（对），但框里被 splitLine 的 /\\s+$/ 剃成 "1.0" ⇒ 空格当场消失
+    expect((screen.getAllByRole("textbox")[0] as HTMLTextAreaElement).value).toBe("1.0 ");
+  });
+
+  it("继续敲下一个值不会与上一个粘连（1.0 → 空格 → 2 ⇒ 两个数，不是一个 1.02）", () => {
+    render(React.createElement(Harness, { initial: rawEntry("SI1  1.0") }));
+    const area = () => screen.getAllByRole("textbox")[0] as HTMLTextAreaElement;
+    fireEvent.change(area(), { target: { value: "1.0 " } });
+    fireEvent.change(area(), { target: { value: "1.0 2" } });
+    expect(area().value).toBe("1.0 2");
+  });
+
+  it("行内空格与多值原文照旧逐字不动（不回归既有行为）", () => {
+    render(React.createElement(Harness, { initial: rawEntry("SP1  0.5  0.5") }));
+    const area = screen.getAllByRole("textbox")[0] as HTMLTextAreaElement;
+    expect(area.value).toBe("0.5  0.5");
+  });
+});
+
+describe("表单模式：DS「依赖 Dn 编号」框也必须能敲空格", () => {
+  const structuredDsEntry = (ids: string[]): DistEntry => ({
+    id: 1, paramRef: "ERG", auto: false, editMode: "structured",
+    si: { type: "", values: ["", ""] },
+    sp: { type: "D", values: [], fnCode: "", fnParams: [] },
+    sb: null,
+    ds: { type: "S", param: "ERG", distributionIds: ids },
+  } as DistEntry);
+
+  it("敲一个空格分隔出第二个 Dn 编号（不再被 join 吃回去）", () => {
+    render(React.createElement(Harness, { initial: structuredDsEntry(["2"]) }));
+    const box = screen.getByPlaceholderText("依赖 Dn 编号") as HTMLInputElement;
+    expect(box.value).toBe("2");
+    fireEvent.change(box, { target: { value: "2 " } });
+    // 修复前：value=ids.join(" ") ⇒ ["2"] ⇒ 回显 "2"，空格当场蒸发，接着敲 3 会变成 "23"
+    expect((screen.getByPlaceholderText("依赖 Dn 编号") as HTMLInputElement).value).toBe("2 ");
+    fireEvent.change(screen.getByPlaceholderText("依赖 Dn 编号"), { target: { value: "2 3" } });
+    expect((screen.getByPlaceholderText("依赖 Dn 编号") as HTMLInputElement).value).toBe("2 3");
+  });
+
+  it("解析结果照旧写回 deck（ids 数组，供生成器用）", () => {
+    const onChange = vi.fn();
+    render(React.createElement(DistributionEditor, {
+      entry: structuredDsEntry(["2"]), onChange, onDelete: () => {},
+    }));
+    fireEvent.change(screen.getByPlaceholderText("依赖 Dn 编号"), { target: { value: "2 3" } });
+    expect((onChange.mock.calls.at(-1)![0] as DistEntry).ds!.distributionIds).toEqual(["2", "3"]);
+  });
+});

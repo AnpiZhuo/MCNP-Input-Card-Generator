@@ -82,6 +82,23 @@ describe("曲面卡语法", () => {
     expect(tokenize("3 SO 5.0", "surface").flat().map((t) => t.kind)).toContain("type");
     expect(tokenize("900 RPP -1 1 -1 1 -1 1", "surface").flat().map((t) => t.kind)).toContain("type");
   });
+
+  it("宏体/曲面关键词不分大小写（本程序自己的自动宏体就是小写）", () => {
+    // 2026-10-08 用户报「宏体未能根据指定的关键词进行颜色变化」。根因：Monarch 编译规则时只取
+    // `re.source`、丢弃 RegExp 的 i 标志（标志只能由语言定义的 ignoreCase 控制），而 MCNP 卡片不区分
+    // 大小写、且 快捷建栅元 / 格阵自动宏体写出的全是小写 ⇒ `1 rpp …` / `1 sph …` / `1 rcc …` 全不着色。
+    // 这几行是 quickCell.ts / lattice.ts 实际生成的写法，逐字取自生成器。
+    const generated = [
+      "1 rpp -1 1 -1 1 -1 1", // quickCell.ts RPP 六面体
+      "1 rcc 0 0 0 0 0 5 2",  // quickCell.ts RCC 圆柱
+      "1 sph 0 0 0 5",        // quickCell.ts SPH 球
+      "1 rhp 0 0 -5 0 0 10 1 0 0", // lattice.ts 六棱柱宏体
+      "1 px -9",
+    ];
+    for (const line of generated) {
+      expect(tokenize(line, "surface").flat().map((t) => t.kind), line).toContain("type");
+    }
+  });
 });
 
 describe("TR 卡语法", () => {
@@ -90,6 +107,12 @@ describe("TR 卡语法", () => {
     expect(firstKind(lines[0])).toBe("tr-id");
     expect(firstKind(lines[1])).toBe("tr-id");
     expect(lines[2].map((t) => t.kind)).toContain("comment");
+  });
+
+  it("小写 TR 也认（同样受 Monarch 丢弃 /i 标志影响）", () => {
+    const lines = tokenize("tr1 0 0 0 30 60 90\n*tr2 1 2 3", "tr");
+    expect(firstKind(lines[0])).toBe("tr-id");
+    expect(firstKind(lines[1])).toBe("tr-id");
   });
 });
 

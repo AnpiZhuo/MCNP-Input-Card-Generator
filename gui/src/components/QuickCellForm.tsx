@@ -105,9 +105,23 @@ export default function QuickCellForm({
   const [unit, setUnit] = useState<"deg" | "rad">("deg");
   const angleFocusRef = useRef<"roll" | "pitch" | "yaw">("roll");
   const [material, setMaterial] = useState("0");
-  const [impN, setImpN] = useState("0");
-  const [impP, setImpP] = useState("0");
-  const [impE, setImpE] = useState("0");
+  /**
+   * IMP:N/P/E **默认留空**（= 按基础页粒子模式自动填 1；留空且该粒子未启用则整条 imp 不写）。
+   *
+   * ⚠️ 2026-10-08 用户报「3D 预览里新加的栅元没被纳入几何重合检测」的**根因就在这三行的默认值**。
+   * 历史：`f2e8c4f` 原始设计是**复选框**（勾选=0 / 不勾选按基础页粒子填 1）；`659d5c6` 把复选框
+   * 改成文本框时默认值写成 `"0"`，于是**语义被翻转**：每个快捷新建的栅元都带 `IMP:N=0`。
+   * 后果（本程序内，全部静默）：
+   *   ① `api_server._imp_is_zero/_is_graveyard` 把 imp=0 判为 **graveyard** ⇒ `build_cells_data`
+   *      直接 `continue` 丢掉 ⇒ 该栅元**不进 3D 渲染**，也**不进 /api/check-overlap**（实测：
+   *      同一个盒子+圆柱，imp 留空检出 (1,2)、imp_n="0" 只剩栅元 1、overlaps 为空）；
+   *   ② 生成的 INP 里它还是 `IMP:N=0 IMP:P=0 IMP:E=0` —— MCNP 语义是**杀死进入该栅元的粒子**，
+   *      用户刚建的几何脚手架会变成物理上的黑洞。
+   * 显式输入 0 仍然生效（这是 MCNP 合法用法，只是不该是默认值）。
+   */
+  const [impN, setImpN] = useState("");
+  const [impP, setImpP] = useState("");
+  const [impE, setImpE] = useState("");
   const [confirmVoid, setConfirmVoid] = useState(false);
 
   const config = useMemo(() => {
@@ -227,7 +241,13 @@ export default function QuickCellForm({
       React.createElement("label", { style: { fontSize: 11, color: "var(--text-secondary)", flexShrink: 0 } }, label),
       React.createElement("input", {
         style: { ...style.inp, width: 42, height: 26, textAlign: "center", flexShrink: 0 },
-        value, placeholder: "0",
+        value,
+        // 留空 = 按基础页粒子模式自动填 1（旧 placeholder "0" 会让人以为默认就是 0，
+        // 而 imp=0 会被本程序当墓地：不渲染、不参与重合检测，见上面的长注释）。
+        placeholder: "自动",
+        "aria-label": `IMP:${label}`,
+        title: "留空 = 按基础页粒子模式自动填 1；填 0 = 该粒子不进入本栅元"
+          + "（本程序会把 imp=0 当墓地：不在 3D 渲染、也不参与重合检测）",
         onChange: (e: React.ChangeEvent<HTMLInputElement>) => set(e.target.value),
       }),
     );

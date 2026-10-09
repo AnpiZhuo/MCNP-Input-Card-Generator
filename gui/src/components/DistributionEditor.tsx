@@ -22,6 +22,16 @@ interface Props {
 
 export default function DistributionEditor({ entry, onChange, onDelete }: Props) {
   const [error, setError] = useState<string>("");
+  /**
+   * DS「依赖 Dn 编号」框的**原文草稿**（同一条「文本框的值不能由解析结果反推」纪律）。
+   *
+   * 反例：`value={ids.join(" ")}` + `onChange → trim().split(/\s+/)` —— 用户敲的那个空格立刻被
+   * join 吃回去（`"2 " → ["2"] → 回显 "2"`），于是**打不出空格**、多个 Dn 编号只能粘成一个
+   * （2026-10-08 用户报的正是「文本模式无法键入空格」这一族）。这里让框显示用户原文，
+   * 解析结果（ids 数组）照旧每次都写回 deck，两者各司其职。
+   * 草稿按 entry.id 归属，切换分布条目时自动失效，不会串台。
+   */
+  const [dsIdsDraft, setDsIdsDraft] = useState<{ id: number; text: string } | null>(null);
   const rawMode = isRawMode(entry);
 
   const setEntry = (e: DistEntry) => { setError(""); onChange(e); };
@@ -63,10 +73,19 @@ export default function DistributionEditor({ entry, onChange, onDelete }: Props)
 
     // 拆行：前缀（SC/SI/SP/SB/DS + 编号）与内容分开；前缀只做徽标，不入文本框。
     const LEAD_RE = /^(\s*((?:SC|SI|SP|SB|DS)\d*)(?:\s+|$))([\s\S]*)$/i;
+    /**
+     * ⚠️ **不得**对 content 做 `replace(/\s+$/, "")`（2026-10-08 用户报「编辑 sdef 卡时，文本模式
+     * 无法键入空格」）。文本框的 value 就是这个 content，而 setContentAt 会把整行重建回
+     * `token + "  " + content` —— 一旦在**读**的时候剃掉行尾空白，用户敲的空格会在下一次渲染里蒸发：
+     * 实测往 `SI1  1.0` 末尾敲空格，rawText 里确实存成 `"SI1  1.0 "`，但框里回显回 `"1.0"`，
+     * 接着敲数字就与前一个**粘成一个数**（`1.02`）。
+     * 行尾那一个空格正是「继续往下填值」的必经位置，所以这个 trim 直接毁掉逐值输入。
+     * 反过来（写的时候 trim）同样错：那会把用户正在敲的原文改掉。原文即状态，解析只向外派生。
+     */
     const splitLine = (line: string) => {
       const m = LEAD_RE.exec(line);
       if (!m) return { token: "", content: line };
-      return { token: m[2].toUpperCase(), content: m[3].replace(/\s+$/, "") };
+      return { token: m[2].toUpperCase(), content: m[3] };
     };
 
     const tagColor: Record<string, string> = {
@@ -284,8 +303,15 @@ export default function DistributionEditor({ entry, onChange, onDelete }: Props)
             ) : null}
             <input
               className="form-input" style={{ width: 110, height: 26, fontSize: 11 }} placeholder="依赖 Dn 编号"
-              value={entry.ds.distributionIds.join(" ")}
-              onChange={(e) => setDs({ ...entry.ds, distributionIds: e.target.value.trim().split(/\s+/) } as DsEntry)}
+              value={dsIdsDraft && dsIdsDraft.id === entry.id
+                ? dsIdsDraft.text
+                : entry.ds.distributionIds.join(" ")}
+              onChange={(e) => {
+                const text = e.target.value;
+                setDsIdsDraft({ id: entry.id, text });
+                setDs({ ...entry.ds, distributionIds: text.split(/\s+/).filter(Boolean) } as DsEntry);
+              }}
+              onBlur={() => setDsIdsDraft(null)}
             />
             <button className="btn btn-ghost btn-xs" onClick={() => setDs(null)}>移除</button>
           </div>

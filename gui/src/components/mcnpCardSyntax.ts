@@ -60,9 +60,16 @@ const NUMBER = new RegExp(NUMBER_SRC);
 
 const isNumberToken = (token: string): boolean => NUMBER_EXACT.test(token);
 
+/**
+ * ⚠️ 这里**不能**靠 `new RegExp(..., "i")` 来忽略大小写：Monarch 编译规则时只取 `re.source`，
+ * 标志位一律丢弃（`monarchCompile.js`：`flags = (lexer.ignoreCase ? 'i' : '') + …`，规则若是 RegExp
+ * 则 `sregex = re.source`）。所以大小写只能由语言定义里的 `ignoreCase: true` 控制 —— 见下面两个
+ * tokenizer。2026-10-08 用户报「宏体未能根据指定的关键词进行颜色变化」就是这个坑：本程序自己的
+ * 快捷建栅元 / 格阵自动宏体写出的都是**小写**（`1 rpp …`、`1 sph …`、`1 rcc …`、`rhp …`），
+ * 而带了 `i` 的大写正则实际按大小写敏感跑 ⇒ 小写宏体关键词一个都不着色（落到默认 source）。
+ */
 const surfaceTypePattern = new RegExp(
   `(?:${SURFACE_TYPES.map((t) => t.replace("/", "\\/")).join("|")})\\b`,
-  "i",
 );
 
 /**
@@ -74,6 +81,9 @@ const surfaceTypePattern = new RegExp(
  * 单状态逐行独立，从根上没有这个坑。
  */
 export const surfaceTokenizer = (): languages.IMonarchLanguage => ({
+  // MCNP 卡片不区分大小写（`1 RPP …` 与 `1 rpp …` 等价，本程序的自动宏体写在下面那种），
+  // 而 Monarch **只认这个字段**、不认规则里的 RegExp 标志位 ⇒ 必须在这里声明。
+  ignoreCase: true,
   tokenizer: {
     root: [
       [/^\s*[Cc].*$/, "comment"],
@@ -89,11 +99,13 @@ export const surfaceTokenizer = (): languages.IMonarchLanguage => ({
 });
 
 export const trTokenizer = (): languages.IMonarchLanguage => ({
+  // 同上：`tr1` 与 `TR1` 等价，靠 ignoreCase 而不是规则里的 /i。
+  ignoreCase: true,
   tokenizer: {
     root: [
       [/^\s*[Cc].*$/, "comment"],
       [/\$.*/, "comment"],
-      [/^\s*\*?TR\d+\b/i, "tr-id"],
+      [/^\s*\*?TR\d+\b/, "tr-id"],
       [NUMBER, "number"],
     ],
   },
