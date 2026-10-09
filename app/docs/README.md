@@ -1,202 +1,150 @@
-# MCNP 输入卡生成器 — MCNP Input Card Generator
+# MCNP 输入卡生成器 — 使用速览
 
-一款用于可视化创建、编辑、校验 **MCNP**（Monte Carlo N-Particle）输入文件（`.INP`）的桌面应用。用结构化、表单化的 GUI 替代手工文本编辑，内置 3D 几何预览、平面截面、材料库、能量/时间网格等工具。
+> **商标声明**：MCNP® 是 Triad National Security, LLC（运营 Los Alamos National Laboratory 的机构）的注册商标。本项目是**独立第三方工具**，与 Triad National Security, LLC / Los Alamos National Laboratory **无任何关联、无背书、非其官方产品**；名称中的 "MCNP" 仅用于描述用途（生成 MCNP 输入文件）。
 
-A desktop application for visually creating, editing, and validating **MCNP** input files (`.INP`). Replaces manual text editing with a structured, form-based GUI, with built-in 3D preview, cross-section view, material library, and energy/time grids.
+> 本文件是**随包速览**（程序内「📖」可直接查看）。完整 README（含开发/打包/项目结构/致谢）见**交付包根目录的 `README.md`** 或仓库主页。
+> 版本 **1.7.7** · 逐批变更见 `docs/CHANGELOG.md`。
 
-![应用截图](images/screenshot.png)
-
-![Version](https://img.shields.io/badge/Version-1.7.3-blue)
-![Frontend](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-teal)
-![Shell](https://img.shields.io/badge/Shell-Tauri-green)
-![License](https://img.shields.io/badge/License-All%20Rights%20Reserved-red)
-![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-lightgrey)
-![MCNP](https://img.shields.io/badge/MCNP-6.x%20Compatible-orange)
+一款用于可视化创建、编辑、校验 **MCNP** 输入文件（`.INP`）的 Windows 桌面应用：表单化 GUI 替代手工文本编辑，内置 FreeCAD 精确几何的 3D 预览 / 平面截面 / 体数据可视化、STEP(CAD) → MCNP 几何转换、材料库、源粒子演示、参数扫描与出图。
 
 ---
 
-## 技术栈 Tech Stack
+## 直接用交付包
 
-| 层 | 技术 |
-|----|------|
-| **前端 UI** | React + TypeScript + Vite（表单化标签页界面） |
-| **3D 渲染** | Three.js（3D 预览）/ SVG（平面截面） |
-| **窗口外壳** | Tauri（无边框自定义窗口：拖拽、缩放、最小化/最大化/关闭、圆角） |
-| **后端** | Python（api_server：INP 解析/生成/校验/3D/截面），FreeCAD 做 CSG 几何 |
-| **构建** | Vite（前端）→ Tauri（exe）+ PyInstaller（Python 后端 sidecar） |
+**只需要 Windows 10/11 x64**：界面运行时（WebView2）已随包（`WebView2\`，裁剪版 433.7 MB / 29 文件），**不需要**装 Edge / WebView2 Runtime、**不需要**联网、**不需要**管理员权限。双击 `MCNP 输入卡生成器.exe` 即可（前端自动拉起本机后端 `127.0.0.1:5001`，关闭主程序时一并退出）。
 
----
+**选装**：**FreeCAD ≥ 0.20**（3D 预览 / 截面 / STEP 导入，装了就启用）；**MCNP6.x**（"一键运行 + 输出解析"才需要，程序自动检测 `mcnp6.exe`，多版本可切换）。
 
-## 功能特性 Features
+**交付目录必须有这几件（缺一不可）**：`MCNP 输入卡生成器.exe`、`python.exe`、`_internal\`、`WebView2\`、`自检.bat`。
 
-| 功能 Feature | 说明 Description |
-|-------------|-----------------|
-| **表单化编辑 Form-based editing** | 8 个标签页覆盖所有 MCNP 输入段 |
-| **INP 生成 INP generation** | 自动生成标准 MCNP 输入卡，含 C/`$` 注释、En/Tn/E0/T0 网格 |
-| **INP 导入 INP import** | Windows 原生文件对话框选择 `.INP/.I/.TXT`，或直接拖入窗口；解析后一次性回填所有字段 |
-| **文本↔表单双向互转** | 材料/几何/计数支持一键在"表单"与"原始文本"间切换，互转不丢数据 |
-| **计数乘子 FMn** | 计数卡支持 FMn 乘子（导入自动识别 + 表单直接编辑，自动生成/回放） |
-| **STEP 导入（GEOUNED）** | 几何标签页导入 `.STEP/.STP`，经 FreeCAD + GEOUNED 自动转换为 MCNP 曲面/栅元 |
-| **工作区保存/恢复 Save/Restore** | 关闭自动保存、手动保存按钮、一键清空；刷新/重开自动恢复全部输入 |
-| **3D 预览 / 截面** | FreeCAD 精确几何渲染，独立窗口可边编辑边看；截面由 STL 直接切出，支持 `#n` 栅元补集 |
-| **条件编译行** | 材料/栅元支持 `#ifdef/#else/#endif`，所有行可拖拽排序 |
-| **材料下拉选择** | 栅元表格与 3D 预览中点击材料号下拉选择，**自动填充材料密度** |
-| **自定义窗口 Custom window** | 无系统边框 + 自绘标题栏（拖拽、最小化/最大化/关闭），类似 VSCode |
-| **材料库 Material library** | 50+ 预设材料 + 化学式换算，xsdir 校验 |
-| **E0/En/T0/Tn 网格** | 全局能谱/时间网格 + 每计数独立 En/Tn，线性/对数/自定义三模式 |
-| **源模式 Source modes** | 固定多源 / SDEF 分布源（SI/SP）/ KCODE 临界源 |
-| **主题 Themes** | 4 套 CSS 主题：夜之城（霓虹）/ 青空 / 护眼 / 多巴胺 |
-| **MCNP 检测与运行** | 自动检测 mcnp6.exe，一键运行、跑完清理临时文件；默认走独显 GPU |
-| **内联参考文档 Inline references** | 曲面卡、计数卡等结构参考一键查看 |
-| **输出分析 Output analysis** | 解析 MCNP 输出文件并绘图 |
+### 出问题先双击 `自检.bat`
+
+用户自助诊断：打印交付件在位情况、界面运行时判定、引导自检（真启动一次 sidecar，用完即退、不占端口）、端口占用，最后给一句结论：
+
+| `[RESULT]` | 含义与处置 |
+| :--- | :--- |
+| `BACKEND-RUNNING` | 后端其实在跑，去查主程序界面 |
+| `PACKAGE-OK-BACKEND-NOT-UP` | 包是好的：查杀软是否拦 `python.exe` |
+| `PKG-INCOMPLETE` | 少了 `_internal\`（三件套要整目录拷贝） |
+| `PKG-INCOMPLETE-OR-BLOCKED` | 三件套不全，或被安全软件清理 |
+| `WEBVIEW2-MISSING` | 少了 `WebView2\`（只拷了 exe、没拷目录的典型症状） |
 
 ---
 
-## 快速开始 Quick Start
+## 功能特性
 
-### 环境要求 Prerequisites
+### 输入与编辑
 
-- **Node.js 18+**（前端构建）
-- **Python 3.10+**（后端，含 pymcnp、numpy 等）
-- **Rust / Cargo**（仅打包 Tauri exe 时需要）
-- **FreeCAD ≥ 0.20**（3D 预览/截面/STEP 导入用，检测到才启用）
+- **表单化编辑**：7 个标签页覆盖全部 MCNP 输入段（基本 / 材料 / 几何 / 源项 / 计数 / 高级 / 输出）
+- **生成 / 导入 INP**：生成标准输入卡（含 `C`、`$` 注释）；导入支持原生文件对话框与**拖入窗口**，解析后一次性回填
+- **文本 ⇄ 表单双向互转**：材料 / 栅元 / 计数 / 源卡一键切换，互转不丢数据
+- **卡片编辑器**：曲面卡 / TR 卡用 Monaco 编辑（曲面号、TR 引用、曲面类型含宏体分色 + 缺参数幽灵提示 + 补全）；**Monaco 与字体随包 ⇒ 断网可用**
+- **条件编译行**：材料 / 栅元支持 `#ifdef / #else / #endif`，所有行可拖拽排序（含按 U 分组）
+- **工作区**：关闭自动保存 / 手动保存 / 一键清空，重开自动恢复；主题与导入设置独立记忆
+- **辅助**：示例库、差异对比、栅元批量编辑、材料下拉（选中自动填密度）
 
-### 开发运行 Run in Dev
+### 几何与 3D
 
-```bash
-# 前端（Vite，端口 1420）
-cd gui
-npm install
-npm run dev
+- **3D 预览**（FreeCAD CSG 精确布尔 → STL，**独立窗口边编辑边看**）：支持 `#n` 补集与 `TRn`、按材料着色 + 图例、单元格显隐 / 半透明 / 色块总览
+- **格阵 3D 装配**：嵌套 `fill` 展开 + InstancedMesh 全堆芯渲染，按 MCNP「窗口」机制裁剪（实体 = universe ∩ 格元盒 ∩ 容器 cell），不超壳、无虚假外块
+- **平面截面**：从保留的 STL 直接切（numpy），可拖动、悬停读数、导出矢量图
+- **体数据可视化**：MESHTAL / FMESH 结果 3D 体绘制 + 切片 + 色标 + 切片导出
+- **几何自检**：① 栅元**封闭性**（`closed / infinite / semi_infinite / empty`，表格内实时显示）；② **重合检测**（AABB 候选 + FreeCAD 精确布尔 + GQ/SQ 采样，按严重度分级，点击高亮）
+- **快捷建栅元**：RCC 圆柱（环×段）/ SPH 球壳 / RPP 六面体（含倾斜角）/ RHP 六棱柱 / TET 四面体 —— 场景内线框预览、自动生成曲面与栅元卡、生成前**重合检测 + 补集决策**
+- **格阵编辑器**：`fill` 范围 / dims / 格元 / `lat`，**自动生成 RPP·RHP 宏体卡** + 子预览
+- **STEP 导入 / 导出**：见下节
 
-# 后端（api_server，端口 5001）
-cd gui/backend
-python api_server.py
-```
+### 源项、计数与运行
 
-浏览器打开 `http://localhost:1420`。
+- **源项四模式**：SDEF 分布源（`SI/SP/SB/DS/SC` 结构化 ⇄ 原文双态）/ 固定多源 / KCODE（+ KSRC）/ 面源 `SSW`·`SSR`
+- **源粒子演示**：按当前 SDEF 抽样 500 粒子在独立窗口 3D 显示
+- **计数**：`F1–F8`（`*`/`+` 前缀、`FIP/FIR/FIC`、`F5` 环探测器轴）+ `FMn` 乘子 + 每计数 `En/Tn`
+- **网格与高级卡**：全局 `E0/En/T0/Tn`、FMESH（线性/对数/自定义）、`PHYS`、`CUT`、`PRINT`、xsdir 路径
+- **参数扫描**：批量扫描 + 结果看板 + 汇总导出
+- **一键运行 MCNP**：自动检测 `mcnp6.exe`，跑完清理临时文件，支持多核 `tasks`
+- **输出解析与出图**：解析 `outp`/`meshtal`/keff；图与截面导出 **PNG / PDF / SVG**（中文字体嵌入、论文配色）
+- **PTRAC 径迹可视化**：径迹 3D 渲染（抽稀 + 类型配色）
+- **内置参考文档**：C810 卡片格式、曲面卡格式、源分布卡、FMESH、FN 卡、输出卡结构与 PRINT 等（8 篇，随包不联网）
+- **4 套主题**（夜之城 / 青空 / 多巴胺 / 护眼）+ 全局等比缩放
 
-### 打包为 EXE Build Standalone EXE
+### 材料库
 
-> 出包请按 **`docs/手动打包方法.md`** 分步操作（v1.6.4 起已停用 build.bat / release.bat 自动化脚本）。
-> 流程：vite 构建 → PyInstaller 打包后端 sidecar → 替换 `src-tauri/binaries/` → Tauri 构建 → 复制产物到交付目录 → 冒烟验证。
-
-打包产物在 `gui/src-tauri/target/release/`（`bundle.active=false`，`bundle/` 目录为空属正常）。运行 exe 时前端自动拉起后端、关闭时一起退出。
-
----
-
-## 用户界面 User Interface
-
-| 标签页 Tab | 章节 Section | 说明 Description |
-|-----------|-------------|-----------------|
-| 基础 Basic | Title, MODE, NPS, CTME | 文件标识与粒子输运参数 |
-| 材料 Materials | 材料卡 Material cards | ZAID/份额输入，含预设材料库 |
-| 几何 Geometry | 曲面与栅元 Surfaces & Cells | 曲面定义、栅元表格、3D 预览、截面、STEP 导入 |
-| 源 Source | SDEF / 固定源 / KCODE | 三种源模式 |
-| 计数 Tallies | F1–F8 | 计数及 En/Tn 网格 |
-| 高级 Advanced | PHYS, CUT, 其他 | 物理卡、粒子截断、辅助卡、xsdir 路径 |
-| 输出 Output | 结果 Results | MCNP 输出解析、绘图、导出 |
+- **常用预设 49 条 / 6 类**（常见化合物、纯元素、合金 & 特殊材料、屏蔽材料、组织等效材料、中子慢化·吸收）+ 化学式换算
+- **PNNL-15870 同位素级 48 条 / 7 类 / 覆盖 133 种核素**（质量份额）
+- **用户可编辑持久库**：内置 ⊕ 自定义 ⊕ 覆盖；保存 / 导入导出 JSON·CSV / 恢复原始；存于 `D:\MCNP\material`
+- **校验**：xsdir 校验 + 反向索引 + 组成自洽校验
 
 ---
 
-## 项目结构 Project Structure
+## 界面
 
-```
-├── app/                            # Python 核心（生成/解析/校验引擎）
-│   ├── generator/                  # inp_generator、parsers、validator
-│   ├── models.py                   # 数据模型 (DeckData, CellData, ...)
-│   ├── freecad_preview.py          # FreeCAD 3D 预览封装
-│   ├── _freecad_csg_worker.py      # FreeCAD CSG 几何求值子进程
-│   ├── geouned_worker.py           # GEOUNED 转换 worker（FreeCAD python 子进程）
-│   ├── spline_skip.py              # 样条实体：跳过而非终止的报告/决策（纯逻辑，无 FreeCAD）
-│   ├── step_importer_geouned.py    # GEOUNED 转换器封装
-│   ├── freecad_locator.py          # FreeCAD 定位（检测/手动指定路径唯一入口）
-│   ├── stl_cross_section.py        # 从 STL 切平面（numpy，截面用，不依赖 FreeCAD）
-│   ├── xsdir_db.py                 # xsdir 截面数据库
-│   └── material_presets.py         # 预设材料库
-└── gui/
-    ├── src/                        # React 前端
-    │   ├── App.tsx                 # 主界面（顶栏/导入/生成/保存恢复）
-    │   ├── components/             # 标签页与对话框
-    │   │   ├── BasicSettings / GeometryTab / MaterialTab / SourceTab / TallyTab / AdvancedTab / OutputTab
-    │   │   ├── Preview3D.tsx       # 3D 预览（Three.js + 材料着色）
-    │   │   ├── CrossSectionView.tsx# 平面截面
-    │   │   ├── MaterialPanel.tsx   # 材料图例 + 栅元列表（共享组件）
-    │   │   └── GridEditor.tsx      # E0/En/T0/Tn 网格编辑器
-    │   ├── utils/
-    │   │   ├── DeckContext.tsx     # 单一权威表单状态
-    │   │   ├── gridState.ts        # 网格解析/序列化深模块
-    │   │   ├── backend.ts          # 后端生命周期（启动/关闭 sidecar）
-    │   │   └── materialColors.ts   # 材料颜色单一来源
-    │   └── styles/global.css       # CSS 变量（4 主题）
-    ├── backend/
-    │   ├── api_server.py           # HTTP 后端（生成/解析/3D/截面/运行）
-    │   ├── mcnp_bridge.py          # 打包后 sidecar 启动器（拉起 api_server）
-    │   └── xsdir_db.py
-    ├── src-tauri/                  # Tauri 窗口外壳
-    │   ├── tauri.conf.json         # 无边框窗口、sidecar 配置
-    │   └── icons/
-    └── electron/                   # （备用）Electron 外壳
-```
+| 标签页 | 覆盖内容 |
+| :--- | :--- |
+| 基本 | 标题、`MODE`、`NPS`、`CTME` |
+| 材料 | 材料卡、材料库、化学式换算 |
+| 几何 | 曲面/TR 编辑器、栅元表格（封闭性/重合状态）、快捷建栅元、格阵编辑器、STEP 导入导出、3D 预览入口 |
+| 源项 | SDEF / 固定多源 / KCODE / 面源 + 源粒子演示 |
+| 计数 | `F1–F8`、`FMn`、`En/Tn`、FMESH、PTRAC |
+| 高级 | `PHYS`、`CUT`、网格卡、其他卡、xsdir |
+| 输出 | 运行 MCNP、输出解析、绘图与出图导出 |
+
+**独立窗口（6 个）**：3D 预览 · 平面截面 · 体积 3D（MESHTAL/FMESH）· PTRAC 径迹 · 计数图 · 源粒子演示。
 
 ---
 
-## 引擎说明 Engine Notes
+## STEP 导入（GEOUNED）要点
 
-### 3D 预览（FreeCAD CSG）
+「几何」→「导入 STEP」，`.STEP/.STP` 经 **FreeCAD + GEOUNED**（随程序打包）转为 MCNP 曲面/栅元：
 
-- 以 JSON AST 序列化 pymcnp 几何树，FreeCAD 子进程用 `Part.Shape` 布尔运算求值
-- 支持 `#n` 栅元补集算子（如空心反射体），输出 STL 网格按材料着色
-- 3D 预览与截面均为独立窗口；截面直接从保留的 STL 切（numpy），不重新调 FreeCAD
-
-支持的曲面：P, PX/PY/PZ, S/SO/SX/SY/SZ, C/X/C/Y/C/Z, CX/CY/CZ, K/X/K/Y/K/Z, KX/KY/KZ, SQ, GQ, RPP, RCC, SPH, BOX, TRC, REC, WED, ARB 等，支持 TRn 坐标变换。
-
-### STEP 导入（GEOUNED）
-
-「几何」标签页 → 「导入 STEP」，经 **GEOUNED**（西班牙 CIEMAT 开发，EUPL-1.2）转换：
-- 随程序打包、无需单独安装；运行时经 FreeCAD Python 调用，**用户仅需另装 FreeCAD**
-- 自动转换并回填曲面/栅元卡，科学计数法自动整理为 3 位小数（GQ/SQ 保留精度）
-- **导入设置分 4 个子页签**（基本 / 常用调节 / 进阶与少见 / 高危 ⚠），共 **43 项 GEOUNED 参数**可调：真空栅元切割（最大曲面数 / 括号上限 / 最小尺寸）、栅元化简、样条曲面处理、几何容差等（另有 9 项本程序自用设置：材料名 / 密度 / TMP / 实体预分解 / 坐标约定等）
-- **默认不生成真空栅元**（2026-10-10 起，界面已移除该开关）：只输出实体栅元，不再插入 GEOUNED 的 enclosure / void / 墓区（`Graveyard`）栅元 —— 大装配体下真空栅元常远多于实体栅元，是栅元总数的主要来源（实测同一装配体：9 栅元 → 6 栅元）。⚠️ **代价**：实体之外的空间于是未定义，直接拿这份卡跑 MCNP 会"丢粒子"，需要**自建外部栅元与墓区**（如最外球壳）；确需 GEOUNED 自动生成真空栅元时，用 GEOUNED 本体转换后再导入
-- **留空 = 用 GEOUNED 自己的默认值**（不是传 0）：只有你改过的项才会下发
-- **样条曲面：跳过而不是终止**（默认档）——含样条（NURBS / 旋转面 / 拉伸面）的实体整块不转换、**其余照常转换**，导入不会被中断；被跳过的**实体序号、曲面类型、面数**会写在导入结果提示里（序号从 0 起，与「跳过实体编号」同口径）。也可以显式选「停止转换」或「强行翻译（可能出错）」
-- 每个输入框 / 下拉 / 按钮**鼠标停在右侧的 `?` 上即显示中文详细释义**（含对应的 GEOUNED 参数名）
-- **设置会被记住**（独立本地键）：关掉对话框再打开、甚至点主界面「🧹 清空」都不影响；「全部恢复默认」是唯一清除入口
-- **实体预分解**（基本页，默认关）：先用 FreeCAD 把实体按**每块面数上限**（**可自己键入数字**，例如 30；常用 50 / 30 / 20）切开再交给 GEOUNED 转换 —— 每个块独立成栅元，单栅元面数大幅下降（实测 274 m³ 厂房模型：上限 30 面 → 18 块，实体栅元最大面数 146 → 25，体积比 1.0000000）；失败或切不到上限会**如实报告并回退原文件**。纯 FreeCAD/OCC 实现，不依赖任何外部程序
+- 导入设置 **4 个子页签 / 43 项 GEOUNED 参数**（+9 项本程序自用设置），每个参数的 `?` 有中文详细释义；**留空 = 用 GEOUNED 默认值**，设置会被记住
+- **实体预分解**（默认关）：按"每块面数上限"（**可自己键入**）先切再转（实测 274 m³ 厂房：上限 30 面 → 18 块，单栅元最大面数 146 → 25，体积比 1.0000000）
+- **相切退化自动修复**（默认开）：破除"球面与同轴圆柱面半径相等"导致的丢定界面（实测栅元体积 28268/29424 → 3646.29/3630.43）
+- **样条曲面：跳过而不是终止**（默认档），被跳过的实体序号/曲面类型/面数写在结果提示里
+- **默认不生成真空栅元**：只输出实体栅元（实测 9 → 6 栅元）。⚠️ 实体外空间于是未定义，直接跑 MCNP 会"丢粒子"——需要**自建外部栅元与墓区**；确需自动生成时请用 GEOUNED 本体转换后再导入
+- **坐标约定**：上轴（Z/Y）、方位角、原点口径（原本/体心/坐底面），并内置**方向预览**
 
 ---
 
-## 引用与致谢 Acknowledgements
+## 常见问题
+
+| 现象 | 处置 |
+| :--- | :--- |
+| 双击没反应 / 一闪就没 | 界面运行时缺失：跑 `自检.bat` 看 `WEBVIEW2-MISSING`（只拷了 exe 没拷目录） |
+| 后端起不来 / 接口全失败 | 杀软拦 `python.exe`，或 `_internal\` 没跟过去 |
+| 3D / 截面 / STEP 导入不可用 | 没装 FreeCAD（或路径未识别），界面里可手动指定 |
+| 3D 预览模型缩成针尖 / 周围多出大盒子 | 旧版把墓区（球外无界）当实体渲染；1.7.7（2026-10-10 起）已修 |
+| 端口被占 | 后端 `127.0.0.1:5001`、AI 接入 MCP `8100`；⚠️ 关主程序后 8100 子进程不会自动退出，需按 PID 清理 |
+| 材料库想恢复出厂 | 材料库面板 →「恢复原始」 |
+| STEP 导入后栅元变少 | 默认不生成真空栅元；含样条面的实体会被跳过并在提示里报告 |
+
+---
+
+## AI 接入（inputcard-mcp）
+
+支持 **MCP** 的 AI 助手可直接读取/修改/生成程序当前工作区：服务名 `inputcard-mcp`（**刻意不含 "MCNP" 子串**）；**MCP over HTTP：`http://127.0.0.1:8100/mcp`**（6 个工具 + 当前工作区会话；无状态、完全本地化，数据不出本机）。详见交付包 `AI接入.md` 与仓库 `docs/inputcard-mcp.md`。
+
+---
+
+## 引用与致谢
 
 | 项目 | 用途 | 许可证 |
-|------|------|--------|
-| [React](https://react.dev/) | 前端 UI 框架 | MIT |
-| [Vite](https://vitejs.dev/) | 前端构建工具 | MIT |
-| [Tauri](https://tauri.app/) | 桌面窗口外壳 | MIT/Apache-2.0 |
-| [Three.js](https://threejs.org/) | 3D 渲染 | MIT |
-| [PyMCNP](https://github.com/FSIBT/PyMCNP) | MCNP 核心库（几何、生成、解析） | BSD-3-Clause |
-| [FreeCAD](https://www.freecad.org/) | 3D CAD 几何处理（CSG 求值引擎） | LGPL v2+ |
-| [GEOUNED](https://geouned-org.github.io/GEOUNED/) | STEP → MCNP 几何转换引擎（随程序打包） | EUPL-1.2 |
-| [OpenCascade](https://dev.opencascade.org/) | CAD 内核（FreeCAD 依赖；实体预分解直接用它） | LGPL v2.1 |
-| [NumPy](https://numpy.org/) | 科学计算 | BSD-3-Clause |
+| :--- | :--- | :--- |
+| React / Vite / Three.js / Monaco Editor / Recharts / jsPDF / svg2pdf.js / marked | 前端与出图 | MIT |
+| Tauri | 桌面窗口外壳 | MIT/Apache-2.0 |
+| PyMCNP | MCNP 核心库（几何、生成、解析） | BSD-3-Clause |
+| FreeCAD | 3D CAD 几何处理（CSG 求值引擎） | LGPL v2+ |
+| GEOUNED | STEP → MCNP 几何转换引擎（随程序打包） | EUPL-1.2 |
+| OpenCascade | CAD 内核（FreeCAD 依赖） | LGPL v2.1 |
+| NumPy | 科学计算 | BSD-3-Clause |
+| OWEN | MCNP 全堆芯 3D 预览参考 | MIT (© 2026 BelvoirDynamics) |
 
 ---
 
-## 许可协议 License
+## 许可协议
 
-**All Rights Reserved.** 版权所有 © 2026 魏祎卓
+本项目自有代码以 **MIT License** 发布。版权所有 © 2026 魏祎卓 (Wei Yizhuo)。
 
-> **本许可仅适用于本项目自有代码。** 所捆绑/调用的开源组件保留其各自许可证：GEOUNED（EUPL-1.2）、OpenCascade（LGPL v2.1）、FreeCAD（LGPL v2+）、pymcnp（BSD-3-Clause）、React（MIT）、Vite（MIT）、Tauri（MIT/Apache-2.0）、Three.js（MIT）、NumPy（BSD）等，详见上方"引用与致谢"。
+> MIT 许可**仅适用于本项目自有代码**：可自由使用、复制、修改、合并、发布、分发、再许可、销售，但必须在所有副本中保留版权声明与许可声明（详见仓库 `LICENSE`；交付包内随附的 `README.md` 亦有许可章节）。
+> 随包/调用的开源组件保留各自许可证（GEOUNED EUPL-1.2、OpenCascade LGPL v2.1、FreeCAD LGPL v2+、pymcnp BSD-3-Clause、React/Vite/Three.js/Monaco MIT 等），使用时请分别遵守。
 
-- ✅ 允许个人及机构内部**免费使用**
-- ✅ 允许为自用或内部使用**修改代码**
-- ❌ **严禁任何形式的盈利活动**（销售、付费服务、商业嵌入等）
-- ❌ 修改后公开发布须**经作者书面许可**
-
-如需授权请联系：1378963177@qq.com
-
----
-
-> 本项目由 AI 辅助编程完成 / Built with AI assistance (Claude).
->
-> Built with [React](https://react.dev/), [Vite](https://vitejs.dev/), [Tauri](https://tauri.app/), and [pymcnp](https://pypi.org/project/pymcnp/).
+如有问题或合作，可联系：1378963177@qq.com
