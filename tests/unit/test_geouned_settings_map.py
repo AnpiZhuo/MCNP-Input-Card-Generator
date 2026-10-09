@@ -40,12 +40,16 @@ def mapped(app_settings):
 # ── 1. 缺省 / 历史键兜底 ────────────────────────────────────────
 
 def test_only_legacy_keys_when_nothing_given():
-    """老调用方一个 GEOUNED 参数都不传 → 只剩 4 个历史键（旧行为一字不变）。"""
+    """老调用方一个 GEOUNED 参数都不传 → 只剩 4 个历史键兜底。
+
+    ⚠️ `voidGen` 兜底值 2026-10-10 按用户指示由 True 改 **False**
+    （「把那个生成真空栅元的按钮去掉，默认不生成真空栅元」）：界面已移除该开关、不再发送此键。
+    """
     for data in ({}, None, {"materialName": "MAT"}):
         out = mapped(data)
         assert out == {
             "settings": {
-                "voidGen": True,
+                "voidGen": False,
                 "compSolids": False,
                 "startCell": 1,
                 "startSurf": 1,
@@ -54,9 +58,9 @@ def test_only_legacy_keys_when_nothing_given():
 
 
 def test_legacy_keys_always_present_with_historical_defaults():
-    """4 个历史键的内置兜底与旧代码一致（避免老调用方漏传导致编号错乱）。"""
+    """4 个历史键的内置兜底（避免老调用方漏传导致编号错乱）；voidGen 现为 False。"""
     assert _LEGACY_DEFAULTS == {
-        "voidGeneration": True,
+        "voidGeneration": False,
         "compoundIsSingleCell": False,
         "startCellNum": 1,
         "startSurfNum": 1,
@@ -67,8 +71,16 @@ def test_legacy_key_falls_back_when_invalid():
     """历史键传了非法值 → 回落历史默认，而不是丢弃（丢了会变成 GEOUNED 默认，语义不同）。"""
     out = mapped({"startSurfNum": "abc", "voidGeneration": "maybe", "startCellNum": 0})
     assert out["settings"]["startSurf"] == 1
-    assert out["settings"]["voidGen"] is True
+    assert out["settings"]["voidGen"] is False   # 回落值 = 新默认（不生成真空栅元）
     assert out["settings"]["startCell"] == 1
+
+
+def test_explicit_void_generation_still_honored():
+    """显式传 true 仍照旧生效（默认改了，但没有把这条路封死 —— 老调用方/MCP 仍可要求生成真空栅元）。"""
+    assert mapped({"voidGeneration": True})["settings"]["voidGen"] is True
+    assert mapped({"voidGeneration": False})["settings"]["voidGen"] is False
+    # 字符串形式同样认（前端历史版本发的是布尔，这里兜住手写 JSON）
+    assert mapped({"voidGeneration": "true"})["settings"]["voidGen"] is True
 
 
 def test_new_key_absent_from_result_when_invalid():
@@ -201,6 +213,13 @@ def test_all_sections_present_when_fully_specified():
 
 # ── 6. 前后端键集契约（双向） ──────────────────────────────────
 
+# 后端仍接受、但**界面已不再暴露**的历史键（有理由的显式豁免，不是放宽闸门）：
+#   · voidGeneration —— 用户 2026-10-10「把那个生成真空栅元的按钮去掉，默认不生成真空栅元」：
+#     界面移除该 toggle、不再随请求发送 ⇒ 走 `_LEGACY_DEFAULTS` 兜底为 **False**；
+#     但后端**仍认这个键**（显式传 true 照旧生成真空栅元）—— 不静默丢弃是项目纪律。
+#     将来若要恢复界面开关，把 PARAM_SPECS 的 toggle 与 `basic` 页的 row 加回来即可（本豁免随之失效）。
+_BACKEND_ONLY_LEGACY = {"voidGeneration"}
+
 def _frontend_specs() -> dict:
     """前端参数元数据表：`{key: is_local}`。
 
@@ -238,11 +257,14 @@ def test_frontend_and_backend_key_sets_agree():
     assert TSX_PATH.is_file(), f"前端文件缺失: {TSX_PATH}"
     specs = _frontend_specs()
     front = {k for k, is_local in specs.items() if not is_local} - {FILE_PSEUDO_KEY}
-    back = _backend_keys()
+    back = _backend_keys() - _BACKEND_ONLY_LEGACY
     assert front == back, (
         f"前端独有（后端会静默丢弃）: {sorted(front - back)}；"
         f"后端独有（界面上没有）: {sorted(back - front)}"
     )
+    # 豁免集必须**真的只在后端**（防止有人把某个键塞进豁免集来掩盖"界面加了、后端没有"）
+    assert _BACKEND_ONLY_LEGACY <= _backend_keys()
+    assert not (_BACKEND_ONLY_LEGACY & set(specs))
 
 
 def test_local_keys_are_exactly_the_two_groups():

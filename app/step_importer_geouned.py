@@ -87,7 +87,9 @@ def _probe_geouned_in(python_exe: str) -> str:
 #
 # 2. 四个历史键（voidGeneration / compoundIsSingleCell / startCellNum /
 #    startSurfNum）例外：它们从旧版本起就始终随请求发送，这里保留内置兜底，
-#    保证老调用方（MCP、测试）不传时行为不变。
+#    保证老调用方（MCP、测试）不传时行为确定。
+#    ⚠️ 其中 `voidGeneration` 的兜底值已按用户指示改为 **False**（见 `_LEGACY_DEFAULTS` 注释）：
+#    界面 2026-10-10 起不再提供该开关、也不发送此键 ⇒ 默认不生成真空栅元。
 #
 # 3. GEOUNED 的 setter 是**严格类型**：float 字段必须 float（传 int 会被拒）、
 #    int 字段必须 int、bool 字段必须 bool、voidMat 必须是长度 3 的
@@ -250,9 +252,13 @@ _PARAM_TABLE = (
     ("cellSummaryFile",      "export", "cellSummaryFile",  _as_bool, None),
 )
 
-# 历史键的内置兜底（旧调用方不传时保持旧行为）
+# 历史键的内置兜底（旧调用方不传时的行为）
+# ⚠️ `voidGeneration` = **False**：用户 2026-10-10 指示「把那个生成真空栅元的按钮去掉，默认不生成真空栅元」
+#    —— 界面已移除该开关、不再发送此键 ⇒ 走这里兜底 ⇒ `settings.voidGen=False`，
+#    GEOUNED 只输出实体栅元（实测：同一份 `筒子1.STEP` 从 9 栅元降到 **6 栅元**，不再有
+#    enclosure / Graveyard_in / Graveyard）。显式传 `voidGeneration: true` 的老调用方仍照旧生效。
 _LEGACY_DEFAULTS = {
-    "voidGeneration": True,
+    "voidGeneration": False,
     "compoundIsSingleCell": False,
     "startCellNum": 1,
     "startSurfNum": 1,

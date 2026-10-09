@@ -735,9 +735,30 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       setLoading(false);
       return;
     }
-    // 格阵装配：universe 栅元（u 非空）不单独摆（经装配出现），从 preview-3d 排除
+    // 格阵装配：universe 栅元（u 非空）不单独摆（经装配出现），从 preview-3d 排除。
+    //
+    // ⚠️ **必须把语义字段一起发过去**（2026-10-10 实测的回归）：后端 `build_cells_data` 的
+    // item-14 跳过规则（`imp` 任一为 0 ⇒ 墓地不渲染 / `fill`、`fill_grid` 非空 ⇒ 装配容器不渲染 /
+    // `render:false` ⇒ 跳过）**全靠这些字段判断**；此前这里只发 4 个字段（number/material/density/
+    // surface_expr），规则一个都不生效。用用户真实 deck（`筒子1`）端到端实测：
+    //   只发 4 字段 → 9 个栅元全出 STL，其中 栅元 8 `Graveyard_in` bbox 180³、
+    //   **栅元 9 `Graveyard`（`SO 90.101` 正侧 = 球外无界）bbox 1000³**（被裁到引擎包围盒）
+    //   —— 模型本体最大才 102 单位 ⇒ 相机被撑到 ±500、模型缩成针尖（= 2026-09-24 修过的
+    //   「3D 预览就是一坨」在这条链上复活；那次只按完整载荷打了端点，没走前端真实请求）；
+    //   带上这些字段 → 只出栅元 1~7（8/9 正确跳过）。
     var cellsForBackend = p.cells.filter(function(c) { return !(hasLattice && c.u); }).map(function(c) {
-      return { number: parseInt(c.num) || 0, material: c.mat, density: (c as any).density || "", surface_expr: (c as any).surfaces || (c as any).surface_expr || "" };
+      return {
+        number: parseInt(c.num) || 0, material: c.mat, density: (c as any).density || "",
+        surface_expr: (c as any).surfaces || (c as any).surface_expr || "",
+        // ↓ 语义字段：缺一个，item-14 的对应规则就失效（键名同 check-overlap 的请求口径）
+        u: (c as any).u || "", fill: (c as any).fill || "", lat: (c as any).lat || "",
+        trcl: (c as any).trcl || "", render: (c as any).render !== false,
+        fill_grid: (c as any).fill_grid || "",
+        imp_n: (c as any).impN || (c as any).imp_n || "",
+        imp_p: (c as any).impP || (c as any).imp_p || "",
+        imp_e: (c as any).impE || (c as any).imp_e || "",
+        comment: (c as any).comment || "",
+      };
     });
     fetch(apiUrl("/api/preview-3d"), {
       method: "POST",

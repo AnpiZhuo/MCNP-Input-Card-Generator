@@ -732,6 +732,47 @@ def _cell_fill_grid(c: dict) -> str:
     return str(c.get("fill_grid", "") or "")
 
 
+def _cell_geometry_payload(cell_list: list) -> list:
+    """栅元载荷 → **决定几何与重合检测**的规范化字段列表（专供 deck 指纹）。
+
+    为什么必须规范化（2026-10-10 实测的缺陷）：`/api/preview-3d` 与 `/api/check-overlap`
+    对**同一个 deck** 收到的 cell 形状不同 —— 前者是扁平 dict、后者是 `{kind,cell}` 信封，
+    于是两者算出的指纹**永远不同** ⇒ `PreviewCache.put_overlaps` 是静默空操作、
+    `overlaps.json` 永不读（实测同一 deck：`6663f94f…` vs `998d9a0c…`）——
+    "写了缓存但永不命中"（只影响性能：每次「重新检测」都要重跑一遍 FreeCAD 布尔）。
+
+    字段口径 = 真正影响 `build_cells_data` 取舍与几何的那些：
+      `surface_expr`（几何）、`u/fill/fill_grid/render`（项14 跳过规则）、
+      `imp_*`（墓地判定）、`comment`（`_is_graveyard` 的 "graveyard" 注释判据）、
+      `number/material/density/lat/trcl`。
+    ⚠️ 少任何一个都会让"几何不同、指纹相同"变成可能 —— 那等于让缓存给出**陈旧的重叠报告**。
+    """
+    out = []
+    for c in cell_list or []:
+        if not isinstance(c, dict) or c.get("kind") == "raw":
+            continue
+        cell = c.get("cell") if c.get("kind") == "cell" and isinstance(c.get("cell"), dict) else c
+        if not isinstance(cell, dict):
+            continue
+        out.append({
+            "number": cell.get("number", cell.get("num", 0)),
+            "material": cell.get("material", cell.get("mat", "")),
+            "density": cell.get("density", ""),
+            "surface_expr": cell.get("surface_expr", cell.get("surfaces", "")),
+            "u": cell.get("u", ""),
+            "fill": cell.get("fill", ""),
+            "lat": cell.get("lat", ""),
+            "trcl": cell.get("trcl", ""),
+            "render": cell.get("render", True),
+            "fill_grid": cell.get("fill_grid", ""),
+            "imp_n": cell.get("imp_n", cell.get("impN", "")),
+            "imp_p": cell.get("imp_p", cell.get("impP", "")),
+            "imp_e": cell.get("imp_e", cell.get("impE", "")),
+            "comment": cell.get("comment", ""),
+        })
+    return out
+
+
 def _cell_bounded_radius(surface_expr: str, surfaces: dict) -> float:
     """栅元实心外边界半径：表面表达式含负引用（有界）时，取所引用 cz/cy/cx/S 圆柱/球
     的最大半径。无界格（如 pin 外围水 `3` 只有正引用）→ 0（由格元盒裁剪，不参与 fit）。
@@ -2327,7 +2368,9 @@ class MCNPHandler(BaseHTTPRequestHandler):
             cell_list = [c for c in (data.get("cells", []) or [])
                          if not _cell_u_of(c)]
             tr_text = data.get("tr_cards", "")
-            fp = _PREVIEW_CACHE.fingerprint(surf_text, cell_list, tr_text)
+            # ⚠️ 指纹必须与 /api/preview-3d **同口径**（规范化字段；此处 cell_list 已排除 universe 栅元）
+            # —— 否则两个端点对同一 deck 算出不同指纹 ⇒ 该缓存永不命中（实测 2026-10-10）。
+            fp = _PREVIEW_CACHE.fingerprint(surf_text, _cell_geometry_payload(cell_list), tr_text)
             cached = _PREVIEW_CACHE.get_overlaps(fp)
             if cached is not None:
                 self._ok(cached)
@@ -3195,7 +3238,13 @@ class MCNPHandler(BaseHTTPRequestHandler):
             tr_text = data.get("tr_cards", "")
 
             # 0. 指纹缓存：同 deck 命中免 FreeCAD 子进程（二次打开 ≤1s）
-            fp = _PREVIEW_CACHE.fingerprint(surf_text, cell_list, tr_text)
+            # ⚠️ 指纹口径必须与 /api/check-overlap 一致：规范化字段 + **同样排除 universe 栅元**
+            # （前端在格阵 deck 上本来就把 u 栅元滤掉了；这里显式再滤一次，保证两端同解）。
+            fp = _PREVIEW_CACHE.fingerprint(
+                surf_text,
+                _cell_geometry_payload([c for c in cell_list if not _cell_u_of(c)]),
+                tr_text,
+            )
             # TD-20（t5）：把「查缓存 → 清旧会话 → 建新会话」整组纳入请求级锁，
             # 防并发 preview-3d 互删对方刚生成的 STL 会话目录。
             with _preview_lock():

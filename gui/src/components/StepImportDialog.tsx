@@ -144,16 +144,6 @@ const PARAM_SPECS: ParamSpec[] = [
     },
   },
   {
-    key: "voidGeneration", label: "生成真空栅元", geouned: "Settings.voidGen",
-    kind: "toggle", always: true, initial: true, def: true,
-    tip: {
-      role: "自动为实体之外的空间生成真空栅元（void），否则实体之间会留下未定义的空隙，MCNP 会报几何错误。",
-      open: "● 开 —— 自动生成真空栅元（默认）",
-      shut: "○ 关 —— 不生成，只输出实体栅元",
-      note: "大装配体下真空栅元可能远多于实体栅元，是栅元总数的来源之一。",
-    },
-  },
-  {
     key: "compoundIsSingleCell", label: "复合体合并", geouned: "Settings.compSolids",
     kind: "toggle", always: true, initial: false, def: false,
     tip: {
@@ -713,7 +703,7 @@ const PAGE_LAYOUT: Record<PageId, Block[]> = {
   basic: [
     { t: "file" },
     { t: "row", keys: ["materialName", "density", "tmp"] },
-    { t: "row", keys: ["voidGeneration", "compoundIsSingleCell"] },
+    { t: "row", keys: ["compoundIsSingleCell"] },
     { t: "row", keys: ["startCellNum", "startSurfNum"] },
     // 真空栅元切割三件套**已搬到「常用调节」页**；这里只留实体预分解
     { t: "group", title: "实体预分解", hint: "先用 FreeCAD 把实体按「每块面数上限」切开，再交给 GEOUNED 转换：每个块独立成栅元，单栅元面数大幅下降；代价是栅元数变多" },
@@ -881,7 +871,10 @@ export interface StepSettings {
   materialName: string;
   density: string;
   tmp: string;
-  voidGeneration: boolean;
+  /* ⚠️ `voidGeneration` 已按用户指示（2026-10-10「把那个生成真空栅元的按钮去掉，默认不生成真空栅元」）
+     从界面**移除**：本程序现在**不发送**该键 ⇒ 后端 `_LEGACY_DEFAULTS` 兜底为 `voidGen=False`
+     ⇒ GEOUNED 只输出实体栅元（不再生成 enclosure/void/墓区那一堆盒子）。
+     要恢复"生成真空栅元"，把 PARAM_SPECS 里的 toggle 与 `basic` 页的 row 加回来即可。 */
   startCellNum: number;
   startSurfNum: number;
   compoundIsSingleCell: boolean;

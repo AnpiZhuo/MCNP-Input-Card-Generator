@@ -88,7 +88,7 @@ describe("StepImportDialog 点导入即关窗", () => {
     fireEvent.change(screen.getByDisplayValue("100"), { target: { value: "500" } });
     fireEvent.click(btn());
     expect(onImport.mock.calls[0][0]).toMatchObject({
-      materialName: "SS316", density: "-7.93", startSurfNum: 500, voidGeneration: true,
+      materialName: "SS316", density: "-7.93", startSurfNum: 500,
     });
   });
 });
@@ -97,7 +97,7 @@ describe("StepImportDialog 点导入即关窗", () => {
 // 4 个子标签页 + 子弹框（2026-09 新增）
 //
 // 锁死的契约：
-//   1. 第 1 页「基本」= 原有 7 项 + **实体预分解**（用户指定）；
+//   1. 第 1 页「基本」= 原有 7 项去掉「生成真空栅元」+ **实体预分解**（用户指定）；
 //      真空栅元切割三件套**在「常用调节」页**（用户二次指定：搬过去）；
 //   2. **留空 = 该键不发送** = 用 GEOUNED 默认值（不是传 0）；
 //   3. 下拉/开关/填空三类控件的中文释义都在子弹框里，点 `?` 可展开；
@@ -119,14 +119,15 @@ describe("StepImportDialog 子标签页", () => {
   beforeEach(() => { alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {}); });
   afterEach(() => { alertSpy.mockRestore(); });
 
-  it("第 1 页 = 原有 7 项 + 实体预分解；真空三件套不在这一页", () => {
+  it("第 1 页 = 基本项（已按用户指示去掉「生成真空栅元」）+ 实体预分解；真空三件套不在这一页", () => {
     render(React.createElement(Harness, { onImport: importSpy() }));
-    // 原有 7 项
+    // 原有 7 项（其中「生成真空栅元」已于 2026-10-10 按用户指示移除）
     ["材料名称", "密度", "TMP 温度", "起始栅元号", "起始曲面号"].forEach((l) => {
       expect(val(l)).toBeTruthy();
     });
-    expect(toggle("生成真空栅元")).toBeTruthy();
     expect(toggle("复合体合并")).toBeTruthy();
+    // 防它悄悄回来：默认不生成真空栅元 ⇒ 界面上不该再有这个开关
+    expect(screen.queryByLabelText("生成真空栅元")).toBeNull();
     // 实体预分解（用户指定放基本页）：开关 + 每块面数上限
     expect(toggle("启用实体预分解").getAttribute("aria-pressed")).toBe("false");  // 默认关
     expect(val("每块面数上限")).toBeTruthy();
@@ -187,10 +188,10 @@ describe("StepImportDialog 留空 = 不发送 = 用 GEOUNED 默认", () => {
     ["maxSurf", "maxBracket", "minVoidSize", "simplify", "splineSurfaces",
      "voidMat", "skipSolids", "sortEnclosure", "debug", "distance", "forceNoOverlap",
     ].forEach((k) => expect(s[k]).toBeUndefined());
-    // 原有 7 项照旧始终发送
+    // 基本项照旧始终发送（「生成真空栅元」已移除 ⇒ 本条不含它；后端按 _LEGACY_DEFAULTS 兜底为 False）
     expect(s).toMatchObject({
       materialName: "MAT", density: "-1.0", tmp: "",
-      voidGeneration: true, startCellNum: 1, startSurfNum: 100,
+      startCellNum: 1, startSurfNum: 100,
       compoundIsSingleCell: false,
     });
   });
@@ -412,12 +413,12 @@ describe("StepImportDialog 校验与子弹框", () => {
   it("划过输入框 / 下拉 / 点选按钮都**不**弹窗（触发器只有 ?）", async () => {
     render(React.createElement(Harness, { onImport: importSpy() }));
     fireEvent.mouseEnter(val("起始栅元号"));
-    fireEvent.mouseEnter(toggle("生成真空栅元"));
+    fireEvent.mouseEnter(toggle("复合体合并"));
     fireEvent.mouseEnter(val("每块面数上限"));
     // 等过 200ms 的出现延时，确认不是"延迟出现"而是"根本不出现"
     await new Promise((r) => setTimeout(r, 320));
     expect(tip("起始栅元号")).toBeNull();
-    expect(tip("生成真空栅元")).toBeNull();
+    expect(tip("复合体合并")).toBeNull();
     expect(tip("每块面数上限")).toBeNull();
   });
 
