@@ -12,12 +12,21 @@
  *     相邻面 overdraw 极小，可接受。
  * - see-through：透传现状半透明配置（opacity:0.6, depthWrite:false）
  * - opacity 可选参数：半透明档位的连续透明度覆盖（栅元透明度滑杆 0~1）。
- * - M0 真空色 "transparent" 维持 opacity 0（所有档位都不可见）
+ * - M0 真空色 "transparent" 默认 opacity 0（所有档位都不可见）；调用方可给
+ *   `vacuumOpacity`/`vacuumColor` **显式**开启"真空真半透明"档位
+ *   （2026-10-11 用户：「真空也要出 STL，只是预览时透明、不影响实体查看」）。
+ *   ⚠️ 不给就用默认 0 —— 体积窗口/源演示/径迹渲染器与本函数共用，默认值不能动。
  */
 export type TransparentMode = "opaque" | "semi" | "see-through";
 
 /** 体积窗口栅元外壳默认半透明透明度（用户反馈 #3：默认半透明而非不透明） */
 export const DEFAULT_SHELL_OPACITY = 0.4;
+
+/** 真空（M0）"真半透明"档位的默认透明度建议值：看得见轮廓、几乎不遮挡实体 */
+export const VACUUM_PREVIEW_OPACITY = 0.15;
+
+/** 真空（M0）"真半透明"档位的默认颜色：深色背景上可辨的浅灰蓝 */
+export const VACUUM_PREVIEW_COLOR = "#b0bec5";
 
 export interface CellMaterialSpec {
   color: string;
@@ -31,11 +40,21 @@ export function buildCellMaterial(opts: {
   transparentMode?: TransparentMode;
   /** 半透明档位连续透明度覆盖（0~1）；缺省按档位默认（semi=0.4 / see-through=0.6） */
   opacity?: number;
+  /** 真空（M0）档位透明度；缺省 0 = 完全不可见（旧契约） */
+  vacuumOpacity?: number;
+  /** 真空（M0）档位颜色；缺省 "#000000"（opacity 0 时颜色无意义） */
+  vacuumColor?: string;
 }): CellMaterialSpec {
   const vacuum = opts.color === "transparent";
   if (vacuum) {
-    // M0 真空：维持 opacity 0（全透明），不参与 overdraw
-    return { color: "#000000", transparent: true, depthWrite: false, opacity: 0 };
+    // M0 真空：缺省维持 opacity 0（全透明，不参与 overdraw）；显式给了档位才可见
+    const vacOpacity = opts.vacuumOpacity ?? 0;
+    return {
+      color: vacOpacity > 0 ? (opts.vacuumColor ?? "#000000") : "#000000",
+      transparent: true,
+      depthWrite: false,
+      opacity: vacOpacity,
+    };
   }
   const mode = opts.transparentMode ?? "opaque";
   if (mode === "opaque") {

@@ -19,6 +19,7 @@ import {
 import {
   buildDashboard,
   convergencePoints,
+  paramKey,
   type SweepParameter,
   type SweepRunRecord,
 } from "../utils/sweepDashboard";
@@ -40,6 +41,22 @@ export default function SweepDashboard({ records, parameters, width = 720, heigh
   );
   const hasAxis = data.paramName !== null && data.points.length > 0;
   const convergedRuns = data.runs.filter((r) => (r.convergence?.mean?.length ?? 0) > 0);
+
+  /**
+   * 每个 run 的标题 = **它自己的参数取值**（如 `1.0=0.5，nps=1000`）。
+   *
+   * 用户 2026-10-11：「那个 # 加数字，不要给我显示成颜色号」—— 原来的 `run #3` 只有序号，
+   * 配上彩色小图看着就像"色号"，也看不出这一条是哪个取值组合。没有参数时退回「第 N 次」。
+   */
+  const runLabel = (r: (typeof data.runs)[number]): string => {
+    const parts = parameters
+      .map((p) => {
+        const v = r.parameters[paramKey(p)];
+        return v === undefined || v === null ? null : `${p.name}=${v}`;
+      })
+      .filter((s): s is string => !!s);
+    return parts.length > 0 ? parts.join("，") : `第 ${r.index} 次`;
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -117,7 +134,7 @@ export default function SweepDashboard({ records, parameters, width = 720, heigh
               return (
                 <div key={r.index} style={{ border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: 6, background: "var(--bg-card, #121a2e)" }}>
                   <div style={{ fontSize: 10, color: "var(--text-tertiary, #94a3b8)", padding: "2px 4px 4px" }}>
-                    run #{r.index}（k-eff {r.keff === null ? "n/a" : r.keff.toFixed(5)}）
+                    {runLabel(r)}（k-eff {r.keff === null ? "n/a" : r.keff.toFixed(5)}）
                   </div>
                   <LineChart width={208} height={110} data={pts} margin={{ top: 6, right: 10, bottom: 0, left: -18 }}>
                     <CartesianGrid stroke={gridColor} strokeDasharray="3 3" />

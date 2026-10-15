@@ -582,68 +582,28 @@ def build_cells_data(cell_list: list, include_void: bool = True,
     （预览时该栅元不渲染）。
 
     force_include_numbers（可选）：强制包含的栅元号集合。水密/缝隙检测需要
-    「外部栅元」的 BRep 实体（通常是 imp=0 的 graveyard 外围，项14 规则平时
-    不渲染），这些栅元默认被跳过 → 用该参数把它们放行（其余跳过规则不变）。
+    「外部栅元」的 BRep 实体（如 include_void=False 或 render:false 时会跳过的外围），
+    用该参数把它们放行（其余规则不变）。
 
-    项14 cell 分类规则（用户已确认，2026-08-24）：
+    项14 cell 分类规则（2026-08-24 用户确认；2026-10-11 按用户指示收敛）：
       - fill 装配容器（fill 非空 或 fill_grid 非空，含 fill="0"）→ 跳过自身 STL，
         无论有没有 u、material 是否 0；内容由 FILL 装配（preview-lattice 路径）。
-      - graveyard（impN/impP/impE 任一为 0）→ 不渲染（跳过自身 STL）。
       - render:false → 跳过。
       - 其余实体 cell（material≠0）与纯 void cell（material=0，无 fill 无 u）
-        → 参与 STL（include_void=True 时）。
+        → 参与 STL（include_void=True 时）；真空由**前端**渲成半透明（默认关）。
+
+    ⛔ **不再**按 imp 或注释判「墓地」而跳过（原两条判据 2026-10-11 删，别加回来）：
+      原 imp 判据（`imp_n/imp_p/imp_e` 任一为 0）拿**输运语义**当**可视语义** —— mode n 的卡
+      习惯给每个栅元写 `imp:p=0`，于是整张卡全灭（用户卡 s.i 实测 35/35 被判墓地、预览全空）；
+      原注释判据（`comment` 含 graveyard）会静默吞掉手写注释带该词的真几何，而它要拦的
+      GEOUNED 墓区自 2026-10-10 起默认不再生成。当年加判据的真实动因是**巨型外围壳撑开
+      取景**，那个缺陷已在取景侧修（前端只按可见**实体**取景，见 src/three/frameBox.ts）。
+      ⚠️ 附带后果（有意接受）：材料非真空但 `imp:n=0` 的外围现在会渲染出来。
     """
     from pymcnp.types.Geometry import Geometry
     from freecad_preview import resolve_cell_complements, parenthesize_unions
 
-    def _imp_is_zero(c):
-        """graveyard 判 0：impN/impP/impE（或 deck 侧 imp_n/imp_p/imp_e）任一非空且
-        首个 token 为 "0" → 该粒子重要性 0（MCNP 在该 cell 杀粒子）= graveyard，不渲染。
-        MCNP imp 单值语义（每 cell 每粒子一个数字），取首个 token 兼容 "0 0" 等续值。
-
-        ⚠️ 这条**本身是对的** —— GEOUNED 生成的 deck **确实带 imp**
-        （实测 `47 0 277 Vol=1.000 imp:n=0 imp:p=0 $Graveyard`）。
-        它在 STEP 路径上失效的原因是**上游把字段丢了**：`flat_cell_json` 原先不输出
-        `imp_n/imp_p/imp_e`，前端只是原样转发 ⇒ 到 preview-3d 时 imp 已经不存在
-        ⇒ 连 `imp=0` 的真墓地都拦不住（详见 `_is_graveyard` 与 §6 的"序列化口漏字段"）。
-        """
-        for key in ("imp_n", "impN", "imp_p", "impP", "imp_e", "impE"):
-            v = c.get(key)
-            if v is None:
-                continue
-            s = str(v).strip()
-            if s and s.split()[0] == "0":
-                return True
-        return False
-
-    def _is_graveyard(c) -> bool:
-        """graveyard 判定 —— **两条并列，任一成立即不渲染**。
-
-        2026-09-24 实测（用户："3D 预览还是一坨"）的准确责任分解：
-
-        | 栅元 | imp 判据 | 注释判据 | `imp:n` | GEOUNED 注释 |
-        |---|---|---|---|---|
-        | 47 | **命中** | 命中 | **0** | `Graveyard`（半径 1049 球**外**）|
-        | 46 | 不命中 | **命中** | **1.000** | `Graveyard_in`（球**内**盒外）|
-
-        · **栅元 47 本来就该被 imp 拦住** —— 失效的原因是上游 `flat_cell_json`
-          没把 `imp_n/imp_p/imp_e` 传下来（见 `_imp_is_zero`），**不是 GEOUNED 没写 imp**。
-        · **栅元 46 的 `imp:n=1` 是 GEOUNED 有意的**：它是"球内、enclosure 盒外"的**真空区**，
-          粒子可以在里面飞，按 MCNP 语义**不是**墓地 ⇒ imp 判据天然拦不住它。
-          但它体积 = 模型的 **1583%**、bbox 2097³，渲染出来一样把模型整个包住
-          ⇒ 需要第二条判据识别 **GEOUNED 的墓区结构**：
-          `void.py:201/208` 把球内/球外写死为 `MatInfo = "Graveyard_in"` / `"Graveyard"`，
-          GEOUNED 自己的 `mcnp_format.py:256` 也是这么认的。
-
-        ⇒ 两条判据**各管一段、缺一不可**：imp 管"重要性为 0 的栅元"（通用 MCNP 语义），
-        注释管"GEOUNED 的边界结构"（imp 不为 0 但同样不该画）。
-        """
-        if _imp_is_zero(c):
-            return True
-        comment = str(c.get("comment", "") or "").strip().lower()
-        return "graveyard" in comment
-
-    entries = []  # (number, mat_val, density, ast_node, render, has_fill, has_fill_grid, is_graveyard)
+    entries = []  # (number, mat_val, density, ast_node, render, has_fill, has_fill_grid)
     seen_numbers = set()
     for cell in cell_list:
         if not isinstance(cell, dict):
@@ -663,25 +623,24 @@ def build_cells_data(cell_list: list, include_void: bool = True,
         raw_mat_raw = cell.get("material") or cell.get("mat") or ""
         raw_mat = str(raw_mat_raw).strip().split()[0] if raw_mat_raw else ""
         mat_val = raw_mat or raw_mat_raw
-        # 第一遍捕获 render / fill / fill_grid / graveyard（第二遍 skip 用）
+        # 第一遍捕获 render / fill / fill_grid（第二遍 skip 用）
         render = bool(cell.get("render", True))
         has_fill = bool(str(cell.get("fill", "") or "").strip())
         has_fill_grid = bool(cell.get("fill_grid"))
-        is_graveyard = _is_graveyard(cell)
         try:
             ast = Geometry.from_mcnp(parenthesize_unions(expr))
             ast_node = ast.ast
         except Exception:
             ast_node = None
         entries.append((number, mat_val, cell.get("density", ""), ast_node,
-                        render, has_fill, has_fill_grid, is_graveyard))
+                        render, has_fill, has_fill_grid))
 
     # #n 栅元补集引用解析：先建 number → ast_node 映射（含真空/不渲染/格阵栅元）
-    cells_by_num = {num: node for num, _, _, node, _, _, _, _ in entries}
+    cells_by_num = {num: node for num, _, _, node, _, _, _ in entries}
     cells_data = []
     for (number, mat_val, density, ast_node, render,
-         has_fill, has_fill_grid, is_graveyard) in entries:
-        # 水密检测等场景强制包含指定栅元（如 graveyard 外部栅元，imp=0 平时不渲染）
+         has_fill, has_fill_grid) in entries:
+        # 水密检测等场景强制包含指定栅元（如 include_void=False 时会跳过的外围）
         force = (force_include_numbers is not None
                  and number in force_include_numbers)
         if not include_void and str(mat_val).split()[0] == "0" and not force:
@@ -694,8 +653,7 @@ def build_cells_data(cell_list: list, include_void: bool = True,
             # material 是否 0 无关。此前只 skip fill_grid、漏掉单值 fill → 用户
             # 看到「大紫方块」（fill cell 自身几何被当实体渲染）。
             continue
-        if is_graveyard and not force:
-            continue  # 项14：graveyard（imp=0 外围）不渲染
+        # ⛔ 原「is_graveyard → 不渲染」闸门 2026-10-11 删（理由见本函数 docstring）
         if ast_node is not None:
             ast_node = resolve_cell_complements(ast_node, cells_by_num)
         # 包回 Geometry 对象（下游 _geometry_ast_to_json 用 c["ast"].ast）
@@ -741,10 +699,11 @@ def _cell_geometry_payload(cell_list: list) -> list:
     `overlaps.json` 永不读（实测同一 deck：`6663f94f…` vs `998d9a0c…`）——
     "写了缓存但永不命中"（只影响性能：每次「重新检测」都要重跑一遍 FreeCAD 布尔）。
 
-    字段口径 = 真正影响 `build_cells_data` 取舍与几何的那些：
+    字段口径 = 影响 `build_cells_data` 取舍与几何的那些：
       `surface_expr`（几何）、`u/fill/fill_grid/render`（项14 跳过规则）、
-      `imp_*`（墓地判定）、`comment`（`_is_graveyard` 的 "graveyard" 注释判据）、
-      `number/material/density/lat/trcl`。
+      `number/material/density/lat/trcl`；
+      外加 `imp_*`/`comment` —— 二者自 2026-10-11 起**不再决定取舍**，保留只为口径不缩水
+      （多算几个字段至多多跑一次 FreeCAD，少算会给出**陈旧的重叠报告**）。
     ⚠️ 少任何一个都会让"几何不同、指纹相同"变成可能 —— 那等于让缓存给出**陈旧的重叠报告**。
     """
     out = []
@@ -859,22 +818,6 @@ def _cell_u_of(c: dict) -> str:
         return ""
     cc = c.get("cell") if c.get("kind") == "cell" and isinstance(c.get("cell"), dict) else c
     return str((cc or {}).get("u", "") or "").strip()
-
-
-def _imp_any_zero(cell: dict) -> bool:
-    """graveyard 判 0（模块级，与 build_cells_data._imp_is_zero 口径一致）：imp_n/imp_p/
-    imp_e（或 deck 侧 impN/impP/impE）任一非空且首 token 为 "0" → graveyard。
-
-    项15 规则5：handler 构造 sub_by_u 时过滤 imp=0 的 cell（与项14 排除口径一致）。
-    """
-    for key in ("imp_n", "impN", "imp_p", "impP", "imp_e", "impE"):
-        v = cell.get(key)
-        if v is None:
-            continue
-        s = str(v).strip()
-        if s and s.split()[0] == "0":
-            return True
-    return False
 
 
 def _max_surface_num(surf_text: str) -> int:
@@ -2192,11 +2135,14 @@ class MCNPHandler(BaseHTTPRequestHandler):
             deck_text = data.get("deck") or ""
             parameters = data.get("parameters") or []
             combos = sweep.cartesian(parameters)
+            # 位置类告警（如框选位置已失效）收集一次；同一原因只报一遍（组合间必然重复）
+            pos_warnings: list[str] = []
             previews = [
-                sweep.apply_parameters(deck_text, c, parameters)
+                sweep.apply_parameters(deck_text, c, parameters, pos_warnings)
                 for c in combos[:3]
             ]
-            self._ok({"count": len(combos), "combos": combos, "previews": previews})
+            self._ok({"count": len(combos), "combos": combos, "previews": previews,
+                      "warnings": list(dict.fromkeys(pos_warnings))})
         except Exception as e:
             self._err(str(e))
 
@@ -2208,13 +2154,17 @@ class MCNPHandler(BaseHTTPRequestHandler):
         直接拒绝（code="budget_exceeded" + 中文消息）；单组合保持 300s 超时。
         每个组合在独立 run_XXX 子目录里以 ``name=sweep-{i:03d}.`` 命名输出
         （sweep-001.o / sweep-001.r …），并发互不覆盖、结果与组合号一一对应。
-        临时目录在成功/失败后清理（摘要先拷到稳定目录再删）。
+
+        **结果保留（2026-10-15 用户要求）**：结果目录默认建在
+        ``<outputDir 或 D:/MCNP/new>/sweep_<时间戳>/`` 并且**跑完不删** —— 用户要看的
+        ``run_XXX/sweep-00N.o`` 就在那儿（旧版跑完 rmtree，用户拿不到任何输出文件）。
+        只有用户目录建不出来时才退回临时目录（那种情况跑完仍清理）。二进制重启文件
+        ``sweep-00N.r``（37.9MB/组合）默认丢弃，见 ``app/sweep.finalize_run_dir``。
         """
         try:
             import math
             import shutil
             import subprocess
-            import tempfile
             from concurrent.futures import ThreadPoolExecutor
             sweep = _import_app("sweep")
             data = self._read_body() or {}
@@ -2232,13 +2182,24 @@ class MCNPHandler(BaseHTTPRequestHandler):
             if not exe:
                 self._ok({"status": "error", "message": "未检测到 MCNP 可执行文件"})
                 return
-            base_dir = tempfile.mkdtemp(prefix="mcnp_sweep_")
+            # 结果目录（默认保留）：<outputDir 或 D:/MCNP/new>/sweep_<时间戳>/。
+            # persistent=False 表示退回临时目录（用户目录写不了），那种情况跑完仍清理。
+            base_dir, persistent = sweep.prepare_results_dir(
+                data.get("outputDir") or "")
+            # 定位类告警（框选位置失效等）：run_one 在多线程里跑 ⇒ 用锁收集，最后随响应回给前端
+            run_warnings: list[str] = []
+            _warn_lock = threading.Lock()
             try:
                 def run_one(idx: int):
                     """跑第 idx 个组合（1-based）。独立子进程 + 独立子目录，天然可并发。"""
                     i = idx + 1
                     combo = combos[idx]
-                    inp = sweep.apply_parameters(deck_text, combo, parameters)
+                    errs: list[str] = []
+                    inp = sweep.apply_parameters(deck_text, combo, parameters, errs)
+                    if errs:
+                        # 位置失效等定位问题：记进组合记录（前端与摘要表可见），不静默
+                        with _warn_lock:
+                            run_warnings.extend(e for e in errs if e not in run_warnings)
                     run_dir = os.path.join(base_dir, sweep.run_dir_name(i))
                     os.makedirs(run_dir, exist_ok=True)
                     inp_path = os.path.join(run_dir, "sweep.i")
@@ -2276,6 +2237,14 @@ class MCNPHandler(BaseHTTPRequestHandler):
                         rec["timedOut"] = True
                         print(f"[sweep] 组合 {i} 超时（{sweep.SWEEP_PER_RUN_TIMEOUT}s）：{run_dir}",
                               file=sys.stderr)
+                    # 规整组合目录并**如实记账**：默认丢弃 37.9MB 的二进制重启文件
+                    # ``sweep-00N.r``，其余产物（``sweep-00N.o`` 结果 + ``sweep.i`` 输入）
+                    # 全部留给用户；超时/崩溃的组合也走这里（半截 .o 照样能看）。
+                    final = sweep.finalize_run_dir(run_dir)
+                    rec["outputs"] = final["kept"]
+                    rec["outputBytes"] = final["keptBytes"]
+                    if final["removed"]:
+                        rec["droppedRestartFiles"] = final["removed"]
                     return rec
 
                 records = []
@@ -2287,15 +2256,32 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 records.sort(key=lambda r: r["index"])
                 tsv = sweep.build_summary_tsv(parameters, records)
                 manifest = sweep.build_manifest("sweep.i", "mcnp", parameters, records)
-                # 摘要（manifest + TSV）拷到稳定目录后清理临时目录（T8）
-                summary_base, manifest_path, _ = sweep.persist_sweep_summary(
+                # 摘要（manifest + TSV）另存稳定摘要目录（%TEMP%）：结果目录被删/被清理后
+                # 历史仍在，「下载 TSV」与 /api/sweep-dashboard 不依赖结果目录（T8）。
+                summary_base, summary_manifest, _ = sweep.persist_sweep_summary(
                     base_dir, manifest, tsv)
-                self._ok({"status": "ok", "baseDir": summary_base,
+                manifest_path = summary_manifest
+                if persistent:
+                    # 结果目录自带一份清单 + 汇总表：run_001…run_011 ↔ 参数取值 的对应
+                    # 关系跟着结果一起走，用户打开文件夹就看得懂（不用回头翻 %TEMP%）。
+                    manifest_path, _ = sweep.write_summary_files(base_dir, manifest, tsv)
+                kept_bytes = sum(int(r.get("outputBytes") or 0) for r in records)
+                self._ok({"status": "ok",
+                          # baseDir = **结果目录**：每个组合的 run_XXX/sweep-00N.o 就在里面
+                          # （旧版给的是 %TEMP% 摘要目录，而 run_XXX 已被删 ⇒ 用户扑空）
+                          "baseDir": base_dir,
+                          "resultsPersisted": persistent,
+                          "summaryDir": summary_base,
                           "records": records, "summaryTsv": tsv,
+                          "outputBytes": kept_bytes,
                           "workers": workers,
+                          "warnings": run_warnings,
                           "manifest": manifest, "manifestPath": manifest_path})
             finally:
-                shutil.rmtree(base_dir, ignore_errors=True)
+                # 保留型结果目录**不删**（用户要的就是 run_XXX 里的输出文件）；
+                # 只有退回临时目录（用户目录写不进去）时才照旧清理 %TEMP% 大文件。
+                if not persistent:
+                    shutil.rmtree(base_dir, ignore_errors=True)
         except Exception as e:
             self._err(str(e))
 
@@ -3908,8 +3894,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 cell = c.get("cell") if c.get("kind") == "cell" and isinstance(c.get("cell"), dict) else c
                 if _cell_u(c) != universe_u:
                     continue
-                if _imp_any_zero(cell):
-                    continue  # graveyard 不参与
+                # ⛔ 原「_imp_any_zero ⇒ graveyard 不参与」过滤 2026-10-11 删：
+                #    mode n 卡全员 imp:p=0 会把整个 universe 滤空（实测 lattices 为空）。
                 if _cell_fill_grid(c):
                     fg = lattice.FillGrid.from_json(_cell_fill_grid(c))
                     if fg is not None and fg.kind == "lattice":
@@ -4145,8 +4131,7 @@ class MCNPHandler(BaseHTTPRequestHandler):
                     continue
                 cell = (c.get("cell") if c.get("kind") == "cell"
                         and isinstance(c.get("cell"), dict) else c)
-                if _imp_any_zero(cell):
-                    continue  # 项15 规则5：graveyard（imp=0 外围）排除，与项14 口径一致
+                # ⛔ 原「_imp_any_zero ⇒ graveyard 排除（项15 规则5）」过滤 2026-10-11 删（同 build_cells_data）
                 u = str(cell.get("u", "") or "")
                 fg_json = cell.get("fill_grid", "")
                 fg = lattice.FillGrid.from_json(fg_json) if fg_json else None

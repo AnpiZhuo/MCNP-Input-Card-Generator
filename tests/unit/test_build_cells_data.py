@@ -5,19 +5,20 @@ build_cells_data cell 分类规则测试（项14，2026-08-24 用户反馈修复
 见 conftest.py 铁律）。build_cells_data 在**子进程**内 import 并执行（照
 test_api_contract.py 范式），测试只收 JSON 结果，不依赖 FreeCAD。
 
-验证项（用户已确认权威规则）：
+验证项（2026-08-24 用户确认；2026-10-11 按用户指示收敛 graveyard 口径）：
   1. 单值 fill=U 的 cell 不产自身 STL（preview-3d 核心回归，修复「大紫方块」）
   2. fill_grid 格阵 cell 不产自身 STL
   3. 纯 void（material=0、无 fill 无 u）产 STL（项14「删 void 约束」）
   4. 普通实体 cell（material≠0、无 fill 无 u）产 STL（不回退）
   5. render:false 仍 skip
-  6. graveyard（imp=0）不渲染
+  6. **imp（含 imp:n=0 / imp:p=0）不再决定渲染**（2026-10-11 删旧 graveyard 判据）
   7. 边界：fill="0" 的 void-fill 也是 fill cell → skip
-  8. 边界：imp_p=0（光子重要性 0）同样算 graveyard
-  9. 边界：imp="1"（非 0）不误判 graveyard
+  8. **注释含 graveyard 不再决定渲染**（导入边界已无 GEOUNED 墓区）
+  9. mode n 卡（全员 imp:p=0）不得被判墓地 → 全栅元参与 STL（用户 s.i 的回归）
   10. include_void=False（STEP 导出路径）纯 void 仍 skip，不回退
   11. CellRow 判别联合格式（kind=cell 嵌套 camelCase）同样生效
   12. 有 u 无 fill 的实体 cell（universe 定义）仍产 STL
+  13. force_include_numbers 仍能放行 include_void=False 会跳过的真空栅元
 """
 import json
 import subprocess
@@ -117,22 +118,28 @@ out["universe_entity"] = nums([
     cell(number=1, surface_expr="-1", u="10"),
 ])
 
-# 13. 项15：handler 构造 sub_by_u 时过滤 graveyard（_imp_any_zero 口径与 build 一致）
-from api_server import _imp_any_zero
-out["imp_any_zero"] = [
-    _imp_any_zero({"imp_n": "0"}),                 # imp_n=0 → True
-    _imp_any_zero({"impN": "0"}),                  # camelCase impN=0 → True
-    _imp_any_zero({"imp_p": "0", "imp_n": "1"}),   # 任一粒子 0 → True
-    _imp_any_zero({"imp_n": "1"}),                 # 非 0 → False
-    _imp_any_zero({}),                             # 无 imp → False
-]
+# 13. imp / comment **不得**决定渲染与否（2026-10-11，用户指出 graveyard 判据越权）。
+#     mode n 的卡习惯给每个栅元写 imp:p=0 ⇒ 旧口径「任一为 0 ⇒ 墓地」整张卡全灭
+#     （用户卡 s.i 实测 35/35，后端回「没有可预览的栅元」、预览全空）。
+out["imp_p_zero_all_cells"] = nums([
+    cell(number=1, surface_expr="-1", material="1", impN="1", impP="0"),
+    cell(number=2, surface_expr="-2", material="1", impN="1", impP="0"),
+    cell(number=3, surface_expr="-3", material="0", impN="0", impP="0"),
+])
 
-# 14. force_include_numbers：强制包含外部栅元（水密检测，imp=0 也不跳过）
+# 14. force_include_numbers：强制包含外部栅元（水密检测，include_void=False 也不跳过）
+#     对照组不加 force：真空栅元被 include_void=False 跳过 ⇒ 只 [2]。
 out["force_include"] = [
     c["number"] for c in build_cells_data(
-        [cell(number=1, surface_expr="-1", material="0", impN="0"),
+        [cell(number=1, surface_expr="-1", material="0"),
          cell(number=2, surface_expr="-2")],
-        include_void=True, force_include_numbers={1})
+        include_void=False, force_include_numbers={1})
+]
+out["force_include_control"] = [
+    c["number"] for c in build_cells_data(
+        [cell(number=1, surface_expr="-1", material="0"),
+         cell(number=2, surface_expr="-2")],
+        include_void=False)
 ]
 
 # 15. GEOUNED 的墓区栅元必须不渲染（2026-09-24 用户："3D 预览还是一坨"）
@@ -208,9 +215,13 @@ def test_render_false_still_skipped(classify_results):
     assert classify_results["render_false"] == [2]
 
 
-def test_graveyard_imp_zero_not_rendered(classify_results):
-    """graveyard（imp=0）→ 不渲染。"""
-    assert classify_results["graveyard"] == [2]
+def test_imp_zero_no_longer_gates_rendering(classify_results):
+    """imp:n=0 不再决定渲染（材料非真空就渲染 —— 2026-10-11 用户指示）。
+
+    imp 是**输运**语义（MCNP 在该栅元杀粒子），不是**可视**语义；旧的 graveyard 判据
+    把两者混用，已删。
+    """
+    assert classify_results["graveyard"] == [1, 2]
 
 
 def test_fill_zero_is_fill_cell(classify_results):
@@ -218,9 +229,13 @@ def test_fill_zero_is_fill_cell(classify_results):
     assert classify_results["fill_zero"] == [2]
 
 
-def test_graveyard_any_particle_imp_zero(classify_results):
-    """imp_p=0（任一粒子重要性 0）同样算 graveyard。"""
-    assert classify_results["graveyard_impP"] == [2]
+def test_any_particle_imp_zero_no_longer_gates_rendering(classify_results):
+    """`imp_p=0` 同样不再算墓地。
+
+    mode n 的卡习惯给**每个**栅元写 `imp:p=0`（该粒子本就不输运）—— 旧的「任一粒子
+    重要性 0 ⇒ 墓地」会让整张卡一个栅元都不渲染（用户 s.i 实测：预览全空）。
+    """
+    assert classify_results["graveyard_impP"] == [1, 2]
 
 
 def test_imp_nonzero_not_graveyard(classify_results):
@@ -243,45 +258,36 @@ def test_universe_entity_still_produces_stl(classify_results):
     assert classify_results["universe_entity"] == [1]
 
 
-def test_imp_any_zero_graveyard_filter(classify_results):
-    """项15：handler 构造 sub_by_u 的 graveyard 过滤（_imp_any_zero）与 build_cells_data 口径一致。"""
-    assert classify_results["imp_any_zero"] == [True, True, True, False, False]
+def test_imp_does_not_gate_rendering(classify_results):
+    """imp 是**输运**语义（杀粒子），不得当**可视**语义用。
+
+    mode n 的卡习惯给每个栅元写 `imp:p=0`（该粒子本就不输运）—— 旧的「任一为 0 ⇒ 墓地」
+    会让整张卡一个栅元都不渲染（用户 s.i 实测：35/35 全灭、预览全空）。
+    """
+    assert classify_results["imp_p_zero_all_cells"] == [1, 2, 3]
 
 
-def test_force_include_graveyard_retained(classify_results):
-    """水密检测 force_include_numbers：graveyard（imp=0）在内的第一栅元被强制包含。"""
+def test_force_include_still_honored(classify_results):
+    """force_include_numbers 仍能放行 include_void=False 会跳过的真空栅元（水密检测用）。"""
     assert sorted(classify_results["force_include"]) == [1, 2]
+    assert classify_results["force_include_control"] == [2], "对照组：不加 force 时真空被跳过"
 
 
 # ══════════════════════════════════════════════════════════════════════
-# GEOUNED 墓区必须不渲染（2026-09-24，用户："3D 预览还是一坨"）
+# imp / 注释 **都不再**决定渲染（2026-10-11，用户：「geouned 导出的墓地怎么能和实际
+# 定义的墓地混为一谈？……程序端的栅元，只要材料不是真空都应该渲染」）
 #
-# 为什么单开一组：STEP 导入路径上 **`flat_cell_json` 把 `imp_*` 丢了**（前端只原样转发），
-# 所以只认 imp=0 的判据在 preview-3d 里**取不到值** ⇒ GEOUNED 的两个墓区被当普通栅元渲染。
-# ⚠️ GEOUNED 的 deck **是带 imp 的**（实测 `47 0 277 Vol=1.000 imp:n=0 imp:p=0 $Graveyard`），
-#    失效是我们丢字段造成的；而栅元 46（`Graveyard_in`）GEOUNED **有意给 imp:n=1**
-#    ⇒ 只能靠注释判据拦。
-# 实测：栅元 47 体积 = 模型的 7372%、bbox 2927³；栅元 46 = 1583%、2097³；
-# 两者把模型（1042×1751×260）整个包住、相机被撑到 ±2000 ⇒ 预览里只有"一坨"。
-# 修法 = 判据加第二条「注释含 graveyard」（GEOUNED 官方标记，void.py:201/208）。
+# GEOUNED 墓区已在导入边界消失（voidGen=False：同一份 STEP 9→6 栅元），所以注释判据
+# 只剩误伤；当年加判据的真实动因（巨型外壳撑开取景）已在取景侧修（src/three/frameBox.ts）。
 # ══════════════════════════════════════════════════════════════════════
 
-def test_geouned_graveyard_comment_cells_are_not_rendered(classify_results):
-    """注释为 GEOUNED 墓区标记的栅元一律不渲染；普通注释的栅元不受影响。"""
+def test_geouned_graveyard_comment_cells_are_rendered(classify_results):
+    """注释含 graveyard 不再影响渲染：GEOUNED 墓区已在导入边界消失，注释判据只会误伤。"""
     kept = classify_results["graveyard_comment"]
-    assert 1 in kept, "普通栅元（注释是 STEP translator）不该被误伤"
-    for n in (46, 47, 48, 49):
-        assert n not in kept, (
-            f"墓区栅元 {n} 仍被渲染 —— 它会把整个模型包住（实测体积达模型 7372%）")
-    assert kept == [1]
+    assert kept == [1, 46, 47, 48, 49], (
+        "注释不得决定渲染；普通注释与 GEOUNED 标记一视同仁")
 
 
-def test_graveyard_comment_match_is_case_insensitive(classify_results):
-    """`Graveyard` / `graveyard` / `Graveyard_in` 都要认（大小写不敏感 + 子串）。"""
-    kept = classify_results["graveyard_comment"]
-    assert 48 not in kept and 49 not in kept
-
-
-def test_imp_zero_rule_still_works(classify_results):
-    """加了注释判据后，imp=0 那条原有规则不许被改坏。"""
-    assert classify_results["graveyard_imp"] == [2]
+def test_imp_zero_with_normal_comment_still_rendered(classify_results):
+    """imp=0 + 普通注释：仍渲染（防"判据以注释为名复活"）。"""
+    assert classify_results["graveyard_imp"] == [1, 2]

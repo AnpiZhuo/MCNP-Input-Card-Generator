@@ -10,7 +10,7 @@
  */
 import type { languages } from "monaco-editor";
 
-export type CardMode = "surface" | "tr";
+export type CardMode = "surface" | "tr" | "deck";
 
 export const languageId = (mode: CardMode): string => `mcnp-${mode}-card`;
 
@@ -111,11 +111,31 @@ export const trTokenizer = (): languages.IMonarchLanguage => ({
   },
 });
 
+/**
+ * 整张输入卡（生成预览页）用的语法：只做最保守的三件事 —— 注释、行首号（栅元/曲面号）、数字。
+ *
+ * 为什么不复用 surfaceTokenizer：它带曲面类型关键词表（RPP/SPH/SO…），套在整张卡上会把
+ * 材料卡/计数卡里的普通单词误判成曲面类型；这里只要"看得出哪是注释、哪是数"就够。
+ * 同样**只有 root 一个状态**（逐行独立，不跨行保持 —— 见上面 surfaceTokenizer 的注释）。
+ */
+export const deckTokenizer = (): languages.IMonarchLanguage => ({
+  ignoreCase: true,
+  tokenizer: {
+    root: [
+      [/^\s*[Cc](?:\s|$).*$/, "comment"],   // 行首 C 注释行
+      [/\$.*/, "comment"],                  // 行内 $ 注释
+      [/^\s*[+*]?\d+/, "surface-id"],       // 行首号：栅元号 / 曲面号 / 材料号
+      [NUMBER, "number"],
+    ],
+  },
+});
+
 /** 当前行「还差哪些参数」的幽灵提示；不需要提示时返回 null。 */
 export function ghostForLine(line: string, mode: CardMode): string | null {
   const trimmed = line.trim();
   if (!trimmed || /^[Cc]\s/.test(trimmed) || trimmed.startsWith("$")) return null;
   const body = trimmed.split("$", 1)[0].trim();
+  if (mode === "deck") return null;       // 整张卡不做逐行参数提示（卡型太多，猜不准就不猜）
   if (mode === "tr") {
     if (!/^\*?TR\d+/i.test(body)) return null;
     const count = body.split(/\s+/).slice(1).filter(isNumberToken).length;
@@ -139,10 +159,10 @@ export function ghostForLine(line: string, mode: CardMode): string | null {
   return expected.slice(count).join(" ");
 }
 
-/** 补全候选词（曲面卡 = 曲面类型；TR 卡 = 两条 TR 写法）。 */
+/** 补全候选词（曲面卡 = 曲面类型；TR 卡 = 两条 TR 写法；整张卡 = 不补全）。 */
 export const completionWords = (mode: CardMode): string[] =>
-  mode === "tr" ? ["TR", "*TR"] : SURFACE_TYPES;
+  mode === "tr" ? ["TR", "*TR"] : mode === "deck" ? [] : SURFACE_TYPES;
 
 /** 补全项的说明文字。 */
 export const completionDetail = (word: string, mode: CardMode): string =>
-  mode === "surface" ? SURFACE_DESCS[word] : "平移+旋转";
+  mode === "surface" ? SURFACE_DESCS[word] : mode === "deck" ? "" : "平移+旋转";

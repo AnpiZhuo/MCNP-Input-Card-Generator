@@ -1384,10 +1384,19 @@ paths:
       tags: [workflow]
       summary: 参数扫描执行（逐组合写 INP → 调 MCNP → 提取 keff → 汇总 TSV）
       description: |
-        入参同 sweep-plan；组合数上限 50。无 MCNP → {status:"error", message}。
-        响应 {status, baseDir, records:[{index, parameters, inputFile, outputDir,
-        exitCode, keff, keffStd?, convergence?:{cycles, mean, std}}], summaryTsv,
-        manifest, manifestPath}。
+        入参同 sweep-plan（可选 outputDir / workers）；组合数上限 50。无 MCNP →
+        {status:"error", message}。
+        **结果保留**（2026-10-15 用户要求「让 11 个输出文件都保留」）：结果目录建在
+        `<outputDir 或 D:/MCNP/new>/sweep_<时间戳>/` 且跑完**不删**，各组合产物
+        `run_XXX/sweep-00N.o`（结果全在此）+ `sweep.i`（该组合实际用的输入卡）留在盘上；
+        同目录另放 sweep-manifest.json / sweep-summary.tsv（自描述 run_XXX ↔ 参数取值）。
+        二进制重启文件 `sweep-00N.r`（实测 37.9MB/组合，且与 NPS 无关的固定存档区）
+        默认丢弃并在 records[].droppedRestartFiles 里如实列出。用户目录写不进去时退回
+        %TEMP% 并照旧清理（此时 resultsPersisted=false）。
+        响应 {status, baseDir(=结果目录), resultsPersisted, summaryDir, outputBytes,
+        records:[{index, parameters, inputFile, outputDir, exitCode, keff, keffStd?,
+        outputs:[{name,size}], outputBytes, droppedRestartFiles?,
+        convergence?:{cycles, mean, std}}], summaryTsv, manifest, manifestPath}。
       requestBody:
         required: true
         content:
@@ -1396,6 +1405,8 @@ paths:
               type: object
               properties:
                 deck: { type: string }
+                outputDir: { type: string, description: 结果目录的上级目录；缺省 D:/MCNP/new }
+                workers: { type: integer, description: 同时跑几个组合 }
                 parameters:
                   type: array
                   items:
@@ -1414,7 +1425,10 @@ paths:
                   - { $ref: '#/components/schemas/OkEnvelope' }
                   - type: object
                     properties:
-                        baseDir: { type: string }
+                        baseDir: { type: string, description: 结果目录（含 run_XXX 子目录，跑完保留） }
+                        resultsPersisted: { type: boolean }
+                        summaryDir: { type: string }
+                        outputBytes: { type: integer }
                         records: { type: array }
                         summaryTsv: { type: string }
                         manifest: { type: object }

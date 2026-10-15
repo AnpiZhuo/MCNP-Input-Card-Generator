@@ -6,10 +6,16 @@
  */
 
 export interface SweepParameter {
+  /** 给人看的标签（GUI 里 = 用户框选到的原文，**允许重复**） */
   name: string;
+  /** 取值的内部键（缺省回落 name）；界面上不显示 */
+  key?: string;
   pattern?: string;
   values: Array<string | number>;
 }
+
+/** 参数 → 取值键（与后端 `sweep._param_key` 同口径）。 */
+export const paramKey = (p: SweepParameter): string => p.key ?? p.name;
 
 export interface Convergence {
   cycles: number[];
@@ -41,12 +47,17 @@ export interface SweepDashboardData {
 }
 
 /** 扫描轴 = 第一个取值集合 size>1 的参数；无参数返回 null。 */
-export function chooseSweepAxis(parameters: SweepParameter[]): string | null {
+export function chooseSweepAxisParam(parameters: SweepParameter[]): SweepParameter | null {
   for (const p of parameters) {
     const distinct = new Set(p.values.map((v) => String(v)));
-    if (distinct.size > 1) return p.name;
+    if (distinct.size > 1) return p;
   }
-  return parameters.length > 0 ? parameters[0].name : null;
+  return parameters.length > 0 ? parameters[0] : null;
+}
+
+/** 扫描轴**名字**（给人看/画轴标签用）。 */
+export function chooseSweepAxis(parameters: SweepParameter[]): string | null {
+  return chooseSweepAxisParam(parameters)?.name ?? null;
 }
 
 function toNumber(v: string | number | undefined): number | null {
@@ -63,11 +74,13 @@ export function buildDashboard(
   records: SweepRunRecord[],
   parameters: SweepParameter[],
 ): SweepDashboardData {
-  const paramName = chooseSweepAxis(parameters);
+  const axis = chooseSweepAxisParam(parameters);
+  const paramName = axis?.name ?? null;
   const points: DashboardPoint[] = [];
-  if (paramName) {
+  if (axis) {
+    const axisKey = paramKey(axis);          // 取值按内部键查（名称可能重复）
     for (const r of records) {
-      const x = toNumber(r.parameters[paramName]);
+      const x = toNumber(r.parameters[axisKey]);
       if (x === null) continue;
       points.push({ x, keff: r.keff ?? null, keffStd: r.keffStd ?? null });
     }
@@ -77,7 +90,7 @@ export function buildDashboard(
     paramName,
     points,
     runs: records.map((r) => ({ ...r })),
-    otherParams: parameters.map((p) => p.name).filter((n) => n !== paramName),
+    otherParams: parameters.filter((p) => p !== axis).map((p) => p.name),
   };
 }
 

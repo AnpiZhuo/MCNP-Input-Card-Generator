@@ -13,6 +13,7 @@
  */
 import { beforeAll, describe, expect, it } from "vitest";
 import {
+  deckTokenizer,
   ghostForLine,
   languageId,
   surfaceTokenizer,
@@ -23,7 +24,7 @@ import {
 let monaco: typeof import("monaco-editor/editor/editor.api.js");
 
 /** 每行 → [{ 列, token 种类 }]，种类已去掉 monaco 追加的语言后缀。 */
-function tokenize(text: string, mode: "surface" | "tr") {
+function tokenize(text: string, mode: "surface" | "tr" | "deck") {
   return monaco.editor
     .tokenize(text, languageId(mode))
     .map((line) => line.map((t) => ({ offset: t.offset, kind: t.type.split(".")[0] })));
@@ -41,8 +42,10 @@ beforeAll(async () => {
   monaco = await import("monaco-editor/editor/editor.api.js");
   monaco.languages.register({ id: languageId("surface") });
   monaco.languages.register({ id: languageId("tr") });
+  monaco.languages.register({ id: languageId("deck") });
   monaco.languages.setMonarchTokensProvider(languageId("surface"), surfaceTokenizer());
   monaco.languages.setMonarchTokensProvider(languageId("tr"), trTokenizer());
+  monaco.languages.setMonarchTokensProvider(languageId("deck"), deckTokenizer());
 }, 120_000);
 
 describe("曲面卡语法", () => {
@@ -152,5 +155,41 @@ describe("幽灵提示（ghostForLine）", () => {
 
   it("$ 之后的内容不参与计数", () => {
     expect(ghostForLine("1 PX -9 $ 已写完", "surface")).toBe("$ X垂面");
+  });
+});
+
+// 整张输入卡（生成预览页的文字层，2026-10-11 起与曲面卡共用 McnpEditor）
+describe("整张卡语法（deck）", () => {
+  const DECK = [
+    "Cf252 neutron-only BPE",
+    "1 0 -210 imp:n=1 $ 栅元注释",
+    "C 注释行",
+    "100 px -50",
+    "m1 6000 -0.000124",
+    "nps 10000000",
+  ].join("\n");
+
+  it("逐行独立着色：每一行都按行首/数字/注释判定（不出现'只有第一行着色'）", () => {
+    const lines = tokenize(DECK, "deck");
+    expect(firstKind(lines[0])).not.toBe("number");        // 标题行不是数字
+    expect(firstKind(lines[1])).toBe("surface-id");        // 栅元号
+    expect(firstKind(lines[2])).toBe("comment");           // C 注释行
+    expect(firstKind(lines[3])).toBe("surface-id");        // 曲面号
+    // 数据卡（m1 / nps）：首词不是行首号 → 不着色；卡里的数字要着色
+    expect(firstKind(lines[4])).not.toBe("surface-id");
+    expect(lines[4].some((t) => t.kind === "number")).toBe(true);
+    expect(firstKind(lines[5])).not.toBe("surface-id");
+    expect(lines[5].some((t) => t.kind === "number")).toBe(true);
+  });
+
+  it("$ 注释着色、且不影响后面的行", () => {
+    const lines = tokenize("1 0 -1 imp:n=1 $ 说明\n2 0 -2\n", "deck");
+    expect(lines[0].some((t) => t.kind === "comment")).toBe(true);
+    expect(firstKind(lines[1])).toBe("surface-id");        // 下一行照常着色
+  });
+
+  it("整张卡不提供幽灵提示与补全（卡型太多，猜不准就不猜）", () => {
+    expect(ghostForLine("nps 1000", "deck")).toBeNull();
+    expect(ghostForLine("1 PX ", "deck")).toBeNull();
   });
 });

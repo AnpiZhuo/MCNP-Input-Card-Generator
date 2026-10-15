@@ -2,16 +2,24 @@
  * INP 生成预览 + 参数扫描（内置，不另外弹窗）。
  *
  * 功能：
- * - 展示生成的 INP 文本（可框选其中的数字来设扫描参数）
+ * - 展示生成的 INP 文本（**与「曲面卡」同一编辑器模块** = `McnpEditor`(Monaco)；
+ *   可框选其中的任意字符来设扫描参数）
  * - 保存到目录 / 运行 MCNP / 复制 / 关闭
  * - 框选 → 设为扫描参数 → 均分快捷取值 → 多核并行扫描（内嵌面板）
- * - 每条参数一个颜色：被扫参数所在行在 textarea 背后衬一整行同色底条
- *   （按行定位而非逐字符定位，不受字体渲染差异影响，滚动同步）
+ * - 每条参数一个颜色，**局部高亮它自己的那几个字符**（Monaco decoration 按字符区间画；
+ *   2026-10-11 用户要求：原先的"整行色底条 + textarea 叠层"已删除）
+ *
+ * 替换语义（用户 2026-10-11 逐字确认）：**只删掉框选中的那几个字符**，把取值原样插进去，
+ * 长度不限 —— 位置（start/end）随参数一起发给后端，后端只认这个区间。
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import FloatingDialog from "./FloatingDialog";
+import McnpEditor from "./McnpEditor";
 import SweepDashboard from "./SweepDashboard";
 import { apiUrl, errorHint, meshtalDetect } from "../utils/api";
+import { selectionSpan } from "../utils/selectionSpan";
+import { parseValues } from "../utils/sweepValues";
+import { SWEEP_COLORS, ensureSweepHighlightStyles, sweepHighlightClass } from "../utils/sweepHighlight";
 
 interface Props {
   content: string;
@@ -27,43 +35,34 @@ interface Props {
 
 import { DETECTED_CORES, DEFAULT_WORKERS, SUGGESTED_WORKERS, clampWorkers } from "../utils/detectedCores";
 
-const bodyStyle: React.CSSProperties = {
-  flex: 1, padding: 0, fontFamily: "Consolas,monospace",
-  fontSize: 12, lineHeight: 1.6, color: "var(--text-primary)",
-  whiteSpace: "pre", background: "var(--editor-bg)",
-};
-
 interface ParamRow {
+  /** 给人看的标签 = **用户框选到的原文**（允许重复 —— 界面上不挂 `#1`/`#2` 后缀） */
   name: string;
+  /** 取值的内部键（唯一；`records[].parameters` / 组合字典按它查） */
+  key: string;
   anchor: string;
   context: string;
   values: string;
   color: string;
   lineIdx?: number;   // 参数所在行号（0-based，按 \n 分行）
+  /** 选区在 deck 文本里的字符偏移：后端**只认这个区间**（删掉它、插入新值，长度不限） */
+  start: number;
+  end: number;
 }
-
-const COLOR_PALETTE = ["#facc15", "#22d3ee", "#4ade80", "#fb923c", "#c084fc", "#f472b6"];
 
 function hexA(hex: string, a: number): string {
   const n = parseInt(hex.slice(1), 16);
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 }
 
-function parseValues(text: string): Array<string | number> {
-  return text.split(/[\s,，]+/).filter(Boolean).map(t =>
-    /^-?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(t) ? Number(t) : t);
-}
-
 function cartesianSize(params: ParamRow[]): number {
-  return params.reduce((n, p) => n * Math.max(1, parseValues(p.values).length), 1);
+  return params.reduce((n, p) => n * Math.max(1, parseValues(p.values).values.length), 1);
 }
 
-function guessParamName(context: string, anchor: string): string {
-  const kw = context.match(/[A-Za-z][A-Za-z0-9]*/);
-  if (kw) return kw[0].toLowerCase();
-  const a = anchor.match(/[A-Za-z]+/);
-  return a ? a[0].toLowerCase() : "param";
-}
+/**
+ * 参数名 = **用户划到的内容**（用户 2026-10-11：不要 `df4`/`param` 这种猜出来的名字，
+ * 也**不要** `#1`/`#2` 重名后缀）。重名靠看不见的 `key` 区分（见 ParamRow）。
+ */
 
 function rangeValues(a: number, b: number, seg: number): number[] {
   const n = Math.max(2, Math.round(seg) + 1);
@@ -77,9 +76,6 @@ function fmtNum(v: number): string {
   return Object.is(r, -0) ? "0" : String(r);
 }
 
-const LINE_HEIGHT = 19.2;   // 12px × 1.6
-const EDIT_PAD_Y = 8;
-const EDIT_PAD_X = 8;
 
 const s = {
   lbl: { fontSize: 10, fontWeight: 500, color: "var(--text-tertiary)", display: "block", marginBottom: 4 },
@@ -103,66 +99,76 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
   const [run, setRun] = useState<{ baseDir: string; records: any[]; summaryTsv: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  /** 后端回传的定位类告警（框选位置失效等）：必须显示出来，绝不静默 */
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [view, setView] = useState<"table" | "dash">("dash");
   const [runAbort, setRunAbort] = useState<AbortController | null>(null);
-
-  // 行底条滚动层 ref
-  const stripeRef = useRef<HTMLDivElement>(null);
+  /** 参数内部键序号（名称可以重复，键不行；见 ParamRow.key） */
+  const keySeq = useRef(0);
 
   useEffect(() => { setParams([]); setRun(null); setSelHint(""); setSelection(null); setQuickIdx(null); setErr(""); }, [content]);
+  // 参数高亮的 CSS 类（Monaco 的 inlineClassName 只认类名）——幂等注入一次
+  useEffect(() => { ensureSweepHighlightStyles(); }, []);
 
   const payload = useMemo(() => ({
     deck: content, workers,
-    parameters: params.map(p => ({ name: p.name.trim(), anchor: p.anchor, context: p.context, values: parseValues(p.values) })).filter(p => p.name && p.anchor && p.values.length > 0),
+    parameters: params.map(p => ({ name: p.name.trim() || p.key, key: p.key,
+                                   anchor: p.anchor, context: p.context,
+                                   start: p.start, end: p.end,
+                                   values: parseValues(p.values).values }))
+                      .filter(p => p.anchor && p.values.length > 0),
   }), [content, params, workers]);
 
   const comboCount = useMemo(() => cartesianSize(params), [params]);
+  /** 取值语法错误（如引号没配对）：有错就不许开始扫描（否则会静默少跑或跑错内容） */
+  const valuesError = useMemo(
+    () => params.map(p => parseValues(p.values).error).find(e => e) || "",
+    [params]);
 
-  /** 每条参数对应的行号 → 颜色数组（同一行可能多条参数，取最后一个颜色覆盖） */
-  const lineColors = useMemo(() => {
-    const map: Record<number, string> = {};
-    params.forEach(p => {
-      if (p.lineIdx !== undefined && p.lineIdx >= 0) map[p.lineIdx] = p.color;
-    });
-    return map;
-  }, [params]);
+  /** 参数扫描的**局部高亮**：每条参数标出它自己的那几个字符（Monaco decoration，按区间） */
+  const highlights = useMemo(
+    () => params.map(p => ({
+      start: p.start, end: p.end,
+      className: sweepHighlightClass(SWEEP_COLORS.indexOf(p.color)),
+    })),
+    [params]);
 
-  const totalLines = content.split("\n").length;
-  const stripeHeight = EDIT_PAD_Y * 2 + totalLines * LINE_HEIGHT;
-  const stripeWidth = `calc(100% - ${EDIT_PAD_X * 2}px)`;
-
-  const syncStripeScroll = (ta: HTMLTextAreaElement) => {
-    const s = stripeRef.current;
-    if (s) { s.scrollTop = ta.scrollTop; s.scrollLeft = ta.scrollLeft; }
-  };
-
-  const handleSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
-    const ta = e.currentTarget;
-    const start = Math.min(ta.selectionStart, ta.selectionEnd);
-    const end = Math.max(ta.selectionStart, ta.selectionEnd);
+  /** 选区变化（Monaco 回报字符偏移）：记住"用户划了哪几个字符" */
+  const handleSelect = (start: number, end: number) => {
     setSelection({ start, end });
     const len = end - start;
-    if (len > 0) { const txt = ta.value.slice(start, end).replace(/\n/g, "⏎"); setSelHint(`已选中 ${len} 字符「${txt.length > 40 ? txt.slice(0, 40) + "…" : txt}」→ 点「设为扫描参数」`); }
-    else setSelHint("");
+    if (len > 0) {
+      const txt = content.slice(start, end).replace(/\n/g, "⏎");
+      setSelHint(`已选中 ${len} 字符「${txt.length > 40 ? txt.slice(0, 40) + "…" : txt}」→ 点「设为扫描参数」`);
+    } else setSelHint("");
   };
 
   const addParamFromSelection = () => {
     setErr("");
     if (!selection || !content) { setSelHint("请先在 INP 文本里框选要变的数字"); return; }
-    const { start, end } = selection;
-    const anchor = content.slice(start, end).trim();
-    if (!anchor) return;
-    if (anchor.includes("\n")) { setSelHint("只能框选同一行里的内容"); return; }
+    // 「我划了这些文字，你就把这些文字删掉、用我给的内容替换」——位置必须一起记住，
+    // 否则后端只能自己猜"首个匹配"，同一个字出现两次就改错地方。
+    const span = selectionSpan(content, selection.start, selection.end);
+    if (!span) {
+      setSelHint(selection.start === selection.end
+        ? "选中的是空白，请重新框选"
+        : "只能框选同一行里的内容");
+      return;
+    }
+    const { anchor, start, end } = span;
     const lineStart = content.lastIndexOf("\n", start - 1) + 1;
     let lineEnd = content.indexOf("\n", end); if (lineEnd < 0) lineEnd = content.length;
     const context = content.slice(lineStart, lineEnd);
-    const name = guessParamName(context, anchor);
-    const color = COLOR_PALETTE[params.length % COLOR_PALETTE.length];
+    // 名称 = **框选到的内容本身**（可重复）；唯一性放在看不见的 key 上
+    // （用户 2026-10-11：界面上不许出现 `#1`/`#2` 这类后缀，看着像色号）
+    keySeq.current += 1;
+    const key = `p${keySeq.current}`;
+    const color = SWEEP_COLORS[params.length % SWEEP_COLORS.length];
     // 计算所在行号
     const lineIdx = (content.slice(0, start).match(/\n/g) || []).length;
-    setParams(ps => [...ps, { name, anchor, context, values: anchor, color, lineIdx }]);
+    setParams(ps => [...ps, { name: anchor, key, anchor, context, values: anchor, color, lineIdx, start, end }]);
     setQuickIdx(null);
-    setSelHint(`已添加参数「${name}」：该行已用同色标出，当前值已填入`);
+    setSelHint(`已添加参数「${anchor}」：将替换第 ${lineIdx + 1} 行的这几个字符，当前值已填入`);
     setSelection(null);
   };
 
@@ -174,7 +180,7 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
   };
 
   const doRun = async () => {
-    setErr(""); setBusy(true); setRun(null);
+    setErr(""); setBusy(true); setRun(null); setWarnings([]);
     const ctrl = new AbortController(); setRunAbort(ctrl);
     const timer = setTimeout(() => { if (!ctrl.signal.aborted) ctrl.abort(new DOMException("扫描超时（120s），已中止", "TimeoutError")); }, 120000);
     try {
@@ -182,6 +188,7 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
       const j = await r.json();
       if (j.status === "error") throw new Error(j.message);
       setRun({ baseDir: j.baseDir, records: j.records, summaryTsv: j.summaryTsv });
+      setWarnings(j.warnings || []);
     } catch (e: any) {
       if (ctrl.signal.aborted) setErr((e?.name === "TimeoutError") ? "扫描超时（120s），已中止" : "扫描已取消");
       else setErr(errorHint(e, "扫描失败"));
@@ -239,16 +246,22 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
           <button className="btn btn-primary btn-xs" onClick={addParamFromSelection} disabled={!selection}>＋ 设为扫描参数</button>
           <span style={{ fontSize: 11, color: "var(--text-tertiary)", flex: 1 }}>{selHint}</span>
         </div>
-        <label style={s.lbl}>参数（同色 = INP 中同色底条所在行；多条会两两搭配生成全部组合）</label>
-        {params.length === 0 && <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginBottom: 6 }}>还没有参数——框选 INP 里的数字后点「设为扫描参数」，该行会出现彩色底条</div>}
+        <label style={s.lbl}>参数（同色 = INP 里高亮的**那几个字符**；多条会两两搭配生成全部组合）</label>
+        {params.length === 0 && <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginBottom: 6 }}>还没有参数——框选 INP 里的数字后点「设为扫描参数」，你划中的那几个字符会被涂成同色高亮</div>}
         {params.map((p, i) => (
-          <div key={i} style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center", background: hexA(p.color, 0.06), borderLeft: `3px solid ${p.color}`, borderRadius: 6, padding: "2px 8px 2px 6px" }}>
-            <span style={{ width: 8, height: 8, borderRadius: 3, background: p.color, flexShrink: 0 }} title="与上方 INP 行底条同色" />
+          <div key={i} style={{ marginBottom: 6 }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", background: hexA(p.color, 0.06), borderLeft: `3px solid ${p.color}`, borderRadius: 6, padding: "2px 8px 2px 6px" }}>
+            <span style={{ width: 8, height: 8, borderRadius: 3, background: p.color, flexShrink: 0 }} title="与 INP 里高亮那几个字符的颜色相同" />
             <input style={{ ...s.inp, width: 100 }} placeholder="名称" value={p.name} onChange={e => setParams(ps => ps.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} />
-            <input style={{ ...s.inp, flex: 1 }} placeholder={`取值列表，如 ${p.anchor} 1000 5000`} value={p.values} onChange={e => setParams(ps => ps.map((x, j) => j === i ? { ...x, values: e.target.value } : x))} />
+            <input style={{ ...s.inp, flex: 1 }} placeholder={`取值列表，如 ${p.anchor} 1000 5000；含空格的用引号，如 "n p"`} value={p.values} onChange={e => setParams(ps => ps.map((x, j) => j === i ? { ...x, values: e.target.value } : x))} />
             <span style={{ fontSize: 10, color: "var(--text-tertiary)" }}>第{p.lineIdx! + 1}行</span>
             <button className="btn btn-ghost btn-xs" title="等分快捷取值" onClick={() => { const n = parseFloat(p.anchor); if (quickIdx === i) { setQuickIdx(null); return; } setQuickIdx(i); setQuickA(isNaN(n) ? "0" : fmtNum(n)); setQuickB(isNaN(n) ? "100" : fmtNum(n * 10)); setQuickC("5"); }}><u>等分</u></button>
             <button className="btn btn-ghost btn-xs" onClick={() => setParams(ps => ps.filter((_, j) => j !== i))}>×</button>
+          </div>
+          {/* 取值语法错误（如引号没配对）就地显示：非静默，且禁止开始扫描 */}
+          {parseValues(p.values).error && (
+            <div style={{ fontSize: 10, color: "#e53935", marginLeft: 14 }}>{parseValues(p.values).error}</div>
+          )}
           </div>
         ))}
         {quick && (
@@ -272,7 +285,7 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
         </div>
         <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
           {runAbort ? <button className="btn btn-danger btn-sm" onClick={() => runAbort.abort()} disabled={!busy}>取消</button>
-            : <button className="btn btn-primary btn-sm" onClick={doRun} disabled={busy || params.length === 0 || comboCount > 50}>开始扫描（{comboCount} 组合{workers > 1 ? ` · ${workers} 路` : ""}）</button>}
+            : <button className="btn btn-primary btn-sm" onClick={doRun} disabled={busy || params.length === 0 || comboCount > 50 || !!valuesError}>开始扫描（{comboCount} 组合{workers > 1 ? ` · ${workers} 路` : ""}）</button>}
         </div>
         {run && (
           <div style={{ marginBottom: 8 }}>
@@ -284,8 +297,16 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
             </div>
             {view === "dash"
               ? <div style={{ maxHeight: 300, overflow: "auto" }}><SweepDashboard records={run.records} parameters={payload.parameters} /></div>
-              : <div className="table-wrap" style={{ maxHeight: 180, overflow: "auto" }}><table><thead><tr><th>#</th>{payload.parameters.map(p => <th key={p.name}>{p.name}</th>)}<th>exit</th><th>keff</th></tr></thead><tbody>{run.records.map(rec => (<tr key={rec.index}><td>{rec.index}</td>{payload.parameters.map(p => <td key={p.name}>{String(rec.parameters[p.name] ?? "n/a")}</td>)}<td>{rec.exitCode === null ? "n/a" : String(rec.exitCode)}</td><td>{rec.keff === null ? "n/a" : rec.keff.toFixed(6)}</td></tr>))}</tbody></table></div>}
+              : <div className="table-wrap" style={{ maxHeight: 180, overflow: "auto" }}><table><thead><tr><th>序号</th>{payload.parameters.map(p => <th key={p.key}>{p.name}</th>)}<th>exit</th><th>keff</th></tr></thead><tbody>{run.records.map(rec => (<tr key={rec.index}><td>{rec.index}</td>{payload.parameters.map(p => <td key={p.key}>{String(rec.parameters[p.key] ?? "n/a")}</td>)}<td>{rec.exitCode === null ? "n/a" : String(rec.exitCode)}</td><td>{rec.keff === null ? "n/a" : rec.keff.toFixed(6)}</td></tr>))}</tbody></table></div>}
             <div style={s.hint}>运行目录：{run.baseDir}</div>
+          </div>
+        )}
+        {warnings.length > 0 && (
+          <div style={{ ...s.err, background: "rgba(255,152,0,0.15)", color: "#ff9800" }}>
+            ⚠ {warnings.length} 条参数没能在输入卡里定位（这些组合按下的是原始内容）：
+            <ul style={{ margin: "4px 0 0 16px" }}>
+              {warnings.map((w, i) => <li key={i}>{w}</li>)}
+            </ul>
           </div>
         )}
         {err && <div style={s.err}>{err}</div>}
@@ -320,44 +341,14 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
         </div>
       )}
       {sweeping ? (
-        <div style={{ position: "relative", height: 380, border: "1px solid var(--border-glass)", borderRadius: 6, overflow: "hidden" }}>
-          {/* 行底条层：每行一条彩色底衬，与 textarea 同行高，随滚动同步 */}
-          <div ref={stripeRef} aria-hidden style={{
-            position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none", zIndex: 0,
-          }}>
-            <div style={{
-              position: "relative", width: `calc(100% - ${EDIT_PAD_X * 2}px)`, height: stripeHeight,
-              fontFamily: "Consolas,monospace", fontSize: 12, lineHeight: `${LINE_HEIGHT}px`,
-              margin: `${EDIT_PAD_Y}px ${EDIT_PAD_X}px`, boxSizing: "border-box",
-            }}>
-              {Object.entries(lineColors).map(([row, color]) => (
-                <div key={row} style={{
-                  position: "absolute",
-                  left: 0, top: `${Number(row) * LINE_HEIGHT}px`,
-                  width: "100%", height: LINE_HEIGHT,
-                  background: hexA(color, 0.18), borderRadius: 3,
-                  borderLeft: `3px solid ${color}`,
-                  boxSizing: "border-box",
-                }} />
-              ))}
-            </div>
-          </div>
-          {/* 文字层：正常 textarea，背景透明以透出行底条 */}
-          <textarea style={{
-            position: "absolute", inset: 0, width: "100%", height: "100%", resize: "none",
-            border: "none", outline: "none", zIndex: 1,
-            background: "transparent",
-            color: "var(--text-primary)",
-            fontFamily: "Consolas,monospace", fontSize: 12, lineHeight: 1.6,
-            whiteSpace: "pre", padding: `${EDIT_PAD_Y}px ${EDIT_PAD_X}px`, boxSizing: "border-box",
-            caretColor: "var(--text-primary)", overflow: "auto",
-          } as React.CSSProperties}
-            readOnly value={content} wrap="off" spellCheck={false}
-            onSelect={handleSelect}
-            onScroll={e => syncStripeScroll(e.currentTarget)} />
+        <div style={{ border: "1px solid var(--border-glass)", borderRadius: 6, overflow: "hidden" }}>
+          {/* 文字层：与「曲面卡」同一个编辑器模块（Monaco）。
+              高亮 = 参数扫到的**那几个字符**（按字符区间画），不再是整行色条。 */}
+          <McnpEditor id="preview-inp" value={content} mode="deck" readOnly minHeight={380}
+            highlights={highlights} onSelect={handleSelect} />
         </div>
       ) : (
-        <div style={bodyStyle}>{content}</div>
+        <McnpEditor id="preview-inp-view" value={content} mode="deck" readOnly minHeight={380} />
       )}
       {sweeping && ScanPanel()}
       {nonAsciiWarn}

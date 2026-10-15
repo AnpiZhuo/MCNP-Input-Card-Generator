@@ -2049,28 +2049,50 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 
 ## §5 核心业务规则（语义记忆 · 必读）
 
-- **⭐ 3D 预览「渲染哪些栅元」的分类规则（项14，2026-08-24 用户确认；2026-09-24 补第二条判据）**：
+- **⭐ 3D 预览「渲染哪些栅元」的分类规则（项14；2026-08-24 用户确认 → 2026-10-11 用户纠正后收敛）**：
   唯一实现 = `gui/backend/api_server.py::build_cells_data`，按序：
   1. **fill 装配容器**（`fill` 非空 或 `fill_grid` 非空，含 `fill="0"`）→ 跳过自身 STL（内容由 FILL 装配走 preview-lattice）；
-  2. **graveyard → 不渲染**，判据**两条并列、各管一段**：
-     · `imp_n/imp_p/imp_e` 任一为 `0`（MCNP 语义：该粒子重要性 0 = 杀粒子）；
-     · **注释含 `graveyard`**（大小写不敏感）—— **GEOUNED 的官方标记**，`void.py:201/208` 写死
-       `MatInfo = "Graveyard_in"/"Graveyard"`，GEOUNED 自己的 `mcnp_format.py:256` 也这么认。
-  3. `render:false` → 跳过；
-  4. 其余实体（`material≠0`）与纯 void（`material=0`，无 fill 无 u）→ 参与 STL（`include_void=True` 时）。
+  2. `render:false` → 跳过；
+  3. 其余实体（`material≠0`）与纯 void（`material=0`，无 fill 无 u）→ 参与 STL（`include_void=True` 时）；
+     真空由**前端**渲成真半透明（默认不勾选、可勾选，见 `cellMaterial.VACUUM_PREVIEW_*`）。
 
-  **⚠️ 两条判据的分工（2026-09-24 实测查准，别记错）**：GEOUNED 生成的 deck **是带 imp 的**，
-  实测 `47 0 277 Vol=1.000 imp:n=0 imp:p=0 $Graveyard`、`46 0 -277 (...) imp:n=1.000 $Graveyard_in`：
-  | 栅元 | imp 判据 | 注释判据 | `imp:n` | 说明 |
-  |---|---|---|---|---|
-  | 47 | **命中** | 命中 | **0** | 真墓地（半径 1049 球**外**）—— imp 本该就拦住它 |
-  | 46 | 不命中 | **命中** | **1.000** | `Graveyard_in`（球**内**、enclosure 盒外）—— **GEOUNED 有意给 imp=1**（粒子可在其中飞行，按 MCNP 语义不是墓地），但它是 GEOUNED 的边界结构、体积达模型 1583%，同样不该画 |
-  ⇒ **imp 判据失效的原因是上游丢字段**（`flat_cell_json` 没输出 `imp_*`），**不是 GEOUNED 没写 imp**。
-  ⇒ **为什么必须拦这两个**：它们的 bbox 是 **2927³ / 2097³**，而模型只有 1042×1751×260 ——
-  一旦渲染就把模型整个包住、相机被撑到 ±2000 ⇒ 用户看到"一坨"（2026-09-24 实证，见 S10 与 §6）。
-  ⇒ **改这条规则前先读**：这些键**全部**由 `app/step_importer.flat_cell_json` 供给（STEP 导入 → 前端
-  → preview-3d 的唯一序列化口，契约见 `docs/contracts/api.yaml` 的 `deck.cells`）——
-  **判据"读不到就放行"，所以序列化口漏一个键就等于该条规则静默失效。**
+  **⛔ 2026-10-11 用户纠正：graveyard 判据全部删除（不要再加回来）**
+  用户原话：「geouned导出的墓地怎么能和实际定义的墓地混为一谈？geouned的墓地，应该是导出到程序端
+  的时候，就把墓地栅元删干净了……而程序端的栅元，只要材料不是真空都应该渲染」。
+  | 已删判据 | 为什么是错的 |
+  |---|---|
+  | `imp_n/imp_p/imp_e` **任一**为 `0`（2026-08-25 `dc621ce` 引入） | 拿**输运语义**当**可视语义**。`mode n` 的卡习惯给每个栅元写 `imp:p=0`（该粒子本就不输运）⇒ **整张卡全灭**：用户真实卡 `s.i`（Cf252）实测 **35/35 被判墓地**、后端回 `没有可预览的栅元`、预览全空（清掉 `imp_p` 同一载荷出 34 个 STL；删掉判据后 35 个） |
+  | `comment` 含 `graveyard`（2026-09-26 `83c5a20` 引入） | ① **越权**：会静默吞掉手写注释里带该词的真几何；② **目标已消失**：它要拦的 GEOUNED 墓区自 2026-10-10 起在**导入边界**就不生成了（`voidGen=False`，同一份 STEP 9→6 栅元） |
+  同口径的模块级 `_imp_any_zero`（格阵 `sub_by_u` 过滤，项15 规则5）一并删除 —— mode n 卡上它会把
+  整个 universe 滤空（实测 `lattices: []`）。
+
+  **⭐ 巨型外围壳撑开取景的根因与正确修法（2026-10-11 查明，取代旧的"墓地照画"结论）**：
+  GEOUNED 墓区是 `material 0` ⇒ `getMatColor` 给色 `"transparent"` ⇒ `buildCellMaterial` 给
+  **opacity 0**，再加 `visible: c.mat !== "0"` —— **一个像素都画不出来**。所以 2026-09-24 那句
+  「墓地照画」是**误诊**：真正把模型变成"一坨"的是 `Preview3D.frameCamera` 把**所有** mesh 的
+  包围盒求并集而**不看 `visible`**（83c5a20 与当时的 HEAD 逐字相同，均无可见性过滤）⇒ 不可见的
+  墓区（bbox 2927³ / 2097³）照样把相机撑到 ±2000。
+  **修法（唯一权威 = `gui/src/three/frameBox.ts::computeFrameBox`，回归 `gui/test/frameBox.test.ts`）**：
+  ① 不可见栅元不参与取景；② **真空（material 0）即使勾选可见也不参与取景**（用户口径「不影响实体
+  查看」）；取景主导 = 可见实体并集，无实体时回退到全部可见并集。
+  ⇒ **教训**：当年为解决取景缺陷去"少给几何"，一路加严到吞掉真几何；取景的缺陷只能在取景侧修。
+
+  **⚠️ 仍然成立的一条（改渲染取舍前先读）**：`fill/fill_grid/render/u` 这些取舍字段**全部**由
+  `app/step_importer.flat_cell_json` 供给（STEP 导入 → 前端 → preview-3d 的唯一序列化口，契约见
+  `docs/contracts/api.yaml` 的 `deck.cells`）——**判据"读不到就放行"，序列化口漏一个键就等于该规则
+  静默失效**（2026-10-10 实测：只发 4 字段 ⇒ fill 容器被当实体块渲染，见 §6）。`imp_*`/`comment`
+  仍照发（deck 事实 + 重合检测缓存指纹口径），但**不再决定取舍**。
+
+- **⭐ Monaco 必须全局关掉「颜色码」识别（2026-10-11 用户报「# 加数字前面会显示色块」）**：
+  Monaco **自带一个对所有语言生效的默认颜色提供者**，把 `#232`、`#RRGGBB`、`rgb(...)` 当 CSS 颜色
+  ⇒ **字前画一个色块**，点开还弹取色器（用户实测截图：`#232` 旁弹 rgb(64,54,...) 取色面板）。
+  而 MCNP 里 **`#n` 是栅元补集**（`#232` = 挖掉 232 号栅元），栅元卡/整张卡里到处都是；`#103 #201
+  #301 #501` 这类"三位十六进制形状"的数也会中招 ⇒ 必须在**全局**关掉，不是只关曲面卡那一处。
+  **唯一实现**：`gui/src/components/McnpEditor.tsx` —— ① 共享 editor options 设
+  `colorDecorators: false` + `defaultColorDecorators: "never"`（Monaco 0.57 两个默认分别是
+  `true`/`"auto"`，**两个都得关**）；② `configureMonaco` 里对本程序三个语言 id（surface/tr/deck）
+  各注册一个**空颜色提供者**（语言级优先于 `*`）作为兜底。
+  ⚠️ 新增任何 Monaco 编辑器都必须走 `McnpEditor`（否则又拿到默认的 `colorDecorators: true`）。
 
 - **⭐ hex 格阵权威语义（2026-10-04 重立，取代旧的"hexCenter 权威公式"条目；改 hex 任何代码前先读本节）**：
   **MCNP 只规定了"曲面顺序 → 基矢"这一条规则**（C810 3-29 / MCNP6.3 p.295-296）：

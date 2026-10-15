@@ -760,6 +760,44 @@ LATTICE_CONTAINER_HASH_DECK = {
 }
 
 
+def _with_mode_n_imp_p_zero(deck: dict) -> dict:
+    """复制一份载荷，给每个栅元补上 mode n 卡的真实习惯写法：`imp_n=1`、`imp_p=0`。
+
+    实测来源：用户真实卡 `s.i`（Cf252，`mode n`）**35 个栅元全部**写 `imp:p=0`。
+    """
+    out = json.loads(json.dumps(deck))
+    for c in out["cells"]:
+        cell = c.get("cell") if c.get("kind") == "cell" else c
+        cell["imp_n"] = cell.get("imp_n") or "1"
+        cell["imp_p"] = "0"
+    return out
+
+
+def test_http_preview_lattice_not_gated_by_imp(backend_base_url):
+    """回归：mode n 卡（全员 `imp:p=0`）不得让格阵 universe 装配被清空。
+
+    旧 handler 按「imp 任一为 0 ⇒ 墓地」过滤 `sub_by_u`，mode n 的卡每个栅元都写
+    `imp:p=0` ⇒ 全部 universe 栅元被滤掉（实测整个 `lattices` 为空）。口径已收敛为
+    「imp 不决定几何取舍」。
+    """
+    try:
+        from app.freecad_locator import bin_dir
+    except ImportError:
+        bin_dir = None
+    if not bin_dir:
+        pytest.skip("FreeCAD 不可用，跳过格阵 universe 装配直验")
+
+    resp = _post(backend_base_url, "/api/preview-lattice",
+                 _with_mode_n_imp_p_zero(LATTICE_DECK))
+    assert resp.get("status") == "ok", resp
+    lattices = resp.get("lattices", [])
+    assert len(lattices) == 1, resp
+    universes = lattices[0].get("universes", {})
+    assert universes, (
+        "全员 imp:p=0 把格阵 universe 全滤空了 —— imp 不得再决定几何取舍"
+        f"（universes={universes!r}）")
+
+
 def test_http_preview_lattice_universe_stl_nonempty_container_hash(backend_base_url):
     """回归：容器 cell 含 `#` 补集（如核心挖叶片）时 universe STL 仍非空。
 

@@ -91,7 +91,8 @@ import { apiUrl } from "../utils/api";
 
 /* ---- 深模块（3D 性能修复） ---- */
 import { computeCameraParams } from "../three/cameraParams";
-import { buildCellMaterial, type TransparentMode } from "../three/cellMaterial";
+import { computeFrameBox } from "../three/frameBox";
+import { buildCellMaterial, type TransparentMode, VACUUM_PREVIEW_COLOR, VACUUM_PREVIEW_OPACITY } from "../three/cellMaterial";
 import { createRenderLoop } from "../three/renderGate";
 import { createTickGrid } from "../three/TickGrid";
 import { AXIS_CONFIG } from "../three/axisConfig";
@@ -283,8 +284,13 @@ function initScene(
 
   /* ---- 半透明模式（默认 opaque）---- */
   let transparentMode: TransparentMode = "opaque";
+  /**
+   * 真空（M0）档位：真半透明 + 可勾选（2026-10-11 用户选定）。默认仍不勾选；
+   * 勾上也不影响取景（frameCamera 只按可见实体取景）。
+   */
+  const VACUUM_MAT_OPTS = { vacuumOpacity: VACUUM_PREVIEW_OPACITY, vacuumColor: VACUUM_PREVIEW_COLOR };
   function applyMeshMaterial(mesh: THREE.Object3D, color: string) {
-    const spec = buildCellMaterial({ color, transparentMode });
+    const spec = buildCellMaterial({ color, transparentMode, ...VACUUM_MAT_OPTS });
     const mat = (mesh as THREE.Mesh).material as THREE.MeshStandardMaterial;
     mat.color.set(spec.color);
     mat.transparent = spec.transparent;
@@ -328,12 +334,14 @@ function initScene(
         var geo = loader.parse(buf.buffer);
         var idx = cellIndex(key);
         var cv = cellViews[idx] || cellViews[0];
-        var spec = buildCellMaterial({ color: cv.color, transparentMode });
+        var spec = buildCellMaterial({ color: cv.color, transparentMode, ...VACUUM_MAT_OPTS });
         var mat = new THREE.MeshStandardMaterial({ color: spec.color, roughness: 0.3, metalness: 0.0, transparent: spec.transparent, opacity: spec.opacity, depthWrite: spec.depthWrite, side: THREE.FrontSide });
         var mesh = new THREE.Mesh(geo, mat);
         mesh.userData.index = idx;
         mesh.userData.color = cv.color;
         mesh.userData.num = key;
+        // 可见性由勾选状态初始化：真空改真半透明后，不对齐就会"列表没勾却自己亮"
+        mesh.visible = cv.visible !== false;
         scene.add(mesh);
         meshes.push(mesh);
         geo.computeBoundingBox();
@@ -364,23 +372,39 @@ function initScene(
     return stlCount;
   }
 
-  // 相机取景：模型 ∪（可选线框预览）∪ 原点（坐标轴在原点），target=模型中心
+  // 相机取景：只按**可见实体**（口径与理由见 src/three/frameBox.ts；回归 test/frameBox.test.ts）
   function frameCamera(extra?: THREE.Object3D) {
-    var modelBox = new THREE.Box3();
-    for (var _m4 of meshes) {
-      var bb4 = (_m4 as THREE.Mesh).geometry?.boundingBox;
-      if (bb4) modelBox.union(bb4);
-    }
-    var frameBox = modelBox.clone();
+    var cands = meshes.map(function (m) {
+      var mm = m as THREE.Mesh;
+      var bb = mm.geometry?.boundingBox;
+      return {
+        box: bb
+          ? { min: [bb.min.x, bb.min.y, bb.min.z] as [number, number, number],
+              max: [bb.max.x, bb.max.y, bb.max.z] as [number, number, number] }
+          : null,
+        visible: mm.visible !== false,
+        // 真空由颜色哨兵 "transparent" 单一权威标识（见 materialColors.getMatColor）；
+        // setColor 会同步 userData.color，材料改动后此处仍准。
+        solid: mm.userData.color !== "transparent",
+      };
+    });
+    var extraBox: { min: [number, number, number]; max: [number, number, number] } | null = null;
     if (extra) {
-      try { frameBox.union(new THREE.Box3().setFromObject(extra)); } catch (e) { /* 忽略线框取景异常 */ }
+      try {
+        var eb = new THREE.Box3().setFromObject(extra);
+        if (!eb.isEmpty()) {
+          extraBox = { min: [eb.min.x, eb.min.y, eb.min.z], max: [eb.max.x, eb.max.y, eb.max.z] };
+        }
+      } catch (e) { /* 忽略线框取景异常 */ }
     }
-    // 无网格且无 extra（如格阵 deck：universe 栅元已排除、装配由 extra 提供）→ 不取景
-    if (modelBox.isEmpty() && !extra) return;
-    frameBox.expandByPoint(new THREE.Vector3(0, 0, 0));
-    var target = modelBox.getCenter(new THREE.Vector3());
-    var fSize = frameBox.getSize(new THREE.Vector3());
-    var cp = computeCameraParams([target.x, target.y, target.z], [Math.max(fSize.x, 1e-3), Math.max(fSize.y, 1e-3), Math.max(fSize.z, 1e-3)]);
+    var framed = computeFrameBox(cands, { extra: extraBox, includeOrigin: true });
+    // 无可见栅元且无 extra（如格阵 deck：universe 栅元已排除、装配由 extra 提供）→ 不取景
+    if (!framed) return;
+    var cp = computeCameraParams(framed.center, [
+      Math.max(framed.size[0], 1e-3),
+      Math.max(framed.size[1], 1e-3),
+      Math.max(framed.size[2], 1e-3),
+    ]);
     camera.near = cp.near;
     camera.far = cp.far;
     camera.position.set(cp.position[0], cp.position[1], cp.position[2]);
@@ -389,8 +413,12 @@ function initScene(
     controls.maxDistance = cp.maxDistance;
     camera.updateProjectionMatrix();
     controls.update();
-    var mSize = modelBox.getSize(new THREE.Vector3());
-    updateAxes(Math.max(mSize.x, mSize.y, mSize.z, 1) * 0.5);  // 轴线随模型范围伸缩
+    var mSize = [
+      framed.model.max[0] - framed.model.min[0],
+      framed.model.max[1] - framed.model.min[1],
+      framed.model.max[2] - framed.model.min[2],
+    ];
+    updateAxes(Math.max(mSize[0], mSize[1], mSize[2], 1) * 0.5);  // 轴线随模型范围伸缩
   }
 
   /* ---- 按需渲染门（renderGate）---- */
@@ -523,10 +551,6 @@ function initScene(
         }
         mat.needsUpdate = true;
       }
-      markDirty();
-    },
-    selectAll(vis: boolean) {
-      meshes.forEach((m) => { m.visible = vis; });
       markDirty();
     },
     setTransparentMode(mode: TransparentMode) {
@@ -727,25 +751,19 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
   useEffect(() => {
     // 用最新曲面/栅元/TR 调用后端生成 STL；生成新栅元后 genTick++ 重拉
     setLoading(true);
+    setFreecadStatus("正在生成几何…");
     var p = propsRef.current;
     // 预置网格模式（STEP 方向预览）：网格由宿主算好（后端按约定转过）直接渲染，不调后端。
     if (p.preloadedStl) {
       setStlData(p.preloadedStl);
-      setFreecadStatus(" 已按当前方向约定转好");
+      setFreecadStatus("已按当前方向约定转好（预置网格）");
       setLoading(false);
       return;
     }
     // 格阵装配：universe 栅元（u 非空）不单独摆（经装配出现），从 preview-3d 排除。
-    //
-    // ⚠️ **必须把语义字段一起发过去**（2026-10-10 实测的回归）：后端 `build_cells_data` 的
-    // item-14 跳过规则（`imp` 任一为 0 ⇒ 墓地不渲染 / `fill`、`fill_grid` 非空 ⇒ 装配容器不渲染 /
-    // `render:false` ⇒ 跳过）**全靠这些字段判断**；此前这里只发 4 个字段（number/material/density/
-    // surface_expr），规则一个都不生效。用用户真实 deck（`筒子1`）端到端实测：
-    //   只发 4 字段 → 9 个栅元全出 STL，其中 栅元 8 `Graveyard_in` bbox 180³、
-    //   **栅元 9 `Graveyard`（`SO 90.101` 正侧 = 球外无界）bbox 1000³**（被裁到引擎包围盒）
-    //   —— 模型本体最大才 102 单位 ⇒ 相机被撑到 ±500、模型缩成针尖（= 2026-09-24 修过的
-    //   「3D 预览就是一坨」在这条链上复活；那次只按完整载荷打了端点，没走前端真实请求）；
-    //   带上这些字段 → 只出栅元 1~7（8/9 正确跳过）。
+    // ⚠️ 语义字段必须一起发：后端的 fill/fill_grid/render 跳过规则全靠它们（2026-10-10
+    // 实测：只发 4 字段 ⇒ 装配容器被当实体块渲染）。`imp_*`/`comment` 自 2026-10-11 起
+    // **不再决定取舍**，但仍照发（deck 事实 + 后端缓存指纹口径，少发会与后端期望分叉）。
     var cellsForBackend = p.cells.filter(function(c) { return !(hasLattice && c.u); }).map(function(c) {
       return {
         number: parseInt(c.num) || 0, material: c.mat, density: (c as any).density || "",
@@ -771,13 +789,17 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
     }).then(function(r) { return r.json(); }).then(function(j) {
       if (j.stl_data && Object.keys(j.stl_data).length > 0) {
         setStlData(j.stl_data);
-        setFreecadStatus(" " + j.count + " ");
+        setFreecadStatus(`已加载 ${Object.keys(j.stl_data).length} 个栅元的几何`);
       } else if (j.message) {
-        setFreecadStatus("  " + j.message);
+        // 这句提示曾经**没有任何地方渲染**（freecadStatus 只 set 不读）⇒ 后端明明回了
+        // "没有可预览的栅元"，用户看到的却只是"空白的三维窗口"。现在底部状态栏会显示它。
+        setFreecadStatus(`后端未产出几何：${j.message}`);
       } else {
-        setFreecadStatus("  ");
+        setFreecadStatus("后端未产出几何（未返回原因）");
       }
-      }).catch(function() { setFreecadStatus("  "); }).finally(function() { setLoading(false); });
+      }).catch(function(err) {
+        setFreecadStatus(`几何请求失败：${err && err.message ? err.message : "网络/后端不可达"}`);
+      }).finally(function() { setLoading(false); });
     // preloadToken：预置网格换了一份时重挂（不把整个 STL 塞进依赖数组）
   }, [genTick, hasLattice, preloadToken]);
 
@@ -920,9 +942,14 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
       if (!stlData || !ctrlRef.current) return;
     var n = ctrlRef.current.loadStlMeshes(stlData, cellViews);
     if (n > 0) {
-      setFreecadStatus(n + " ");
-      setCellViews(prev => prev.map(c => c.mat === "0" ? c : { ...c, visible: true }));
-      ctrlRef.current.selectAll(true);
+      setFreecadStatus(`已加载 ${n} 个栅元的几何`);
+      // 实体自动勾选（真空保持不勾选），并把勾选状态落到网格上；不用 selectAll(true)，
+      // 否则会连真空网格一起点亮（真空现在真半透明，会无视列表勾选状态显形）。
+      setCellViews(prev => {
+        const next = prev.map(c => c.mat === "0" ? c : { ...c, visible: true });
+        next.forEach((c, i) => ctrlRef.current?.setVisible(i, c.visible));
+        return next;
+      });
       runOverlapCheck();  // 异步自动重合检测（渲染完成后）
       setTimeout(() => {
         // STL 加载成功后 0.5s 自动勾选半透明查看（用户要求）
@@ -1019,10 +1046,9 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
     });
   }, []);
 
-  // 切换单个可见性（真空栅元不可切换）
+  // 切换单个可见性（真空自 2026-10-11 起不再锁死：透明是可视性的一种，不该用"禁止勾选"实现）
   const toggleCell = useCallback((index: number) => {
     setCellViews((prev) => {
-      if (prev[index]?.mat === "0") return prev; // 真空不可勾选
       const next = [...prev];
       next[index] = { ...next[index], visible: !next[index].visible };
       ctrlRef.current?.setVisible(index, next[index].visible);
@@ -1030,10 +1056,13 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
     });
   }, []);
 
-  // 全选/全不选（真空栅元不受影响）
+  // 全选/全不选（含真空；批量必须同时落网格可见性 —— 显示由 mesh.visible 决定）
   const setAllVisible = useCallback((vis: boolean) => {
-    setCellViews((prev) => prev.map((c) => c.mat === "0" ? c : { ...c, visible: vis }));
-    ctrlRef.current?.selectAll(vis);
+    setCellViews((prev) => {
+      const next = prev.map((c) => ({ ...c, visible: vis }));
+      next.forEach((c, i) => ctrlRef.current?.setVisible(i, c.visible));
+      return next;
+    });
   }, []);
 
   // 材料变更：更新本地 cellViews（颜色）+ 3D 网格颜色 + 回写 deck
@@ -1335,13 +1364,13 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         hasLattice
           ? React.createElement(UniverseCellList, {
               groups: universeGroups,
-              ungrouped: displayOrigIdx.map((i) => ({ num: cellViews[i].num, mat: cellViews[i].mat, comment: cellViews[i].comment, visible: cellViews[i].visible, locked: cellViews[i].mat === "0" })),
+              ungrouped: displayOrigIdx.map((i) => ({ num: cellViews[i].num, mat: cellViews[i].mat, comment: cellViews[i].comment, visible: cellViews[i].visible, locked: false })),
               onToggleGroup: toggleUniverseGroup,
               onToggle: (rowIndex: number) => toggleCell(displayOrigIdx[rowIndex]),
               onMaterialClick: (rowIndex: number, e: React.MouseEvent) => { setMatPicker({ i: displayOrigIdx[rowIndex], x: e.clientX, y: e.clientY }); },
             })
           : React.createElement(CellList, {
-              rows: cellViews.map(cv => ({ num: cv.num, mat: cv.mat, comment: cv.comment, visible: cv.visible, locked: cv.mat === "0" })),
+              rows: cellViews.map(cv => ({ num: cv.num, mat: cv.mat, comment: cv.comment, visible: cv.visible, locked: false })),
               onToggle: (rowIndex: number) => toggleCell(rowIndex),
               onMaterialClick: (rowIndex: number, e: React.MouseEvent) => { setMatPicker({ i: rowIndex, x: e.clientX, y: e.clientY }); },
             }),
@@ -1397,6 +1426,15 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
           React.createElement("span", {
             style: { fontSize: 11, color: "var(--text-tertiary)" },
           }, `${visibleCount}/${cellViews.length} 显示`),
+          // 后端几何状态：此前这个 state 只 set 不读 ⇒ 后端回"没有可预览的栅元"时用户只见空白
+          React.createElement("span", {
+            title: freecadStatus,
+            style: {
+              fontSize: 10, color: "var(--text-tertiary)", flex: 1,
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              marginLeft: 8, textAlign: "left",
+            },
+          }, freecadStatus),
           React.createElement("button", {
             className: "btn btn-primary btn-xs",
             onClick: onClose,
