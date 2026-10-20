@@ -2312,3 +2312,39 @@ warnings: ["MCCAD 切割已跳过：未找到 McCAD.exe。请把 McCAD.exe 放�
   ③ 自愈：`focus`/`blur` 事件 + DOM 层 `pointerup`/`mouseup`/`Esc`/`blur` 一律熄灭覆盖层。
 - 测试：`gui/test/dragImport.test.ts` +3 例（共 9 例）；vitest **124 文件 / 1072 例全过**；`tsc` 两档 EXIT 0。
 - 出包：`build:app` EXIT 0（sidecar 未变），部署只替换 exe，启动冒烟通过。
+
+### M. 弹出窗口 localStorage 桥「写爆配额」——PTRAC / 3D 结果（meshtal）两个窗口（2026-10-21）
+
+- 症状（用户原话）：「解析ptrac时显示没有 3D 径迹数据（请从主窗口「输出」标签页解析 PTRAC 后打开）」；
+  指令补充「顺带看看 meshtal 有无类似 bug」。
+- 根因（部署版 CDP 实测）：`openPtrac3DWindow` / `openVolume3DWindow` 都把**整份几何外壳 base64 STL**
+  写进 localStorage 桥（18 栅元 deck 实测 `stl_data` = **21,142,374 字符**），而 Chromium/WebView2 单 origin
+  localStorage 配额**实测 ≈5,000,000 字符**（4.0M 通过 / 5.5M 抛）⇒ `setItem` 抛 `QuotaExceededError`
+  ⇒ `windows.ts` 旧实现 `console.warn` 吞掉后照样 `invoke` 开窗 ⇒ 子窗口读不到桥 ⇒ 只显示兜底文案
+  「没有 3D 径迹数据」/「没有 3D 结果数据」（**误导成"用户没解析"**）。
+  部署版主窗口 console 实录：`ptrac bridge write failed QuotaExceededError: … Setting the value of
+  'mcnp_win_ptrac' exceeded the quota.`
+- 修法：
+  1. `utils/windows.ts`：新增 `writeBridge(key, data, what)` —— 序列化超 **4,000,000 字符**（留 1M 余量）或
+     `setItem` 抛错时**当场抛错**（调用方 `errorHint` 显示在输出页），彻底禁止"开一个读不到数据的空窗口"；
+     `openPtracWindow` / `openVolume3D` 都改走它。
+  2. `ptrac/openPtracWindow.ts`、`volume/openVolume3DWindow.ts`：桥里**只放几何描述**
+     （`model.cells/surfaces/trCards` + 元数据），STL 不再过桥；主窗口仍调一次 `/api/preview-3d`
+     但**只用于预热后端 deck 指纹缓存**（结果丢弃），子窗口随后自取命中缓存（≤1s）。
+  3. `ptrac/PtracWindow.tsx`、`volume/ResultWindow.tsx`：读到 `model` 时自己 `fetchPreview3dStl(...)` 取外壳
+     再建渲染器（契约 ptrac-visualization.md §4 原设计）；旧桥的 `stlData` 字段保留兼容。
+  4. `src-tauri/src/main.rs`：`create_or_focus(..., reload_if_exists)` —— 窗口已存在时 `eval("window.location.reload()")`，
+     否则"再点一次解析"只是 show+focus，仍显示旧数据（桥是一次性消费）。
+- 测试：新增 `gui/test/ptrac/openPtracWindow.test.ts`（4 例：桥体积 < 200K 且无 `stlData`、几何描述下行、
+  无模型不取 STL、写入失败→`error` 而非静默）、`gui/test/utils/windowsBridge.test.ts`（4 例：setItem 抛配额 /
+  超限 / volume 同源 / 正常体积不误伤）、`gui/test/volume/openVolume3DWindow.test.ts` +3 例。
+  vitest **126 文件 / 1083 例全过**；`tsc` 两档 EXIT 0；`build:app` EXIT 0（Rust 签名变更需重编）。
+- 端到端验收（部署版 exe + CDP，脚本在仓库根 `__cdp_ptrac_e2e.mjs` / `__cdp_ptrac_reopen.mjs` / `__cdp_volume_e2e.mjs`）：
+  PTRAC 窗口「径迹（粒子）400 条 · 事件 10000 · 点 10000」+ canvas 1250×1025；再点「解析 PTRAC」用
+  `window.__reloadMarker` 探针确认窗口真重载；3D 结果窗口用 `tests/fixtures/valid_40.meshtal` + 同一 18 栅元 deck
+  渲染正常（色阶 0.289–9.809 / 18 栅元图例 / canvas 1250×1025）。
+- 未修的同类风险（已登记）：`openPreview3D` 的 `preloadedStl`（STEP 方向预览 = 全模型 base64 STL）同一模式，
+  大 CAD 模型仍会静默失败（显示「没有 3D 预览数据」）；截面桥是矢量多边形、Tally 图是逐 bin 行、演示源 500 粒子，量级小。
+- 遗留观察：该 ptrac（`TYPE=P` + `WRITE=ALL`）统计行「中子 0 / 光子 0 / 电子 0」——解析器 IPT 提取未识别，
+  径迹全部显示但都是灰色；与本次开窗缺陷无关，建议另开一轮。
+- 提交：`e0bda17`（未 push）；部署只替换 exe（与构建产物 SHA256 一致），用户旧进程需关掉重开。

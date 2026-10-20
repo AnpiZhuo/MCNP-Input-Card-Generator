@@ -1,5 +1,37 @@
 # 项目记忆文档（AI 速查手册）
 
+> **★ 本批（2026-10-21 凌晨）：PTRAC「没有 3D 径迹数据」= localStorage 桥写爆配额 —— 已改 ✅ / 已重新出包部署 ✅ · 版本仍 1.7.7**
+> 用户原话：「解析ptrac时显示没有 3D 径迹数据（请从主窗口「输出」标签页解析 PTRAC 后打开）」。
+> **根因（实测取证，非推断）**：`openPtrac3DWindow` 把整份几何外壳 base64 STL 塞进 localStorage 桥 `mcnp_win_ptrac`
+> （用户 deck：18 栅元，`/api/preview-3d` 返回 **21,142,374 字符**）；Chromium/WebView2 单 origin localStorage 配额
+> **实测上限 ≈5,000,000 字符**（4.0M 通过 / 5.5M 抛，Edg/154 实测）⇒ `setItem` 抛 `QuotaExceededError` ⇒ `windows.ts` 用
+> `console.warn` 吞掉后照样 invoke 开窗 ⇒ 子窗口读不到桥 ⇒ 只显示兜底文案（**症状把"数据太大"误导成"你没解析"**）。
+> **取证方式（可复跑）**：部署版 exe 用 `WEBVIEW2_USER_DATA_FOLDER`（独立 profile）+ `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=
+> --remote-debugging-port=9411` 起探针实例 → CDP 驱动（`__cdp_ptrac_e2e.mjs`，经 `mcnp:import-inp` 事件导入卡 → 输出页 → 解析 PTRAC）
+> → 主窗口 console 抓到 `ptrac bridge write failed QuotaExceededError … 'mcnp_win_ptrac' exceeded the quota`，子窗口文本正是用户看到的那句。
+> **修法**：① 桥里只放几何描述（`model.cells/surfaces/trCards`，几十 KB）+ ptrac 路径；外壳由**子窗口自己**调 `/api/preview-3d`
+> 取（契约 §4 原设计；主窗口仍预热一次后端 deck 指纹缓存，**结果不进桥**）；② `windows.ts` 新增 `writeBridge()`：超 4,000,000 字符
+> 或 setItem 抛错就**当场抛错**（OutputTab 显示 hint），绝不再"开一个读不到数据的空窗口"；③ Rust `create_or_focus(..., reload_if_exists)`：
+> 窗口已存在时 `eval("window.location.reload()")`（桥是一次性消费，否则再点只 focus 旧数据）。
+> **顺带同源缺陷（用户指令「顺带看看 meshtal 有无类似 bug」）**：**「3D 结果」（meshtal 体积窗口）同源**——`openVolume3DWindow`
+> 也把同一份 21MB STL 塞桥 ⇒ 同样只会显示「没有 3D 结果数据（请从主窗口「计数」标签页解析 MESHTAL 后打开）」。本批同口径修好
+> （桥只带几何描述，`ResultWindow.tsx` 自取外壳）。
+> **未修的同类风险（已登记，未动）**：`openPreview3D` 的 `preloadedStl`（STEP 方向预览 = 全模型 base64 STL）仍是同一模式，大 CAD 模型
+> 同样会静默失败（显示「没有 3D 预览数据」）；截面桥是矢量多边形、Tally 图是逐 bin 行、演示源 500 粒子，量级都小。
+> **验证（实跑）**：vitest **126 文件 / 1083 例全过**（新增 `gui/test/ptrac/openPtracWindow.test.ts` 4 例、`gui/test/utils/windowsBridge.test.ts`
+> 4 例、`gui/test/volume/openVolume3DWindow.test.ts` +3 例）；`tsc` 两档 EXIT 0；`build:app` EXIT 0（Rust 签名改了要重编，约 4 min）；
+> 部署只替换 exe（与构建产物 **SHA256 一致 `DF47D1C07D69A55E51824CC2C1ACF179F9826B45907784548CA6D62247FA0961`**）；**部署版 CDP 端到端**：
+> PTRAC 窗口「径迹（粒子）400 条 · 事件 10000」+ canvas 1250×1025，再点「解析 PTRAC」确认窗口**真重载**（注入 `window.__reloadMarker`
+> 探针：reload 后变 undefined）；meshtal 3D 结果窗口用 `tests/fixtures/valid_40.meshtal` + 同一 18 栅元 deck 实测渲染
+> （色阶 0.289–9.809、18 栅元图例、canvas 1250×1025、无空态文案）。
+> ⚠️ **遗留观察（未修，建议另开一轮）**：该 ptrac（`TYPE=P` + `WRITE=ALL`）统计行「中子 0 / 光子 0 / 电子 0」——解析器 IPT 提取没认出来，
+> 径迹仍全部显示但都是灰色；与本次开窗缺陷无关。
+> ⚠️ 用户当时运行中的进程是**旧 exe**（00:34 构建）：**必须关掉重开**才吃到本次修复；部署目录留了两份
+> `MCNP 输入卡生成器.exe.old_20261021_*` 回滚点（其中一份是旧进程正在跑的，重启后可删）。
+> **已提交 ✅ `e0bda17`（未 push）**：`gui/src/utils/windows.ts`、`gui/src/ptrac/{openPtracWindow.ts,PtracWindow.tsx}`、
+> `gui/src/volume/{openVolume3DWindow.ts,ResultWindow.tsx}`、`gui/src-tauri/src/main.rs` + 3 个测试文件；文档批次见下一提交。
+> 3 个 `__cdp_*` 探针脚本在仓库根（`/__*` 已 gitignore，不入库，但可复跑）。
+
 > **★ 本批（2026-10-20）参数扫描改「显式计算」—— 每个组合一个可见 MCNP 控制台窗口，程序不再管理超时（用户当场指定）**
 > **起因（用户报「参数扫描超时为什么中止？」）**：上一轮 10 组合扫描（`D:\MCNP\new\sweep_20261020_225916`，
 > 22:59:16–23:01:46 = **150 s**）被**前端** 120 s 兜底中止 —— 不是 MCNP 超时、也不是后端预算：10/10 组合 `exit 0`
@@ -1862,6 +1894,11 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 
 ## §2 当前状态快照（语义记忆）
 
+  > **2026-10-21 凌晨（同版本 1.7.7，未升版；已提交 `e0bda17`，未 push）**：修「解析 PTRAC 后窗口显示『没有 3D 径迹数据』」
+  > —— 根因是弹出窗 localStorage 桥夹带整份 base64 STL（实测 21.1M 字符 > 配额 ≈5M）导致 `setItem` 抛错后被吞；
+  > 同源修好「3D 结果」（meshtal）窗口。部署只替换 exe（与构建产物 SHA256 一致），**用户旧进程需关掉重开**。
+  > 详见文首「★ 本批（2026-10-21 凌晨）」与 §6 两条新教训（localStorage 桥配额 / CDP 探针实例验证法）。
+
 - **开发阶段**：**v1.7.7 已打包部署**（2026-09-26，**用户指定升版**）—— 本包含 **S11 三条修复（计数卡前缀 / 栅元 `#` / 截面拖动）+ S10 全量（GEOUNED 参数 UI · FreeCAD 自适应切分 · `P A B C D` 感度 · slab 覆盖 · 墓区过滤）+ 09-23 各批**。
   > **2026-10-10 分发（同版本 1.7.7，未升版）**：6 个提交已 **push `origin/main`**（`a9a5659..8997791`）；**README 两份全部重写**
   > （主 README 374 行 + 包内速览 150 行，按实测计数改写：7 页签 / 6 独立窗口 / 常用预设 49 条·PNNL 48 条 133 核素 / MCP 6 工具）；
@@ -2047,12 +2084,12 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 | `gui/src/App.tsx` | 主界面（顶栏/导入/生成/保存恢复/主题） | 前端 |
 | `gui/src/components/` | 标签页组件：BasicSettings/MaterialTab/GeometryTab/SourceTab/TallyTab/AdvancedTab/OutputTab。**TallyTab 的"前缀/环探测器轴"必须经 `utils/tallyBridge.ts` 落 deck**（2026-09-26 起，见 §6 接缝那条） | 前端 |
 | `gui/src/components/Preview3D.tsx` / `Preview3DWindow.tsx` | Three.js 3D 预览（独立窗口）。**预置网格模式（2026-10-08）：`preloadedStl`/`preloadToken`/`titleOverride`/`zIndex` —— 方向预览与正常预览复用同一个窗口，不再自搓第二套画布** | 前端 |
-| `gui/src/utils/windows.ts` | **弹出窗口桥（localStorage + Tauri `invoke`）**：`openPreview3D`/`openCrossSection`/`openVolume3D`/`openPtracWindow`… 及各自 `read*Data` 一次性消费。**2026-10-08：3D 预览桥扩展 `preloadedStl`/`preloadToken`/`titleOverride`（STEP 方向预览复用同一窗口、同一 label）** | 前端 |
+| `gui/src/utils/windows.ts` | **弹出窗口桥（localStorage + Tauri `invoke`）**：`openPreview3D`/`openCrossSection`/`openVolume3D`/`openPtracWindow`… 及各自 `read*Data` 一次性消费。**2026-10-08：3D 预览桥扩展 `preloadedStl`/`preloadToken`/`titleOverride`（STEP 方向预览复用同一窗口、同一 label）**。**2026-10-21：新增 `writeBridge()`——超 4,000,000 字符或 `setItem` 抛错就当场抛错（不再吞成空窗口）；`openPtracWindow`/`openVolume3D` 改走它，桥里不再带 STL** | 前端 |
 | `gui/src/utils/cellClosure.ts` / `useCellClosure.ts` | **栅元封闭性深模块**（6 状态 → 展示元数据）；**2026-10-08 新增 `closureWarnText(report)`：生成前复核文案的唯一来源，坏栅元逐条列出、干净返回 `null`（调用方据此必然清空旧警告）** + `CLOSURE_WARN_PENDING` | 前端 |
 | `gui/src/components/CrossSectionView.tsx` / `CrossSectionWindow.tsx` | 平面截面（独立窗口）；**视图变换/拖动换算一律走 `utils/sectionView.ts`**（2026-09-26 起：旋转中心不得含 `pan`） | 前端 |
 | `gui/src/three/` | 3D 深模块：cameraParams/renderGate/cellMaterial/TickGrid（`setLabelTheme` 屏幕·纸质两种标签底）/axisConfig（轴单一事实来源；**`color` 屏幕色 + `paperInk` 出图墨色**）/planeOffset（截面平面坐标换算）/quickCellPreview（快捷建栅元线框） | 前端 |
-| `gui/src/volume/` | 体积可视化 11 模块（volumeShader/VolumeRenderer/colorize/alignWorld/downsampleRequest/fmeshState/ColorLegend/FMeshForm/VolumeControlPanel/ResultWindow/surfacesAABB） | 前端 |
-| `gui/src/ptrac/` | PTRAC 径迹 3D 窗口模块（trackColors/PtracRenderer/PtracWindow 等） | 前端 |
+| `gui/src/volume/` | 体积可视化 11 模块（volumeShader/VolumeRenderer/colorize/alignWorld/downsampleRequest/fmeshState/ColorLegend/FMeshForm/VolumeControlPanel/ResultWindow/surfacesAABB）。**2026-10-21：`ResultWindow` 从桥里的 `model` 自取外壳 STL（桥不再带 21MB STL，见 §6 配额条目）** | 前端 |
+| `gui/src/ptrac/` | PTRAC 径迹 3D 窗口模块（trackColors/PtracRenderer/PtracWindow 等）。**2026-10-21：`PtracWindow` 从桥里的 `model` 自取外壳 STL；`openPtracWindow` 的桥只带几何描述** | 前端 |
 | `gui/src/utils/quickCell.ts` / `gui/src/components/QuickCellDialog.tsx` / `QuickCellForm.tsx` | 快捷建栅元：纯函数生成（编号/校验/RCC/RPP/SPH/**HEX/TET**）+ 弹窗；**表单是固定像素排版，宿主宽度必须 ≥360px**（见 §5）；重合检测**恒开**（勾选框已按用户裁决删除） | 前端 |
 | `gui/src/utils/useQuickAddOverlap.ts` | **快捷建栅元重合检测+补集决策深模块（GeometryTab/Preview3D 共用）** | 前端 |
 | `gui/src/utils/batchCellEdit.ts` / `gui/src/components/BatchCellEditDialog.tsx` | 栅元列表批量编辑：纯函数应用（空字段=不改、曲面只追加）+ 弹窗 | 前端 |
@@ -2287,6 +2324,21 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 
 ## §6 踩坑与排雷指南（情景记忆 · 经验教训）
 
+- **❗localStorage 桥不能夹带大二进制（base64 STL）：配额 5,000,000 字符，写失败必须显式报错（2026-10-21，用户实测两窗口同时中招）**：
+  「3D 径迹」/「3D 结果」两窗旧实现把整份几何外壳 STL 塞进 localStorage 桥（18 栅元 deck 实测 **21,142,374 字符**），
+  超过 Chromium/WebView2 单 origin 配额（**实测 ≈5,000,000 字符**：4.0M 通过 / 5.5M 抛 QuotaExceededError）⇒
+  `setItem` 抛错 + `console.warn` 吞掉 ⇒ **窗口照开、数据没到**，界面只剩「没有 3D 径迹数据（请从主窗口…解析后打开）」，
+  症状把"数据太大"误导成"用户没解析"（白查半天）。**纪律**：① 桥里只放**描述性小数据**（路径 / cells / surfaces / 文本），
+  大网格由子窗口自己调端点取（后端 deck 指纹缓存会命中，≤1s）；② 桥写失败一律**抛错 → 界面显示 hint**，禁止"开空窗"；
+  ③ 桥是**一次性消费**（读时删 key），窗口已存在时必须 `reload` 才能读新桥，否则再点只 focus 旧数据。
+  落地：`windows.ts::writeBridge()`（4,000,000 字符硬上限 + 失败抛错）、`PtracWindow`/`ResultWindow` 自取 STL、Rust `reload_if_exists`。
+- **❗验证 Tauri 子窗口问题：用 `WEBVIEW2_USER_DATA_FOLDER` + `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port` 起探针实例（2026-10-21 首次成功，可复跑）**：
+  交付 exe 默认无调试端口；再起一个**独立 profile** 的实例即可 CDP 直连（`/json/list` 拿 target，
+  `Page.javascriptDialogOpening` 自动吃 alert，`Runtime.consoleAPICalled` 直接读主窗口 console）。
+  仅需注意：① 端口 5001 已被用户实例占用时，探针实例会自动复用（`backend.ts` 有"5001 已有后端就跳过 spawn"逻辑），**不会**起第二个后端；
+  ② 部署替换 exe 时运行中的进程锁文件 ⇒ 用 **rename 改名**（`旧.exe → *.old_时间戳`）再落新文件，用户可以继续用旧进程，关掉重开即生效；
+  ③ 端到端断言要用"可判定探针"（例：窗口内 `window.__reloadMarker`，reload 后变 undefined 才算真重载），别只看文字像不像。
+  脚本：仓库根 `__cdp_ptrac_e2e.mjs` / `__cdp_ptrac_reopen.mjs` / `__cdp_volume_e2e.mjs`（`/__*` 已 gitignore）。
 - **❗改写"只在远端"的长文本时，破坏性正则必须先做"历史串还在"的断言（2026-10-10，差点把 93% 的 release 正文删掉）**：
   改 v1.7.7 release 说明正文（4 KB，含 09-26 首发历史段）时写了
   `re.compile(r"> \*\*本资产已于 2026-10-04 原位更新\*\*.*?\n(?:> .*\n)*", re.S)` ——
