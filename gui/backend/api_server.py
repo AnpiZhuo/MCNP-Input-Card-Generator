@@ -2147,11 +2147,15 @@ class MCNPHandler(BaseHTTPRequestHandler):
             self._err(str(e))
 
     def _handle_sweep_run(self):
-        """参数扫描执行：笛卡尔组合 → 线程池并行（workers 个同时跑）写 INP 调 MCNP →
-        提取 keff → 汇总 TSV。
+        """参数扫描执行：笛卡尔组合 → 线程池并行（workers 个同时跑）写 INP → **显式**调 MCNP
+        → 提取 keff → 汇总 TSV。
 
-        总时长预算纪律：组合数 × 单次超时 ÷ 并行数 ≤ 预算（默认 30 分钟），超预算/超上限
-        直接拒绝（code="budget_exceeded" + 中文消息）；单组合保持 300s 超时。
+        **显式计算（2026-10-20 用户口径）**：每个组合在新控制台窗口里跑 MCNP（标题
+        ``sweep-00N``），用户看得见进度。程序**不设任何超时**（旧的前端 120s、单次 300s、
+        30 分钟总预算全部取消）：MCNP 算完窗口自动关闭；发现异常就手动关掉那个窗口 =
+        中止该组合，其余组合照常跑。程序不主动 abort、不杀进程。
+        只保留「组合数 ≤ 50」这一数量保护（``sweep.sweep_combo_limit_status``）。
+
         每个组合在独立 run_XXX 子目录里以 ``name=sweep-{i:03d}.`` 命名输出
         （sweep-001.o / sweep-001.r …），并发互不覆盖、结果与组合号一一对应。
 
@@ -2173,10 +2177,9 @@ class MCNPHandler(BaseHTTPRequestHandler):
             workers = int(data.get("workers") or 1)
             workers = max(1, min(workers, 32))
             combos = sweep.cartesian(parameters)
-            budget = sweep.sweep_budget_status(
-                len(combos), workers=max(1, workers))
-            if budget is not None:
-                self._ok({"status": "error", **budget})
+            limit = sweep.sweep_combo_limit_status(len(combos))
+            if limit is not None:
+                self._ok({"status": "error", **limit})
                 return
             exe = _find_mcnp_exe()
             if not exe:
@@ -2208,16 +2211,19 @@ class MCNPHandler(BaseHTTPRequestHandler):
                     rec = {"index": i, "parameters": combo, "inputFile": inp_path,
                            "outputDir": run_dir, "exitCode": None, "keff": None}
                     try:
-                        # name=sweep-XXX. → 输出文件 sweep-001.o / sweep-001.r …，
-                        # 多组合并行时互不覆盖（与组合序号一一对应）。
-                        proc = subprocess.run(
-                            [exe, "i=sweep.i", f"name=sweep-{i:03d}."],
-                            cwd=run_dir, capture_output=True, text=True, timeout=300,
+                        # **显式**：每个组合在新控制台窗口里跑 MCNP（标题 sweep-00N），
+                        # 用户看得见进度。proc.wait() 不设超时 —— 程序不管时长；
+                        # MCNP 算完窗口自动关闭，用户也可直接关掉窗口中止该组合。
+                        # 注意用字符串命令行（而非 list）：cmd.exe /c 的整串参数要原样
+                        # 交给 CreateProcess，list 形式会被 list2cmdline 转义坏内层引号。
+                        proc = subprocess.Popen(
+                            sweep.launch_command(exe, i), cwd=run_dir,
+                            creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
                         )
+                        proc.wait()
                         rec["exitCode"] = proc.returncode
-                        # MCNP 把 keff/收敛序列写在结果文件里（mctal，或 name= 前缀下的
-                        # outp ``sweep-XXX.o``），**stdout 只有少量提示行** ⇒ 必须读目录
-                        # （早先只解析 stdout，导致扫描汇总表的 keff 恒为 n/a）。
+                        # 窗口不捕获 stdout：keff/收敛序列一律从结果文件读
+                        # （mctal，或 name= 前缀下的 outp ``sweep-XXX.o``）。
                         res = sweep.scan_run_dir(run_dir)
                         rec["keff"] = res["keff"]
                         if res["history"]:
@@ -2225,21 +2231,14 @@ class MCNPHandler(BaseHTTPRequestHandler):
                         std = sweep.history_keff_std(res["history"])
                         if std is not None:
                             rec["keffStd"] = std
-                        if rec["keff"] is None:
-                            # 兜底：极少数封装把结果也回显到 stdout
-                            rec["keff"] = sweep.parse_keff(
-                                (proc.stdout or "") + "\n" + (proc.stderr or ""))
-                    except subprocess.TimeoutExpired:
-                        # TD-26（t5）：原为裸 `pass` —— 超时后 exitCode 保持 None、无日志、
-                        # 无标记，落盘 manifest/TSV 里与"MCNP 无输出"不可区分（都出 n/a）。
-                        # 现在显式标记 + 告警，让"超时 / 崩溃 / 无 keff"三者可归因。
-                        rec["exitCode"] = "timeout"
-                        rec["timedOut"] = True
-                        print(f"[sweep] 组合 {i} 超时（{sweep.SWEEP_PER_RUN_TIMEOUT}s）：{run_dir}",
-                              file=sys.stderr)
+                    except Exception as e:
+                        # 启动失败（exe 被删/权限/环境异常）：如实记账，不静默
+                        rec["exitCode"] = "error"
+                        rec["error"] = str(e)
+                        print(f"[sweep] 组合 {i} 启动失败：{e}", file=sys.stderr)
                     # 规整组合目录并**如实记账**：默认丢弃 37.9MB 的二进制重启文件
                     # ``sweep-00N.r``，其余产物（``sweep-00N.o`` 结果 + ``sweep.i`` 输入）
-                    # 全部留给用户；超时/崩溃的组合也走这里（半截 .o 照样能看）。
+                    # 全部留给用户；被中途关窗口的组合也走这里（半截 .o 照样能看）。
                     final = sweep.finalize_run_dir(run_dir)
                     rec["outputs"] = final["kept"]
                     rec["outputBytes"] = final["keptBytes"]
@@ -3235,6 +3234,9 @@ class MCNPHandler(BaseHTTPRequestHandler):
             # 防并发 preview-3d 互删对方刚生成的 STL 会话目录。
             with _preview_lock():
                 cached = _PREVIEW_CACHE.get(fp)
+            # 旧版本缓存没有封闭性/解析诊断；不能用它继续静默显示可能被包围盒裁剪的几何。
+            if cached is not None and "closure_report" not in cached:
+                cached = None
             if cached is not None:
                 with _preview_lock():
                     prev_dir = _STL_SESSION.get("dir")
@@ -3263,7 +3265,10 @@ class MCNPHandler(BaseHTTPRequestHandler):
                             stl_data[str(num)] = base64.b64encode(_f.read()).decode()
                         stl_files[str(num)] = p
                 self._ok({"stl_files": stl_files, "stl_data": stl_data,
-                          "freecad": cached.get("freecad"), "count": len(stl_data)})
+                          "freecad": cached.get("freecad"), "count": len(stl_data),
+                          "closure_report": cached.get("closure_report", {}),
+                          "parse_errors": cached.get("parse_errors", []),
+                          "skipped_cells": cached.get("skipped_cells", [])})
                 return
 
             # 1. 检测 FreeCAD
@@ -3274,9 +3279,11 @@ class MCNPHandler(BaseHTTPRequestHandler):
                 return
 
             # 2. 解析曲面（共享 parse_surfaces）
-            surfs = parse_surfaces(surf_text)
+            parse_errors = []
+            surfs = parse_surfaces(surf_text, errors=parse_errors)
             if not surfs:
-                self._ok({"stl_files": {}, "message": "未解析到有效曲面"})
+                self._ok({"stl_files": {}, "message": "未解析到有效曲面",
+                          "parse_errors": parse_errors})
                 return
 
             # 3. 解析 TR 卡（共享 parse_tr_cards）
@@ -3296,7 +3303,8 @@ class MCNPHandler(BaseHTTPRequestHandler):
             # 5. FreeCAD CSG → STL
             from freecad_preview import FreeCADEngine
             engine = FreeCADEngine(freecad_bin)
-            result = engine.build_geometry(surfs, cells_data, tr_cards, fmt="stl")
+            result = engine.build_geometry(surfs, cells_data, tr_cards, fmt="stl",
+                                           check_closure=True)
 
             # STL 复制到会话专用目录（engine 析构会删它自己的临时目录，必须复制走）
             session_dir = tempfile.mkdtemp(prefix="mcnp_stl_session_")
@@ -3326,11 +3334,16 @@ class MCNPHandler(BaseHTTPRequestHandler):
                         }
                 # 存入指纹缓存：会话 STL 拷入缓存自有目录，clear-stl 删除会话目录不影响缓存
                 _PREVIEW_CACHE.put(fp, {"dir": session_dir, "cells": _STL_SESSION["cells"],
-                                        "freecad": freecad_bin})
+                                        "freecad": freecad_bin,
+                                        "closure_report": getattr(engine, "closure_report", {}),
+                                        "parse_errors": parse_errors,
+                                        "skipped_cells": getattr(engine, "skipped_cells", [])})
             engine.cleanup()  # 引擎临时目录可删，会话目录已独立
             self._ok({"stl_files": stl_files, "stl_data": stl_data, "freecad": freecad_bin,
                       "count": len(stl_data),
-                      "skipped_cells": getattr(engine, "skipped_cells", [])})
+                      "skipped_cells": getattr(engine, "skipped_cells", []),
+                      "closure_report": getattr(engine, "closure_report", {}),
+                      "parse_errors": parse_errors})
         except Exception as e:
             import traceback
             self._err(str(e) + " | " + traceback.format_exc())

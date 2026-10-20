@@ -6,6 +6,8 @@
  *   可框选其中的任意字符来设扫描参数）
  * - 保存到目录 / 运行 MCNP / 复制 / 关闭
  * - 框选 → 设为扫描参数 → 均分快捷取值 → 多核并行扫描（内嵌面板）
+ * - **显式计算（2026-10-20）**：每个组合由后端开一个可见 MCNP 控制台窗口（标题 sweep-00N）；
+ *   前端不设超时、不 abort —— 关掉那个窗口 = 中止该组合，其余组合照常。
  * - 每条参数一个颜色，**局部高亮它自己的那几个字符**（Monaco decoration 按字符区间画；
  *   2026-10-11 用户要求：原先的"整行色底条 + textarea 叠层"已删除）
  *
@@ -102,7 +104,6 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
   /** 后端回传的定位类告警（框选位置失效等）：必须显示出来，绝不静默 */
   const [warnings, setWarnings] = useState<string[]>([]);
   const [view, setView] = useState<"table" | "dash">("dash");
-  const [runAbort, setRunAbort] = useState<AbortController | null>(null);
   /** 参数内部键序号（名称可以重复，键不行；见 ParamRow.key） */
   const keySeq = useRef(0);
 
@@ -181,18 +182,18 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
 
   const doRun = async () => {
     setErr(""); setBusy(true); setRun(null); setWarnings([]);
-    const ctrl = new AbortController(); setRunAbort(ctrl);
-    const timer = setTimeout(() => { if (!ctrl.signal.aborted) ctrl.abort(new DOMException("扫描超时（120s），已中止", "TimeoutError")); }, 120000);
+    // 显式计算（2026-10-20 用户口径）：每个组合由后端开一个可见 MCNP 控制台窗口，
+    // **前端不设超时**、不带 AbortSignal —— 等所有窗口结束（算完自动关，或用户手动关掉
+    // 中止该组合）。中止 MCNP 的唯一方式就是关那个控制台窗口，程序不主动 abort。
     try {
-      const r = await fetch(apiUrl("/api/sweep-run"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: ctrl.signal });
+      const r = await fetch(apiUrl("/api/sweep-run"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const j = await r.json();
       if (j.status === "error") throw new Error(j.message);
       setRun({ baseDir: j.baseDir, records: j.records, summaryTsv: j.summaryTsv });
       setWarnings(j.warnings || []);
     } catch (e: any) {
-      if (ctrl.signal.aborted) setErr((e?.name === "TimeoutError") ? "扫描超时（120s），已中止" : "扫描已取消");
-      else setErr(errorHint(e, "扫描失败"));
-    } finally { clearTimeout(timer); setRunAbort(null); setBusy(false); }
+      setErr(errorHint(e, "扫描失败"));
+    } finally { setBusy(false); }
   };
 
   const runBatContent = (() => { const name = safeName.replace(/\.inp$/i, "").replace(/\.i$/i, ""); const exe = mcnpExe || "mcnp6.exe"; return `@echo off\nset CUDA_VISIBLE_DEVICES=1\ncall ${exe} inp=${safeName} outp=${name}.o\npause\n`; })();
@@ -283,9 +284,14 @@ export default function PreviewDialog({ content, onClose, onRegenerate, outputPa
           <input type="range" min={1} max={DETECTED_CORES} value={workers} style={{ width: 100 }} onChange={e => setWorkers(Number(e.target.value))} />
           <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{workers} 个</span>
         </div>
-        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-          {runAbort ? <button className="btn btn-danger btn-sm" onClick={() => runAbort.abort()} disabled={!busy}>取消</button>
-            : <button className="btn btn-primary btn-sm" onClick={doRun} disabled={busy || params.length === 0 || comboCount > 50 || !!valuesError}>开始扫描（{comboCount} 组合{workers > 1 ? ` · ${workers} 路` : ""}）</button>}
+        <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+          <button className="btn btn-primary btn-sm" onClick={doRun} disabled={busy || params.length === 0 || comboCount > 50 || !!valuesError}>
+            {busy ? "扫描中（等 MCNP 窗口结束）…" : `开始扫描（${comboCount} 组合${workers > 1 ? ` · ${workers} 路` : ""}）`}
+          </button>
+          <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>
+            每个组合弹一个 MCNP 控制台窗口（标题 sweep-00N）；<b>本程序不设超时</b> —— MCNP 算完窗口自动关闭，
+            发现异常直接关掉那个窗口就是中止它，其余组合照常跑完。
+          </span>
         </div>
         {run && (
           <div style={{ marginBottom: 8 }}>

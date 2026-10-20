@@ -2285,3 +2285,19 @@ warnings: ["MCCAD 切割已跳过：未找到 McCAD.exe。请把 McCAD.exe 放�
 （修复前这一步就会去 jsdelivr 取 monaco）。**逐行 token 实测**（真实鼠标事件点进编辑器 + `Input.insertText` 换成受控卡）：
 五行行首全是 surface-id(琥珀)、注释行整行灰、TR 引用青色、末行出现幽灵提示 `$ 长方体`。
 门禁 vitest **118 文件 / 1017 例全过**、`tsc` 两档 EXIT 0、`build:release` **399 s EXIT 0**。
+
+### J. 参数扫描改「显式计算」：删 120s 超时与「取消」（2026-10-20，前端）
+
+- **入口认定**：部署版 bundle 实测含 `INP 生成预览` + `⚙ 扫描参数` + `扫描超时（120s）` ⇒ 真正被点的
+  入口是 `PreviewDialog.tsx` 内嵌扫描面板；`SweepDialog.tsx` 已无人引用（git grep 无 import），属旧入口。
+- 两处都改（保持一致，避免以后误接回旧入口）：
+  - 删除 `SWEEP_RUN_TIMEOUT_MS = 120000`、`doRun` 的 `AbortController` / `setTimeout` 兜底、
+    「取消」按钮与 `runAbort` 状态；`/api/sweep-run` 的 `fetch` 不再带 `signal`。
+  - 文案：PreviewDialog 扫描面板按钮旁注明「每个组合弹一个 MCNP 控制台窗口（标题 sweep-00N）；
+    **本程序不设超时** —— MCNP 算完窗口自动关闭，关窗口即中止该组合，其余照常」；扫描中按钮文案
+    「扫描中（等 MCNP 窗口结束）…」。
+- 回归锁：新增 `gui/test/sweepNoAutoAbort.test.ts`（4 例，扫源码）——两组件都不得出现
+  `120000` / `扫描超时（120s）` / `扫描已取消` / `AbortController`，`/api/sweep-run` 调用串不得含 `signal`。
+- 测试：`gui/test/sweepDialogCancel.test.tsx` 重写（请求不带 `signal`、无「取消」、假时钟推进 10 分钟不中止；
+  后端拒绝消息照常透传）。
+- 门禁：vitest **124 文件 / 1069 例全过**；`tsc` 两档 EXIT 0。

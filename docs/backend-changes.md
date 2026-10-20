@@ -1726,3 +1726,23 @@ worker 其实把原因写得好好的：`{"status":"error","message":"…把「�
 - **真缝复核**（走真实 `GeoUnedConverter` + 真实 GEOUNED）：用户看到的消息为
   `GEOUNED 转换失败：样条曲面：实体 1 共 1 个含样条类曲面（拉伸面，1 个面）。当前「样条曲面处理」设为「停止转换」，导入已终止 —— 把它改成「跳过该实体」即可继续：这 1 个实体不参与转换，其余实体照常转换。`
 - **部署版复核**（HTTP）：同一条消息（`status=error`），无转义碎片、无 traceback、标签只出现一次。
+
+### T. 参数扫描改「显式计算」（2026-10-20，后端）
+
+- 用户口径：显式计算 —— 每个组合一个可见 MCNP 控制台窗口，程序不管理超时；用户关窗口 = 中止该组合，
+  其余组合照常；用户没关就不管。
+- `app/sweep.py`：删除 `SWEEP_PER_RUN_TIMEOUT=300` / `SWEEP_TOTAL_BUDGET=1800` / `sweep_budget_status`；
+  新增 `sweep_combo_limit_status`（只查 50 组合数量上限，`code="combo_limit_exceeded"`）与
+  `launch_command(exe, index)` = `cmd.exe /c title sweep-00N & "<exe>" i=sweep.i name=sweep-00N.`
+  （**字符串**命令行：`cmd.exe /c` 的整串参数必须原样交给 CreateProcess；用 list 会被 list2cmdline 把
+  内层引号转义成 `\"`，cmd 不认）。
+- `gui/backend/api_server.py::_handle_sweep_run`：`subprocess.run(..., timeout=300, capture_output=True)` →
+  `Popen(sweep.launch_command(exe, i), cwd=run_dir, creationflags=CREATE_NEW_CONSOLE)` + **无超时**
+  `proc.wait()`；不再捕获 stdout（keff/收敛仍从结果文件读，`scan_run_dir`）；删除 `TimeoutExpired`
+  分支与 `timedOut` 标记；启动异常记 `exitCode="error"` + `error` 字段并打 stderr（不静默）。
+- 记录口径不变：`run_XXX/sweep-00N.o` + `sweep.i` 保留、`*.r` 默认丢弃（`finalize_run_dir`）；
+  manifest/TSV 照旧落盘；`workers` 并行不变（每个组合各自一个窗口）。
+- **验证**：真实 MCNP 冒烟（200 NPS 单组合 6 s / exit 0）；双组合并发时对 `sweep-002` 窗口发 WM_CLOSE →
+  该组合 `exit 2` + 半截 `.o`，`sweep-001` 仍 `exit 0` 完整收敛，扫描照常 `status=ok` 出表；
+  门禁 pytest **1591 passed / 1 failed（既有 GBK `test_worker_spawn_dev_mode_bad_tally_error`）/ 11 skipped**，
+  `test_sweep.py` 新增/改写 6 例（无超时常量、组合上限、启动命令契约）。

@@ -333,19 +333,20 @@ def test_http_parse_outp_compact_mcnp61(backend_base_url):
     assert t["rows"] == [{"energy": "", "flux": "3.36115E-03", "error": "0.0071"}]
 
 
-def test_http_sweep_run_budget_rejected(backend_base_url):
-    """sweep-run 组合数×单次超时超总预算（7×300>1800s）→ code=budget_exceeded 拒绝。
+def test_http_sweep_run_combo_limit_rejected(backend_base_url):
+    """sweep-run 组合数超上限（51 > 50）→ code=combo_limit_exceeded 拒绝。
 
-    拒绝发生在 MCNP 检测之前，不依赖真实 MCNP 可执行文件。
+    2026-10-20 起时间预算（300s/组合、30 分钟总额）已取消：显式计算，由用户关窗口
+    中止；仅保留组合数上限这一数量保护。拒绝发生在 MCNP 检测之前，不依赖真实 MCNP。
     """
     params = [{"name": "nps", "pattern": r"NPS\s+(\d+)",
-               "values": [1000, 2000, 3000, 4000, 5000, 6000, 7000]}]
+               "values": list(range(1, 52))}]
     resp = _post(backend_base_url, "/api/sweep-run",
                  {"deck": "t\n", "parameters": params})
     assert resp.get("status") == "error", resp
-    assert resp.get("code") == "budget_exceeded", resp
-    assert "7" in resp.get("message", "")  # 当前组合数
-    assert "预算" in resp.get("message", "")
+    assert resp.get("code") == "combo_limit_exceeded", resp
+    assert "51" in resp.get("message", "")  # 当前组合数
+    assert "50" in resp.get("message", "")  # 上限
 
 
 def test_http_validate_lattice_surfaces(backend_base_url):

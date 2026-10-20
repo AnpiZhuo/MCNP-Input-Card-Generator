@@ -8,6 +8,8 @@
  *
  * 后端对参数做笛卡尔积；支持多参数（可反复添加，哪怕同一行里的多个数也能各自扫）。
  * 每个组合独立子进程 + name=sweep-XXX. 输出文件（sweep-001.o …），并发互不覆盖。
+ * **显式计算（2026-10-20）**：每个组合在新控制台窗口里跑 MCNP，程序不设超时；
+ * 用户关掉窗口 = 中止该组合（其余照常），MCNP 算完窗口自动关闭。
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { apiUrl, errorHint } from "../utils/api";
@@ -17,9 +19,11 @@ import FloatingDialog from "./FloatingDialog";
 import SweepDashboard from "./SweepDashboard";
 import { DETECTED_CORES, DEFAULT_WORKERS, SUGGESTED_WORKERS, clampWorkers } from "../utils/detectedCores";
 
-/** doRun 请求级超时（ms）：后端负责预算拒绝/请求级超时（返回明确错误消息），
- *  前端超时只作兜底，防止大组合 fetch 无限挂起。MCNP 逐组合运行较久，故给 120s。 */
-const SWEEP_RUN_TIMEOUT_MS = 120000;
+/**
+ * 显式计算（2026-10-20 用户口径）：每个组合开一个可见的 MCNP 控制台窗口，**前端不设超时**
+ * —— MCNP 算完窗口自动关闭；发现异常时用户直接关掉那个窗口 = 中止该组合，其余组合照常。
+ * 程序不主动 abort、不杀进程。
+ */
 
 /** 参数行：anchor=用户选中的原文（要替换的值）；context=所在整行（用于唯一定位） */
 export interface ParamRow { name: string; anchor: string; context: string; values: string; }
@@ -71,8 +75,6 @@ export default function SweepDialog({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [view, setView] = useState<"table" | "dash">("dash");
-  // T3：doRun 进行中的 AbortController（供「取消」按钮中止请求；完成后/中止后置 null）
-  const [runAbort, setRunAbort] = useState<AbortController | null>(null);
 
   const gen = async () => {
     setGenBusy(true); setErr("");
@@ -147,30 +149,19 @@ export default function SweepDialog({ onClose }: { onClose: () => void }) {
 
   const doRun = async () => {
     setErr(""); setBusy(true); setRun(null);
-    // T3：可取消 + 超时兜底（后端拒绝超预算请求时由 catch 显示后端错误消息）
-    const ctrl = new AbortController();
-    setRunAbort(ctrl);
-    const timer = setTimeout(() => {
-      if (!ctrl.signal.aborted) ctrl.abort(new DOMException("扫描超时（120s），已中止", "TimeoutError"));
-    }, SWEEP_RUN_TIMEOUT_MS);
+    // 显式计算：不带 AbortSignal、不设超时 —— 等所有 MCNP 窗口结束（算完自动关，
+    // 或用户手动关掉中止该组合）。中止 MCNP 的唯一方式就是关那个控制台窗口。
     try {
       const r = await fetch(apiUrl("/api/sweep-run"), {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload), signal: ctrl.signal,
+        body: JSON.stringify(payload),
       });
       const j = await r.json();
       if (j.status === "error") throw new Error(j.message);
       setRun({ baseDir: j.baseDir, records: j.records, summaryTsv: j.summaryTsv });
     } catch (e: any) {
-      if (ctrl.signal.aborted) {
-        // 主动取消/超时：用固定文案（不要取 e.message，AbortError.message 无用户语义）
-        setErr((e && e.name === "TimeoutError") ? "扫描超时（120s），已中止" : "扫描已取消");
-      } else {
-        setErr(errorHint(e, "扫描失败"));
-      }
+      setErr(errorHint(e, "扫描失败"));
     } finally {
-      clearTimeout(timer);
-      setRunAbort(null);
       setBusy(false);
     }
   };
@@ -186,18 +177,15 @@ export default function SweepDialog({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <FloatingDialog title="参数扫描（批量改参数 · 多核并行跑 MCNP）" onClose={onClose} width={820}
+    <FloatingDialog title="参数扫描（批量改参数 · 每个组合一个可见 MCNP 窗口）" onClose={onClose} width={820}
       footer={
         <>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>关闭</button>
           <button className="btn btn-ghost btn-sm" onClick={doPlan} disabled={busy || !baseText || params.length === 0}>
             {busy ? "处理中…" : "规划预览"}
           </button>
-          {runAbort
-            ? <button className="btn btn-danger btn-sm" onClick={() => runAbort.abort()} disabled={!busy}>取消</button>
-            : null}
           <button className="btn btn-primary btn-sm" onClick={doRun} disabled={busy || !baseText || params.length === 0 || comboCount > 50}>
-            {busy ? "扫描中…" : `开始扫描（${comboCount} 组合${workers > 1 ? ` · ${workers} 路并行` : ""}）`}
+            {busy ? "扫描中（等 MCNP 窗口结束）…" : `开始扫描（${comboCount} 组合${workers > 1 ? ` · ${workers} 路并行` : ""}）`}
           </button>
         </>
       }>
@@ -246,7 +234,7 @@ export default function SweepDialog({ onClose }: { onClose: () => void }) {
 
         {/* ③ 并行数 */}
         <div style={{ marginBottom: 10 }}>
-          <label style={s.lbl}>③ 同时跑几个（本机检测到 {DETECTED_CORES} 个逻辑核；MCNP 每个组合用 1 核，多路并行才能吃满 CPU）</label>
+          <label style={s.lbl}>③ 同时跑几个（本机检测到 {DETECTED_CORES} 个逻辑核；每个组合会弹一个 MCNP 控制台窗口，标题为 sweep-00N）</label>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <input type="range" min={1} max={DETECTED_CORES} step={1} value={workers}
               style={{ flex: 1 }}
@@ -312,6 +300,10 @@ export default function SweepDialog({ onClose }: { onClose: () => void }) {
         <div style={s.hint}>
           用法：框选要变的数字 → 「设为扫描参数」→ 填多个取值（空格分隔）→ 选并行路数 → 开始扫描。
           多参数会做组合（如 NPS 3 个值 × keff 2 个值 = 6 组）。每个组合都从基准 INP 重新替换，互不影响。
+          <br />
+          <b>显式计算</b>：每个组合都在单独的 MCNP 控制台窗口里跑，<b>本程序不设超时</b>。
+          MCNP 算完窗口自动关闭；如果发现某个组合有问题，<b>直接关掉那个窗口就是中止它</b>，
+          其余组合照常跑完。关窗口后该组合的 exit 会记成非 0，汇总表照常生成。
         </div>
         {err ? <div style={s.err}>{err}</div> : null}
       </div>

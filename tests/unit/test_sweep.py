@@ -12,7 +12,8 @@ from app.sweep import (
     apply_parameters, build_summary_tsv, cartesian, cleanup_sweep_dir,
     finalize_run_dir, history_keff_std, list_run_files, parse_keff,
     parse_keff_history, persist_sweep_summary, prepare_results_dir,
-    run_dir_name, scan_run_dir, sweep_budget_status, write_summary_files,
+    run_dir_name, scan_run_dir, sweep_combo_limit_status, launch_command,
+    write_summary_files,
 )
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
@@ -160,34 +161,48 @@ def test_scan_run_dir_empty_or_missing(tmp_path):
     assert scan_run_dir(str(tmp_path))["keff"] is None
 
 
-# ── T3：sweep-run 总时长预算（命令硬性超时纪律）──────────────
-def test_sweep_budget_within_limit_is_none():
-    """组合数×单次超时 ≤ 预算 → None（可执行）。"""
-    assert sweep_budget_status(0) is None
-    assert sweep_budget_status(1) is None          # 300 ≤ 1800
-    assert sweep_budget_status(6) is None          # 6×300=1800 = 预算，不超
+# ── 组合数上限（2026-10-20：时间预算全部取消 —— 显式计算，程序不管理超时）──
+def test_sweep_no_timeout_constants_remain():
+    """超时/预算常量必须已删除：程序不再对 MCNP 计时或强杀。"""
+    assert not hasattr(sweep_mod, "SWEEP_PER_RUN_TIMEOUT")
+    assert not hasattr(sweep_mod, "SWEEP_TOTAL_BUDGET")
 
 
-def test_sweep_budget_exceeded_reports_code_and_count():
-    """超预算 → code="budget_exceeded"，消息含当前组合数与预算说明。"""
-    r = sweep_budget_status(7)                     # 7×300=2100 > 1800
+def test_sweep_combo_limit_within_cap_is_none():
+    """≤50 组合一律放行；不再按「组合数×300s÷并行数」估预算拒绝。"""
+    assert sweep_combo_limit_status(0) is None
+    assert sweep_combo_limit_status(1) is None
+    assert sweep_combo_limit_status(7) is None     # 旧口径 7×300>1800 会拒；显式计算后不拒
+    assert sweep_combo_limit_status(50) is None
+
+
+def test_sweep_combo_limit_exceeded_reports_code_and_count():
+    """超 50 → code="combo_limit_exceeded"，消息含当前组合数与上限。"""
+    r = sweep_combo_limit_status(51)
     assert r is not None
-    assert r["code"] == "budget_exceeded"
-    assert "7" in r["message"]                     # 当前组合数
-    assert "预算" in r["message"]
-
-
-def test_sweep_budget_exceeded_combo_cap():
-    """组合数超上限 50 → 拒绝。"""
-    r = sweep_budget_status(51)
-    assert r is not None
-    assert r["code"] == "budget_exceeded"
+    assert r["code"] == "combo_limit_exceeded"
+    assert "51" in r["message"]
     assert "50" in r["message"]
 
 
-def test_sweep_budget_custom_limits():
-    assert sweep_budget_status(10, per_run_timeout=10, total_budget=100) is None
-    assert sweep_budget_status(11, per_run_timeout=10, total_budget=100) is not None
+def test_sweep_combo_limit_custom_max():
+    assert sweep_combo_limit_status(10, max_combos=10) is None
+    assert sweep_combo_limit_status(11, max_combos=10) is not None
+
+
+# ── 显式控制台启动命令（2026-10-20：每个组合一个可见 MCNP 窗口）──
+def test_launch_command_opens_visible_console_with_combo_title():
+    """命令走 cmd /c + title，窗口标题带组合号；i=/name= 与扫描产物命名一致。"""
+    cmd = launch_command(r"D:\MCNP\MCNP6\MCNP_CODE\bin\mcnp6.exe", 1)
+    assert cmd.startswith("cmd.exe /c title sweep-001")
+    assert "i=sweep.i" in cmd
+    assert "name=sweep-001." in cmd
+    assert r'"D:\MCNP\MCNP6\MCNP_CODE\bin\mcnp6.exe"' in cmd
+
+
+def test_launch_command_pads_combo_index():
+    assert "sweep-012" in launch_command("mcnp6.exe", 12)
+    assert "name=sweep-012." in launch_command("mcnp6.exe", 12)
 
 
 # ── T8：sweep 临时目录清理（摘要先拷贝再删）────────────────

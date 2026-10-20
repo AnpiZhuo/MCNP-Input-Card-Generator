@@ -46,9 +46,11 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 _NUM = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
-SWEEP_MAX_COMBOS = 50               # 组合数上限（对齐 api.yaml）
-SWEEP_PER_RUN_TIMEOUT = 300         # 秒：单组合 MCNP 执行超时
-SWEEP_TOTAL_BUDGET = 1800           # 秒：总时长预算（30 分钟，命令硬性超时纪律）
+SWEEP_MAX_COMBOS = 50               # 组合数上限（对齐 api.yaml）；只是数量保护，不是超时
+# 2026-10-20 用户口径：参数扫描改成**显式计算** —— 每个组合弹一个可见的 MCNP 控制台
+# 窗口，程序**不设任何超时**（旧的 SWEEP_PER_RUN_TIMEOUT=300 / SWEEP_TOTAL_BUDGET=1800
+# 已删除）：MCNP 算完窗口自动关闭；用户发现异常就手动关掉那个窗口 = 中止该组合，
+# 其余组合不受影响。程序不主动 abort、不杀进程、不判「超时」。
 # sweep 摘要（manifest + TSV）持久化根目录；临时 run 目录清理后仍可被
 # sweep-dashboard / 前端下载引用（每个 sweep 一个 <stamp> 子目录，小文件）。
 SWEEP_SUMMARY_ROOT = os.path.join(tempfile.gettempdir(), "mcnp_sweep_summaries")
@@ -336,29 +338,34 @@ def run_dir_name(index: int) -> str:
     return f"run_{index:03d}"
 
 
-def sweep_budget_status(num_combos, per_run_timeout=SWEEP_PER_RUN_TIMEOUT,
-                        total_budget=SWEEP_TOTAL_BUDGET, workers=1):
-    """检查 sweep-run 是否超出总时长预算（命令硬性超时纪律）。
+def sweep_combo_limit_status(num_combos, max_combos=SWEEP_MAX_COMBOS):
+    """组合数上限检查（**只查数量，不查时间**）。
 
-    预算 = ceil(组合数 / 并行数) × 单次超时。组合数超上限或预计总耗时超过预算 → 返回
-    ``{"code": "budget_exceeded", "message": ...}``（含当前组合数/预算说明）；
-    可执行返回 ``None``。
+    2026-10-20 起参数扫描是显式计算：每个组合在新控制台窗口里跑 MCNP，由用户看窗口、
+    手动关窗口中止，程序不设超时。所以这里只剩「组合数 ≤ 50」这一数量保护；
+    返回 ``{"code": "combo_limit_exceeded", "message": ...}`` 或 None。
     """
-    if num_combos > SWEEP_MAX_COMBOS:
-        message = f"组合数 {num_combos} 超上限 {SWEEP_MAX_COMBOS}，请缩小参数范围"
-    else:
-        batches = (num_combos + workers - 1) // workers  # ceil 取整
-        expected = batches * per_run_timeout
-        if expected <= total_budget:
-            return None
-        message = (
-            f"组合数 {num_combos}，同时跑 {workers} 个 ≈ {batches} 批 × "
-            f"单次超时 {per_run_timeout}s = 预计耗时 {expected}s"
-            f"（{expected // 60} 分钟），超过总预算 "
-            f"{total_budget}s（{total_budget // 60} 分钟）。"
-            f"请缩小参数范围、增加并行数或缩短单次运行时间。"
-        )
-    return {"code": "budget_exceeded", "message": message}
+    if num_combos <= max_combos:
+        return None
+    return {
+        "code": "combo_limit_exceeded",
+        "message": (f"组合数 {num_combos} 超上限 {max_combos}，请缩小参数范围"),
+    }
+
+
+def launch_command(exe: str, index: int) -> str:
+    """一个组合的**可见控制台**启动命令（Windows；`cmd.exe /c` + title）。
+
+    为什么用字符串而不是 list：`cmd.exe /c` 的整串参数必须原样交给 CreateProcess ——
+    Python 用 list 时会走 list2cmdline 把内层引号转义成 ``\\"``，而 cmd 不认这种转义。
+
+    窗口标题 ``sweep-00N`` 让多路并行时用户分得清哪个窗口对应哪个组合；
+    MCNP 结束后 cmd 退出、窗口自动关闭（不加 pause，避免要手动关 N 个窗口才出结果）。
+    用户直接关掉窗口 = 中止该组合。
+    """
+    title = f"sweep-{index:03d}"
+    return f'cmd.exe /c title {title} & "{exe}" i=sweep.i name={title}.'
+
 
 
 def _stamp(now=None) -> str:
@@ -518,7 +525,8 @@ __all__ = [
     "parse_keff", "parse_keff_history", "history_keff_std", "scan_run_dir",
     "cartesian", "apply_parameters", "run_dir_name",
     "build_manifest", "build_summary_tsv",
-    "sweep_budget_status", "persist_sweep_summary", "cleanup_sweep_dir",
+    "sweep_combo_limit_status", "launch_command",
+    "persist_sweep_summary", "cleanup_sweep_dir",
     "prepare_results_dir", "finalize_run_dir", "list_run_files",
     "write_summary_files",
 ]

@@ -1384,8 +1384,13 @@ paths:
       tags: [workflow]
       summary: 参数扫描执行（逐组合写 INP → 调 MCNP → 提取 keff → 汇总 TSV）
       description: |
-        入参同 sweep-plan（可选 outputDir / workers）；组合数上限 50。无 MCNP →
-        {status:"error", message}。
+        入参同 sweep-plan（可选 outputDir / workers）；组合数上限 50（仅数量保护）。
+        无 MCNP → {status:"error", message}。
+        **显式计算（2026-10-20）**：每个组合在新控制台窗口里跑 MCNP（窗口标题
+        sweep-00N），用户看得见进度；后端**不设超时**（无单次超时、无总预算拒绝），
+        MCNP 算完窗口自动关闭；发现异常时用户直接关闭该窗口 = 中止该组合，其余组合
+        继续，响应在全部窗口结束后返回。组合数超 50 → {status:"error",
+        code:"combo_limit_exceeded", message}（在 MCNP 检测之前拒绝）。
         **结果保留**（2026-10-15 用户要求「让 11 个输出文件都保留」）：结果目录建在
         `<outputDir 或 D:/MCNP/new>/sweep_<时间戳>/` 且跑完**不删**，各组合产物
         `run_XXX/sweep-00N.o`（结果全在此）+ `sweep.i`（该组合实际用的输入卡）留在盘上；

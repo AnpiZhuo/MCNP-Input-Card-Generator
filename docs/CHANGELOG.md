@@ -16,6 +16,45 @@
 
 ## 一、批次详情档案（原 PROJECT_MEMORY.md 顶部修复横幅，含独有验收细节）
 
+### 🔧 参数扫描改「显式计算」—— 每个组合一个可见 MCNP 窗口，程序不再管理超时【2026-10-20，**已改 ✅ / 已重新打包部署 ✅ · 版本仍 1.7.7（行为调整批不升版）**】
+
+> 用户原话：「把参数扫描按钮的功能改一下，改成显式计算，就是说，让 mcnp 的计算窗口显示出来，我们的程序
+> 不要管是否超时，交给用户去判断，让用户自己手动去关闭，用户关闭 mcnp 就是有问题，中止之后的运算，
+> 用户没关就不要管」。
+>
+> **起因（本批先按只读调查定性）**：用户报「参数扫描超时为什么中止？」——实测上一轮 10 组合扫描
+> （`D:\MCNP\new\sweep_20261020_225916`，22:59:16–23:01:46 = **150 s**）**不是 MCNP 超时、也不是后端预算拒绝**：
+> 10/10 组合 `exit 0`（每个 `.o` 都有 `run terminated when 500000 particle histories were done`，
+> `computer time` 1.01–2.10 min），manifest/TSV 于 23:01:46 完整落盘。中止的是**前端**的 120 s 兜底
+> （后端线程池继续跑完）。**入口认定（重要）**：部署版 bundle 实测含 `INP 生成预览` + `⚙ 扫描参数` +
+> `扫描超时（120s）`，即真正被点的入口是 `PreviewDialog.tsx` 的内嵌扫描面板（`SweepDialog.tsx` 已无人引用）。
+>
+> **改法**：
+> ① 后端 `_handle_sweep_run`：`subprocess.run(..., timeout=300, capture_output=True)` →
+>    `Popen(app.sweep.launch_command(exe, i), creationflags=CREATE_NEW_CONSOLE)` + **无超时** `proc.wait()`；
+>    命令 = `cmd.exe /c title sweep-00N & "<exe>" i=sweep.i name=sweep-00N.`（用字符串命令行，避免
+>    list2cmdline 转义坏 `cmd /c` 的内层引号）。窗口标题带组合号，MCNP 结束 cmd 退出 ⇒ 窗口自动关闭；
+>    用户关窗口 = 中止该组合（其余组合照常，`exitCode` 记非 0，半截 `.o` 照样留给用户）。
+> ② 前端：`PreviewDialog.tsx`（真正入口）与 `SweepDialog.tsx`（旧入口）都删 120 s abort / AbortController /
+>    「取消」按钮 / `runAbort` 状态；`/api/sweep-run` 的 `fetch` 不再带 `signal`；提示改为
+>    「本程序不设超时，关窗口即中止该组合」。新增回归锁 `gui/test/sweepNoAutoAbort.test.ts`（扫源码断言无 120000/AbortController/signal）。
+> ③ 删除 `SWEEP_PER_RUN_TIMEOUT` / `SWEEP_TOTAL_BUDGET` 与 `sweep_budget_status`；
+>    只留 `sweep_combo_limit_status`（50 组合数量上限，`code="combo_limit_exceeded"`，仍先于 MCNP 检测拒绝）。
+>
+> **实测（真跑，非只跑单测）**：
+> - 单组合 HTTP 冒烟（源码后端 + 真实 `mcnp6.exe`，200 NPS）：6 s 返回 `status=ok / exit 0`。
+> - 双组合并发（workers=2，200k NPS）时对 `sweep-002` 控制台窗口发 `WM_CLOSE`：该组合 `exitCode=2` +
+>   半截 `.o`（39,592 B）；`sweep-001` 仍 `exitCode=0`、完整 `.o`（130,896 B）；扫描照常 `status=ok` 出表。
+>   ⇒「关窗口=中止该组合 / 其余不受影响 / 程序不判超时」三条行为全部成立（窗口由 Windows Terminal
+>   承载为独立窗口，标题 `sweep-001` / `sweep-002`，已用 EnumWindows 取证）。
+> - **部署版冒烟**：`build:release` **EXIT 0 / 277 s**（首次 682 s 是 Rust 全量重编）；交付目录
+>   `D:\MCNP\MCNP输入卡生成器` **7916 文件 / 677.3 MB**；三件套与构建产物哈希一致、`app/sweep.py` 与源码一致；
+>   部署版 `python.exe --port 5013` 跑单组合扫描 **9.3 s / exit 0**，manifest+TSV 正常落盘。
+>   回滚点 `D:\MCNP\_backup_1.7.7_20261020_2325`（exe+python.exe+_internal，243.8 MB）。
+>
+> **门禁**：pytest **1591 passed / 1 failed（既有 GBK 环境失败 `test_meshtal_worker::test_worker_spawn_dev_mode_bad_tally_error`，与本批无关）/ 11 skipped**；
+> vitest 全量复跑（数字见下）；`tsc` 两档 EXIT 0。
+
 ### 🔧 卡片编辑器断网化（Monaco 本地化 + 去字体外链 + 顺带省 10 MB）+ 曲面卡「只有第一行着色」修复【2026-10-08 晚，**已改 ✅ / 已重新打包并部署 ✅ / 已提交 `75f9b58` + `8f07e12` + `ecd9172`（未 push）· 版本仍 1.7.7（bug 批不升版）**】
 
 > 用户原话：「我的项目不能联网」（前一条：编辑器换 Monaco 后我查到的 CDN 依赖）→「直接关掉并部署」；
