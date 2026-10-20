@@ -9,7 +9,7 @@
  */
 import React, { useEffect, useRef, useState } from "react";
 import { readPtracData, closeCurrentWindow } from "../utils/windows";
-import { ptracParse, errorHint, type PtracParseResult, type PtracTrack } from "../utils/api";
+import { ptracParse, errorHint, fetchPreview3dStl, type PtracParseResult, type PtracTrack } from "../utils/api";
 import { getMatColor } from "../utils/materialColors";
 import { DEFAULT_SHELL_OPACITY } from "../three/cellMaterial";
 import { createPtracRenderer, type PtracRendererHandle } from "./PtracRenderer";
@@ -18,12 +18,28 @@ import { TRACK_LEGEND, TRACK_COLORS, TRACK_PARTICLE_LABELS, energyRangeOfTracks,
 import { ExportButton } from "../export/useFigureExport";
 import { build3dSpec, subtitleOf } from "../export/figureSpecs";
 
+/**
+ * 桥数据（新形态，2026-10-21 起）：**只带几何描述**，不带 STL 网格。
+ *
+ * 旧形态（`stlData`：整份 base64 STL）会写爆 localStorage 配额（实测 21.1M 字符 > 5M 上限），
+ * setItem 抛 QuotaExceededError 后窗口读不到桥 → 只见「没有 3D 径迹数据」。故新桥改由本窗口
+ * 自己调 `/api/preview-3d` 取外壳（契约 ptrac-visualization.md §4 的原设计）。
+ * `stlData` 仅保留向后兼容（旧版主窗口写入的残留桥）。
+ */
+interface BridgeModel {
+  cells: { number: number; material: string; density: string; surface_expr: string }[];
+  surfaces: string;
+  trCards: string;
+}
+
 interface BridgeData {
-  stlData: Record<string, string>;
   cells: { num: string; mat: string; comment?: string }[];
+  model?: BridgeModel | null;
   ptracPath: string;
   maxTracks: number;
   maxPoints: number;
+  /** 旧桥兼容：主窗口预取的 base64 STL（新桥不再带，避免超 localStorage 配额） */
+  stlData?: Record<string, string>;
 }
 
 const SAMPLE_STEPS = [1, 10, 100, 1000, 10000];
@@ -48,23 +64,35 @@ export default function PtracWindow() {
 
   const tracksRef = useRef<PtracTrack[]>([]);
 
-  // 首帧：读桥 → 初始化渲染器 → /api/ptrac-parse → 填径迹
+  // 首帧：读桥 → 取外壳 STL（桥里有几何描述时）→ 初始化渲染器 → /api/ptrac-parse → 填径迹
   useEffect(() => {
     if (!data || !canvasRef.current) return;
     let disposed = false;
+    let renderer: PtracRendererHandle | null = null;
     const cellViews = (data.cells || []).map((c) => ({
       num: String(c.num),
       mat: c.mat,
       comment: c.comment || "",
       color: getMatColor(c.mat),
     }));
-    const renderer = createPtracRenderer(canvasRef.current!, {
-      stlData: data.stlData || {},
-      cellViews,
-      onError: (m) => setError(m),
-    });
-    rendererRef.current = renderer;
     (async () => {
+      // 外壳：新桥只带几何描述 → 本窗口自取 STL（后端按 deck 指纹缓存，主窗口开窗前已预热）
+      let stlData: Record<string, string> = data.stlData || {};
+      if (!Object.keys(stlData).length && data.model) {
+        try {
+          stlData = await fetchPreview3dStl(data.model.cells || [], data.model.surfaces || "", data.model.trCards || "");
+        } catch (e) {
+          // 外壳取不到不影响径迹（照旧显示径迹；错误由后端提示条/console 体现）
+          console.warn("[ptrac] 外壳 STL 获取失败（径迹照常显示）", e);
+        }
+        if (disposed) return;
+      }
+      renderer = createPtracRenderer(canvasRef.current!, {
+        stlData: stlData || {},
+        cellViews,
+        onError: (m) => setError(m),
+      });
+      rendererRef.current = renderer;
       try {
         const res = await ptracParse(data.ptracPath, data.maxTracks, data.maxPoints);
         if (disposed) return;
@@ -83,7 +111,7 @@ export default function PtracWindow() {
     })();
     return () => {
       disposed = true;
-      renderer.dispose();
+      renderer?.dispose();
       rendererRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -152,13 +152,9 @@ export function readPreview3DData(): {
   }
 }
 
-/** 主窗口：打开「3D 结果」（体积可视化）独立窗口（先写数据桥再开窗） */
+/** 主窗口：打开「3D 结果」（体积可视化）独立窗口（先写数据桥再开窗）。桥写不进去则抛错。 */
 export async function openVolume3D(data: Record<string, any>): Promise<boolean> {
-  try {
-    localStorage.setItem(KEY_VOLUME3D, JSON.stringify(data));
-  } catch (e) {
-    console.warn("volume3d bridge write failed", e);
-  }
+  writeBridge(KEY_VOLUME3D, data, "3D 结果");
   return invoke("open_volume3d_window");
 }
 
@@ -175,13 +171,52 @@ export function readVolumeData(): Record<string, any> | null {
   }
 }
 
-/** 主窗口：打开「3D 径迹」（PTRAC）独立窗口（先写数据桥再开窗） */
-export async function openPtracWindow(data: Record<string, any>): Promise<boolean> {
+/**
+ * 桥数据体积硬上限（字符数）。
+ *
+ * Chromium/WebView2 单 origin 的 localStorage 配额实测 ≈**5,000,000 字符**（10 MB UTF-16，
+ * 2026-10-21 用随包固定版内核 Edg/154 实测：4,000,000 字符通过、5,500,000 抛 QuotaExceededError）。
+ * 留 1M 余量做上限：超过就**不要写**，直接报错。
+ *
+ * 为什么必须有这道闸（2026-10-21 用户实测缺陷）：旧版「3D 径迹」桥把整份几何外壳 STL（base64，
+ * 18 栅元 deck 实测 21,142,374 字符）塞进 localStorage ⇒ setItem 抛 QuotaExceededError ⇒
+ * 被 `console.warn` 吞掉后照样 invoke 开窗 ⇒ 子窗口读不到桥，只显示
+ * 「没有 3D 径迹数据（请从主窗口「输出」标签页解析 PTRAC 后打开）」——**症状误导成"你没解析"**。
+ */
+const BRIDGE_MAX_CHARS = 4_000_000;
+
+/**
+ * 写 localStorage 数据桥：**写不进去就抛错**，绝不静默开一个读不到数据的窗口。
+ *
+ * 调用方（openPtracWindow / openVolume3D 的使用者）都把异常转成界面提示（`errorHint`），
+ * 让用户看到「数据过大 / 写入失败」，而不是一个空窗口。
+ */
+function writeBridge(key: string, data: unknown, what: string): void {
+  let payload: string;
   try {
-    localStorage.setItem(KEY_PTRAC, JSON.stringify(data));
+    payload = JSON.stringify(data);
   } catch (e) {
-    console.warn("ptrac bridge write failed", e);
+    throw new Error(`${what}数据序列化失败：${e instanceof Error ? e.message : String(e)}`);
   }
+  if (payload.length > BRIDGE_MAX_CHARS) {
+    const mb = payload.length / 1024 / 1024;
+    throw new Error(
+      `${what}数据过大（${mb.toFixed(1)} M 字符，超过浏览器 localStorage 配额上限 ${BRIDGE_MAX_CHARS / 1_000_000} M 字符），`
+      + "无法传送到子窗口。请反馈开发者：桥里不应携带几何网格（STL），应由子窗口自行向后端获取。",
+    );
+  }
+  try {
+    localStorage.setItem(key, payload);
+  } catch (e) {
+    throw new Error(
+      `${what}数据写入失败（localStorage 配额不足或存储被禁用）：${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+}
+
+/** 主窗口：打开「3D 径迹」（PTRAC）独立窗口（先写数据桥再开窗）。桥写不进去则抛错。 */
+export async function openPtracWindow(data: Record<string, any>): Promise<boolean> {
+  writeBridge(KEY_PTRAC, data, "3D 径迹");
   return invoke("open_ptrac_window");
 }
 

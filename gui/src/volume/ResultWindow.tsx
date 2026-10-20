@@ -10,7 +10,7 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { readVolumeData, closeCurrentWindow } from "../utils/windows";
-import { meshtalTexture, errorHint, type MeshtalTextureFrame } from "../utils/api";
+import { meshtalTexture, errorHint, fetchPreview3dStl, type MeshtalTextureFrame } from "../utils/api";
 import { getMatColor } from "../utils/materialColors";
 import { CellList } from "../components/MaterialPanel";
 import {
@@ -29,7 +29,14 @@ import { build3dSpec, subtitleOf, volumeColorbar } from "../export/figureSpecs";
 import type { AABB } from "../export/planeSample";
 
 interface BridgeData {
-  stlData: Record<string, string>;
+  /** 旧桥兼容：主窗口预取的 base64 STL（新桥不再带 —— 实测 21.1M 字符 > localStorage 配额 ≈5M） */
+  stlData?: Record<string, string>;
+  /** 新桥下传的几何描述：本窗口据此自取外壳 STL（2026-10-21 起） */
+  model?: {
+    cells: { number: number; material: string; density: string; surface_expr: string }[];
+    surfaces: string;
+    trCards: string;
+  } | null;
   cells: { num: string; mat: string; comment?: string }[];
   meshtal: { path: string; tallyNumber: number; resolution: number; particle: string; geom: string };
   energyOptions: { index: number; label: string }[];
@@ -137,8 +144,19 @@ export default function ResultWindow() {
           visible: c.mat !== "0",
           color: getMatColor(c.mat),
         }));
+        // 外壳 STL：新桥只带几何描述 → 本窗口自取（后端按 deck 指纹缓存，主窗口开窗前已预热）。
+        // 取不到不影响体积层（外壳缺失而已），不阻断渲染。
+        let stlData: Record<string, string> = d.stlData || {};
+        if (!Object.keys(stlData).length && d.model) {
+          try {
+            stlData = await fetchPreview3dStl(d.model.cells || [], d.model.surfaces || "", d.model.trCards || "");
+          } catch (e) {
+            console.warn("[volume3d] 外壳 STL 获取失败（体积层照常显示）", e);
+          }
+          if (disposed) return;
+        }
         rendererRef.current = createVolumeRenderer(canvasRef.current!, {
-          stlData: d.stlData || {},
+          stlData: stlData || {},
           cellViews,
           frame,
           initialDisplayMin: dm,

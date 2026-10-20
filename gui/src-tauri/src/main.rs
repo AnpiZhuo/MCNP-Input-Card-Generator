@@ -50,8 +50,15 @@ fn create_or_focus(
     width: f64,
     height: f64,
     hash: &str,
+    reload_if_exists: bool,
 ) -> Result<(), String> {
     if let Some(win) = app.get_window(label) {
+        if reload_if_exists {
+            // 桥数据是「一次性消费」（子窗口读时即删除）：窗口已存在时只 show/focus 会**继续显示旧数据**
+            // —— 用户实测「再点一次『解析 PTRAC』，窗口不刷新/还是空的」。reload 让子窗口重新读本次
+            // 刚写好的桥（桥写入在 invoke 之前完成，顺序有保证）。
+            let _ = win.eval("window.location.reload()");
+        }
         let _ = win.show();
         let _ = win.set_focus();
         return Ok(());
@@ -71,31 +78,31 @@ fn create_or_focus(
 
 #[tauri::command]
 async fn open_preview3d_window(app: tauri::AppHandle) -> Result<(), String> {
-    create_or_focus(&app, "preview3d", "3D 预览", 1300.0, 820.0, "preview3d")
+    create_or_focus(&app, "preview3d", "3D 预览", 1300.0, 820.0, "preview3d", false)
 }
 
 #[tauri::command]
 async fn open_cross_section_window(app: tauri::AppHandle) -> Result<(), String> {
-    create_or_focus(&app, "cross_section", "截面", 1000.0, 700.0, "cross_section")
+    create_or_focus(&app, "cross_section", "截面", 1000.0, 700.0, "cross_section", false)
 }
 
 #[tauri::command]
 async fn open_volume3d_window(app: tauri::AppHandle) -> Result<(), String> {
     // label 必须与 App.tsx WindowRouter 路由分支同值（"volume"→ResultWindow）。
     // 曾用 "volume3d"：与路由 "volume" 不匹配 → 子窗口渲染整个主应用（P0，已修）。
-    create_or_focus(&app, "volume", "3D 结果", 1300.0, 820.0, "volume")
+    create_or_focus(&app, "volume", "3D 结果", 1300.0, 820.0, "volume", true)
 }
 
 #[tauri::command]
 async fn open_ptrac_window(app: tauri::AppHandle) -> Result<(), String> {
     // label 必须与 App.tsx WindowRouter 路由分支同值（"ptrac"→PtracWindow）。
-    create_or_focus(&app, "ptrac", "3D 径迹", 1300.0, 820.0, "ptrac")
+    create_or_focus(&app, "ptrac", "3D 径迹", 1300.0, 820.0, "ptrac", true)
 }
 
 #[tauri::command]
 async fn open_source_demo_window(app: tauri::AppHandle) -> Result<(), String> {
     // label 必须与 App.tsx WindowRouter 路由分支同值（"source-demo"→SourceDemoWindow）。
-    create_or_focus(&app, "source-demo", "演示源", 1300.0, 820.0, "source-demo")
+    create_or_focus(&app, "source-demo", "演示源", 1300.0, 820.0, "source-demo", false)
 }
 
 /// 「Tally 通量图」独立窗口。
@@ -106,7 +113,7 @@ async fn open_source_demo_window(app: tauri::AppHandle) -> Result<(), String> {
 /// 图能铺满窗口、导出按钮与其它窗口位置一致、数据表留在输出页不再被挤压。
 #[tauri::command]
 async fn open_tally_chart_window(app: tauri::AppHandle) -> Result<(), String> {
-    create_or_focus(&app, "tally_chart", "Tally 通量图", 1000.0, 700.0, "tally_chart")
+    create_or_focus(&app, "tally_chart", "Tally 通量图", 1000.0, 700.0, "tally_chart", false)
 }
 
 /// 优先使用随包分发的 WebView2「固定版运行时」，让没有 Edge 的机器也能开界面。
