@@ -43,3 +43,27 @@ export function overlayAfterDrag(phase: DragPhase, types?: ArrayLike<string> | r
 
 /** 覆盖层文案（App 与测试共用一处，避免测试去硬编码字符串） */
 export const DROP_OVERLAY_TEXT = "释放以导入 INP 文件";
+
+/**
+ * Tauri（打包后）的 `tauri://file-drop-hover` 事件：**要不要亮主窗口覆盖层**。
+ *
+ * 2026-10-21 用户实测（第二个坑，与上面的 HTML5 drag 坑不同源）：
+ *   在 **3D 预览子窗口** 里框选文字后拖拽 ⇒ **主窗口**亮起粉色覆盖层且永不消失。
+ *   根因：`App.tsx` 用 `@tauri-apps/api/event` 的 **全局** `listen()` 订阅
+ *   `tauri://file-drop-hover`；Tauri v1 的全局监听会收到**所有窗口**的事件
+ *   （事件对象带 `windowLabel` 正是为此），于是子窗口里"拖文字"触发的 hover
+ *   被主窗口当成"拖文件进来"；而文字拖拽没有对应的 drop/cancelled 事件 ⇒ 卡住。
+ *
+ * 两条判据（与 `overlayAfterDrag` 同一个"假拖拽不许亮"的原则）：
+ *   ① **只认本窗口**（`windowLabel` 缺省或等于 mainLabel）——子窗口的事件一律忽略；
+ *   ② **payload 必须是非空的文件路径数组** —— 文字/图片拖拽没有文件路径 ⇒ 不亮。
+ */
+export function shouldShowDropOverlay(
+  payload: unknown,
+  windowLabel?: string | null,
+  mainLabel = "main",
+): boolean {
+  if (windowLabel && windowLabel !== mainLabel) return false;
+  if (!Array.isArray(payload) || payload.length === 0) return false;
+  return payload.some((p) => typeof p === "string" && p.length > 0);
+}

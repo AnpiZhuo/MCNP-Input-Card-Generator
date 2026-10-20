@@ -25,7 +25,7 @@ import {
   normalizeMcnpDetect, upsertCandidate, type McnpState,
 } from "./utils/mcnpSelect";
 import { buildRawOverrides } from "./utils/rawOverrides";
-import { DROP_OVERLAY_TEXT, overlayAfterDrag } from "./utils/dragImport";
+import { DROP_OVERLAY_TEXT, overlayAfterDrag, shouldShowDropOverlay } from "./utils/dragImport";
 import { canonicalSourceMode } from "./utils/sourceAdv";
 import AppScaleProvider from "./utils/appScale";
 
@@ -372,6 +372,9 @@ function AppInner() {
   }, [importInpText]);
 
   // Tauri 原生拖入判定：hover 亮覆盖层，drop 导入、取消熄灭
+  // ⚠️ 2026-10-21：必须用**本窗口**的 listen（getCurrent().listen）而不是全局 listen ——
+  // 全局监听会收到其它窗口的事件（3D 预览子窗口里拖文字会触发 file-drop-hover 并泄漏到主窗口，
+  // 且文字拖拽没有 drop/cancelled ⇒ 粉色覆盖层卡死）。另外 hover 的 payload 必须是文件路径数组。
   useEffect(() => {
     let unlisteners: (() => void)[] = [];
     let active = true;
@@ -380,19 +383,27 @@ function AppInner() {
       const isMainWindow = label === "main";
       setAcceptsFileDrop(isMainWindow);
       if (!isMainWindow) return;
-      return import("@tauri-apps/api/event").then(async (m) => {
+      return import("@tauri-apps/api/window").then(async (m) => {
         if (!active) return;
-      try {
-        unlisteners = await Promise.all([
-          m.listen("tauri://file-drop-hover", () => setDragOver(true)),
-          m.listen("tauri://file-drop-cancelled", () => setDragOver(false)),
-          m.listen("tauri://file-drop", (e: any) => {
-            setDragOver(false);
-            const p = Array.isArray(e.payload) ? e.payload[0] : undefined;
-            if (p) handleTauriDrop(p);
-          }),
-        ]);
-      } catch { /* 非 Tauri 环境 */ }
+        const win = m.getCurrent();
+        try {
+          unlisteners = await Promise.all([
+            // 只认「带文件路径」的 hover；子窗口事件即使漏进来也按 windowLabel 拒绝
+            win.listen("tauri://file-drop-hover", (e: any) => {
+              if (shouldShowDropOverlay(e?.payload, e?.windowLabel ?? label)) setDragOver(true);
+              else setDragOver(false);
+            }),
+            win.listen("tauri://file-drop-cancelled", () => setDragOver(false)),
+            win.listen("tauri://file-drop", (e: any) => {
+              setDragOver(false);
+              const p = Array.isArray(e.payload) ? e.payload[0] : undefined;
+              if (p) handleTauriDrop(p);
+            }),
+            // 自愈：窗口获得/失去焦点时一律熄灭（任何"没落下"的拖拽都不许留残影）
+            win.listen("tauri://focus", () => setDragOver(false)),
+            win.listen("tauri://blur", () => setDragOver(false)),
+          ]);
+        } catch { /* 非 Tauri 环境 */ }
       }).catch(() => {});
     }).catch(() => { setAcceptsFileDrop(true); });
     return () => {
@@ -400,6 +411,23 @@ function AppInner() {
       unlisteners.forEach(u => u());
     };
   }, [handleTauriDrop]);
+
+  // DOM 级自愈（2026-10-21 加）：任何指针释放/按 Esc 都熄灭覆盖层 ——
+  // 拖拽期间浏览器不投递 pointer 事件，故这不会误熄正常拖文件；但能救"事件序列残缺"的卡死。
+  useEffect(() => {
+    const clear = () => setDragOver(false);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") clear(); };
+    window.addEventListener("pointerup", clear);
+    window.addEventListener("mouseup", clear);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("blur", clear);
+    return () => {
+      window.removeEventListener("pointerup", clear);
+      window.removeEventListener("mouseup", clear);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("blur", clear);
+    };
+  }, []);
 
   const handleBrowse = async () => {
     try {

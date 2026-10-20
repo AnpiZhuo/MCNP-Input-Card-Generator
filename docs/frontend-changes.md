@@ -2301,3 +2301,14 @@ warnings: ["MCCAD 切割已跳过：未找到 McCAD.exe。请把 McCAD.exe 放�
 - 测试：`gui/test/sweepDialogCancel.test.tsx` 重写（请求不带 `signal`、无「取消」、假时钟推进 10 分钟不中止；
   后端拒绝消息照常透传）。
 - 门禁：vitest **124 文件 / 1069 例全过**；`tsc` 两档 EXIT 0。
+
+### K. Tauri 拖放事件跨窗口泄漏（2026-10-21）
+
+- 症状：3D 预览**子窗口**里框选文字后拖拽 → **主窗口**粉色「释放以导入 INP 文件」覆盖层亮起且不消失。
+- 根因：`@tauri-apps/api/event` 的**全局** `listen()` 会收到所有窗口的事件（`Event.windowLabel` 为此存在）；
+  子窗口的 hover 泄漏到主窗口，文字拖拽又没有 drop/cancelled 事件，且空 payload 也被当成拖文件。
+- 修法：① 改用 `getCurrent().listen`（窗口作用域，官方 `onFileDropEvent` 同款）；
+  ② 新增 `shouldShowDropOverlay(payload, windowLabel)`——只认 `windowLabel === "main"` 且 payload 为非空路径数组；
+  ③ 自愈：`focus`/`blur` 事件 + DOM 层 `pointerup`/`mouseup`/`Esc`/`blur` 一律熄灭覆盖层。
+- 测试：`gui/test/dragImport.test.ts` +3 例（共 9 例）；vitest **124 文件 / 1072 例全过**；`tsc` 两档 EXIT 0。
+- 出包：`build:app` EXIT 0（sidecar 未变），部署只替换 exe，启动冒烟通过。

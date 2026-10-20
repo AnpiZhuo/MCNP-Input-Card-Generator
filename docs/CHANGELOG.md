@@ -55,6 +55,20 @@
 > **门禁**：pytest **1591 passed / 1 failed（既有 GBK 环境失败 `test_meshtal_worker::test_worker_spawn_dev_mode_bad_tally_error`，与本批无关）/ 11 skipped**；
 > vitest 全量复跑（数字见下）；`tsc` 两档 EXIT 0。
 
+### 🔧 拖拽覆盖层「跨窗口泄漏」修复 —— 3D 子窗口拖文字不再点亮主窗口粉色层【2026-10-21，**已改 ✅ / 已重新出包部署 ✅ · 版本仍 1.7.7**】
+
+> 用户实测原话：「在 3D 预览不小心框选到文字后拖拽在 3D 预览界面，主窗口依旧会出粉色的那个界面，依旧不会消掉」。
+> 根因（与 2026-09-26 的 HTML5 drag 坑不同源）：`App.tsx` 用 `@tauri-apps/api/event` 的**全局** `listen()`
+> 订阅 `tauri://file-drop-hover`；Tauri v1 全局监听会收到**所有窗口**的事件（`Event.windowLabel` 为此存在），
+> 3D 子窗口里"拖文字"触发的 hover 泄漏到主窗口 ⇒ 主窗口亮覆盖层；文字拖拽没有 drop/cancelled ⇒ 永不熄；
+> 且 hover 的空路径数组也被当成"拖文件"。
+> 修法：① 改用**本窗口** `getCurrent().listen`（与官方 `window.onFileDropEvent` 实现同款）；
+> ② 新增 `dragImport.shouldShowDropOverlay(payload, windowLabel)`：只认 `windowLabel === "main"` 且 payload
+> 为非空文件路径数组；③ 自愈：监听 `focus`/`blur`，并在 DOM 层 `pointerup`/`mouseup`/`Esc`/`blur` 一律熄灭。
+> 验证：`dragImport.test.ts` +3 例（共 9 例）；vitest **124 文件 / 1072 例全过**、`tsc` 两档 EXIT 0；
+> `build:app` EXIT 0（sidecar 未变，只重建前端+外壳）；部署只替换 exe（与构建产物 hash 一致），
+> 启动冒烟 5001 ready / xsdir 7925。**行为仍需用户手拖确认**（OLE 拖拽自动化模拟不了）。
+
 ### 🔧 卡片编辑器断网化（Monaco 本地化 + 去字体外链 + 顺带省 10 MB）+ 曲面卡「只有第一行着色」修复【2026-10-08 晚，**已改 ✅ / 已重新打包并部署 ✅ / 已提交 `75f9b58` + `8f07e12` + `ecd9172`（未 push）· 版本仍 1.7.7（bug 批不升版）**】
 
 > 用户原话：「我的项目不能联网」（前一条：编辑器换 Monaco 后我查到的 CDN 依赖）→「直接关掉并部署」；

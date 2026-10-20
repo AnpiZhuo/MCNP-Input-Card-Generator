@@ -64,6 +64,19 @@
 > 2026-10-20 23:38 的 `build:release` 包已含本批改动（部署目录同样是它）。
 > **提交**：**已提交 ✅ `c3b12f6`**（与参数扫描批次 `1c8f700` 分开提交，便于回滚定位）；**未 push**。
 
+> **★ 2026-10-21 补充：拖拽覆盖层「跨窗口泄漏」（用户实测"拖拽锁定主窗口还没完成"）**
+> 症状（用户原话）：「在 3D 预览不小心框选到文字后拖拽在 3D 预览界面，主窗口依旧会出粉色的那个界面，依旧不会消掉」。
+> 根因（与 2026-09-26 的 HTML5 drag 坑**不同源**）：`App.tsx` 用 `@tauri-apps/api/event` 的**全局** `listen()`
+> 订阅 `tauri://file-drop-hover`；Tauri v1 的全局监听会收到**所有窗口**的事件（`Event.windowLabel` 就是为此存在），
+> 于是 3D 子窗口里"拖文字"触发的 hover 泄漏到主窗口 ⇒ 主窗口亮粉色覆盖层；而文字拖拽没有
+> drop/cancelled 事件 ⇒ 永不熄灭。另外 hover 的 payload（文件路径数组）为空时也被当成拖文件。
+> 修法：① 改用**本窗口** `getCurrent().listen`（与官方 `window.onFileDropEvent` 实现同款）；
+> ② 新增 `dragImport.shouldShowDropOverlay(payload, windowLabel)`：**只认 `windowLabel === "main"` 且 payload
+> 是非空文件路径数组**；③ 自愈：再监听 `focus`/`blur`，并在 DOM 层 `pointerup`/`mouseup`/`Esc`/`blur` 一律熄灭。
+> 验证：`gui/test/dragImport.test.ts` +3 例（共 9 例：主窗口真文件亮 / 子窗口一律不亮 / 空 payload 不亮）；
+> vitest **124 文件 / 1072 例**、`tsc` 两档 EXIT 0；`build:app` EXIT 0（约 2 min，sidecar 未变），部署只替换 exe
+> （与构建产物 hash 一致），启动冒烟 5001 ready / xsdir 7925。**行为仍需用户手拖确认**（OLE 拖拽自动化测不了）。
+
 > **★ 本批（2026-10-10）续批：3D 预览「墓地照画」回归修复 + 重合检测缓存永不命中修复 + 按用户指示**去掉「生成真空栅元」开关**（默认不生成）—— 已改 ✅ / 已重新打包并部署 ✅（`build:release` EXIT 0 / 280 s）/ 已提交见文末 · 版本仍 1.7.7**
 > **起因**：用户在 2026-10-09 批部署后说「你继续」。顺着"重合检测这条链"往下查，先量出**三处重叠是真几何**（详见下条），
 > 再顺着缓存这条线查出**两个更值钱的缺陷**（一个是用户可见的回归，一个是"写了缓存但永不命中"）。
@@ -2812,6 +2825,14 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
   274 m³ 厂房模型切到每块 ≤30 面后，**实体块**面数合计 194→367（18 块，最大 25 面），
   但 **28 个真空栅元最大仍有 48 面**。真空是实体**之间**的空隙，把实体切碎只会让空隙更零碎。
   ⇒ 用户提"每块 ≤N 面"时，**先问清是块还是最终栅元**，并如实报告没做到的那一侧。
+- **❗Tauri v1 的全局 `listen()` 会收到**所有窗口**的事件 —— file-drop 必须用本窗口 listen（2026-10-21 实测）**：
+  主窗口用 `@tauri-apps/api/event` 的 `listen("tauri://file-drop-hover")` 订阅拖放，结果 3D 预览**子窗口**里
+  拖文字也把主窗口的粉色覆盖层点亮，且没有对应的 drop/cancelled ⇒ 永久卡住。官方 `Window.onFileDropEvent`
+  用的是 `this.listen(...)`（本窗口作用域）；全局监听拿到的事件虽带 `windowLabel`，但默认不看它就等于"谁的都收"。
+  **纪律**：① 窗口相关事件（file-drop / focus / close-requested…）一律 `getCurrent().listen`；
+  ② 即使改用本窗口监听，也校验 payload（hover 的路径数组非空才算文件拖拽）；
+  ③ 覆盖层这类"一次性状态"必须多路自愈（focus/blur/pointerup/Esc），不能只等一个理想事件序列。
+
 - **❗改前端 UI 前先确认"用户点的到底是哪个组件"——bundle 取证，别凭文件名猜（2026-10-20 当场踩到）**：
   用户报"参数扫描超时中止"，我按 `grep` 找到 `SweepDialog.tsx` 的 120 s 兜底就改了它；第一次出包后
   在 `gui/dist/assets/index-*.js` 里搜文案才发现：产物里根本没有 `参数扫描` 标题，却有 `INP 生成预览` +

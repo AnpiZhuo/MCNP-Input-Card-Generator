@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { DROP_OVERLAY_TEXT, isFileDrag, overlayAfterDrag } from "../src/utils/dragImport";
+import { DROP_OVERLAY_TEXT, isFileDrag, overlayAfterDrag, shouldShowDropOverlay } from "../src/utils/dragImport";
 
 /*
  * dragImport —— 「拖入文件即导入」覆盖层的判定。
@@ -68,5 +68,31 @@ describe("overlayAfterDrag（覆盖层状态机）", () => {
 describe("覆盖层文案", () => {
   it("只有一处字面量（App 与测试共用常量，避免测试硬编码）", () => {
     expect(DROP_OVERLAY_TEXT).toBe("释放以导入 INP 文件");
+  });
+});
+
+/*
+ * 2026-10-21 用户实测（第二个坑）：在 3D 预览**子窗口**里框选文字后拖拽 ⇒ 主窗口亮粉色
+ * 覆盖层且永不消失。根因是 App 用全局 listen 订阅 file-drop-hover，子窗口事件泄漏到主窗口；
+ * 且文字拖拽没有 drop/cancelled 事件。修法 = 窗口作用域 + payload 必须是文件路径数组。
+ */
+describe("shouldShowDropOverlay（Tauri 跨窗口 hover 事件）", () => {
+  it("主窗口 + 真文件路径 ⇒ 亮", () => {
+    expect(shouldShowDropOverlay(["C:\\MCNP\\a.inp"], "main")).toBe(true);
+    expect(shouldShowDropOverlay(["C:\\a.inp", "C:\\b.inp"], undefined)).toBe(true); // 老版本无 windowLabel
+  });
+
+  it("子窗口（3D 预览）的事件一律不亮 —— 用户报的『拖文字把主窗口点亮』", () => {
+    expect(shouldShowDropOverlay(["C:\\a.inp"], "preview3d")).toBe(false);
+    expect(shouldShowDropOverlay(["C:\\a.inp"], "cross_section")).toBe(false);
+  });
+
+  it("没有文件路径的拖拽（选中文字/图片）不亮", () => {
+    expect(shouldShowDropOverlay([], "main")).toBe(false);
+    expect(shouldShowDropOverlay(null, "main")).toBe(false);
+    expect(shouldShowDropOverlay(undefined, "main")).toBe(false);
+    expect(shouldShowDropOverlay("C:\\a.inp", "main")).toBe(false);   // 非数组
+    expect(shouldShowDropOverlay([""], "main")).toBe(false);          // 空字符串路径
+    expect(shouldShowDropOverlay([123], "main")).toBe(false);         // 非字符串
   });
 });
