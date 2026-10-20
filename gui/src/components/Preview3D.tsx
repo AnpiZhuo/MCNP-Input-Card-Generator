@@ -103,6 +103,7 @@ import { buildQuickCellPreview, wireColorForMaterial } from "../three/quickCellP
 import { type QuickCellResult, type QuickShape } from "../utils/quickCell";
 import { useQuickAddOverlap } from "../utils/useQuickAddOverlap";
 import FloatingDialog from "./FloatingDialog";
+import { preview3dWarnings } from "../utils/preview3dWarnings";
 
 /**
  * 快捷建栅元时右侧栏的加宽宽度。
@@ -614,6 +615,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
 
   // 尝试从后端获取真实 STL 数据
   const [freecadStatus, setFreecadStatus] = useState("");
+  const [previewWarnings, setPreviewWarnings] = useState<string[]>([]);
   const [stlData, setStlData] = useState<Record<string, string> | null>(null);
   const [loading, setLoading] = useState(true);
   const [seeThrough, setSeeThrough] = useState(false);  // 半透明查看（默认关 → opaque）
@@ -756,6 +758,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
     // 预置网格模式（STEP 方向预览）：网格由宿主算好（后端按约定转过）直接渲染，不调后端。
     if (p.preloadedStl) {
       setStlData(p.preloadedStl);
+      setPreviewWarnings([]);
       setFreecadStatus("已按当前方向约定转好（预置网格）");
       setLoading(false);
       return;
@@ -787,13 +790,19 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
         tr_cards: p.trCards,
       }),
     }).then(function(r) { return r.json(); }).then(function(j) {
+      const warnings = preview3dWarnings(j);
+      setPreviewWarnings(warnings);
       if (j.stl_data && Object.keys(j.stl_data).length > 0) {
         setStlData(j.stl_data);
-        setFreecadStatus(`已加载 ${Object.keys(j.stl_data).length} 个栅元的几何`);
+        setFreecadStatus(warnings.length
+          ? `已加载 ${Object.keys(j.stl_data).length} 个栅元；${warnings[0]}`
+          : `已加载 ${Object.keys(j.stl_data).length} 个栅元的几何`);
       } else if (j.message) {
         // 这句提示曾经**没有任何地方渲染**（freecadStatus 只 set 不读）⇒ 后端明明回了
         // "没有可预览的栅元"，用户看到的却只是"空白的三维窗口"。现在底部状态栏会显示它。
-        setFreecadStatus(`后端未产出几何：${j.message}`);
+        setFreecadStatus(warnings.length
+          ? `后端未产出几何：${j.message}；${warnings[0]}`
+          : `后端未产出几何：${j.message}`);
       } else {
         setFreecadStatus("后端未产出几何（未返回原因）");
       }
@@ -1428,7 +1437,7 @@ export default function Preview3D({ cells: rawCells, surfaces, trCards, onClose,
           }, `${visibleCount}/${cellViews.length} 显示`),
           // 后端几何状态：此前这个 state 只 set 不读 ⇒ 后端回"没有可预览的栅元"时用户只见空白
           React.createElement("span", {
-            title: freecadStatus,
+            title: [freecadStatus, ...previewWarnings].filter(Boolean).join("\n"),
             style: {
               fontSize: 10, color: "var(--text-tertiary)", flex: 1,
               overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",

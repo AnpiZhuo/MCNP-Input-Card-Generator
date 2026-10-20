@@ -11,7 +11,7 @@
 import "./monacoLocal";
 
 import React, { useEffect, useRef } from "react";
-import Editor, { type Monaco, type OnMount } from "@monaco-editor/react";
+import Editor, { type Monaco, type BeforeMount, type OnMount } from "@monaco-editor/react";
 import type { IDisposable, Position, editor } from "monaco-editor";
 import {
   completionDetail,
@@ -20,6 +20,7 @@ import {
   ghostForLine,
   languageId,
   surfaceTokenizer,
+  surfaceCompletionAllowed,
   trTokenizer,
 } from "./mcnpCardSyntax";
 
@@ -69,6 +70,11 @@ function configureMonaco(monaco: Monaco): void {
       "editor.selectionBackground": "#2563EB55",
       "editor.inactiveSelectionBackground": "#2563EB33",
       "editorSuggestWidget.background": "#1A1A3E",
+      "editorSuggestWidget.foreground": "#F1F1F9",
+      "editorSuggestWidget.selectedForeground": "#FFFFFF",
+      "editorSuggestWidget.selectedBackground": "#37306B",
+      "editorSuggestWidget.highlightForeground": "#67E8F9",
+      "editorSuggestWidget.border": "#6D5BD0",
     },
   });
   monaco.editor.defineTheme("mcnp-card-light", {
@@ -89,6 +95,11 @@ function configureMonaco(monaco: Monaco): void {
       "editor.selectionBackground": "#2563EB55",
       "editor.inactiveSelectionBackground": "#2563EB33",
       "editorSuggestWidget.background": "#FFFFFF",
+      "editorSuggestWidget.foreground": "#1F2937",
+      "editorSuggestWidget.selectedForeground": "#111827",
+      "editorSuggestWidget.selectedBackground": "#DBEAFE",
+      "editorSuggestWidget.highlightForeground": "#1D4ED8",
+      "editorSuggestWidget.border": "#93C5FD",
     },
   });
 }
@@ -161,10 +172,13 @@ export default function McnpEditor({
     decorationIds.current = ed.deltaDecorations(decorationIds.current, decorations);
   };
 
+  const beforeMount: BeforeMount = (monaco) => {
+    configureMonaco(monaco);
+  };
+
   const handleMount: OnMount = (editor, monaco) => {
     monacoRef.current = monaco;
     editorRef.current = editor;
-    configureMonaco(monaco);
     monaco.editor.setModelLanguage(editor.getModel()!, currentLanguageId);
     monaco.editor.setTheme(currentMonacoTheme());
 
@@ -183,9 +197,13 @@ export default function McnpEditor({
     if (modeRef.current === "deck") { paintHighlights(); return; }
 
     completionDisposable.current = monaco.languages.registerCompletionItemProvider(currentLanguageId, {
+      triggerCharacters: [" "],
       provideCompletionItems: (model: editor.ITextModel, position: Position) => {
         const line = model.getLineContent(position.lineNumber);
         const before = line.slice(0, position.column - 1);
+        if (modeRef.current === "surface" && !surfaceCompletionAllowed(before)) {
+          return { suggestions: [] };
+        }
         const partial = before.match(/[A-Za-z/*]+$/)?.[0] || "";
         const words = completionWords(modeRef.current);
         const suggestions = words
@@ -248,6 +266,7 @@ export default function McnpEditor({
         theme={currentMonacoTheme()}
         value={value}
         onChange={(next) => onChange?.(next ?? "")}
+        beforeMount={beforeMount}
         onMount={handleMount}
         // 加载期文案（默认是英文 "Loading..."）。monaco 现在随包，正常只闪一下；但万一编辑器
         // 起不来，这行字至少让用户看出「卡在编辑器本身」，而不是一片空白。

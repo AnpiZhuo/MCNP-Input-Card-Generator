@@ -43,6 +43,27 @@
 >    光子 bin 低于 cutoff（warning，计入总量时为零）。分析用临时脚本与 `__analysis_rows.json` 已清理，
 >    数据目录只留原始产物（run_XXX + manifest + TSV）。
 
+> **★ 补提交：2026-10-19「3D 预览三缺陷」交接批（改动自 10-19 留在工作区，2026-10-20 核对 diff 后提交）**
+> **来源**：`交接-3D预览三缺陷-20261019.md`（用户报：①编辑栅元时 3D 预览勾选默认不勾；②编辑的 s 球预览成方块；
+> ③曲面卡下拉不自动弹 + 白字白底）。本批改动已在工作区存在多日，本轮**只做核对与补提交，未改其代码**。
+> **改动清单（逐条核对 diff 后登记）**：
+> ① **栅元 render 默认值**：`GeometryTab.tsx` 新增栅元 `render:false → true`，与后端 `CellData.render=True` 对齐
+>    （修缺陷①；导入/STEP/快捷建路径本来就是 true）。
+> ② **无界栅元不再静默**：新增 `gui/src/utils/preview3dWarnings.ts`，把后端 `closure_report` 的
+>    infinite/semi_infinite/empty/unresolvable、`parse_errors`、`skipped_cells` 汇总成中文提示，
+>    `Preview3D.tsx` 写进状态栏并进 `title` tooltip（如「栅元 18 无界，当前几何按包围盒裁剪显示，可能看起来像方块」）。
+>    **注意：没改几何引擎** —— 无界栅元仍按包围盒裁剪，只是把"为什么像方块"说出来（缺陷②的诚实修法）。
+> ③ **曲面卡补全/主题**：`McnpEditor.tsx` 的 `configureMonaco` 从 `handleMount` 移到 **`beforeMount`**（主题先定义再应用）；
+>    两套主题各补齐 5 个 `editorSuggestWidget.*` 颜色（背景/前景/选中背景/选中前景/高亮/边框）；补全加
+>    `triggerCharacters:[" "]`，并用 `mcnpCardSyntax.surfaceCompletionAllowed` 保证"类型已填后不再弹类型候选"
+>    （缺陷③；`mcnpCardSyntax.test.ts` +2 例覆盖 `1 ` / `1 3 ` 允许、`1 S ` / `1 3 S …` 禁止）。
+> ④ **文件拖放只认主窗口**：`App.tsx` 用 `currentWindowLabel()==="main"` 决定 `acceptsFileDrop`，
+>    子窗口（3D 预览等）不再亮拖放覆盖层、也不再吞拖入文件。
+> **验证**：vitest 全量 **124 文件 / 1069 例**（含 `preview3dWarnings.test.ts` 2 例、`mcnpCardSyntax` 补全边界 2 例）、
+> `tsc` 两档 EXIT 0、pytest **1591 passed / 1 failed（既有 GBK）/ 11 skipped**；
+> 2026-10-20 23:38 的 `build:release` 包已含本批改动（部署目录同样是它）。
+> **提交**：见下方"补提交 hash"（与参数扫描批次分开提交，便于回滚定位）。
+
 > **★ 本批（2026-10-10）续批：3D 预览「墓地照画」回归修复 + 重合检测缓存永不命中修复 + 按用户指示**去掉「生成真空栅元」开关**（默认不生成）—— 已改 ✅ / 已重新打包并部署 ✅（`build:release` EXIT 0 / 280 s）/ 已提交见文末 · 版本仍 1.7.7**
 > **起因**：用户在 2026-10-09 批部署后说「你继续」。顺着"重合检测这条链"往下查，先量出**三处重叠是真几何**（详见下条），
 > 再顺着缓存这条线查出**两个更值钱的缺陷**（一个是用户可见的回归，一个是"写了缓存但永不命中"）。

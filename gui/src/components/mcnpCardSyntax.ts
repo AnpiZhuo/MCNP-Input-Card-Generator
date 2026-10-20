@@ -30,6 +30,7 @@ export const SURFACE_DESCS: Record<string, string> = {
 };
 
 const SURFACE_TYPES = Object.keys(SURFACE_DESCS);
+const SURFACE_TYPE_SET = new Set(SURFACE_TYPES);
 
 const GHOST_HINTS: Record<string, string> = {
   P: "A B C D", PX: "D", PY: "D", PZ: "D",
@@ -162,6 +163,15 @@ export function ghostForLine(line: string, mode: CardMode): string | null {
 /** 补全候选词（曲面卡 = 曲面类型；TR 卡 = 两条 TR 写法；整张卡 = 不补全）。 */
 export const completionWords = (mode: CardMode): string[] =>
   mode === "tr" ? ["TR", "*TR"] : mode === "deck" ? [] : SURFACE_TYPES;
+
+/** 曲面类型补全是否仍适用于当前光标位置。 */
+export function surfaceCompletionAllowed(lineBeforeCursor: string): boolean {
+  const body = lineBeforeCursor.split("$", 1)[0].trim();
+  if (!body) return false;
+  const tokens = body.split(/\s+/);
+  // 第一个 token 是曲面编号；类型一旦出现，后续只能输入系数，不能再弹类型候选。
+  return !tokens.slice(1).some((token) => SURFACE_TYPE_SET.has(token.toUpperCase()));
+}
 
 /** 补全项的说明文字。 */
 export const completionDetail = (word: string, mode: CardMode): string =>

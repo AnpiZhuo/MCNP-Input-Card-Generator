@@ -17,6 +17,7 @@ import {
   ghostForLine,
   languageId,
   surfaceTokenizer,
+  surfaceCompletionAllowed,
   trTokenizer,
 } from "../src/components/mcnpCardSyntax";
 
@@ -136,6 +137,19 @@ describe("幽灵提示（ghostForLine）", () => {
     expect(ghostForLine("1 PX ", "surface")).toBe("D");
     expect(ghostForLine("3 S ", "surface")).toBe("x0 y0 z0 R");
     expect(ghostForLine("4 SO ", "surface")).toBe("R");
+  });
+
+  describe("曲面类型补全边界", () => {
+    it("曲面类型尚未填写时允许提示", () => {
+      expect(surfaceCompletionAllowed("1 ")).toBe(true);
+      expect(surfaceCompletionAllowed("1 3 ")).toBe(true);
+    });
+
+    it("曲面类型填写后不再提示类型候选", () => {
+      expect(surfaceCompletionAllowed("1 S ")).toBe(false);
+      expect(surfaceCompletionAllowed("1 3 S 0 0 0 5 ")).toBe(false);
+      expect(surfaceCompletionAllowed("1 3 C/X ")).toBe(false);
+    });
   });
 
   it("参数齐了给中文说明", () => {

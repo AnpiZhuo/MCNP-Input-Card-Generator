@@ -58,7 +58,7 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     const c = [...cells]; const [m] = c.splice(from, 1); c.splice(to, 0, m); setCells(c);
   };
   const cellDrag = useRowDrag(moveCellRow);
-  const addCellRow = () => setCells([...cells, { kind: "cell", cell: { num:String(cells.length+1), mat:"0", density:"", surfaces:"", impN:"", impP:"", impE:"", vol:"", pwt:"", ext:"", fcl:"", u:"", fill:"", lat:"", trcl:"", tmp:"", otherParams:"", render:false, fill_grid:"", comment:"" } }]);
+  const addCellRow = () => setCells([...cells, { kind: "cell", cell: { num:String(cells.length+1), mat:"0", density:"", surfaces:"", impN:"", impP:"", impE:"", vol:"", pwt:"", ext:"", fcl:"", u:"", fill:"", lat:"", trcl:"", tmp:"", otherParams:"", render:true, fill_grid:"", comment:"" } }]);
   const addRawCell = (text: string) => setCells([...cells, { kind: "raw", text }]);
   const addConditionalCells = () => {
     const name = window.prompt("条件名（如 ENDF7）", "ENDF7");
@@ -926,4 +926,3 @@ export default function GeometryTab({ pendingCellFromMaterial }: GeoProps) {
     </>
   );
 }
-

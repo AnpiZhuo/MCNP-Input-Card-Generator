@@ -63,6 +63,7 @@ function AppInner() {
   const [outputPath, setOutputPath] = useState("D:/MCNP/new");
   const [suffix, setSuffix] = useState(".i");
   const [dragOver, setDragOver] = useState(false);
+  const [acceptsFileDrop, setAcceptsFileDrop] = useState(false);
   const [pendingCell, setPendingCell] = useState(0);
   const [mcnpInfo, setMcnpInfo] = useState<McnpState>(EMPTY_MCNP_STATE);
   const [backendState, setBackendState] = useState<"connecting" | "ready" | "offline">("connecting");
@@ -300,30 +301,37 @@ function AppInner() {
    */
   const dragTypes = (e: React.DragEvent) => (e.dataTransfer ? e.dataTransfer.types : null);
   const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (!acceptsFileDrop) return;
     e.preventDefault();
     setDragOver(overlayAfterDrag("over", dragTypes(e)));
-  }, []);
+  }, [acceptsFileDrop]);
   const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (!acceptsFileDrop) return;
     e.preventDefault();
     setDragOver(overlayAfterDrag("enter", dragTypes(e)));
-  }, []);
+  }, [acceptsFileDrop]);
   const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (!acceptsFileDrop) return;
     e.preventDefault();
     // 掠过子元素时 **不** 熄灭（否则拖文件经过子元素边界会一闪一闪）；
     // 真正离开窗口（relatedTarget 为空或不在 shell 内）才熄。
     const to = e.relatedTarget as Node | null;
     if (to && e.currentTarget.contains(to)) return;
     setDragOver(overlayAfterDrag("leave", dragTypes(e)));
-  }, []);
+  }, [acceptsFileDrop]);
   const handleDragEnd = useCallback((e: React.DragEvent) => {
+    if (!acceptsFileDrop) return;
     // dragend = 这次拖拽结束了（放下/取消/落在窗口外）——无条件熄灭，绝不留残影
     e.preventDefault();
     setDragOver(overlayAfterDrag("end", dragTypes(e)));
-  }, []);
+  }, [acceptsFileDrop]);
   /** 内部拖拽起手（拖的是选中的文字/元素而不是文件）：绝不当成"拖文件进来" */
-  const handleDragStart = useCallback(() => { setDragOver(false); }, []);
+  const handleDragStart = useCallback(() => {
+    if (acceptsFileDrop) setDragOver(false);
+  }, [acceptsFileDrop]);
 
   const handleDrop = useCallback(async (e: React.DragEvent) => {
+    if (!acceptsFileDrop) return;
     e.preventDefault(); setDragOver(false);
     const file = e.dataTransfer.files[0];
     if (!file) return;
@@ -347,7 +355,7 @@ function AppInner() {
     } catch (err: any) {
       alert("导入失败: " + (err.message || "请确认后端已重启（添加新接口后需重启）"));
     }
-  }, [importInpText]);
+  }, [acceptsFileDrop, importInpText]);
 
   // 打包后（Tauri）文件拖放走 tauri://file-drop 事件——HTML5 drag 事件被 Tauri 拦截不触发
   const handleTauriDrop = useCallback(async (path: string) => {
@@ -366,7 +374,14 @@ function AppInner() {
   // Tauri 原生拖入判定：hover 亮覆盖层，drop 导入、取消熄灭
   useEffect(() => {
     let unlisteners: (() => void)[] = [];
-    import("@tauri-apps/api/event").then(async (m) => {
+    let active = true;
+    currentWindowLabel().then((label) => {
+      if (!active) return;
+      const isMainWindow = label === "main";
+      setAcceptsFileDrop(isMainWindow);
+      if (!isMainWindow) return;
+      return import("@tauri-apps/api/event").then(async (m) => {
+        if (!active) return;
       try {
         unlisteners = await Promise.all([
           m.listen("tauri://file-drop-hover", () => setDragOver(true)),
@@ -378,8 +393,12 @@ function AppInner() {
           }),
         ]);
       } catch { /* 非 Tauri 环境 */ }
-    }).catch(() => {});
-    return () => { unlisteners.forEach(u => u()); };
+      }).catch(() => {});
+    }).catch(() => { setAcceptsFileDrop(true); });
+    return () => {
+      active = false;
+      unlisteners.forEach(u => u());
+    };
   }, [handleTauriDrop]);
 
   const handleBrowse = async () => {
