@@ -2,8 +2,8 @@
 
 > **★ 本批（2026-10-22）：自有代码改专有许可 + 首页反馈文案 —— 已改 ✅ / 已提交 ✅ `ee84b6f` / 已 push ✅ / 已打包部署 ✅ / 已发 GitHub Release `v1.7.73` ✅（用户指定升版）**
 > 用户指令：「改成自有，分发商用改编需要我许可」→「仅对自由代码生效」（按"仅对自有代码生效"落地）→「首页邮箱行改成有bug请联系兰大核学院辐射生物装置课题组」→ 润色为「Bug 反馈：兰大核学院辐射生物装置课题组」→「准备打包分发」。
-> 改动：`LICENSE` 重写为**专有许可（All Rights Reserved）**（分发/商用/改编须书面许可；仅对自有代码生效；第三方各按自身许可；2026-10-22 生效，MIT 历史版本不溯及）；README 徽章与许可段落重写 + OWEN 链接修正（→ `github.com/caalh/OWEN`）；`app/docs/README.md` 同步；`gui/src/components/BasicSettings.tsx:23` 反馈行；版本 7 处 → **1.7.73**。
-> 发布：`build:release` **EXIT 0 / 561 s**；部署 `D:\MCNP\MCNP输入卡生成器`（旧目录备份 `D:\MCNP\_backup_1.7.7_20261022_200743`）；exe **7,736,320 B** / SHA-256 `590809…87A5` / FileVersion **1.7.73**；冒烟：启动 **4.0 s** 后 5001 监听 + `自检.bat` → `PACKAGE-OK-BACKEND-NOT-UP`（包完整、程序未起，符合预期）；zip `D:\MCNP\MCNP-Input-Card-Generator-v1.7.73-win64.zip` **346,491,079 B** / SHA-256 `b18a14e8…d0b7`。
+> 改动：`LICENSE` 重写为**专有许可（All Rights Reserved）**（分发/商用/改编须书面许可；仅对自有代码生效；第三方各按自身许可；2026-10-22 生效，MIT 历史版本不溯及）；README 徽章与许可段落重写 + OWEN 链接修正（→ `github.com/caalh/OWEN`）；`app/docs/README.md` 同步；`gui/src/components/BasicSettings.tsx:23` 反馈行改为可点击 `mailto:1378963177@qq.com`（文字「Bug 反馈：兰大核学院辐射生物装置课题组」，悬停 title 显示邮箱）；版本 7 处 → **1.7.73**。
+> 发布：`build:release` **EXIT 0 / 561 s**；部署 `D:\MCNP\MCNP输入卡生成器`（旧目录备份 `D:\MCNP\_backup_1.7.7_20261022_200743`）；exe **7,736,320 B** / SHA-256 `590809…87A5` / FileVersion **1.7.73**；冒烟：启动 **4.0 s** 后 5001 监听 + `自检.bat` → `PACKAGE-OK-BACKEND-NOT-UP`（包完整、程序未起，符合预期）；zip `D:\MCNP\MCNP-Input-Card-Generator-v1.7.73-win64.zip` **346,491,515 B** / SHA-256 `14757a3f…a042`（补丁后原位替换；首版 346,491,079 B / `b18a14e8…d0b7`）。
 > GitHub：`main` 已 push（`426ba41..ee84b6f`，经用户开启的本地代理 `127.0.0.1:7877`）、tag `v1.7.73`、Release <https://github.com/AnpiZhuo/MCNP-Input-Card-Generator/releases/tag/v1.7.73>，**资产 `digest` 与本地 SHA-256 逐字节一致**。
 > 同日早先：GitHub 原有 **7 个 release / 5 个 tag 已按用户指令全部清空**（资产约 1.4 GB 不可恢复）。
 
@@ -1903,7 +1903,7 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 
   > **2026-10-22（v1.7.73，用户指定升版；已提交 `ee84b6f`，已 push）**：自有代码 MIT → 专有许可（分发/商用/改编须书面许可，
   > 仅对自有代码生效，第三方各按自身许可）+ 首页反馈文案「Bug 反馈：兰大核学院辐射生物装置课题组」。
-  > 已打包部署（EXIT 0 / 561 s）、已发 GitHub Release `v1.7.73`（zip 346,491,079 B / SHA-256 `b18a14e8…d0b7`，
+  > 已打包部署（EXIT 0 / 561 s）、已发 GitHub Release `v1.7.73`（zip 346,491,515 B / SHA-256 `14757a3f…a042`，补丁后原位替换
   > 资产 digest 与本地逐字节一致）；旧 releases/tags 已清空。详见文首「★ 本批（2026-10-22）」。
 
   > **2026-10-21 凌晨（同版本 1.7.7，未升版；已提交 `e0bda17`，未 push）**：修「解析 PTRAC 后窗口显示『没有 3D 径迹数据』」
