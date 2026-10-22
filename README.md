@@ -22,11 +22,11 @@ A desktop application for visually creating, editing, and validating **MCNP** in
   <img src="images/tab_006.png" alt="输出解析与出图" width="820"/>
 </div>
 
-![Version](https://img.shields.io/badge/Version-1.7.7-blue)
+![Version](https://img.shields.io/badge/Version-1.7.73-blue)
 ![Frontend](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-teal)
 ![Shell](https://img.shields.io/badge/Shell-Tauri-green)
 ![Backend](https://img.shields.io/badge/Backend-Python%20%2B%20pymcnp-yellow)
-![License](https://img.shields.io/badge/License-MIT-brightgreen)
+![License](https://img.shields.io/badge/License-Proprietary-red)
 ![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-lightgrey)
 ![MCNP](https://img.shields.io/badge/MCNP-6.x%20Compatible-orange)
 ![Offline](https://img.shields.io/badge/Offline-Ready-success)
@@ -346,7 +346,7 @@ npm run build:release
 | [Recharts](https://recharts.org/) | 结果绘图 | MIT |
 | [jsPDF](https://github.com/parallax/jsPDF) + [svg2pdf.js](https://github.com/yWorks/svg2pdf.js) | 出图导出 PDF | MIT |
 | [marked](https://github.com/markedjs/marked) | 内置文档渲染 | MIT |
-| [OWEN](https://github.com/BelvoirDynamics) | MCNP 全堆芯 3D 预览参考（格阵 fill 位置 / 轴向折叠 / disc 降级 / LOD 预算） | MIT (© 2026 BelvoirDynamics) |
+| [OWEN](https://github.com/caalh/OWEN) | MCNP 全堆芯 3D 预览参考（格阵 fill 位置 / 轴向折叠 / disc 降级 / LOD 预算） | MIT (© 2026 BelvoirDynamics) |
 | [PyMCNP](https://github.com/FSIBT/PyMCNP) | MCNP 核心库（几何、生成、解析） | BSD-3-Clause |
 | [FreeCAD](https://www.freecad.org/) | 3D CAD 几何处理（CSG 求值引擎） | LGPL v2+ |
 | [GEOUNED](https://geouned-org.github.io/GEOUNED/) | STEP → MCNP 几何转换引擎（随程序打包） | EUPL-1.2 |
@@ -357,17 +357,21 @@ npm run build:release
 
 ## 许可协议
 
-本项目自有代码以 [**MIT License**](LICENSE) 发布。版权所有 © 2026 魏祎卓 (Wei Yizhuo)。
+本项目**自有代码为专有软件（Proprietary, All Rights Reserved）**，版权所有 © 2026 魏祎卓 (Wei Yizhuo)。
 
-> **MIT 许可仅适用于本项目自有代码。** 任何人可自由使用、复制、修改、合并、发布、分发、再许可、销售本软件，但必须在所有副本中保留此版权声明与许可声明（详见 `LICENSE` 文件）。
+> **分发、商业使用、改编均需作者事先书面许可**（联系 1378963177@qq.com）。未经许可，不得转载、镜像、公开再发布（无论原版或修改版），不得用于任何商业目的，不得修改/翻译/反向工程或基于本软件创作衍生作品。
 >
-> 项目所捆绑/调用的开源组件保留其各自许可证：GEOUNED（EUPL-1.2）、OpenCascade（LGPL v2.1）、FreeCAD（LGPL v2+）、pymcnp（BSD-3-Clause）、React（MIT）、Vite（MIT）、Tauri（MIT/Apache-2.0）、Three.js（MIT）、Monaco Editor（MIT）、NumPy（BSD）等，详见上方"引用与致谢"。"引用与致谢"列出的第三方许可是各组件自身的许可，与本项目代码的 MIT 许可不同，使用时请分别遵守。
+> **免费允许**：个人学习、研究、评估与非商业自用；非商业学术研究中的使用与引用（注明出处即可）。完整条款见 [LICENSE](LICENSE)。
+
+> **本协议仅对自有代码生效**；项目所捆绑/调用的第三方组件（自由/开源代码）保留其各自许可证：GEOUNED（EUPL-1.2）、OpenCascade（LGPL v2.1）、FreeCAD（LGPL v2+）、pymcnp（BSD-3-Clause）、React（MIT）、Vite（MIT）、Tauri（MIT/Apache-2.0）、Three.js（MIT）、Monaco Editor（MIT）、NumPy（BSD）等，详见上方"引用与致谢"。这些第三方许可是各组件自身的许可，与本项目代码的专有许可不同，使用时请分别遵守；本协议不改变其条款。
+
+> **历史版本**：2026-08-28 ~ 2026-10-22 期间发布的版本曾以 MIT 许可发布，对已合法获得其副本者继续有效；本专有许可自 2026-10-22 起适用于此后发布的版本，不溯及既往。
 
 如有问题或合作，可联系：1378963177@qq.com
 
 ---
 
-> **版本**：1.7.7（`gui/package.json` / `tauri.conf.json` 为版本单一来源）；逐批变更见 [`docs/CHANGELOG.md`](docs/CHANGELOG.md)，AI 接手请先读 [`PROJECT_MEMORY.md`](PROJECT_MEMORY.md)。
+> **版本**：1.7.73（`gui/package.json` / `tauri.conf.json` 为版本单一来源）；逐批变更见 [`docs/CHANGELOG.md`](docs/CHANGELOG.md)，AI 接手请先读 [`PROJECT_MEMORY.md`](PROJECT_MEMORY.md)。
 >
 > 本项目由 AI 辅助编程完成 / Built with AI assistance (Claude).
 >

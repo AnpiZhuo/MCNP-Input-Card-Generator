@@ -3,7 +3,7 @@
 > **商标声明**：MCNP® 是 Triad National Security, LLC（运营 Los Alamos National Laboratory 的机构）的注册商标。本项目是**独立第三方工具**，与 Triad National Security, LLC / Los Alamos National Laboratory **无任何关联、无背书、非其官方产品**；名称中的 "MCNP" 仅用于描述用途（生成 MCNP 输入文件）。
 
 > 本文件是**随包速览**（程序内「📖」可直接查看）。完整 README（含开发/打包/项目结构/致谢）见**交付包根目录的 `README.md`** 或仓库主页。
-> 版本 **1.7.7** · 逐批变更见 `docs/CHANGELOG.md`。
+> 版本 **1.7.73** · 逐批变更见 `docs/CHANGELOG.md`。
 
 一款用于可视化创建、编辑、校验 **MCNP** 输入文件（`.INP`）的 Windows 桌面应用：表单化 GUI 替代手工文本编辑，内置 FreeCAD 精确几何的 3D 预览 / 平面截面 / 体数据可视化、STEP(CAD) → MCNP 几何转换、材料库、源粒子演示、参数扫描与出图。
 
@@ -142,9 +142,11 @@
 
 ## 许可协议
 
-本项目自有代码以 **MIT License** 发布。版权所有 © 2026 魏祎卓 (Wei Yizhuo)。
+本项目**自有代码为专有软件（Proprietary, All Rights Reserved）**，版权所有 © 2026 魏祎卓 (Wei Yizhuo)。
 
-> MIT 许可**仅适用于本项目自有代码**：可自由使用、复制、修改、合并、发布、分发、再许可、销售，但必须在所有副本中保留版权声明与许可声明（详见仓库 `LICENSE`；交付包内随附的 `README.md` 亦有许可章节）。
-> 随包/调用的开源组件保留各自许可证（GEOUNED EUPL-1.2、OpenCascade LGPL v2.1、FreeCAD LGPL v2+、pymcnp BSD-3-Clause、React/Vite/Three.js/Monaco MIT 等），使用时请分别遵守。
+> **分发、商业使用、改编均需作者事先书面许可**（联系 1378963177@qq.com）。未经许可，不得转载、镜像、公开再发布（无论原版或修改版），不得用于任何商业目的，不得修改/翻译/反向工程或基于本软件创作衍生作品。
+>
+> **免费允许**：个人学习、研究、评估与非商业自用；非商业学术研究中的使用与引用（注明出处即可）。完整条款见仓库 `LICENSE`，交付包内随附的 `README.md` 亦有许可章节。
+> **本协议仅对自有代码生效**；随包/调用的开源组件保留各自许可证（GEOUNED EUPL-1.2、OpenCascade LGPL v2.1、FreeCAD LGPL v2+、pymcnp BSD-3-Clause、React/Vite/Three.js/Monaco MIT 等），本协议不改变其条款，使用时请分别遵守。
 
 如有问题或合作，可联系：1378963177@qq.com

@@ -20,7 +20,7 @@ export default function BasicSettings() {
       <div className="glass-card" style={{ marginBottom: 10, padding: "8px 14px", display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)" }}>基本设置</span>
         <div style={{ flex: 1 }} />
-        <a href="mailto:1378963177@qq.com" style={{ color: "var(--accent-glow)", fontSize: 13, whiteSpace: "nowrap", textDecoration: "none" }}>发现 Bug 或有好建议？欢迎联系 → 1378963177@qq.com</a>
+        <span style={{ color: "var(--accent-glow)", fontSize: 13, whiteSpace: "nowrap" }}>Bug 反馈：兰大核学院辐射生物装置课题组</span>
       </div>
       <><div className="glass-card">
         <div className="card-header">

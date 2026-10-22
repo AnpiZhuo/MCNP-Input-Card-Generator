@@ -1,21 +1,84 @@
-MIT License
+MCNP 输入卡生成器 — 专有许可协议
+Proprietary License — All Rights Reserved
 
-Copyright (c) 2026 魏祎卓 (Wei Yizhuo)
+Copyright (c) 2026 魏祎卓 (Wei Yizhuo). All rights reserved.
+版权所有 © 2026 魏祎卓。保留所有权利。
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+本协议（以下简称"本协议"）适用于本仓库中由作者享有著作权的全部内容，包括源代码、
+文档、图标、界面设计、示例文件及其他材料（以下合称"本软件"）。除本协议明确授予的
+权利外，作者保留全部权利；任何未明示授予的权利，均不视为授予。
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+**适用范围：本协议仅对作者自有代码生效。** 仓库内的第三方组件（自由软件 / 开源代码，
+如 GEOUNED、FreeCAD、OpenCascade、PyMCNP、NumPy、React、Tauri、Three.js、
+Monaco Editor 等）不适用本协议，其使用、复制与分发一律按其各自许可证执行，详见
+第三、四节。
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+一、免费许可（无需事先书面许可）
+
+1. 个人学习、研究、评估与非商业自用，且不得用于任何商业目的；
+2. 非营利机构（学校、实验室、公益科研机构）内部非商业研究使用；
+3. 在非商业性的论文、报告、教学材料中引用本软件及其文档（注明名称与作者即可）。
+
+二、须事先获得作者书面许可的行为
+
+未经作者书面许可，任何人不得实施下列行为：
+
+1. 分发：以任何形式向第三方提供本软件或其任何副本，包括转载、镜像、公开再发布、
+   上传网盘或应用商店、随其他产品捆绑交付；原始版本与修改后的版本均同。
+2. 商业使用：将本软件用于任何商业目的，包括销售、出租、转授权；作为付费产品或
+   付费服务（含 SaaS、托管服务）的组成部分；嵌入商业产品或商业流程；以本软件
+   提供收费的技术支持、培训、部署或咨询；或借本软件直接或间接获取经济利益。
+3. 改编：修改、翻译、反向工程、反编译或拆解本软件（法律强制允许的情形除外），
+   或基于本软件创作衍生作品并以任何形式使用、发布。
+4. 去除或遮蔽本软件的版权声明、许可声明、作者标识或界面署名。
+
+三、第三方组件（不适用本协议）
+
+本软件捆绑或调用的第三方组件（包括但不限于 GEOUNED、FreeCAD、OpenCascade、
+PyMCNP、NumPy、React、Tauri、Three.js、Monaco Editor 等）保留其各自的许可证，
+详见本仓库 README 的"引用与致谢"。本协议不改变上述第三方许可证，也不得被解释为
+改变之；分发包含这些组件的构建产物时，仍须遵守其各自条款。若第三方许可证与本协议
+就相应组件本身发生冲突，以第三方许可证为准。
+
+四、商标
+
+MCNP® 是 Triad National Security, LLC 的注册商标。本软件为独立第三方工具，与
+Triad National Security, LLC / Los Alamos National Laboratory 无任何关联、无背书、
+非其官方产品。本协议不授予任何商标或品牌使用许可。
+
+五、免责声明
+
+本软件按"原样"提供，不附带任何明示或默示的保证，包括但不限于适销性、特定用途
+适用性与非侵权性。在任何情况下，作者均不对因使用或无法使用本软件而产生的任何
+直接、间接、附带、特殊或后果性损害承担责任，即使已被告知此类损害发生的可能性。
+
+六、授权申请
+
+如需分发、商业使用、改编或合作，请以书面方式提出申请，说明用途、范围、期限与
+主体，联系方式：1378963177@qq.com。作者可自行决定是否授权以及授权条件。
+
+七、版本与生效
+
+本协议自 2026-10-22 起适用于本软件此后发布的版本。
+
+2026-08-28 至 2026-10-22 期间发布的版本曾以 MIT License 发布（v1.7.4、v1.7.6.2、
+v1.7.7 等），对已合法获得其副本者，继续适用其获得时随附的 MIT 许可；本协议不溯
+及既往。更早版本适用其各自发布时的许可条款。
+
+八、协议变更
+
+作者保留随时修订本协议的权利；修订后的协议自随新版本发布之日起生效，并适用于
+该版本及此后发布的版本。
+
+---
+
+English reference text (the Chinese text above prevails):
+
+This software is proprietary. All rights are reserved. Personal, non-commercial study
+and research use is permitted. Any distribution, commercial use, or modification
+(including translation, reverse engineering, or derivative works) requires prior
+written permission from the copyright holder (1378963177@qq.com). Third-party
+components bundled with or called by this software remain under their own licenses
+(see the "引用与致谢" section of README); this license does not alter them. MCNP® is
+a registered trademark of Triad National Security, LLC; this project is an
+independent third-party tool and is not affiliated with or endorsed by them.
