@@ -1,6 +1,13 @@
 # 项目记忆文档（AI 速查手册）
 
-> **★ 本批（2026-10-21 凌晨）：PTRAC「没有 3D 径迹数据」= localStorage 桥写爆配额 —— 已改 ✅ / 已重新出包部署 ✅ · 版本仍 1.7.7**
+> **★ 本批（2026-10-22）：自有代码改专有许可 + 首页反馈文案 —— 已改 ✅ / 已提交 ✅ `ee84b6f` / 已 push ✅ / 已打包部署 ✅ / 已发 GitHub Release `v1.7.73` ✅（用户指定升版）**
+> 用户指令：「改成自有，分发商用改编需要我许可」→「仅对自由代码生效」（按"仅对自有代码生效"落地）→「首页邮箱行改成有bug请联系兰大核学院辐射生物装置课题组」→ 润色为「Bug 反馈：兰大核学院辐射生物装置课题组」→「准备打包分发」。
+> 改动：`LICENSE` 重写为**专有许可（All Rights Reserved）**（分发/商用/改编须书面许可；仅对自有代码生效；第三方各按自身许可；2026-10-22 生效，MIT 历史版本不溯及）；README 徽章与许可段落重写 + OWEN 链接修正（→ `github.com/caalh/OWEN`）；`app/docs/README.md` 同步；`gui/src/components/BasicSettings.tsx:23` 反馈行；版本 7 处 → **1.7.73**。
+> 发布：`build:release` **EXIT 0 / 561 s**；部署 `D:\MCNP\MCNP输入卡生成器`（旧目录备份 `D:\MCNP\_backup_1.7.7_20261022_200743`）；exe **7,736,320 B** / SHA-256 `590809…87A5` / FileVersion **1.7.73**；冒烟：启动 **4.0 s** 后 5001 监听 + `自检.bat` → `PACKAGE-OK-BACKEND-NOT-UP`（包完整、程序未起，符合预期）；zip `D:\MCNP\MCNP-Input-Card-Generator-v1.7.73-win64.zip` **346,491,079 B** / SHA-256 `b18a14e8…d0b7`。
+> GitHub：`main` 已 push（`426ba41..ee84b6f`，经用户开启的本地代理 `127.0.0.1:7877`）、tag `v1.7.73`、Release <https://github.com/AnpiZhuo/MCNP-Input-Card-Generator/releases/tag/v1.7.73>，**资产 `digest` 与本地 SHA-256 逐字节一致**。
+> 同日早先：GitHub 原有 **7 个 release / 5 个 tag 已按用户指令全部清空**（资产约 1.4 GB 不可恢复）。
+
+> **★ 上一批（2026-10-21 凌晨）：PTRAC「没有 3D 径迹数据」= localStorage 桥写爆配额 —— 已改 ✅ / 已重新出包部署 ✅ · 版本仍 1.7.7**
 > 用户原话：「解析ptrac时显示没有 3D 径迹数据（请从主窗口「输出」标签页解析 PTRAC 后打开）」。
 > **根因（实测取证，非推断）**：`openPtrac3DWindow` 把整份几何外壳 base64 STL 塞进 localStorage 桥 `mcnp_win_ptrac`
 > （用户 deck：18 栅元，`/api/preview-3d` 返回 **21,142,374 字符**）；Chromium/WebView2 单 origin localStorage 配额
@@ -1893,6 +1900,11 @@ README 13095 B / AI接入.md 3798 B）→ 冒烟。
 - **许可**：本项目自有代码为**专有许可（Proprietary, All Rights Reserved）**，自 **2026-10-22** 起：个人非商业使用免费；**分发 / 商业使用 / 改编须作者事先书面许可**（详见 `LICENSE`）。沿革：2026-08-28 前自定义禁商用 → 2026-08-28 改 MIT → 2026-10-22 改回专有（MIT 期间的 v1.7.4~v1.7.7 对已合法获得副本者仍有效，不溯及）。开源组件各按自身许可
 
 ## §2 当前状态快照（语义记忆）
+
+  > **2026-10-22（v1.7.73，用户指定升版；已提交 `ee84b6f`，已 push）**：自有代码 MIT → 专有许可（分发/商用/改编须书面许可，
+  > 仅对自有代码生效，第三方各按自身许可）+ 首页反馈文案「Bug 反馈：兰大核学院辐射生物装置课题组」。
+  > 已打包部署（EXIT 0 / 561 s）、已发 GitHub Release `v1.7.73`（zip 346,491,079 B / SHA-256 `b18a14e8…d0b7`，
+  > 资产 digest 与本地逐字节一致）；旧 releases/tags 已清空。详见文首「★ 本批（2026-10-22）」。
 
   > **2026-10-21 凌晨（同版本 1.7.7，未升版；已提交 `e0bda17`，未 push）**：修「解析 PTRAC 后窗口显示『没有 3D 径迹数据』」
   > —— 根因是弹出窗 localStorage 桥夹带整份 base64 STL（实测 21.1M 字符 > 配额 ≈5M）导致 `setItem` 抛错后被吞；
